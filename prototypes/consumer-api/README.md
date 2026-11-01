@@ -36,6 +36,15 @@ src/misuse.ts                            what must not compile
 - Name format is a documented convention, not enforced; duplicate names fail at startup.
 - Dispatching imports every task's handler code.
 
+## Decided in round 2
+
+- The augmented interface keeps the name `Register`. It exists only to type `emit` and `dispatch` inside handlers: a handler that imports the instance instead typechecks, but the circular import throws `ReferenceError` when a task file is loaded before the instance (a unit test of that task, for one).
+- The handler context is `{ payload, step, emit, dispatch, logger, runId, attempt, abortSignal }`; a scheduled task's has no `payload`.
+- `abortSignal` aborts on the attempt's `timeout` and on worker shutdown.
+- `defineEvent(name, { schema })`, an options object like the task definers.
+- Outside handlers, call sites write `nextasking.emit(...)` and `nextasking.dispatch(...)`; no destructured exports.
+- An `emit` inside a handler is emitted again when the attempt is retried: left to the duplicate-runs ticket (#14).
+
 ## Error messages
 
 | Misuse                                     | Error                                                          |

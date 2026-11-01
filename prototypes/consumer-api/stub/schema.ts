@@ -16,7 +16,9 @@ export type PayloadSchema = StandardSchemaV1<JsonObject, JsonObject>;
 export type PayloadInput<Schema extends PayloadSchema> = NonNullable<Schema["~standard"]["types"]>["input"];
 export type Payload<Schema extends PayloadSchema> = NonNullable<Schema["~standard"]["types"]>["output"];
 
-export type Duration = `${number}${"s" | "m" | "h" | "d"}`;
+type DurationUnit = "s" | "m" | "h" | "d";
+type Digit = "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9";
+export type Duration = `${bigint}${DurationUnit}` & `${Digit}${string}`;
 
 export type Logger = {
   info: (message: string, details?: Record<string, unknown>) => void;

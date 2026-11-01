@@ -60,6 +60,18 @@ _Avoid_: Try, execution
 An attempt of a run that starts while another attempt of the same run is still executing, after the first lost its lock.
 _Avoid_: Zombie, double run
 
+**Backoff**:
+The wait between a failed attempt and the next attempt of the same run.
+_Avoid_: Delay, cooldown
+
+**Failed run**:
+A run whose final outcome is failure: its last attempt failed with no retry left, or it threw an error that skips the remaining retries.
+_Avoid_: Exhausted job, dead job, dead letter
+
+**Replay**:
+To start a failed run again under its own run id, with a fresh retry budget, reusing the steps it has already saved; or to start a failed fan-out again, skipping the listeners that already have a run.
+_Avoid_: Retry, rerun, redrive
+
 **Suspend**:
 To pause a run's attempt at a step until a set time, so it holds no worker and no concurrency slot while it waits.
 _Avoid_: Pause, park, yield
@@ -83,3 +95,7 @@ _Avoid_: Group, partition, lock key
 **Worker**:
 The role of a process that executes attempts, whether embedded in the Next.js server or standalone.
 _Avoid_: Consumer, processor
+
+**Lifecycle log**:
+A line the library writes through the app's logger when a run or an attempt changes state.
+_Avoid_: Event, hook, notification

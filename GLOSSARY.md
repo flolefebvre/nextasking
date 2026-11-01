@@ -52,6 +52,14 @@ _Avoid_: Job, execution
 One try at completing a run; a retry is a new attempt of the same run.
 _Avoid_: Try, execution
 
+**Suspend**:
+To pause a run's attempt at a step until a set time, so it holds no worker and no concurrency slot while it waits.
+_Avoid_: Pause, park, yield
+
+**Resume**:
+To continue a suspended attempt once its time comes, reusing the steps it has already saved.
+_Avoid_: Wake, restart, retry
+
 **Concurrency limit**:
 The most attempts of one task allowed to execute at the same time, counted across the whole task or per concurrency key.
 _Avoid_: Throttle, rate limit

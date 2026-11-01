@@ -45,7 +45,7 @@
     "test": "vitest run",
     "test:changed": "vitest run --changed ${CHECK_BASE:-origin/main}",
     "test:watch": "vitest",
-    "prototype:consumer-api": "tsc -p prototypes/consumer-api/variant-a-handles/tsconfig.json && tsc -p prototypes/consumer-api/variant-b-names/tsconfig.json && echo \"both variants typecheck\""
+    "prototype:consumer-api": "tsc -p prototypes/consumer-api/tsconfig.json && echo \"prototype typechecks\""
   },
   "devDependencies": {
     "@eslint/compat": "^2.1.1",

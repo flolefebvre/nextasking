@@ -1,0 +1,7 @@
+{
+  "path": ["src", "scripts"],
+  "format": ["typescript"],
+  "minTokens": 50,
+  "exitCode": 1,
+  "reporters": ["consoleFull"]
+}

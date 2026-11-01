@@ -1,0 +1,61 @@
+{
+  "name": "@flefebvre/nextasking",
+  "version": "0.0.0",
+  "description": "",
+  "type": "module",
+  "license": "MIT",
+  "author": "Florian Lefebvre <florian.lefebvre.contact@gmail.com>",
+  "homepage": "https://github.com/flolefebvre/nextasking#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/flolefebvre/nextasking.git"
+  },
+  "bugs": {
+    "url": "https://github.com/flolefebvre/nextasking/issues"
+  },
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "LICENSE"
+  ],
+  "packageManager": "pnpm@11.15.0",
+  "engines": {
+    "node": "^22.22 || ^24.5 || >=26"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "check": "tsx scripts/gate.ts format:check+lint+duplication+typecheck,test:changed",
+    "gate": "tsx scripts/gate.ts format:check+lint+duplication+typecheck,test+build",
+    "build": "rm -rf dist && tsc -p tsconfig.build.json",
+    "prepublishOnly": "pnpm run build",
+    "format": "prettier --cache --write .",
+    "format:check": "prettier --cache --check .",
+    "lint": "eslint --cache --cache-location node_modules/.cache/eslint/ --cache-strategy content --max-warnings=0 .",
+    "duplication": "jscpd",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:changed": "vitest run --changed ${CHECK_BASE:-origin/main}",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "@eslint/compat": "^2.1.1",
+    "@types/node": "^24.19.2",
+    "eslint": "^10.14.0",
+    "eslint-plugin-no-comments": "^1.2.1",
+    "jscpd": "^5.4.2",
+    "prettier": "^3.9.10",
+    "tsx": "^4.23.15",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.72.1",
+    "vitest": "^5.0.5"
+  }
+}

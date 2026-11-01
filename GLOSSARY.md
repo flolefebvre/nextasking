@@ -52,6 +52,14 @@ _Avoid_: Job, execution
 One try at completing a run; a retry is a new attempt of the same run.
 _Avoid_: Try, execution
 
+**Concurrency limit**:
+The most attempts of one task allowed to execute at the same time, counted across the whole task or per concurrency key.
+_Avoid_: Throttle, rate limit
+
+**Concurrency key**:
+A value derived from a run's payload when it is dispatched, grouping the runs of one task that share a concurrency limit.
+_Avoid_: Group, partition, lock key
+
 **Worker**:
 The role of a process that executes attempts, whether embedded in the Next.js server or standalone.
 _Avoid_: Consumer, processor

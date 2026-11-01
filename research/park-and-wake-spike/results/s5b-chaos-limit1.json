@@ -1,0 +1,58 @@
+{
+  "id": "s5b-chaos-limit1",
+  "limits": {
+    "charge": 1
+  },
+  "recheck": true,
+  "workers": 4,
+  "workerConcurrency": 10,
+  "dispatched": 300,
+  "elapsedMs": 24951,
+  "finalCounts": {
+    "completed": 300,
+    "failed": 0,
+    "delayed": 0,
+    "wait": 0,
+    "active": 0,
+    "prioritized": 0
+  },
+  "stuck": 0,
+  "stalledEvents": 1,
+  "failedEvents": 0,
+  "kills": 6,
+  "stats": {
+    "parks": "458",
+    "wake_ok:release": "298",
+    "wake_ok:recheck": "1",
+    "wake_fail:release:job <id> is not in the delayed state. promote": "1"
+  },
+  "perKey": {
+    "charge:acc": {
+      "limit": 1,
+      "runsStartedBeforeAnOlderRun": 97,
+      "maxPositionsOvertaken": 29,
+      "executions": 301,
+      "killedExecutions": 0,
+      "maxConcurrentFromIntervals": 1,
+      "maxConcurrentFromCounter": 1,
+      "violations": [],
+      "releaseToNextStartMs": {
+        "n": 300,
+        "p50": 5,
+        "p95": 9,
+        "p99": 11,
+        "max": 6982
+      },
+      "releasesFallingBackOver1s": 1,
+      "startDelayFromDispatchMs": {
+        "n": 301,
+        "p50": 15588,
+        "p95": 23281,
+        "p99": 23964,
+        "max": 24401
+      },
+      "firstStartMs": 16,
+      "lastEndMs": 24888
+    }
+  }
+}

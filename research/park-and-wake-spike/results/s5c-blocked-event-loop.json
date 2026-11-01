@@ -1,0 +1,111 @@
+{
+  "id": "s5c-blocked-event-loop",
+  "limits": {
+    "charge": 1
+  },
+  "recheck": true,
+  "workers": 4,
+  "workerConcurrency": 10,
+  "dispatched": 21,
+  "elapsedMs": 40819,
+  "finalCounts": {
+    "completed": 20,
+    "failed": 1,
+    "delayed": 0,
+    "wait": 0,
+    "active": 0,
+    "prioritized": 0
+  },
+  "stuck": 0,
+  "stalledEvents": 7,
+  "failedEvents": 1,
+  "kills": 0,
+  "stats": {
+    "parks": "21",
+    "wake_ok:recheck": "1",
+    "lock_renewal_failed": "3",
+    "worker_error:could not renew lock for job <id>": "3",
+    "wake_fail:recheck:job <id> is not in the delayed state. promote": "3",
+    "wake_ok:release": "20",
+    "worker_error:Missing lock for job <id> moveToFinished": "7",
+    "worker_error:Lock mismatch for job <id> Cmd moveToFinished from active": "2"
+  },
+  "perKey": {
+    "charge:acc": {
+      "limit": 1,
+      "executions": 24,
+      "killedExecutions": 0,
+      "maxConcurrentFromIntervals": 2,
+      "maxConcurrentFromCounter": 2,
+      "violations": [
+        {
+          "at": 9982,
+          "ms": 202,
+          "concurrent": 2
+        },
+        {
+          "at": 10188,
+          "ms": 202,
+          "concurrent": 2
+        },
+        {
+          "at": 10395,
+          "ms": 202,
+          "concurrent": 2
+        },
+        {
+          "at": 10600,
+          "ms": 203,
+          "concurrent": 2
+        },
+        {
+          "at": 10807,
+          "ms": 202,
+          "concurrent": 2
+        },
+        {
+          "at": 11012,
+          "ms": 202,
+          "concurrent": 2
+        },
+        {
+          "at": 11218,
+          "ms": 201,
+          "concurrent": 2
+        },
+        {
+          "at": 11422,
+          "ms": 768,
+          "concurrent": 2
+        },
+        {
+          "at": 20711,
+          "ms": 6183,
+          "concurrent": 2
+        },
+        {
+          "at": 30719,
+          "ms": 1994,
+          "concurrent": 2
+        }
+      ],
+      "releaseToNextStartMs": {
+        "n": 22,
+        "p50": 8,
+        "p95": 160,
+        "p99": 3825,
+        "max": 3825
+      },
+      "releasesFallingBackOver1s": 1,
+      "startDelayFromDispatchMs": {
+        "n": 24,
+        "p50": 12983,
+        "p95": 20711,
+        "p99": 30719,
+        "max": 30719
+      },
+      "firstStartMs": 6,
+      "lastEndMs": 40819
+    }
+  }
+}

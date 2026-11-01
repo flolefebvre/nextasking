@@ -1,0 +1,98 @@
+{
+  "id": "s3b-fairness-with-backlog",
+  "limits": {
+    "charge": 1
+  },
+  "recheck": true,
+  "workers": 4,
+  "workerConcurrency": 10,
+  "dispatched": 4001,
+  "elapsedMs": 16903,
+  "finalCounts": {
+    "completed": 4001,
+    "failed": 0,
+    "delayed": 0,
+    "wait": 0,
+    "active": 0,
+    "prioritized": 0
+  },
+  "stuck": 0,
+  "stalledEvents": 0,
+  "failedEvents": 0,
+  "kills": 0,
+  "stats": {
+    "parks": "1106",
+    "wake_ok:recheck": "1",
+    "wake_fail:recheck:job <id> is not in the delayed state. promote": "1060",
+    "wake_fail:release:job <id> is not in the delayed state. promote": "1",
+    "wake_ok:release": "998"
+  },
+  "perKey": {
+    "charge:A": {
+      "limit": 1,
+      "executions": 1000,
+      "killedExecutions": 0,
+      "maxConcurrentFromIntervals": 1,
+      "maxConcurrentFromCounter": 1,
+      "violations": [],
+      "releaseToNextStartMs": {
+        "n": 999,
+        "p50": 2,
+        "p95": 4,
+        "p99": 8,
+        "max": 1031
+      },
+      "releasesFallingBackOver1s": 1,
+      "startDelayFromDispatchMs": {
+        "n": 1000,
+        "p50": 9170,
+        "p95": 16083,
+        "p99": 16700,
+        "max": 16849
+      },
+      "firstStartMs": 16,
+      "lastEndMs": 16862
+    },
+    "bulk:-": {
+      "executions": 3000,
+      "killedExecutions": 0,
+      "maxConcurrentFromIntervals": 40,
+      "maxConcurrentFromCounter": 40,
+      "violations": [],
+      "startDelayFromDispatchMs": {
+        "n": 3000,
+        "p50": 721,
+        "p95": 1190,
+        "p99": 1233,
+        "max": 1243
+      },
+      "firstStartMs": 225,
+      "lastEndMs": 1288
+    },
+    "charge:B": {
+      "limit": 1,
+      "executions": 1,
+      "killedExecutions": 0,
+      "maxConcurrentFromIntervals": 1,
+      "maxConcurrentFromCounter": 1,
+      "violations": [],
+      "releaseToNextStartMs": {
+        "n": 0,
+        "p50": null,
+        "p95": null,
+        "p99": null,
+        "max": null
+      },
+      "releasesFallingBackOver1s": 0,
+      "startDelayFromDispatchMs": {
+        "n": 1,
+        "p50": 1160,
+        "p95": 1160,
+        "p99": 1160,
+        "max": 1160
+      },
+      "firstStartMs": 1269,
+      "lastEndMs": 1275
+    }
+  }
+}

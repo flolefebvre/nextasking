@@ -1,0 +1,117 @@
+{
+  "id": "s6-retries",
+  "retriedJob": {
+    "attemptsMade": 2,
+    "attemptsStarted": 3,
+    "state": "completed"
+  },
+  "timeline": [
+    {
+      "jobId": "retried",
+      "key": "acc",
+      "startMs": 7,
+      "endMs": 210,
+      "attemptsMade": 0,
+      "attemptsStarted": 1
+    },
+    {
+      "jobId": "2",
+      "key": "acc",
+      "startMs": 214,
+      "endMs": 717,
+      "attemptsMade": 0,
+      "attemptsStarted": 2
+    },
+    {
+      "jobId": "4",
+      "key": "acc",
+      "startMs": 720,
+      "endMs": 1223,
+      "attemptsMade": 0,
+      "attemptsStarted": 2
+    },
+    {
+      "jobId": "3",
+      "key": "acc",
+      "startMs": 1228,
+      "endMs": 1732,
+      "attemptsMade": 0,
+      "attemptsStarted": 2
+    },
+    {
+      "jobId": "5",
+      "key": "acc",
+      "startMs": 1736,
+      "endMs": 2237,
+      "attemptsMade": 0,
+      "attemptsStarted": 2
+    },
+    {
+      "jobId": "6",
+      "key": "acc",
+      "startMs": 2240,
+      "endMs": 2743,
+      "attemptsMade": 0,
+      "attemptsStarted": 2
+    },
+    {
+      "jobId": "retried",
+      "key": "acc",
+      "startMs": 2746,
+      "endMs": 2948,
+      "attemptsMade": 1,
+      "attemptsStarted": 3
+    }
+  ],
+  "limits": {
+    "charge": 1
+  },
+  "recheck": true,
+  "workers": 4,
+  "workerConcurrency": 10,
+  "dispatched": 6,
+  "elapsedMs": 3047,
+  "finalCounts": {
+    "completed": 6,
+    "failed": 0,
+    "delayed": 0,
+    "wait": 0,
+    "active": 0,
+    "prioritized": 0
+  },
+  "stuck": 0,
+  "stalledEvents": 0,
+  "failedEvents": 0,
+  "kills": 0,
+  "stats": {
+    "parks": "6",
+    "wake_ok:release": "6"
+  },
+  "perKey": {
+    "charge:acc": {
+      "limit": 1,
+      "executions": 7,
+      "killedExecutions": 0,
+      "maxConcurrentFromIntervals": 1,
+      "maxConcurrentFromCounter": 1,
+      "violations": [],
+      "releaseToNextStartMs": {
+        "n": 6,
+        "p50": 4,
+        "p95": 5,
+        "p99": 5,
+        "max": 5
+      },
+      "releasesFallingBackOver1s": 0,
+      "startDelayFromDispatchMs": {
+        "n": 7,
+        "p50": 1224,
+        "p95": 2746,
+        "p99": 2746,
+        "max": 2746
+      },
+      "firstStartMs": 7,
+      "lastEndMs": 2948
+    }
+  }
+}

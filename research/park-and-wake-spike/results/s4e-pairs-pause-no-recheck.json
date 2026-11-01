@@ -1,0 +1,2529 @@
+{
+  "id": "s4e-pairs-pause-no-recheck",
+  "limits": {
+    "charge": 1
+  },
+  "recheck": false,
+  "workers": 4,
+  "workerConcurrency": 10,
+  "dispatched": 200,
+  "elapsedMs": 15153,
+  "finalCounts": {
+    "completed": 200,
+    "failed": 0,
+    "delayed": 0,
+    "wait": 0,
+    "active": 0,
+    "prioritized": 0
+  },
+  "stuck": 0,
+  "stalledEvents": 0,
+  "failedEvents": 0,
+  "kills": 0,
+  "stats": {
+    "wake_fail:release:job <id> is not in the delayed state. promote": "100",
+    "parks": "100"
+  },
+  "perKey": {
+    "charge:k1": {
+      "limit": 1,
+      "executions": 2,
+      "killedExecutions": 0,
+      "maxConcurrentFromIntervals": 1,
+      "maxConcurrentFromCounter": 1,
+      "violations": [],
+      "releaseToNextStartMs": {
+        "n": 1,
+        "p50": 15046,
+        "p95": 15046,
+        "p99": 15046,
+        "max": 15046
+      },
+      "releasesFallingBackOver1s": 1,
+      "startDelayFromDispatchMs": {
+        "n": 2,
+        "p50": 15066,
+        "p95": 15066,
+        "p99": 15066,
+        "max": 15066
+      },
+      "firstStartMs": 12,
+      "lastEndMs": 15075
+    },
+    "charge:k0": {
+      "limit": 1,
+      "executions": 2,
+      "killedExecutions": 0,
+      "maxConcurrentFromIntervals": 1,
+      "maxConcurrentFromCounter": 1,
+      "violations": [],
+      "releaseToNextStartMs": {
+        "n": 1,
+        "p50": 15044,
+        "p95": 15044,
+        "p99": 15044,
+        "max": 15044
+      },
+      "releasesFallingBackOver1s": 1,
+      "startDelayFromDispatchMs": {
+        "n": 2,
+        "p50": 15065,
+        "p95": 15065,
+        "p99": 15065,
+        "max": 15065
+      },
+      "firstStartMs": 12,
+      "lastEndMs": 15072
+    },
+    "charge:k2": {
+      "limit": 1,
+      "executions": 2,
+      "killedExecutions": 0,
+      "maxConcurrentFromIntervals": 1,
+      "maxConcurrentFromCounter": 1,
+      "violations": [],
+      "releaseToNextStartMs": {
+        "n": 1,
+        "p50": 15040,
+        "p95": 15040,
+        "p99": 15040,
+        "max": 15040
+      },
+      "releasesFallingBackOver1s": 1,
+      "startDelayFromDispatchMs": {
+        "n": 2,
+        "p50": 15065,
+        "p95": 15065,
+        "p99": 15065,
+        "max": 15065
+      },
+      "firstStartMs": 19,
+      "lastEndMs": 15072
+    },
+    "charge:k3": {
+      "limit": 1,
+      "executions": 2,
+      "killedExecutions": 0,
+      "maxConcurrentFromIntervals": 1,
+      "maxConcurrentFromCounter": 1,
+      "violations": [],
+      "releaseToNextStartMs": {
+        "n": 1,
+        "p50": 15041,
+        "p95": 15041,
+        "p99": 15041,
+        "max": 15041
+      },
+      "releasesFallingBackOver1s": 1,
+      "startDelayFromDispatchMs": {
+        "n": 2,
+        "p50": 15066,
+        "p95": 15066,
+        "p99": 15066,
+        "max": 15066
+      },
+      "firstStartMs": 19,
+      "lastEndMs": 15075
+    },
+    "charge:k5": {
+      "limit": 1,
+      "executions": 2,
+      "killedExecutions": 0,
+      "maxConcurrentFromIntervals": 1,
+      "maxConcurrentFromCounter": 1,
+      "violations": [],
+      "releaseToNextStartMs": {
+        "n": 1,
+        "p50": 15039,
+        "p95": 15039,
+        "p99": 15039,
+        "max": 15039
+      },
+      "releasesFallingBackOver1s": 1,
+      "startDelayFromDispatchMs": {
+        "n": 2,
+        "p50": 15065,
+        "p95": 15065,
+        "p99": 15065,
+        "max": 15065
+      },
+      "firstStartMs": 19,
+      "lastEndMs": 15072
+    },
+    "charge:k7": {
+      "limit": 1,
+      "executions": 2,
+      "killedExecutions": 0,
+      "maxConcurrentFromIntervals": 1,
+      "maxConcurrentFromCounter": 1,
+      "violations": [],
+      "releaseToNextStartMs": {
+        "n": 1,
+        "p50": 15040,
+        "p95": 15040,
+        "p99": 15040,
+        "max": 15040
+      },
+      "releasesFallingBackOver1s": 1,
+      "startDelayFromDispatchMs": {
+        "n": 2,
+        "p50": 15066,
+        "p95": 15066,
+        "p99": 15066,
+        "max": 15066
+      },
+      "firstStartMs": 19,
+      "lastEndMs": 15075
+    },
+    "charge:k8": {
+      "limit": 1,
+      "executions": 2,
+      "killedExecutions": 0,
+      "maxConcurrentFromIntervals": 1,
+      "maxConcurrentFromCounter": 1,
+      "violations": [],
+      "releaseToNextStartMs": {
+        "n": 1,
+        "p50": 15040,
+        "p95": 15040,
+        "p99": 15040,
+        "max": 15040
+      },
+      "releasesFallingBackOver1s": 1,
+      "startDelayFromDispatchMs": {
+        "n": 2,
+        "p50": 15066,
+        "p95": 15066,
+        "p99": 15066,
+        "max": 15066
+      },
+      "firstStartMs": 20,
+      "lastEndMs": 15074
+    },
+    "charge:k11": {
+      "limit": 1,
+      "executions": 2,
+      "killedExecutions": 0,
+      "maxConcurrentFromIntervals": 1,
+      "maxConcurrentFromCounter": 1,
+      "violations": [],
+      "releaseToNextStartMs": {
+        "n": 1,
+        "p50": 15039,
+        "p95": 15039,
+        "p99": 15039,
+        "max": 15039
+      },
+      "releasesFallingBackOver1s": 1,
+      "startDelayFromDispatchMs": {
+        "n": 2,
+        "p50": 15065,
+        "p95": 15065,
+        "p99": 15065,
+        "max": 15065
+      },
+      "firstStartMs": 20,
+      "lastEndMs": 15072
+    },
+    "charge:k13": {
+      "limit": 1,
+      "executions": 2,
+      "killedExecutions": 0,
+      "maxConcurrentFromIntervals": 1,
+      "maxConcurrentFromCounter": 1,
+      "violations": [],
+      "releaseToNextStartMs": {
+        "n": 1,
+        "p50": 15040,
+        "p95": 15040,
+        "p99": 15040,
+        "max": 15040
+      },
+      "releasesFallingBackOver1s": 1,
+      "startDelayFromDispatchMs": {
+        "n": 2,
+        "p50": 15066,
+        "p95": 15066,
+        "p99": 15066,
+        "max": 15066
+      },
+      "firstStartMs": 20,
+      "lastEndMs": 15075
+    },
+    "charge:k15": {
+      "limit": 1,
+      "executions": 2,
+      "killedExecutions": 0,
+      "maxConcurrentFromIntervals": 1,
+      "maxConcurrentFromCounter": 1,
+      "violations": [],
+      "releaseToNextStartMs": {
+        "n": 1,
+        "p50": 15040,
+        "p95": 15040,
+        "p99": 15040,
+        "max": 15040
+      },
+      "releasesFallingBackOver1s": 1,
+      "startDelayFromDispatchMs": {
+        "n": 2,
+        "p50": 15066,
+        "p95": 15066,
+        "p99": 15066,
+        "max": 15066
+      },
+      "firstStartMs": 20,
+      "lastEndMs": 15074
+    },
+    "charge:k17": {
+      "limit": 1,
+      "executions": 2,
+      "killedExecutions": 0,
+      "maxConcurrentFromIntervals": 1,
+      "maxConcurrentFromCounter": 1,
+      "violations": [],
+      "releaseToNextStartMs": {
+        "n": 1,
+        "p50": 15040,
+        "p95": 15040,
+        "p99": 15040,
+        "max": 15040
+      },
+      "releasesFallingBackOver1s": 1,
+      "startDelayFromDispatchMs": {
+        "n": 2,
+        "p50": 15066,
+        "p95": 15066,
+        "p99": 15066,
+        "max": 15066
+      },
+      "firstStartMs": 20,
+      "lastEndMs": 15075
+    },
+    "charge:k4": {
+      "limit": 1,
+      "executions": 2,
+      "killedExecutions": 0,
+      "maxConcurrentFromIntervals": 1,
+      "maxConcurrentFromCounter": 1,
+      "violations": [],
+      "releaseToNextStartMs": {
+        "n": 1,
+        "p50": 15038,
+        "p95": 15038,
+        "p99": 15038,
+        "max": 15038
+      },
+      "releasesFallingBackOver1s": 1,
+      "startDelayFromDispatchMs": {
+        "n": 2,
+        "p50": 15065,
+        "p95": 15065,
+        "p99": 15065,
+        "max": 15065
+      },
+      "firstStartMs": 20,
+      "lastEndMs": 15072
+    },
+    "charge:k6": {
+      "limit": 1,
+      "executions": 2,
+      "killedExecutions": 0,
+      "maxConcurrentFromIntervals": 1,
+      "maxConcurrentFromCounter": 1,
+      "violations": [],
+      "releaseToNextStartMs": {
+        "n": 1,
+        "p50": 15039,
+        "p95": 15039,
+        "p99": 15039,
+        "max": 15039
+      },
+      "releasesFallingBackOver1s": 1,
+      "startDelayFromDispatchMs": {
+        "n": 2,
+        "p50": 15066,
+        "p95": 15066,
+        "p99": 15066,
+        "max": 15066
+      },
+      "firstStartMs": 20,
+      "lastEndMs": 15075
+    },
+    "charge:k9": {
+      "limit": 1,
+      "executions": 2,
+      "killedExecutions": 0,
+      "maxConcurrentFromIntervals": 1,
+      "maxConcurrentFromCounter": 1,
+      "violations": [],
+      "releaseToNextStartMs": {
+        "n": 1,
+        "p50": 15038,
+        "p95": 15038,
+        "p99": 15038,
+        "max": 15038
+      },
+      "releasesFallingBackOver1s": 1,
+      "startDelayFromDispatchMs": {
+        "n": 2,
+        "p50": 15065,
+        "p95": 15065,
+        "p99": 15065,
+        "max": 15065
+      },
+      "firstStartMs": 20,
+      "lastEndMs": 15072
+    },
+    "charge:k10": {
+      "limit": 1,
+      "executions": 2,
+      "killedExecutions": 0,
+      "maxConcurrentFromIntervals": 1,
+      "maxConcurrentFromCounter": 1,
+      "violations": [],
+      "releaseToNextStartMs": {
+        "n": 1,
+        "p50": 15039,
+        "p95": 15039,
+        "p99": 15039,
+        "max": 15039
+      },
+      "releasesFallingBackOver1s": 1,
+      "startDelayFromDispatchMs": {
+        "n": 2,
+        "p50": 15066,
+        "p95": 15066,
+        "p99": 15066,
+        "max": 15066
+      },
+      "firstStartMs": 20,
+      "lastEndMs": 15075
+    },
+    "charge:k12": {
+      "limit": 1,
+      "executions": 2,
+      "killedExecutions": 0,
+      "maxConcurrentFromIntervals": 1,
+      "maxConcurrentFromCounter": 1,
+      "violations": [],
+      "releaseToNextStartMs": {
+        "n": 1,
+        "p50": 15039,
+        "p95": 15039,
+        "p99": 15039,
+        "max": 15039
+      },
+      "releasesFallingBackOver1s": 1,
+      "startDelayFromDispatchMs": {
+        "n": 2,
+        "p50": 15066,
+        "p95": 15066,
+        "p99": 15066,
+        "max": 15066
+      },
+      "firstStartMs": 20,
+      "lastEndMs": 15075
+    },
+    "charge:k14": {
+      "limit": 1,
+      "executions": 2,
+      "killedExecutions": 0,
+      "maxConcurrentFromIntervals": 1,
+      "maxConcurrentFromCounter": 1,
+      "violations": [],
+      "releaseToNextStartMs": {
+        "n": 1,
+        "p50": 15039,
+        "p95": 15039,
+        "p99": 15039,
+        "max": 15039
+      },
+      "releasesFallingBackOver1s": 1,
+      "startDelayFromDispatchMs": {
+        "n": 2,
+        "p50": 15066,
+        "p95": 15066,
+        "p99": 15066,
+        "max": 15066
+      },
+      "firstStartMs": 20,
+      "lastEndMs": 15075
+    },
+    "charge:k16": {
+      "limit": 1,
+      "executions": 2,
+      "killedExecutions": 0,
+      "maxConcurrentFromIntervals": 1,
+      "maxConcurrentFromCounter": 1,
+      "violations": [],
+      "releaseToNextStartMs": {
+        "n": 1,
+        "p50": 15038,
+        "p95": 15038,
+        "p99": 15038,
+        "max": 15038
+      },
+      "releasesFallingBackOver1s": 1,
+      "startDelayFromDispatchMs": {
+        "n": 2,
+        "p50": 15065,
+        "p95": 15065,
+        "p99": 15065,
+        "max": 15065
+      },
+      "firstStartMs": 20,
+      "lastEndMs": 15074
+    },
+    "charge:k18": {
+      "limit": 1,
+      "executions": 2,
+      "killedExecutions": 0,
+      "maxConcurrentFromIntervals": 1,
+      "maxConcurrentFromCounter": 1,
+      "violations": [],
+      "releaseToNextStartMs": {
+        "n": 1,
+        "p50": 15039,
+        "p95": 15039,
+        "p99": 15039,
+        "max": 15039
+      },
+      "releasesFallingBackOver1s": 1,
+      "startDelayFromDispatchMs": {
+        "n": 2,
+        "p50": 15066,
+        "p95": 15066,
+        "p99": 15066,
+        "max": 15066
+      },
+      "firstStartMs": 21,
+      "lastEndMs": 15075
+    },
+    "charge:k19": {
+      "limit": 1,
+      "executions": 2,
+      "killedExecutions": 0,
+      "maxConcurrentFromIntervals": 1,
+      "maxConcurrentFromCounter": 1,
+      "violations": [],
+      "releaseToNextStartMs": {
+        "n": 1,
+        "p50": 15038,
+        "p95": 15038,
+        "p99": 15038,
+        "max": 15038
+      },
+      "releasesFallingBackOver1s": 1,
+      "startDelayFromDispatchMs": {
+        "n": 2,
+        "p50": 15065,
+        "p95": 15065,
+        "p99": 15065,
+        "max": 15065
+      },
+      "firstStartMs": 21,
+      "lastEndMs": 15072
+    },
+    "charge:k20": {
+      "limit": 1,
+      "executions": 2,
+      "killedExecutions": 0,
+      "maxConcurrentFromIntervals": 1,
+      "maxConcurrentFromCounter": 1,
+      "violations": [],
+      "releaseToNextStartMs": {
+        "n": 1,
+        "p50": 15035,
+        "p95": 15035,
+        "p99": 15035,
+        "max": 15035
+      },
+      "releasesFallingBackOver1s": 1,
+      "startDelayFromDispatchMs": {
+        "n": 2,
+        "p50": 15066,
+        "p95": 15066,
+        "p99": 15066,
+        "max": 15066
+      },
+      "firstStartMs": 25,
+      "lastEndMs": 15075
+    },
+    "charge:k21": {
+      "limit": 1,
+      "executions": 2,
+      "killedExecutions": 0,
+      "maxConcurrentFromIntervals": 1,
+      "maxConcurrentFromCounter": 1,
+      "violations": [],
+      "releaseToNextStartMs": {
+        "n": 1,
+        "p50": 15030,
+        "p95": 15030,
+        "p99": 15030,
+        "max": 15030
+      },
+      "releasesFallingBackOver1s": 1,
+      "startDelayFromDispatchMs": {
+        "n": 2,
+        "p50": 15066,
+        "p95": 15066,
+        "p99": 15066,
+        "max": 15066
+      },
+      "firstStartMs": 29,
+      "lastEndMs": 15074
+    },
+    "charge:k22": {
+      "limit": 1,
+      "executions": 2,
+      "killedExecutions": 0,
+      "maxConcurrentFromIntervals": 1,
+      "maxConcurrentFromCounter": 1,
+      "violations": [],
+      "releaseToNextStartMs": {
+        "n": 1,
+        "p50": 15030,
+        "p95": 15030,
+        "p99": 15030,
+        "max": 15030
+      },
+      "releasesFallingBackOver1s": 1,
+      "startDelayFromDispatchMs": {
+        "n": 2,
+        "p50": 15066,
+        "p95": 15066,
+        "p99": 15066,
+        "max": 15066
+      },
+      "firstStartMs": 29,
+      "lastEndMs": 15075
+    },
+    "charge:k23": {
+      "limit": 1,
+      "executions": 2,
+      "killedExecutions": 0,
+      "maxConcurrentFromIntervals": 1,
+      "maxConcurrentFromCounter": 1,
+      "violations": [],
+      "releaseToNextStartMs": {
+        "n": 1,
+        "p50": 15030,
+        "p95": 15030,
+        "p99": 15030,
+        "max": 15030
+      },
+      "releasesFallingBackOver1s": 1,
+      "startDelayFromDispatchMs": {
+        "n": 2,
+        "p50": 15066,
+        "p95": 15066,
+        "p99": 15066,
+        "max": 15066
+      },
+      "firstStartMs": 30,
+      "lastEndMs": 15075
+    },
+    "charge:k24": {
+      "limit": 1,
+      "executions": 2,
+      "killedExecutions": 0,
+      "maxConcurrentFromIntervals": 1,
+      "maxConcurrentFromCounter": 1,
+      "violations": [],
+      "releaseToNextStartMs": {
+        "n": 1,
+        "p50": 15030,
+        "p95": 15030,
+        "p99": 15030,
+        "max": 15030
+      },
+      "releasesFallingBackOver1s": 1,
+      "startDelayFromDispatchMs": {
+        "n": 2,
+        "p50": 15066,
+        "p95": 15066,
+        "p99": 15066,
+        "max": 15066
+      },
+      "firstStartMs": 30,
+      "lastEndMs": 15075
+    },
+    "charge:k25": {
+      "limit": 1,
+      "executions": 2,
+      "killedExecutions": 0,
+      "maxConcurrentFromIntervals": 1,
+      "maxConcurrentFromCounter": 1,
+      "violations": [],
+      "releaseToNextStartMs": {
+        "n": 1,
+        "p50": 15030,
+        "p95": 15030,
+        "p99": 15030,
+        "max": 15030
+      },
+      "releasesFallingBackOver1s": 1,
+      "startDelayFromDispatchMs": {
+        "n": 2,
+        "p50": 15066,
+        "p95": 15066,
+        "p99": 15066,
+        "max": 15066
+      },
+      "firstStartMs": 30,
+      "lastEndMs": 15075
+    },
+    "charge:k26": {
+      "limit": 1,
+      "executions": 2,
+      "killedExecutions": 0,
+      "maxConcurrentFromIntervals": 1,
+      "maxConcurrentFromCounter": 1,
+      "violations": [],
+      "releaseToNextStartMs": {
+        "n": 1,
+        "p50": 15029,
+        "p95": 15029,
+        "p99": 15029,
+        "max": 15029
+      },
+      "releasesFallingBackOver1s": 1,
+      "startDelayFromDispatchMs": {
+        "n": 2,
+        "p50": 15066,
+        "p95": 15066,
+        "p99": 15066,
+        "max": 15066
+      },
+      "firstStartMs": 31,
+      "lastEndMs": 15074
+    },
+    "charge:k27": {
+      "limit": 1,
+      "executions": 2,
+      "killedExecutions": 0,
+      "maxConcurrentFromIntervals": 1,
+      "maxConcurrentFromCounter": 1,
+      "violations": [],
+      "releaseToNextStartMs": {
+        "n": 1,
+        "p50": 15029,
+        "p95": 15029,
+        "p99": 15029,
+        "max": 15029
+      },
+      "releasesFallingBackOver1s": 1,
+      "startDelayFromDispatchMs": {
+        "n": 2,
+        "p50": 15066,
+        "p95": 15066,
+        "p99": 15066,
+        "max": 15066
+      },
+      "firstStartMs": 31,
+      "lastEndMs": 15075
+    },
+    "charge:k28": {
+      "limit": 1,
+      "executions": 2,
+      "killedExecutions": 0,
+      "maxConcurrentFromIntervals": 1,
+      "maxConcurrentFromCounter": 1,
+      "violations": [],
+      "releaseToNextStartMs": {
+        "n": 1,
+        "p50": 15029,
+        "p95": 15029,
+        "p99": 15029,
+        "max": 15029
+      },
+      "releasesFallingBackOver1s": 1,
+      "startDelayFromDispatchMs": {
+        "n": 2,
+        "p50": 15066,
+        "p95": 15066,
+        "p99": 15066,
+        "max": 15066
+      },
+      "firstStartMs": 31,
+      "lastEndMs": 15075
+    },
+    "charge:k29": {
+      "limit": 1,
+      "executions": 2,
+      "killedExecutions": 0,
+      "maxConcurrentFromIntervals": 1,
+      "maxConcurrentFromCounter": 1,
+      "violations": [],
+      "releaseToNextStartMs": {
+        "n": 1,
+        "p50": 15027,
+        "p95": 15027,
+        "p99": 15027,
+        "max": 15027
+      },
+      "releasesFallingBackOver1s": 1,
+      "startDelayFromDispatchMs": {
+        "n": 2,
+        "p50": 15066,
+        "p95": 15066,
+        "p99": 15066,
+        "max": 15066
+      },
+      "firstStartMs": 33,
+      "lastEndMs": 15075
+    },
+    "charge:k30": {
+      "limit": 1,
+      "executions": 2,
+      "killedExecutions": 0,
+      "maxConcurrentFromIntervals": 1,
+      "maxConcurrentFromCounter": 1,
+      "violations": [],
+      "releaseToNextStartMs": {
+        "n": 1,
+        "p50": 15033,
+        "p95": 15033,
+        "p99": 15033,
+        "max": 15033
+      },
+      "releasesFallingBackOver1s": 1,
+      "startDelayFromDispatchMs": {
+        "n": 2,
+        "p50": 15073,
+        "p95": 15073,
+        "p99": 15073,
+        "max": 15073
+      },
+      "firstStartMs": 34,
+      "lastEndMs": 15080
+    },
+    "charge:k31": {
+      "limit": 1,
+      "executions": 2,
+      "killedExecutions": 0,
+      "maxConcurrentFromIntervals": 1,
+      "maxConcurrentFromCounter": 1,
+      "violations": [],
+      "releaseToNextStartMs": {
+        "n": 1,
+        "p50": 15028,
+        "p95": 15028,
+        "p99": 15028,
+        "max": 15028
+      },
+      "releasesFallingBackOver1s": 1,
+      "startDelayFromDispatchMs": {
+        "n": 2,
+        "p50": 15074,
+        "p95": 15074,
+        "p99": 15074,
+        "max": 15074
+      },
+      "firstStartMs": 39,
+      "lastEndMs": 15080
+    },
+    "charge:k32": {
+      "limit": 1,
+      "executions": 2,
+      "killedExecutions": 0,
+      "maxConcurrentFromIntervals": 1,
+      "maxConcurrentFromCounter": 1,
+      "violations": [],
+      "releaseToNextStartMs": {
+        "n": 1,
+        "p50": 15027,
+        "p95": 15027,
+        "p99": 15027,
+        "max": 15027
+      },
+      "releasesFallingBackOver1s": 1,
+      "startDelayFromDispatchMs": {
+        "n": 2,
+        "p50": 15073,
+        "p95": 15073,
+        "p99": 15073,
+        "max": 15073
+      },
+      "firstStartMs": 39,
+      "lastEndMs": 15080
+    },
+    "charge:k33": {
+      "limit": 1,
+      "executions": 2,
+      "killedExecutions": 0,
+      "maxConcurrentFromIntervals": 1,
+      "maxConcurrentFromCounter": 1,
+      "violations": [],
+      "releaseToNextStartMs": {
+        "n": 1,
+        "p50": 15027,
+        "p95": 15027,
+        "p99": 15027,
+        "max": 15027
+      },
+      "releasesFallingBackOver1s": 1,
+      "startDelayFromDispatchMs": {
+        "n": 2,
+        "p50": 15074,
+        "p95": 15074,
+        "p99": 15074,
+        "max": 15074
+      },
+      "firstStartMs": 41,
+      "lastEndMs": 15080
+    },
+    "charge:k34": {
+      "limit": 1,
+      "executions": 2,
+      "killedExecutions": 0,
+      "maxConcurrentFromIntervals": 1,
+      "maxConcurrentFromCounter": 1,
+      "violations": [],
+      "releaseToNextStartMs": {
+        "n": 1,
+        "p50": 15028,
+        "p95": 15028,
+        "p99": 15028,
+        "max": 15028
+      },
+      "releasesFallingBackOver1s": 1,
+      "startDelayFromDispatchMs": {
+        "n": 2,
+        "p50": 15075,
+        "p95": 15075,
+        "p99": 15075,
+        "max": 15075
+      },
+      "firstStartMs": 41,
+      "lastEndMs": 15084
+    },
+    "charge:k35": {
+      "limit": 1,
+      "executions": 2,
+      "killedExecutions": 0,
+      "maxConcurrentFromIntervals": 1,
+      "maxConcurrentFromCounter": 1,
+      "violations": [],
+      "releaseToNextStartMs": {
+        "n": 1,
+        "p50": 15029,
+        "p95": 15029,
+        "p99": 15029,
+        "max": 15029
+      },
+      "releasesFallingBackOver1s": 1,
+      "startDelayFromDispatchMs": {
+        "n": 2,
+        "p50": 15076,
+        "p95": 15076,
+        "p99": 15076,
+        "max": 15076
+      },
+      "firstStartMs": 42,
+      "lastEndMs": 15084
+    },
+    "charge:k36": {
+      "limit": 1,
+      "executions": 2,
+      "killedExecutions": 0,
+      "maxConcurrentFromIntervals": 1,
+      "maxConcurrentFromCounter": 1,
+      "violations": [],
+      "releaseToNextStartMs": {
+        "n": 1,
+        "p50": 15027,
+        "p95": 15027,
+        "p99": 15027,
+        "max": 15027
+      },
+      "releasesFallingBackOver1s": 1,
+      "startDelayFromDispatchMs": {
+        "n": 2,
+        "p50": 15079,
+        "p95": 15079,
+        "p99": 15079,
+        "max": 15079
+      },
+      "firstStartMs": 45,
+      "lastEndMs": 15085
+    },
+    "charge:k37": {
+      "limit": 1,
+      "executions": 2,
+      "killedExecutions": 0,
+      "maxConcurrentFromIntervals": 1,
+      "maxConcurrentFromCounter": 1,
+      "violations": [],
+      "releaseToNextStartMs": {
+        "n": 1,
+        "p50": 15025,
+        "p95": 15025,
+        "p99": 15025,
+        "max": 15025
+      },
+      "releasesFallingBackOver1s": 1,
+      "startDelayFromDispatchMs": {
+        "n": 2,
+        "p50": 15080,
+        "p95": 15080,
+        "p99": 15080,
+        "max": 15080
+      },
+      "firstStartMs": 48,
+      "lastEndMs": 15086
+    },
+    "charge:k38": {
+      "limit": 1,
+      "executions": 2,
+      "killedExecutions": 0,
+      "maxConcurrentFromIntervals": 1,
+      "maxConcurrentFromCounter": 1,
+      "violations": [],
+      "releaseToNextStartMs": {
+        "n": 1,
+        "p50": 15024,
+        "p95": 15024,
+        "p99": 15024,
+        "max": 15024
+      },
+      "releasesFallingBackOver1s": 1,
+      "startDelayFromDispatchMs": {
+        "n": 2,
+        "p50": 15080,
+        "p95": 15080,
+        "p99": 15080,
+        "max": 15080
+      },
+      "firstStartMs": 49,
+      "lastEndMs": 15086
+    },
+    "charge:k39": {
+      "limit": 1,
+      "executions": 2,
+      "killedExecutions": 0,
+      "maxConcurrentFromIntervals": 1,
+      "maxConcurrentFromCounter": 1,
+      "violations": [],
+      "releaseToNextStartMs": {
+        "n": 1,
+        "p50": 15025,
+        "p95": 15025,
+        "p99": 15025,
+        "max": 15025
+      },
+      "releasesFallingBackOver1s": 1,
+      "startDelayFromDispatchMs": {
+        "n": 2,
+        "p50": 15085,
+        "p95": 15085,
+        "p99": 15085,
+        "max": 15085
+      },
+      "firstStartMs": 53,
+      "lastEndMs": 15091
+    },
+    "charge:k40": {
+      "limit": 1,
+      "executions": 2,
+      "killedExecutions": 0,
+      "maxConcurrentFromIntervals": 1,
+      "maxConcurrentFromCounter": 1,
+      "violations": [],
+      "releaseToNextStartMs": {
+        "n": 1,
+        "p50": 15025,
+        "p95": 15025,
+        "p99": 15025,
+        "max": 15025
+      },
+      "releasesFallingBackOver1s": 1,
+      "startDelayFromDispatchMs": {
+        "n": 2,
+        "p50": 15085,
+        "p95": 15085,
+        "p99": 15085,
+        "max": 15085
+      },
+      "firstStartMs": 52,
+      "lastEndMs": 15092
+    },
+    "charge:k41": {
+      "limit": 1,
+      "executions": 2,
+      "killedExecutions": 0,
+      "maxConcurrentFromIntervals": 1,
+      "maxConcurrentFromCounter": 1,
+      "violations": [],
+      "releaseToNextStartMs": {
+        "n": 1,
+        "p50": 15025,
+        "p95": 15025,
+        "p99": 15025,
+        "max": 15025
+      },
+      "releasesFallingBackOver1s": 1,
+      "startDelayFromDispatchMs": {
+        "n": 2,
+        "p50": 15085,
+        "p95": 15085,
+        "p99": 15085,
+        "max": 15085
+      },
+      "firstStartMs": 53,
+      "lastEndMs": 15091
+    },
+    "charge:k42": {
+      "limit": 1,
+      "executions": 2,
+      "killedExecutions": 0,
+      "maxConcurrentFromIntervals": 1,
+      "maxConcurrentFromCounter": 1,
+      "violations": [],
+      "releaseToNextStartMs": {
+        "n": 1,
+        "p50": 15025,
+        "p95": 15025,
+        "p99": 15025,
+        "max": 15025
+      },
+      "releasesFallingBackOver1s": 1,
+      "startDelayFromDispatchMs": {
+        "n": 2,
+        "p50": 15085,
+        "p95": 15085,
+        "p99": 15085,
+        "max": 15085
+      },
+      "firstStartMs": 53,
+      "lastEndMs": 15091
+    },
+    "charge:k43": {
+      "limit": 1,
+      "executions": 2,
+      "killedExecutions": 0,
+      "maxConcurrentFromIntervals": 1,
+      "maxConcurrentFromCounter": 1,
+      "violations": [],
+      "releaseToNextStartMs": {
+        "n": 1,
+        "p50": 15026,
+        "p95": 15026,
+        "p99": 15026,
+        "max": 15026
+      },
+      "releasesFallingBackOver1s": 1,
+      "startDelayFromDispatchMs": {
+        "n": 2,
+        "p50": 15086,
+        "p95": 15086,
+        "p99": 15086,
+        "max": 15086
+      },
+      "firstStartMs": 53,
+      "lastEndMs": 15092
+    },
+    "charge:k44": {
+      "limit": 1,
+      "executions": 2,
+      "killedExecutions": 0,
+      "maxConcurrentFromIntervals": 1,
+      "maxConcurrentFromCounter": 1,
+      "violations": [],
+      "releaseToNextStartMs": {
+        "n": 1,
+        "p50": 15026,
+        "p95": 15026,
+        "p99": 15026,
+        "max": 15026
+      },
+      "releasesFallingBackOver1s": 1,
+      "startDelayFromDispatchMs": {
+        "n": 2,
+        "p50": 15087,
+        "p95": 15087,
+        "p99": 15087,
+        "max": 15087
+      },
+      "firstStartMs": 54,
+      "lastEndMs": 15093
+    },
+    "charge:k45": {
+      "limit": 1,
+      "executions": 2,
+      "killedExecutions": 0,
+      "maxConcurrentFromIntervals": 1,
+      "maxConcurrentFromCounter": 1,
+      "violations": [],
+      "releaseToNextStartMs": {
+        "n": 1,
+        "p50": 15025,
+        "p95": 15025,
+        "p99": 15025,
+        "max": 15025
+      },
+      "releasesFallingBackOver1s": 1,
+      "startDelayFromDispatchMs": {
+        "n": 2,
+        "p50": 15086,
+        "p95": 15086,
+        "p99": 15086,
+        "max": 15086
+      },
+      "firstStartMs": 54,
+      "lastEndMs": 15092
+    },
+    "charge:k46": {
+      "limit": 1,
+      "executions": 2,
+      "killedExecutions": 0,
+      "maxConcurrentFromIntervals": 1,
+      "maxConcurrentFromCounter": 1,
+      "violations": [],
+      "releaseToNextStartMs": {
+        "n": 1,
+        "p50": 15025,
+        "p95": 15025,
+        "p99": 15025,
+        "max": 15025
+      },
+      "releasesFallingBackOver1s": 1,
+      "startDelayFromDispatchMs": {
+        "n": 2,
+        "p50": 15086,
+        "p95": 15086,
+        "p99": 15086,
+        "max": 15086
+      },
+      "firstStartMs": 54,
+      "lastEndMs": 15092
+    },
+    "charge:k47": {
+      "limit": 1,
+      "executions": 2,
+      "killedExecutions": 0,
+      "maxConcurrentFromIntervals": 1,
+      "maxConcurrentFromCounter": 1,
+      "violations": [],
+      "releaseToNextStartMs": {
+        "n": 1,
+        "p50": 15026,
+        "p95": 15026,
+        "p99": 15026,
+        "max": 15026
+      },
+      "releasesFallingBackOver1s": 1,
+      "startDelayFromDispatchMs": {
+        "n": 2,
+        "p50": 15087,
+        "p95": 15087,
+        "p99": 15087,
+        "max": 15087
+      },
+      "firstStartMs": 54,
+      "lastEndMs": 15093
+    },
+    "charge:k48": {
+      "limit": 1,
+      "executions": 2,
+      "killedExecutions": 0,
+      "maxConcurrentFromIntervals": 1,
+      "maxConcurrentFromCounter": 1,
+      "violations": [],
+      "releaseToNextStartMs": {
+        "n": 1,
+        "p50": 15028,
+        "p95": 15028,
+        "p99": 15028,
+        "max": 15028
+      },
+      "releasesFallingBackOver1s": 1,
+      "startDelayFromDispatchMs": {
+        "n": 2,
+        "p50": 15092,
+        "p95": 15092,
+        "p99": 15092,
+        "max": 15092
+      },
+      "firstStartMs": 57,
+      "lastEndMs": 15098
+    },
+    "charge:k49": {
+      "limit": 1,
+      "executions": 2,
+      "killedExecutions": 0,
+      "maxConcurrentFromIntervals": 1,
+      "maxConcurrentFromCounter": 1,
+      "violations": [],
+      "releaseToNextStartMs": {
+        "n": 1,
+        "p50": 15026,
+        "p95": 15026,
+        "p99": 15026,
+        "max": 15026
+      },
+      "releasesFallingBackOver1s": 1,
+      "startDelayFromDispatchMs": {
+        "n": 2,
+        "p50": 15093,
+        "p95": 15093,
+        "p99": 15093,
+        "max": 15093
+      },
+      "firstStartMs": 60,
+      "lastEndMs": 15100
+    },
+    "charge:k50": {
+      "limit": 1,
+      "executions": 2,
+      "killedExecutions": 0,
+      "maxConcurrentFromIntervals": 1,
+      "maxConcurrentFromCounter": 1,
+      "violations": [],
+      "releaseToNextStartMs": {
+        "n": 1,
+        "p50": 15026,
+        "p95": 15026,
+        "p99": 15026,
+        "max": 15026
+      },
+      "releasesFallingBackOver1s": 1,
+      "startDelayFromDispatchMs": {
+        "n": 2,
+        "p50": 15095,
+        "p95": 15095,
+        "p99": 15095,
+        "max": 15095
+      },
+      "firstStartMs": 63,
+      "lastEndMs": 15102
+    },
+    "charge:k51": {
+      "limit": 1,
+      "executions": 2,
+      "killedExecutions": 0,
+      "maxConcurrentFromIntervals": 1,
+      "maxConcurrentFromCounter": 1,
+      "violations": [],
+      "releaseToNextStartMs": {
+        "n": 1,
+        "p50": 15026,
+        "p95": 15026,
+        "p99": 15026,
+        "max": 15026
+      },
+      "releasesFallingBackOver1s": 1,
+      "startDelayFromDispatchMs": {
+        "n": 2,
+        "p50": 15095,
+        "p95": 15095,
+        "p99": 15095,
+        "max": 15095
+      },
+      "firstStartMs": 63,
+      "lastEndMs": 15101
+    },
+    "charge:k52": {
+      "limit": 1,
+      "executions": 2,
+      "killedExecutions": 0,
+      "maxConcurrentFromIntervals": 1,
+      "maxConcurrentFromCounter": 1,
+      "violations": [],
+      "releaseToNextStartMs": {
+        "n": 1,
+        "p50": 15024,
+        "p95": 15024,
+        "p99": 15024,
+        "max": 15024
+      },
+      "releasesFallingBackOver1s": 1,
+      "startDelayFromDispatchMs": {
+        "n": 2,
+        "p50": 15095,
+        "p95": 15095,
+        "p99": 15095,
+        "max": 15095
+      },
+      "firstStartMs": 64,
+      "lastEndMs": 15102
+    },
+    "charge:k53": {
+      "limit": 1,
+      "executions": 2,
+      "killedExecutions": 0,
+      "maxConcurrentFromIntervals": 1,
+      "maxConcurrentFromCounter": 1,
+      "violations": [],
+      "releaseToNextStartMs": {
+        "n": 1,
+        "p50": 15025,
+        "p95": 15025,
+        "p99": 15025,
+        "max": 15025
+      },
+      "releasesFallingBackOver1s": 1,
+      "startDelayFromDispatchMs": {
+        "n": 2,
+        "p50": 15096,
+        "p95": 15096,
+        "p99": 15096,
+        "max": 15096
+      },
+      "firstStartMs": 64,
+      "lastEndMs": 15103
+    },
+    "charge:k54": {
+      "limit": 1,
+      "executions": 2,
+      "killedExecutions": 0,
+      "maxConcurrentFromIntervals": 1,
+      "maxConcurrentFromCounter": 1,
+      "violations": [],
+      "releaseToNextStartMs": {
+        "n": 1,
+        "p50": 15026,
+        "p95": 15026,
+        "p99": 15026,
+        "max": 15026
+      },
+      "releasesFallingBackOver1s": 1,
+      "startDelayFromDispatchMs": {
+        "n": 2,
+        "p50": 15097,
+        "p95": 15097,
+        "p99": 15097,
+        "max": 15097
+      },
+      "firstStartMs": 65,
+      "lastEndMs": 15103
+    },
+    "charge:k55": {
+      "limit": 1,
+      "executions": 2,
+      "killedExecutions": 0,
+      "maxConcurrentFromIntervals": 1,
+      "maxConcurrentFromCounter": 1,
+      "violations": [],
+      "releaseToNextStartMs": {
+        "n": 1,
+        "p50": 15026,
+        "p95": 15026,
+        "p99": 15026,
+        "max": 15026
+      },
+      "releasesFallingBackOver1s": 1,
+      "startDelayFromDispatchMs": {
+        "n": 2,
+        "p50": 15098,
+        "p95": 15098,
+        "p99": 15098,
+        "max": 15098
+      },
+      "firstStartMs": 65,
+      "lastEndMs": 15103
+    },
+    "charge:k56": {
+      "limit": 1,
+      "executions": 2,
+      "killedExecutions": 0,
+      "maxConcurrentFromIntervals": 1,
+      "maxConcurrentFromCounter": 1,
+      "violations": [],
+      "releaseToNextStartMs": {
+        "n": 1,
+        "p50": 15025,
+        "p95": 15025,
+        "p99": 15025,
+        "max": 15025
+      },
+      "releasesFallingBackOver1s": 1,
+      "startDelayFromDispatchMs": {
+        "n": 2,
+        "p50": 15097,
+        "p95": 15097,
+        "p99": 15097,
+        "max": 15097
+      },
+      "firstStartMs": 66,
+      "lastEndMs": 15103
+    },
+    "charge:k57": {
+      "limit": 1,
+      "executions": 2,
+      "killedExecutions": 0,
+      "maxConcurrentFromIntervals": 1,
+      "maxConcurrentFromCounter": 1,
+      "violations": [],
+      "releaseToNextStartMs": {
+        "n": 1,
+        "p50": 15025,
+        "p95": 15025,
+        "p99": 15025,
+        "max": 15025
+      },
+      "releasesFallingBackOver1s": 1,
+      "startDelayFromDispatchMs": {
+        "n": 2,
+        "p50": 15097,
+        "p95": 15097,
+        "p99": 15097,
+        "max": 15097
+      },
+      "firstStartMs": 66,
+      "lastEndMs": 15103
+    },
+    "charge:k58": {
+      "limit": 1,
+      "executions": 2,
+      "killedExecutions": 0,
+      "maxConcurrentFromIntervals": 1,
+      "maxConcurrentFromCounter": 1,
+      "violations": [],
+      "releaseToNextStartMs": {
+        "n": 1,
+        "p50": 15026,
+        "p95": 15026,
+        "p99": 15026,
+        "max": 15026
+      },
+      "releasesFallingBackOver1s": 1,
+      "startDelayFromDispatchMs": {
+        "n": 2,
+        "p50": 15098,
+        "p95": 15098,
+        "p99": 15098,
+        "max": 15098
+      },
+      "firstStartMs": 66,
+      "lastEndMs": 15104
+    },
+    "charge:k59": {
+      "limit": 1,
+      "executions": 2,
+      "killedExecutions": 0,
+      "maxConcurrentFromIntervals": 1,
+      "maxConcurrentFromCounter": 1,
+      "violations": [],
+      "releaseToNextStartMs": {
+        "n": 1,
+        "p50": 15027,
+        "p95": 15027,
+        "p99": 15027,
+        "max": 15027
+      },
+      "releasesFallingBackOver1s": 1,
+      "startDelayFromDispatchMs": {
+        "n": 2,
+        "p50": 15099,
+        "p95": 15099,
+        "p99": 15099,
+        "max": 15099
+      },
+      "firstStartMs": 67,
+      "lastEndMs": 15105
+    },
+    "charge:k60": {
+      "limit": 1,
+      "executions": 2,
+      "killedExecutions": 0,
+      "maxConcurrentFromIntervals": 1,
+      "maxConcurrentFromCounter": 1,
+      "violations": [],
+      "releaseToNextStartMs": {
+        "n": 1,
+        "p50": 15025,
+        "p95": 15025,
+        "p99": 15025,
+        "max": 15025
+      },
+      "releasesFallingBackOver1s": 1,
+      "startDelayFromDispatchMs": {
+        "n": 2,
+        "p50": 15102,
+        "p95": 15102,
+        "p99": 15102,
+        "max": 15102
+      },
+      "firstStartMs": 71,
+      "lastEndMs": 15108
+    },
+    "charge:k61": {
+      "limit": 1,
+      "executions": 2,
+      "killedExecutions": 0,
+      "maxConcurrentFromIntervals": 1,
+      "maxConcurrentFromCounter": 1,
+      "violations": [],
+      "releaseToNextStartMs": {
+        "n": 1,
+        "p50": 15026,
+        "p95": 15026,
+        "p99": 15026,
+        "max": 15026
+      },
+      "releasesFallingBackOver1s": 1,
+      "startDelayFromDispatchMs": {
+        "n": 2,
+        "p50": 15103,
+        "p95": 15103,
+        "p99": 15103,
+        "max": 15103
+      },
+      "firstStartMs": 71,
+      "lastEndMs": 15109
+    },
+    "charge:k62": {
+      "limit": 1,
+      "executions": 2,
+      "killedExecutions": 0,
+      "maxConcurrentFromIntervals": 1,
+      "maxConcurrentFromCounter": 1,
+      "violations": [],
+      "releaseToNextStartMs": {
+        "n": 1,
+        "p50": 15024,
+        "p95": 15024,
+        "p99": 15024,
+        "max": 15024
+      },
+      "releasesFallingBackOver1s": 1,
+      "startDelayFromDispatchMs": {
+        "n": 2,
+        "p50": 15102,
+        "p95": 15102,
+        "p99": 15102,
+        "max": 15102
+      },
+      "firstStartMs": 73,
+      "lastEndMs": 15108
+    },
+    "charge:k63": {
+      "limit": 1,
+      "executions": 2,
+      "killedExecutions": 0,
+      "maxConcurrentFromIntervals": 1,
+      "maxConcurrentFromCounter": 1,
+      "violations": [],
+      "releaseToNextStartMs": {
+        "n": 1,
+        "p50": 15025,
+        "p95": 15025,
+        "p99": 15025,
+        "max": 15025
+      },
+      "releasesFallingBackOver1s": 1,
+      "startDelayFromDispatchMs": {
+        "n": 2,
+        "p50": 15105,
+        "p95": 15105,
+        "p99": 15105,
+        "max": 15105
+      },
+      "firstStartMs": 74,
+      "lastEndMs": 15111
+    },
+    "charge:k64": {
+      "limit": 1,
+      "executions": 2,
+      "killedExecutions": 0,
+      "maxConcurrentFromIntervals": 1,
+      "maxConcurrentFromCounter": 1,
+      "violations": [],
+      "releaseToNextStartMs": {
+        "n": 1,
+        "p50": 15025,
+        "p95": 15025,
+        "p99": 15025,
+        "max": 15025
+      },
+      "releasesFallingBackOver1s": 1,
+      "startDelayFromDispatchMs": {
+        "n": 2,
+        "p50": 15105,
+        "p95": 15105,
+        "p99": 15105,
+        "max": 15105
+      },
+      "firstStartMs": 74,
+      "lastEndMs": 15111
+    },
+    "charge:k65": {
+      "limit": 1,
+      "executions": 2,
+      "killedExecutions": 0,
+      "maxConcurrentFromIntervals": 1,
+      "maxConcurrentFromCounter": 1,
+      "violations": [],
+      "releaseToNextStartMs": {
+        "n": 1,
+        "p50": 15024,
+        "p95": 15024,
+        "p99": 15024,
+        "max": 15024
+      },
+      "releasesFallingBackOver1s": 1,
+      "startDelayFromDispatchMs": {
+        "n": 2,
+        "p50": 15106,
+        "p95": 15106,
+        "p99": 15106,
+        "max": 15106
+      },
+      "firstStartMs": 75,
+      "lastEndMs": 15112
+    },
+    "charge:k66": {
+      "limit": 1,
+      "executions": 2,
+      "killedExecutions": 0,
+      "maxConcurrentFromIntervals": 1,
+      "maxConcurrentFromCounter": 1,
+      "violations": [],
+      "releaseToNextStartMs": {
+        "n": 1,
+        "p50": 15024,
+        "p95": 15024,
+        "p99": 15024,
+        "max": 15024
+      },
+      "releasesFallingBackOver1s": 1,
+      "startDelayFromDispatchMs": {
+        "n": 2,
+        "p50": 15106,
+        "p95": 15106,
+        "p99": 15106,
+        "max": 15106
+      },
+      "firstStartMs": 75,
+      "lastEndMs": 15112
+    },
+    "charge:k67": {
+      "limit": 1,
+      "executions": 2,
+      "killedExecutions": 0,
+      "maxConcurrentFromIntervals": 1,
+      "maxConcurrentFromCounter": 1,
+      "violations": [],
+      "releaseToNextStartMs": {
+        "n": 1,
+        "p50": 15025,
+        "p95": 15025,
+        "p99": 15025,
+        "max": 15025
+      },
+      "releasesFallingBackOver1s": 1,
+      "startDelayFromDispatchMs": {
+        "n": 2,
+        "p50": 15107,
+        "p95": 15107,
+        "p99": 15107,
+        "max": 15107
+      },
+      "firstStartMs": 76,
+      "lastEndMs": 15112
+    },
+    "charge:k68": {
+      "limit": 1,
+      "executions": 2,
+      "killedExecutions": 0,
+      "maxConcurrentFromIntervals": 1,
+      "maxConcurrentFromCounter": 1,
+      "violations": [],
+      "releaseToNextStartMs": {
+        "n": 1,
+        "p50": 15025,
+        "p95": 15025,
+        "p99": 15025,
+        "max": 15025
+      },
+      "releasesFallingBackOver1s": 1,
+      "startDelayFromDispatchMs": {
+        "n": 2,
+        "p50": 15111,
+        "p95": 15111,
+        "p99": 15111,
+        "max": 15111
+      },
+      "firstStartMs": 80,
+      "lastEndMs": 15117
+    },
+    "charge:k69": {
+      "limit": 1,
+      "executions": 2,
+      "killedExecutions": 0,
+      "maxConcurrentFromIntervals": 1,
+      "maxConcurrentFromCounter": 1,
+      "violations": [],
+      "releaseToNextStartMs": {
+        "n": 1,
+        "p50": 15025,
+        "p95": 15025,
+        "p99": 15025,
+        "max": 15025
+      },
+      "releasesFallingBackOver1s": 1,
+      "startDelayFromDispatchMs": {
+        "n": 2,
+        "p50": 15111,
+        "p95": 15111,
+        "p99": 15111,
+        "max": 15111
+      },
+      "firstStartMs": 80,
+      "lastEndMs": 15117
+    },
+    "charge:k70": {
+      "limit": 1,
+      "executions": 2,
+      "killedExecutions": 0,
+      "maxConcurrentFromIntervals": 1,
+      "maxConcurrentFromCounter": 1,
+      "violations": [],
+      "releaseToNextStartMs": {
+        "n": 1,
+        "p50": 15026,
+        "p95": 15026,
+        "p99": 15026,
+        "max": 15026
+      },
+      "releasesFallingBackOver1s": 1,
+      "startDelayFromDispatchMs": {
+        "n": 2,
+        "p50": 15112,
+        "p95": 15112,
+        "p99": 15112,
+        "max": 15112
+      },
+      "firstStartMs": 81,
+      "lastEndMs": 15118
+    },
+    "charge:k71": {
+      "limit": 1,
+      "executions": 2,
+      "killedExecutions": 0,
+      "maxConcurrentFromIntervals": 1,
+      "maxConcurrentFromCounter": 1,
+      "violations": [],
+      "releaseToNextStartMs": {
+        "n": 1,
+        "p50": 15027,
+        "p95": 15027,
+        "p99": 15027,
+        "max": 15027
+      },
+      "releasesFallingBackOver1s": 1,
+      "startDelayFromDispatchMs": {
+        "n": 2,
+        "p50": 15117,
+        "p95": 15117,
+        "p99": 15117,
+        "max": 15117
+      },
+      "firstStartMs": 83,
+      "lastEndMs": 15124
+    },
+    "charge:k72": {
+      "limit": 1,
+      "executions": 2,
+      "killedExecutions": 0,
+      "maxConcurrentFromIntervals": 1,
+      "maxConcurrentFromCounter": 1,
+      "violations": [],
+      "releaseToNextStartMs": {
+        "n": 1,
+        "p50": 15027,
+        "p95": 15027,
+        "p99": 15027,
+        "max": 15027
+      },
+      "releasesFallingBackOver1s": 1,
+      "startDelayFromDispatchMs": {
+        "n": 2,
+        "p50": 15117,
+        "p95": 15117,
+        "p99": 15117,
+        "max": 15117
+      },
+      "firstStartMs": 84,
+      "lastEndMs": 15124
+    },
+    "charge:k73": {
+      "limit": 1,
+      "executions": 2,
+      "killedExecutions": 0,
+      "maxConcurrentFromIntervals": 1,
+      "maxConcurrentFromCounter": 1,
+      "violations": [],
+      "releaseToNextStartMs": {
+        "n": 1,
+        "p50": 15027,
+        "p95": 15027,
+        "p99": 15027,
+        "max": 15027
+      },
+      "releasesFallingBackOver1s": 1,
+      "startDelayFromDispatchMs": {
+        "n": 2,
+        "p50": 15117,
+        "p95": 15117,
+        "p99": 15117,
+        "max": 15117
+      },
+      "firstStartMs": 85,
+      "lastEndMs": 15124
+    },
+    "charge:k74": {
+      "limit": 1,
+      "executions": 2,
+      "killedExecutions": 0,
+      "maxConcurrentFromIntervals": 1,
+      "maxConcurrentFromCounter": 1,
+      "violations": [],
+      "releaseToNextStartMs": {
+        "n": 1,
+        "p50": 15027,
+        "p95": 15027,
+        "p99": 15027,
+        "max": 15027
+      },
+      "releasesFallingBackOver1s": 1,
+      "startDelayFromDispatchMs": {
+        "n": 2,
+        "p50": 15117,
+        "p95": 15117,
+        "p99": 15117,
+        "max": 15117
+      },
+      "firstStartMs": 85,
+      "lastEndMs": 15123
+    },
+    "charge:k75": {
+      "limit": 1,
+      "executions": 2,
+      "killedExecutions": 0,
+      "maxConcurrentFromIntervals": 1,
+      "maxConcurrentFromCounter": 1,
+      "violations": [],
+      "releaseToNextStartMs": {
+        "n": 1,
+        "p50": 15028,
+        "p95": 15028,
+        "p99": 15028,
+        "max": 15028
+      },
+      "releasesFallingBackOver1s": 1,
+      "startDelayFromDispatchMs": {
+        "n": 2,
+        "p50": 15118,
+        "p95": 15118,
+        "p99": 15118,
+        "max": 15118
+      },
+      "firstStartMs": 85,
+      "lastEndMs": 15124
+    },
+    "charge:k76": {
+      "limit": 1,
+      "executions": 2,
+      "killedExecutions": 0,
+      "maxConcurrentFromIntervals": 1,
+      "maxConcurrentFromCounter": 1,
+      "violations": [],
+      "releaseToNextStartMs": {
+        "n": 1,
+        "p50": 15027,
+        "p95": 15027,
+        "p99": 15027,
+        "max": 15027
+      },
+      "releasesFallingBackOver1s": 1,
+      "startDelayFromDispatchMs": {
+        "n": 2,
+        "p50": 15118,
+        "p95": 15118,
+        "p99": 15118,
+        "max": 15118
+      },
+      "firstStartMs": 85,
+      "lastEndMs": 15124
+    },
+    "charge:k77": {
+      "limit": 1,
+      "executions": 2,
+      "killedExecutions": 0,
+      "maxConcurrentFromIntervals": 1,
+      "maxConcurrentFromCounter": 1,
+      "violations": [],
+      "releaseToNextStartMs": {
+        "n": 1,
+        "p50": 15027,
+        "p95": 15027,
+        "p99": 15027,
+        "max": 15027
+      },
+      "releasesFallingBackOver1s": 1,
+      "startDelayFromDispatchMs": {
+        "n": 2,
+        "p50": 15118,
+        "p95": 15118,
+        "p99": 15118,
+        "max": 15118
+      },
+      "firstStartMs": 85,
+      "lastEndMs": 15124
+    },
+    "charge:k78": {
+      "limit": 1,
+      "executions": 2,
+      "killedExecutions": 0,
+      "maxConcurrentFromIntervals": 1,
+      "maxConcurrentFromCounter": 1,
+      "violations": [],
+      "releaseToNextStartMs": {
+        "n": 1,
+        "p50": 15025,
+        "p95": 15025,
+        "p99": 15025,
+        "max": 15025
+      },
+      "releasesFallingBackOver1s": 1,
+      "startDelayFromDispatchMs": {
+        "n": 2,
+        "p50": 15120,
+        "p95": 15120,
+        "p99": 15120,
+        "max": 15120
+      },
+      "firstStartMs": 89,
+      "lastEndMs": 15127
+    },
+    "charge:k79": {
+      "limit": 1,
+      "executions": 2,
+      "killedExecutions": 0,
+      "maxConcurrentFromIntervals": 1,
+      "maxConcurrentFromCounter": 1,
+      "violations": [],
+      "releaseToNextStartMs": {
+        "n": 1,
+        "p50": 15028,
+        "p95": 15028,
+        "p99": 15028,
+        "max": 15028
+      },
+      "releasesFallingBackOver1s": 1,
+      "startDelayFromDispatchMs": {
+        "n": 2,
+        "p50": 15124,
+        "p95": 15124,
+        "p99": 15124,
+        "max": 15124
+      },
+      "firstStartMs": 89,
+      "lastEndMs": 15131
+    },
+    "charge:k80": {
+      "limit": 1,
+      "executions": 2,
+      "killedExecutions": 0,
+      "maxConcurrentFromIntervals": 1,
+      "maxConcurrentFromCounter": 1,
+      "violations": [],
+      "releaseToNextStartMs": {
+        "n": 1,
+        "p50": 15025,
+        "p95": 15025,
+        "p99": 15025,
+        "max": 15025
+      },
+      "releasesFallingBackOver1s": 1,
+      "startDelayFromDispatchMs": {
+        "n": 2,
+        "p50": 15124,
+        "p95": 15124,
+        "p99": 15124,
+        "max": 15124
+      },
+      "firstStartMs": 92,
+      "lastEndMs": 15130
+    },
+    "charge:k82": {
+      "limit": 1,
+      "executions": 2,
+      "killedExecutions": 0,
+      "maxConcurrentFromIntervals": 1,
+      "maxConcurrentFromCounter": 1,
+      "violations": [],
+      "releaseToNextStartMs": {
+        "n": 1,
+        "p50": 15026,
+        "p95": 15026,
+        "p99": 15026,
+        "max": 15026
+      },
+      "releasesFallingBackOver1s": 1,
+      "startDelayFromDispatchMs": {
+        "n": 2,
+        "p50": 15126,
+        "p95": 15126,
+        "p99": 15126,
+        "max": 15126
+      },
+      "firstStartMs": 94,
+      "lastEndMs": 15132
+    },
+    "charge:k81": {
+      "limit": 1,
+      "executions": 2,
+      "killedExecutions": 0,
+      "maxConcurrentFromIntervals": 1,
+      "maxConcurrentFromCounter": 1,
+      "violations": [],
+      "releaseToNextStartMs": {
+        "n": 1,
+        "p50": 15024,
+        "p95": 15024,
+        "p99": 15024,
+        "max": 15024
+      },
+      "releasesFallingBackOver1s": 1,
+      "startDelayFromDispatchMs": {
+        "n": 2,
+        "p50": 15124,
+        "p95": 15124,
+        "p99": 15124,
+        "max": 15124
+      },
+      "firstStartMs": 94,
+      "lastEndMs": 15130
+    },
+    "charge:k83": {
+      "limit": 1,
+      "executions": 2,
+      "killedExecutions": 0,
+      "maxConcurrentFromIntervals": 1,
+      "maxConcurrentFromCounter": 1,
+      "violations": [],
+      "releaseToNextStartMs": {
+        "n": 1,
+        "p50": 15025,
+        "p95": 15025,
+        "p99": 15025,
+        "max": 15025
+      },
+      "releasesFallingBackOver1s": 1,
+      "startDelayFromDispatchMs": {
+        "n": 2,
+        "p50": 15125,
+        "p95": 15125,
+        "p99": 15125,
+        "max": 15125
+      },
+      "firstStartMs": 95,
+      "lastEndMs": 15131
+    },
+    "charge:k84": {
+      "limit": 1,
+      "executions": 2,
+      "killedExecutions": 0,
+      "maxConcurrentFromIntervals": 1,
+      "maxConcurrentFromCounter": 1,
+      "violations": [],
+      "releaseToNextStartMs": {
+        "n": 1,
+        "p50": 15026,
+        "p95": 15026,
+        "p99": 15026,
+        "max": 15026
+      },
+      "releasesFallingBackOver1s": 1,
+      "startDelayFromDispatchMs": {
+        "n": 2,
+        "p50": 15127,
+        "p95": 15127,
+        "p99": 15127,
+        "max": 15127
+      },
+      "firstStartMs": 95,
+      "lastEndMs": 15133
+    },
+    "charge:k85": {
+      "limit": 1,
+      "executions": 2,
+      "killedExecutions": 0,
+      "maxConcurrentFromIntervals": 1,
+      "maxConcurrentFromCounter": 1,
+      "violations": [],
+      "releaseToNextStartMs": {
+        "n": 1,
+        "p50": 15026,
+        "p95": 15026,
+        "p99": 15026,
+        "max": 15026
+      },
+      "releasesFallingBackOver1s": 1,
+      "startDelayFromDispatchMs": {
+        "n": 2,
+        "p50": 15128,
+        "p95": 15128,
+        "p99": 15128,
+        "max": 15128
+      },
+      "firstStartMs": 96,
+      "lastEndMs": 15135
+    },
+    "charge:k86": {
+      "limit": 1,
+      "executions": 2,
+      "killedExecutions": 0,
+      "maxConcurrentFromIntervals": 1,
+      "maxConcurrentFromCounter": 1,
+      "violations": [],
+      "releaseToNextStartMs": {
+        "n": 1,
+        "p50": 15025,
+        "p95": 15025,
+        "p99": 15025,
+        "max": 15025
+      },
+      "releasesFallingBackOver1s": 1,
+      "startDelayFromDispatchMs": {
+        "n": 2,
+        "p50": 15128,
+        "p95": 15128,
+        "p99": 15128,
+        "max": 15128
+      },
+      "firstStartMs": 97,
+      "lastEndMs": 15135
+    },
+    "charge:k87": {
+      "limit": 1,
+      "executions": 2,
+      "killedExecutions": 0,
+      "maxConcurrentFromIntervals": 1,
+      "maxConcurrentFromCounter": 1,
+      "violations": [],
+      "releaseToNextStartMs": {
+        "n": 1,
+        "p50": 15026,
+        "p95": 15026,
+        "p99": 15026,
+        "max": 15026
+      },
+      "releasesFallingBackOver1s": 1,
+      "startDelayFromDispatchMs": {
+        "n": 2,
+        "p50": 15129,
+        "p95": 15129,
+        "p99": 15129,
+        "max": 15129
+      },
+      "firstStartMs": 98,
+      "lastEndMs": 15135
+    },
+    "charge:k88": {
+      "limit": 1,
+      "executions": 2,
+      "killedExecutions": 0,
+      "maxConcurrentFromIntervals": 1,
+      "maxConcurrentFromCounter": 1,
+      "violations": [],
+      "releaseToNextStartMs": {
+        "n": 1,
+        "p50": 15027,
+        "p95": 15027,
+        "p99": 15027,
+        "max": 15027
+      },
+      "releasesFallingBackOver1s": 1,
+      "startDelayFromDispatchMs": {
+        "n": 2,
+        "p50": 15130,
+        "p95": 15130,
+        "p99": 15130,
+        "max": 15130
+      },
+      "firstStartMs": 98,
+      "lastEndMs": 15136
+    },
+    "charge:k89": {
+      "limit": 1,
+      "executions": 2,
+      "killedExecutions": 0,
+      "maxConcurrentFromIntervals": 1,
+      "maxConcurrentFromCounter": 1,
+      "violations": [],
+      "releaseToNextStartMs": {
+        "n": 1,
+        "p50": 15027,
+        "p95": 15027,
+        "p99": 15027,
+        "max": 15027
+      },
+      "releasesFallingBackOver1s": 1,
+      "startDelayFromDispatchMs": {
+        "n": 2,
+        "p50": 15133,
+        "p95": 15133,
+        "p99": 15133,
+        "max": 15133
+      },
+      "firstStartMs": 99,
+      "lastEndMs": 15139
+    },
+    "charge:k90": {
+      "limit": 1,
+      "executions": 2,
+      "killedExecutions": 0,
+      "maxConcurrentFromIntervals": 1,
+      "maxConcurrentFromCounter": 1,
+      "violations": [],
+      "releaseToNextStartMs": {
+        "n": 1,
+        "p50": 15027,
+        "p95": 15027,
+        "p99": 15027,
+        "max": 15027
+      },
+      "releasesFallingBackOver1s": 1,
+      "startDelayFromDispatchMs": {
+        "n": 2,
+        "p50": 15134,
+        "p95": 15134,
+        "p99": 15134,
+        "max": 15134
+      },
+      "firstStartMs": 102,
+      "lastEndMs": 15139
+    },
+    "charge:k91": {
+      "limit": 1,
+      "executions": 2,
+      "killedExecutions": 0,
+      "maxConcurrentFromIntervals": 1,
+      "maxConcurrentFromCounter": 1,
+      "violations": [],
+      "releaseToNextStartMs": {
+        "n": 1,
+        "p50": 15025,
+        "p95": 15025,
+        "p99": 15025,
+        "max": 15025
+      },
+      "releasesFallingBackOver1s": 1,
+      "startDelayFromDispatchMs": {
+        "n": 2,
+        "p50": 15134,
+        "p95": 15134,
+        "p99": 15134,
+        "max": 15134
+      },
+      "firstStartMs": 103,
+      "lastEndMs": 15141
+    },
+    "charge:k92": {
+      "limit": 1,
+      "executions": 2,
+      "killedExecutions": 0,
+      "maxConcurrentFromIntervals": 1,
+      "maxConcurrentFromCounter": 1,
+      "violations": [],
+      "releaseToNextStartMs": {
+        "n": 1,
+        "p50": 15025,
+        "p95": 15025,
+        "p99": 15025,
+        "max": 15025
+      },
+      "releasesFallingBackOver1s": 1,
+      "startDelayFromDispatchMs": {
+        "n": 2,
+        "p50": 15135,
+        "p95": 15135,
+        "p99": 15135,
+        "max": 15135
+      },
+      "firstStartMs": 104,
+      "lastEndMs": 15141
+    },
+    "charge:k93": {
+      "limit": 1,
+      "executions": 2,
+      "killedExecutions": 0,
+      "maxConcurrentFromIntervals": 1,
+      "maxConcurrentFromCounter": 1,
+      "violations": [],
+      "releaseToNextStartMs": {
+        "n": 1,
+        "p50": 15024,
+        "p95": 15024,
+        "p99": 15024,
+        "max": 15024
+      },
+      "releasesFallingBackOver1s": 1,
+      "startDelayFromDispatchMs": {
+        "n": 2,
+        "p50": 15135,
+        "p95": 15135,
+        "p99": 15135,
+        "max": 15135
+      },
+      "firstStartMs": 104,
+      "lastEndMs": 15140
+    },
+    "charge:k94": {
+      "limit": 1,
+      "executions": 2,
+      "killedExecutions": 0,
+      "maxConcurrentFromIntervals": 1,
+      "maxConcurrentFromCounter": 1,
+      "violations": [],
+      "releaseToNextStartMs": {
+        "n": 1,
+        "p50": 15026,
+        "p95": 15026,
+        "p99": 15026,
+        "max": 15026
+      },
+      "releasesFallingBackOver1s": 1,
+      "startDelayFromDispatchMs": {
+        "n": 2,
+        "p50": 15137,
+        "p95": 15137,
+        "p99": 15137,
+        "max": 15137
+      },
+      "firstStartMs": 105,
+      "lastEndMs": 15142
+    },
+    "charge:k95": {
+      "limit": 1,
+      "executions": 2,
+      "killedExecutions": 0,
+      "maxConcurrentFromIntervals": 1,
+      "maxConcurrentFromCounter": 1,
+      "violations": [],
+      "releaseToNextStartMs": {
+        "n": 1,
+        "p50": 15027,
+        "p95": 15027,
+        "p99": 15027,
+        "max": 15027
+      },
+      "releasesFallingBackOver1s": 1,
+      "startDelayFromDispatchMs": {
+        "n": 2,
+        "p50": 15139,
+        "p95": 15139,
+        "p99": 15139,
+        "max": 15139
+      },
+      "firstStartMs": 106,
+      "lastEndMs": 15145
+    },
+    "charge:k96": {
+      "limit": 1,
+      "executions": 2,
+      "killedExecutions": 0,
+      "maxConcurrentFromIntervals": 1,
+      "maxConcurrentFromCounter": 1,
+      "violations": [],
+      "releaseToNextStartMs": {
+        "n": 1,
+        "p50": 15026,
+        "p95": 15026,
+        "p99": 15026,
+        "max": 15026
+      },
+      "releasesFallingBackOver1s": 1,
+      "startDelayFromDispatchMs": {
+        "n": 2,
+        "p50": 15138,
+        "p95": 15138,
+        "p99": 15138,
+        "max": 15138
+      },
+      "firstStartMs": 107,
+      "lastEndMs": 15145
+    },
+    "charge:k97": {
+      "limit": 1,
+      "executions": 2,
+      "killedExecutions": 0,
+      "maxConcurrentFromIntervals": 1,
+      "maxConcurrentFromCounter": 1,
+      "violations": [],
+      "releaseToNextStartMs": {
+        "n": 1,
+        "p50": 15026,
+        "p95": 15026,
+        "p99": 15026,
+        "max": 15026
+      },
+      "releasesFallingBackOver1s": 1,
+      "startDelayFromDispatchMs": {
+        "n": 2,
+        "p50": 15138,
+        "p95": 15138,
+        "p99": 15138,
+        "max": 15138
+      },
+      "firstStartMs": 107,
+      "lastEndMs": 15144
+    },
+    "charge:k98": {
+      "limit": 1,
+      "executions": 2,
+      "killedExecutions": 0,
+      "maxConcurrentFromIntervals": 1,
+      "maxConcurrentFromCounter": 1,
+      "violations": [],
+      "releaseToNextStartMs": {
+        "n": 1,
+        "p50": 15028,
+        "p95": 15028,
+        "p99": 15028,
+        "max": 15028
+      },
+      "releasesFallingBackOver1s": 1,
+      "startDelayFromDispatchMs": {
+        "n": 2,
+        "p50": 15141,
+        "p95": 15141,
+        "p99": 15141,
+        "max": 15141
+      },
+      "firstStartMs": 107,
+      "lastEndMs": 15147
+    },
+    "charge:k99": {
+      "limit": 1,
+      "executions": 2,
+      "killedExecutions": 0,
+      "maxConcurrentFromIntervals": 1,
+      "maxConcurrentFromCounter": 1,
+      "violations": [],
+      "releaseToNextStartMs": {
+        "n": 1,
+        "p50": 15026,
+        "p95": 15026,
+        "p99": 15026,
+        "max": 15026
+      },
+      "releasesFallingBackOver1s": 1,
+      "startDelayFromDispatchMs": {
+        "n": 2,
+        "p50": 15142,
+        "p95": 15142,
+        "p99": 15142,
+        "max": 15142
+      },
+      "firstStartMs": 110,
+      "lastEndMs": 15147
+    }
+  }
+}

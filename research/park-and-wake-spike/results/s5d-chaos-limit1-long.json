@@ -1,0 +1,658 @@
+{
+  "id": "s5d-chaos-limit1-long",
+  "timeline": [
+    {
+      "jobId": "1",
+      "key": "acc",
+      "startMs": 9,
+      "endMs": 2017,
+      "attemptsMade": 0,
+      "attemptsStarted": 1
+    },
+    {
+      "jobId": "2",
+      "key": "acc",
+      "startMs": 2025,
+      "endMs": 4029,
+      "attemptsMade": 0,
+      "attemptsStarted": 2
+    },
+    {
+      "jobId": "3",
+      "key": "acc",
+      "startMs": 4037,
+      "endMs": 6009,
+      "attemptsMade": 0,
+      "attemptsStarted": 2,
+      "killed": true
+    },
+    {
+      "jobId": "4",
+      "key": "acc",
+      "startMs": 10003,
+      "endMs": 12011,
+      "attemptsMade": 0,
+      "attemptsStarted": 2
+    },
+    {
+      "jobId": "5",
+      "key": "acc",
+      "startMs": 12019,
+      "endMs": 14023,
+      "attemptsMade": 0,
+      "attemptsStarted": 2
+    },
+    {
+      "jobId": "9",
+      "key": "acc",
+      "startMs": 14032,
+      "endMs": 16034,
+      "attemptsMade": 0,
+      "attemptsStarted": 2
+    },
+    {
+      "jobId": "13",
+      "key": "acc",
+      "startMs": 16042,
+      "endMs": 18785,
+      "attemptsMade": 0,
+      "attemptsStarted": 3
+    },
+    {
+      "jobId": "17",
+      "key": "acc",
+      "startMs": 18791,
+      "endMs": 20797,
+      "attemptsMade": 0,
+      "attemptsStarted": 3
+    },
+    {
+      "jobId": "21",
+      "key": "acc",
+      "startMs": 20802,
+      "endMs": 21747,
+      "attemptsMade": 0,
+      "attemptsStarted": 3,
+      "killed": true
+    },
+    {
+      "jobId": "27",
+      "key": "acc",
+      "startMs": 30156,
+      "endMs": 30749,
+      "attemptsMade": 0,
+      "attemptsStarted": 3,
+      "killed": true
+    },
+    {
+      "jobId": "32",
+      "key": "acc",
+      "startMs": 35423,
+      "endMs": 37426,
+      "attemptsMade": 0,
+      "attemptsStarted": 4
+    },
+    {
+      "jobId": "35",
+      "key": "acc",
+      "startMs": 37430,
+      "endMs": 39433,
+      "attemptsMade": 0,
+      "attemptsStarted": 4
+    },
+    {
+      "jobId": "39",
+      "key": "acc",
+      "startMs": 39439,
+      "endMs": 41444,
+      "attemptsMade": 0,
+      "attemptsStarted": 4
+    },
+    {
+      "jobId": "6",
+      "key": "acc",
+      "startMs": 41451,
+      "endMs": 43454,
+      "attemptsMade": 0,
+      "attemptsStarted": 4
+    },
+    {
+      "jobId": "12",
+      "key": "acc",
+      "startMs": 43459,
+      "endMs": 45460,
+      "attemptsMade": 0,
+      "attemptsStarted": 4
+    },
+    {
+      "jobId": "16",
+      "key": "acc",
+      "startMs": 45465,
+      "endMs": 45751,
+      "attemptsMade": 0,
+      "attemptsStarted": 5,
+      "killed": true
+    },
+    {
+      "jobId": "19",
+      "key": "acc",
+      "startMs": 53121,
+      "endMs": 55124,
+      "attemptsMade": 0,
+      "attemptsStarted": 5
+    },
+    {
+      "jobId": "7",
+      "key": "acc",
+      "startMs": 55132,
+      "endMs": 55458,
+      "attemptsMade": 0,
+      "attemptsStarted": 5,
+      "killed": true
+    },
+    {
+      "jobId": "10",
+      "key": "acc",
+      "startMs": 60185,
+      "endMs": 62193,
+      "attemptsMade": 0,
+      "attemptsStarted": 5
+    },
+    {
+      "jobId": "14",
+      "key": "acc",
+      "startMs": 62200,
+      "endMs": 64204,
+      "attemptsMade": 0,
+      "attemptsStarted": 6
+    },
+    {
+      "jobId": "18",
+      "key": "acc",
+      "startMs": 64208,
+      "endMs": 64461,
+      "attemptsMade": 0,
+      "attemptsStarted": 6,
+      "killed": true
+    },
+    {
+      "jobId": "24",
+      "key": "acc",
+      "startMs": 70078,
+      "endMs": 70461,
+      "attemptsMade": 0,
+      "attemptsStarted": 6,
+      "killed": true
+    },
+    {
+      "jobId": "28",
+      "key": "acc",
+      "startMs": 75205,
+      "endMs": 76462,
+      "attemptsMade": 0,
+      "attemptsStarted": 6,
+      "killed": true
+    },
+    {
+      "jobId": "30",
+      "key": "acc",
+      "startMs": 80537,
+      "endMs": 82540,
+      "attemptsMade": 0,
+      "attemptsStarted": 7
+    },
+    {
+      "jobId": "8",
+      "key": "acc",
+      "startMs": 82544,
+      "endMs": 84549,
+      "attemptsMade": 0,
+      "attemptsStarted": 7
+    },
+    {
+      "jobId": "11",
+      "key": "acc",
+      "startMs": 84553,
+      "endMs": 86558,
+      "attemptsMade": 0,
+      "attemptsStarted": 7
+    },
+    {
+      "jobId": "15",
+      "key": "acc",
+      "startMs": 86561,
+      "endMs": 88568,
+      "attemptsMade": 0,
+      "attemptsStarted": 7
+    },
+    {
+      "jobId": "20",
+      "key": "acc",
+      "startMs": 88571,
+      "endMs": 90572,
+      "attemptsMade": 0,
+      "attemptsStarted": 7
+    },
+    {
+      "jobId": "23",
+      "key": "acc",
+      "startMs": 90576,
+      "endMs": 92581,
+      "attemptsMade": 0,
+      "attemptsStarted": 8
+    },
+    {
+      "jobId": "26",
+      "key": "acc",
+      "startMs": 92586,
+      "endMs": 94592,
+      "attemptsMade": 0,
+      "attemptsStarted": 8
+    },
+    {
+      "jobId": "31",
+      "key": "acc",
+      "startMs": 94601,
+      "endMs": 96607,
+      "attemptsMade": 0,
+      "attemptsStarted": 8
+    },
+    {
+      "jobId": "22",
+      "key": "acc",
+      "startMs": 96611,
+      "endMs": 98615,
+      "attemptsMade": 0,
+      "attemptsStarted": 8
+    },
+    {
+      "jobId": "25",
+      "key": "acc",
+      "startMs": 98624,
+      "endMs": 100630,
+      "attemptsMade": 0,
+      "attemptsStarted": 8
+    },
+    {
+      "jobId": "29",
+      "key": "acc",
+      "startMs": 100638,
+      "endMs": 102646,
+      "attemptsMade": 0,
+      "attemptsStarted": 8
+    },
+    {
+      "jobId": "34",
+      "key": "acc",
+      "startMs": 102654,
+      "endMs": 104657,
+      "attemptsMade": 0,
+      "attemptsStarted": 8
+    },
+    {
+      "jobId": "37",
+      "key": "acc",
+      "startMs": 104663,
+      "endMs": 106668,
+      "attemptsMade": 0,
+      "attemptsStarted": 8
+    },
+    {
+      "jobId": "41",
+      "key": "acc",
+      "startMs": 106672,
+      "endMs": 107186,
+      "attemptsMade": 0,
+      "attemptsStarted": 9,
+      "killed": true
+    },
+    {
+      "jobId": "36",
+      "key": "acc",
+      "startMs": 113252,
+      "endMs": 113896,
+      "attemptsMade": 0,
+      "attemptsStarted": 9,
+      "killed": true
+    },
+    {
+      "jobId": "40",
+      "key": "acc",
+      "startMs": 119194,
+      "endMs": 121197,
+      "attemptsMade": 0,
+      "attemptsStarted": 9
+    },
+    {
+      "jobId": "43",
+      "key": "acc",
+      "startMs": 121200,
+      "endMs": 122898,
+      "attemptsMade": 0,
+      "attemptsStarted": 10,
+      "killed": true
+    },
+    {
+      "jobId": "33",
+      "key": "acc",
+      "startMs": 128305,
+      "endMs": 130308,
+      "attemptsMade": 0,
+      "attemptsStarted": 10
+    },
+    {
+      "jobId": "38",
+      "key": "acc",
+      "startMs": 130313,
+      "endMs": 132316,
+      "attemptsMade": 0,
+      "attemptsStarted": 10
+    },
+    {
+      "jobId": "42",
+      "key": "acc",
+      "startMs": 132322,
+      "endMs": 134324,
+      "attemptsMade": 0,
+      "attemptsStarted": 10
+    },
+    {
+      "jobId": "44",
+      "key": "acc",
+      "startMs": 134332,
+      "endMs": 134899,
+      "attemptsMade": 0,
+      "attemptsStarted": 10,
+      "killed": true
+    },
+    {
+      "jobId": "45",
+      "key": "acc",
+      "startMs": 139592,
+      "endMs": 142340,
+      "attemptsMade": 0,
+      "attemptsStarted": 11
+    },
+    {
+      "jobId": "46",
+      "key": "acc",
+      "startMs": 142343,
+      "endMs": 144345,
+      "attemptsMade": 0,
+      "attemptsStarted": 11
+    },
+    {
+      "jobId": "47",
+      "key": "acc",
+      "startMs": 144352,
+      "endMs": 146356,
+      "attemptsMade": 0,
+      "attemptsStarted": 11
+    },
+    {
+      "jobId": "48",
+      "key": "acc",
+      "startMs": 146362,
+      "endMs": 148366,
+      "attemptsMade": 0,
+      "attemptsStarted": 11
+    },
+    {
+      "jobId": "59",
+      "key": "acc",
+      "startMs": 148373,
+      "endMs": 150379,
+      "attemptsMade": 0,
+      "attemptsStarted": 11
+    },
+    {
+      "jobId": "49",
+      "key": "acc",
+      "startMs": 150384,
+      "endMs": 152393,
+      "attemptsMade": 0,
+      "attemptsStarted": 11
+    },
+    {
+      "jobId": "50",
+      "key": "acc",
+      "startMs": 152402,
+      "endMs": 154412,
+      "attemptsMade": 0,
+      "attemptsStarted": 12
+    },
+    {
+      "jobId": "51",
+      "key": "acc",
+      "startMs": 154423,
+      "endMs": 156425,
+      "attemptsMade": 0,
+      "attemptsStarted": 12
+    },
+    {
+      "jobId": "52",
+      "key": "acc",
+      "startMs": 156434,
+      "endMs": 158436,
+      "attemptsMade": 0,
+      "attemptsStarted": 12
+    },
+    {
+      "jobId": "53",
+      "key": "acc",
+      "startMs": 158441,
+      "endMs": 160444,
+      "attemptsMade": 0,
+      "attemptsStarted": 12
+    },
+    {
+      "jobId": "54",
+      "key": "acc",
+      "startMs": 160449,
+      "endMs": 162453,
+      "attemptsMade": 0,
+      "attemptsStarted": 12
+    },
+    {
+      "jobId": "55",
+      "key": "acc",
+      "startMs": 162459,
+      "endMs": 164463,
+      "attemptsMade": 0,
+      "attemptsStarted": 12
+    },
+    {
+      "jobId": "56",
+      "key": "acc",
+      "startMs": 164470,
+      "endMs": 166472,
+      "attemptsMade": 0,
+      "attemptsStarted": 12
+    },
+    {
+      "jobId": "60",
+      "key": "acc",
+      "startMs": 166479,
+      "endMs": 168481,
+      "attemptsMade": 0,
+      "attemptsStarted": 13
+    },
+    {
+      "jobId": "57",
+      "key": "acc",
+      "startMs": 168487,
+      "endMs": 170492,
+      "attemptsMade": 0,
+      "attemptsStarted": 13
+    },
+    {
+      "jobId": "58",
+      "key": "acc",
+      "startMs": 170495,
+      "endMs": 173210,
+      "attemptsMade": 0,
+      "attemptsStarted": 13
+    },
+    {
+      "jobId": "3",
+      "key": "acc",
+      "startMs": 173213,
+      "endMs": 175216,
+      "attemptsMade": 0,
+      "attemptsStarted": 14
+    },
+    {
+      "jobId": "21",
+      "key": "acc",
+      "startMs": 175219,
+      "endMs": 177223,
+      "attemptsMade": 0,
+      "attemptsStarted": 14
+    },
+    {
+      "jobId": "27",
+      "key": "acc",
+      "startMs": 177229,
+      "endMs": 179235,
+      "attemptsMade": 0,
+      "attemptsStarted": 14
+    },
+    {
+      "jobId": "16",
+      "key": "acc",
+      "startMs": 179239,
+      "endMs": 181242,
+      "attemptsMade": 0,
+      "attemptsStarted": 15
+    },
+    {
+      "jobId": "7",
+      "key": "acc",
+      "startMs": 181246,
+      "endMs": 183252,
+      "attemptsMade": 0,
+      "attemptsStarted": 14
+    },
+    {
+      "jobId": "18",
+      "key": "acc",
+      "startMs": 183256,
+      "endMs": 185259,
+      "attemptsMade": 0,
+      "attemptsStarted": 15
+    },
+    {
+      "jobId": "24",
+      "key": "acc",
+      "startMs": 185265,
+      "endMs": 187269,
+      "attemptsMade": 0,
+      "attemptsStarted": 14
+    },
+    {
+      "jobId": "28",
+      "key": "acc",
+      "startMs": 187274,
+      "endMs": 189276,
+      "attemptsMade": 0,
+      "attemptsStarted": 14
+    },
+    {
+      "jobId": "41",
+      "key": "acc",
+      "startMs": 189282,
+      "endMs": 190359,
+      "attemptsMade": 0,
+      "attemptsStarted": 15,
+      "killed": true
+    },
+    {
+      "jobId": "36",
+      "key": "acc",
+      "startMs": 194713,
+      "endMs": 196718,
+      "attemptsMade": 0,
+      "attemptsStarted": 15
+    },
+    {
+      "jobId": "43",
+      "key": "acc",
+      "startMs": 196726,
+      "endMs": 198729,
+      "attemptsMade": 0,
+      "attemptsStarted": 16
+    },
+    {
+      "jobId": "44",
+      "key": "acc",
+      "startMs": 198735,
+      "endMs": 200737,
+      "attemptsMade": 0,
+      "attemptsStarted": 15
+    },
+    {
+      "jobId": "41",
+      "key": "acc",
+      "startMs": 200742,
+      "endMs": 203472,
+      "attemptsMade": 0,
+      "attemptsStarted": 17
+    }
+  ],
+  "limits": {
+    "charge": 1
+  },
+  "recheck": true,
+  "workers": 4,
+  "workerConcurrency": 10,
+  "dispatched": 60,
+  "elapsedMs": 203521,
+  "finalCounts": {
+    "completed": 60,
+    "failed": 0,
+    "delayed": 0,
+    "wait": 0,
+    "active": 0,
+    "prioritized": 0
+  },
+  "stuck": 0,
+  "stalledEvents": 13,
+  "failedEvents": 0,
+  "kills": 66,
+  "stats": {
+    "parks": "482",
+    "wake_ok:release": "58",
+    "wake_ok:recheck": "10",
+    "wake_fail:recheck:job <id> is not in the delayed state. promote": "8",
+    "wake_fail:release:job <id> is not in the delayed state. promote": "1"
+  },
+  "perKey": {
+    "charge:acc": {
+      "limit": 1,
+      "runsStartedBeforeAnOlderRun": 38,
+      "maxPositionsOvertaken": 17,
+      "executions": 73,
+      "killedExecutions": 13,
+      "maxConcurrentFromIntervals": 1,
+      "maxConcurrentFromCounter": 14,
+      "violations": [],
+      "releaseToNextStartMs": {
+        "n": 72,
+        "p50": 6,
+        "p95": 5617,
+        "p99": 8409,
+        "max": 8409
+      },
+      "releasesFallingBackOver1s": 13,
+      "startDelayFromDispatchMs": {
+        "n": 73,
+        "p50": 106672,
+        "p95": 194713,
+        "p99": 200742,
+        "max": 200742
+      },
+      "firstStartMs": 9,
+      "lastEndMs": 203472
+    }
+  }
+}

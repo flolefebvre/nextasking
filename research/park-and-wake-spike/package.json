@@ -1,0 +1,13 @@
+{
+  "name": "park-and-wake-spike",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "spike": "tsx run.ts"
+  },
+  "dependencies": {
+    "bullmq": "6.5.3",
+    "ioredis": "~5.11.0",
+    "tsx": "^4.20.0"
+  }
+}

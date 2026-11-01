@@ -1,0 +1,47 @@
+{
+  "promoteWaiting": "Job 1 is not in the delayed state. promote",
+  "promoteActive": "Job 2 is not in the delayed state. promote",
+  "promoteDelayedSelfBeforeThrow": "no error",
+  "promoteCompleted": "Job 5 is not in the delayed state. promote",
+  "waitingJobState": "completed",
+  "selfPromote": {
+    "runs": 2,
+    "state": "completed",
+    "returnvalue": "second run"
+  },
+  "noThrow": {
+    "runs": 2,
+    "state": "completed",
+    "returnvalue": "second run"
+  },
+  "parks": {
+    "seenOnEachPickup": [
+      {
+        "attemptsMade": 0,
+        "attemptsStarted": 1
+      },
+      {
+        "attemptsMade": 0,
+        "attemptsStarted": 2
+      },
+      {
+        "attemptsMade": 0,
+        "attemptsStarted": 3
+      },
+      {
+        "attemptsMade": 0,
+        "attemptsStarted": 4
+      }
+    ],
+    "final": {
+      "attemptsMade": 1,
+      "attemptsStarted": 4,
+      "state": "completed"
+    }
+  },
+  "workerErrors": [
+    "Missing lock for job 4. moveToFinished",
+    "Missing lock for job 4. moveToFinished"
+  ],
+  "failedReasons": []
+}

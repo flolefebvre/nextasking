@@ -1,0 +1,60 @@
+{
+  "id": "s2-limit3",
+  "limits": {
+    "charge": 3
+  },
+  "recheck": true,
+  "workers": 4,
+  "workerConcurrency": 10,
+  "dispatched": 1000,
+  "elapsedMs": 5558,
+  "finalCounts": {
+    "completed": 1000,
+    "failed": 0,
+    "delayed": 0,
+    "wait": 0,
+    "active": 0,
+    "prioritized": 0
+  },
+  "stuck": 0,
+  "stalledEvents": 0,
+  "failedEvents": 0,
+  "kills": 0,
+  "stats": {
+    "parks": "997",
+    "wake_fail:recheck:job <id> is not in the delayed state. promote": "995",
+    "wake_fail:release:job <id> is not in the delayed state. promote": "201",
+    "wake_ok:recheck": "1",
+    "wake_ok:chain": "200",
+    "wake_ok:release": "796"
+  },
+  "perKey": {
+    "charge:acc": {
+      "limit": 3,
+      "runsStartedBeforeAnOlderRun": 211,
+      "maxPositionsOvertaken": 24,
+      "executions": 1000,
+      "killedExecutions": 0,
+      "maxConcurrentFromIntervals": 3,
+      "maxConcurrentFromCounter": 3,
+      "violations": [],
+      "releaseToNextStartMs": {
+        "n": 997,
+        "p50": 2,
+        "p95": 4,
+        "p99": 4,
+        "max": 188
+      },
+      "releasesFallingBackOver1s": 0,
+      "startDelayFromDispatchMs": {
+        "n": 1000,
+        "p50": 2831,
+        "p95": 5186,
+        "p99": 5393,
+        "max": 5443
+      },
+      "firstStartMs": 26,
+      "lastEndMs": 5461
+    }
+  }
+}

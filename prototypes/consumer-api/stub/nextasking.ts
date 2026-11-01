@@ -76,7 +76,7 @@ export type RunContext = {
   logger: Logger;
   runId: string;
   attempt: number;
-  signal: AbortSignal;
+  abortSignal: AbortSignal;
 };
 
 export type TaskContext<TaskPayload> = RunContext & { payload: TaskPayload };

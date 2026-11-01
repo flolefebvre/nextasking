@@ -44,6 +44,10 @@ _Avoid_: Send, fire, publish, trigger
 The turning of one emitted event into one run per listener, done by a worker rather than by the emitter.
 _Avoid_: Broadcast, dispatch
 
+**Dedup window**:
+How long a repeated dispatch or emit with the same id is dropped.
+_Avoid_: TTL, retention
+
 **Run**:
 One execution of a task, from its dispatch to its final outcome, across all its attempts.
 _Avoid_: Job, execution
@@ -52,6 +56,10 @@ _Avoid_: Job, execution
 One try at completing a run; a retry is a new attempt of the same run.
 _Avoid_: Try, execution
 
+**Duplicate attempt**:
+An attempt of a run that starts while another attempt of the same run is still executing, after the first lost its lock.
+_Avoid_: Zombie, double run
+
 **Suspend**:
 To pause a run's attempt at a step until a set time, so it holds no worker and no concurrency slot while it waits.
 _Avoid_: Pause, park, yield
@@ -59,6 +67,10 @@ _Avoid_: Pause, park, yield
 **Resume**:
 To continue a suspended attempt once its time comes, reusing the steps it has already saved.
 _Avoid_: Wake, restart, retry
+
+**Idempotency key**:
+A value that stays the same for one step of one run, handed to that step so an external service can recognise a repeat.
+_Avoid_: Dedup key, request id
 
 **Concurrency limit**:
 The most attempts of one task allowed to execute at the same time, counted across the whole task or per concurrency key.

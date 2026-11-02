@@ -19,6 +19,7 @@ The library's purpose and public API are not settled yet: the change that settle
 ```
 src/            The published package source; builds into dist/
 scripts/        Repo tooling, run with tsx
+tests/          The test harness and the scenarios that cross modules or processes
 docs/
   agents/       Agent-skill config: issue tracker, triage labels, domain docs
   codebase/     Conventions, one file per area, linked from the AGENTS.md section it governs
@@ -35,8 +36,10 @@ pnpm format:check         Prettier in check mode (fails on unformatted files)
 pnpm lint                 ESLint flat config (eslint.config.mjs), warnings are failures
 pnpm duplication          jscpd copy/paste detection (.jscpd.json); any clone is a failure
 pnpm typecheck            TypeScript with no emit
-pnpm test                 Vitest, once
-pnpm test:changed         Vitest, once, only the tests affected since $CHECK_BASE (default origin/main)
+pnpm test                 Vitest, once, the unit and integration projects (integration needs Docker)
+pnpm test:unit            Vitest, once, the unit project alone (no Docker)
+pnpm test:integration     Vitest, once, the integration project alone, against a Valkey container
+pnpm test:changed         Vitest, once, only the tests affected since $CHECK_BASE (default origin/main), both projects
 ```
 
 ## Verification
@@ -57,7 +60,7 @@ The `check` and `gate` lines in package.json are the sequences: `,` separates st
 
 ## Testing
 
-This project uses TDD. Tests are collocated with the file they test. See `docs/codebase/testing.md` before writing tests.
+This project uses TDD. Tests are collocated with the file they test; scenarios crossing modules or processes live in `tests/`. See `docs/codebase/testing.md` before writing tests.
 
 ## Naming
 

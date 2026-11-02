@@ -64,6 +64,7 @@ export const renderReport = defineTask("render-report", {
 ```
 
 - `timeout` bounds each attempt. Without it, an attempt has no time limit.
+- In a run that sleeps, `timeout` bounds each stretch: from the start or the resume to the sleep, and from the last resume to the end. Time spent sleeping never counts. See [Steps](steps.md#sleep-for-minutes-or-days).
 - An attempt still running at its timeout fails with an error named `AttemptTimeoutError`, whose message names the task and the timeout, and retries like any failure.
 - The handler isn't stopped: its promise keeps running in the background after the timeout. Don't rely on a timeout to cancel work.
 

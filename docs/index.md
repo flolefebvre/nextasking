@@ -31,6 +31,8 @@ Events and background tasks for a Next.js app, on BullMQ with Redis or Valkey. D
 | Return a step result that compiles                | [Steps](steps.md)                               |
 | Run steps in parallel                             | [Steps](steps.md)                               |
 | Pass an idempotency key to a provider             | [Steps](steps.md)                               |
+| Sleep for minutes or days without holding workers | [Steps](steps.md)                               |
+| Skip work a sleep made unnecessary                | [Steps](steps.md)                               |
 | Know the step size limits                         | [Steps](steps.md)                               |
 | Fix a `StepMisuseError`                           | [Steps](steps.md)                               |
 | Set how often and how soon a failed run retries   | [Retries and failures](retries-and-failures.md) |
@@ -83,7 +85,7 @@ import type {
 | `UnknownEventError`   | Thrown by `emit` for a name the instance doesn't list                                             |
 | `InvalidPayloadError` | Thrown by `dispatch` and `emit` for a payload the schema refuses                                  |
 | `NonRetriableError`   | Thrown by a handler to fail its run at once, skipping the retries left                            |
-| `StepMisuseError`     | Thrown by `step.run` on a bug: a repeated id, a nested step, a non-JSON or oversized result       |
+| `StepMisuseError`     | Thrown by a step on a bug: a repeated id, a nested step, a bad result, duration or wake time      |
 | `DispatchOptions`     | The type of `dispatch`'s third argument: `runId` and `delay`                                      |
 | `Duration`            | The type of a duration option: a whole number and `s`, `m`, `h` or `d`                            |
 | `EmitOptions`         | The type of `emit`'s third argument: `eventId`                                                    |
@@ -95,7 +97,7 @@ import type {
 | `Register`            | The interface you augment with your instance's type                                               |
 | `RunId`               | The type of a run id: a string                                                                    |
 | `StepContext`         | The type of the object a step's `fn` receives: `idempotencyKey`                                   |
-| `StepTools`           | The type of the handler's `step`: `step.run`                                                      |
+| `StepTools`           | The type of the handler's `step`: `step.run`, `step.sleep` and `step.sleepUntil`                  |
 | `TaskContext`         | The type of the object a handler receives                                                         |
 | `TaskDefinition`      | The type `defineTask` returns                                                                     |
 | `TaskName`            | The union of the registered instance's task names, listeners included; `never` without `Register` |

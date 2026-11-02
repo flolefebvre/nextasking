@@ -22,6 +22,10 @@ _Avoid_: Subscriber, handler
 A recurring time rule declared by a task, each firing of which starts a run of that task.
 _Avoid_: Cron job, scheduler
 
+**Firing**:
+One time a schedule comes due, starting one run of its task.
+_Avoid_: Occurrence, tick, trigger
+
 **Step**:
 A named part of a run whose result is saved, so a later attempt of the same run reuses it instead of executing it again.
 _Avoid_: Activity, checkpoint

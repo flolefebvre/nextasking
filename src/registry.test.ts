@@ -5,6 +5,7 @@ import { z } from "zod";
 
 import { defineTask } from "./definitions.js";
 import { InvalidPayloadError, UnknownTaskError } from "./errors.js";
+import type { Duration } from "./durations.js";
 import { createNextasking } from "./registry.js";
 
 const UNREACHABLE_URL = "redis://nextasking.invalid:6379";
@@ -40,6 +41,80 @@ describe("createNextasking", () => {
     const networkResourcesBefore = networkResources();
 
     createTestNextasking();
+    await setImmediate();
+
+    expect(networkResources()).toEqual(networkResourcesBefore);
+  });
+
+  test("rejects two tasks with the same name", () => {
+    const otherSendWelcomeEmail = defineTask("send-welcome-email", {
+      schema: z.object({}),
+      handler: async () => undefined,
+    });
+
+    expect(() =>
+      createNextasking({
+        connection: { url: UNREACHABLE_URL },
+        tasks: [sendWelcomeEmail, generateInvoicePdf, otherSendWelcomeEmail],
+      }),
+    ).toThrow('Duplicate name "send-welcome-email": every task needs its own name');
+  });
+
+  test.each([
+    [0, "0"],
+    [-1, "-1"],
+    [1.5, "1.5"],
+    [Number.NaN, "NaN"],
+    ["2" as unknown as number, '"2"'],
+  ])("rejects a concurrency limit of %s", (limit, shownLimit) => {
+    const rebuildIndex = defineTask("rebuild-index", {
+      schema: z.object({}),
+      concurrency: { limit },
+      handler: async () => undefined,
+    });
+
+    expect(() => createNextasking({ connection: { url: UNREACHABLE_URL }, tasks: [rebuildIndex] })).toThrow(
+      `Task "rebuild-index" has an invalid concurrency.limit: ${shownLimit} is not a positive integer`,
+    );
+  });
+
+  test.each(["backoff", "timeout"] as const)("rejects an invalid %s, naming the task and the option", (option) => {
+    const rebuildIndex = defineTask("rebuild-index", {
+      schema: z.object({}),
+      [option]: "0.5h" as Duration,
+      handler: async () => undefined,
+    });
+
+    const creating = () => createNextasking({ connection: { url: UNREACHABLE_URL }, tasks: [rebuildIndex] });
+
+    expect(creating).toThrow(
+      `Task "rebuild-index" has an invalid ${option}: "0.5h" is not a duration: a whole number followed by s, m, h or d, such as "30s"`,
+    );
+    expect(creating).toThrow(expect.objectContaining({ cause: expect.any(Error) }));
+  });
+
+  test("accepts valid options", () => {
+    const rebuildIndex = defineTask("rebuild-index", {
+      schema: z.object({ accountId: z.string() }),
+      retries: 3,
+      backoff: "30s",
+      timeout: "5m",
+      concurrency: { key: (payload) => payload.accountId, limit: 1 },
+      handler: async () => undefined,
+    });
+
+    expect(() => createNextasking({ connection: { url: UNREACHABLE_URL }, tasks: [rebuildIndex] })).not.toThrow();
+  });
+
+  test("rejects an invalid config before opening any connection", async () => {
+    const rebuildIndex = defineTask("rebuild-index", {
+      schema: z.object({}),
+      timeout: "soon" as Duration,
+      handler: async () => undefined,
+    });
+    const networkResourcesBefore = networkResources();
+
+    expect(() => createNextasking({ connection: { url: UNREACHABLE_URL }, tasks: [rebuildIndex] })).toThrow();
     await setImmediate();
 
     expect(networkResources()).toEqual(networkResourcesBefore);

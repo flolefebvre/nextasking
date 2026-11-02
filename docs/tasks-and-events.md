@@ -25,7 +25,24 @@ export const sendWelcomeEmail = defineTask("send-welcome-email", {
   - `runId`: the id `dispatch` returned for this run
   - `attempt`: the attempt number, starting at 1
   - `logger`: a logger that tags every line with the run; see [Logging](logging.md)
-- Keep the payload small and JSON: ids and short values, not whole records. Load the rest in the handler.
+- The schema's input and output must be JSON: `z.date()`, or a transform into a `Date`, doesn't compile. Pass a date as an ISO string.
+- Keep the payload small: ids and short values, not whole records. Load the rest in the handler.
+- A misspelt option doesn't compile, and neither does a handler typed for another payload.
+
+### Durations
+
+An option that takes a time takes a duration: a whole number followed by `s`, `m`, `h` or `d`.
+
+```ts
+"30s"; // 30 seconds
+"5m"; // 5 minutes
+"2h"; // 2 hours
+"3d"; // 3 days
+```
+
+- `"5 s"`, `"0.5h"` and `"2w"` don't compile; write `"30m"` for half an hour.
+- A bad value that slips past the types, through a cast or plain JavaScript, makes `createNextasking` throw.
+- Import the `Duration` type to type your own duration values.
 
 ## Register the tasks
 
@@ -51,6 +68,21 @@ declare module "@flefebvre/nextasking" {
 - `createNextasking` opens no connection. Importing the instance is safe anywhere, `next build` included; the first `dispatch` connects.
 - `prefix` (default `"nextasking"`) puts every key of the instance under that prefix. Give two apps sharing one server different prefixes.
 - `logger` takes your app's logger; without it the library is silent. See [Logging](logging.md).
+
+### Startup checks
+
+`createNextasking` checks the definitions before anything else, with no connection, and throws an `Error` whose one-line message names the task and what is wrong:
+
+- two tasks with the same name
+- a `concurrency.limit` that isn't a positive integer
+- a duration option that isn't a valid duration, such as `"-5s"` or `"0.5h"` passed through a cast or plain JavaScript
+
+```text
+Duplicate name "send-welcome-email": every task needs its own name
+Task "rebuild-index" has an invalid timeout: "0.5h" is not a duration: a whole number followed by s, m, h or d, such as "30s"
+```
+
+The error is a startup crash: fix the definition, don't catch it.
 
 ## Dispatch a task
 

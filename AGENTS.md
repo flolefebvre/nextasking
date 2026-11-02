@@ -60,7 +60,7 @@ The `check` and `gate` lines in package.json are the sequences: `,` separates st
 
 ## Testing
 
-This project uses TDD. Tests are collocated with the file they test. See `docs/codebase/testing.md` before writing tests.
+This project uses TDD. Tests are collocated with the file they test; scenarios crossing modules or processes live in `tests/`. See `docs/codebase/testing.md` before writing tests.
 
 ## Naming
 

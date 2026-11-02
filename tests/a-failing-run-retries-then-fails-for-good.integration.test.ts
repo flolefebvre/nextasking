@@ -136,3 +136,54 @@ integrationTest(
     }
   },
 );
+
+integrationTest(
+  "a timeout fails an attempt that runs too long, and the attempt retries like any other failure",
+  async ({ redisUrl, keyPrefix }) => {
+    const { logger, lines } = createRecordingLogger();
+    const renderReport = defineTask("render-report", {
+      schema: z.object({ reportId: z.string() }),
+      retries: 1,
+      backoff: "0s",
+      timeout: "1s",
+      handler: () => new Promise<void>(() => undefined),
+    });
+    const nextasking = createNextasking({
+      connection: { url: redisUrl },
+      prefix: keyPrefix,
+      logger,
+      tasks: [renderReport],
+    });
+
+    try {
+      await nextasking.startWorker();
+      const { runId } = await nextasking.dispatch("render-report", { reportId: "report-7" });
+      await waitForLogMessage(lines, "run failed");
+      const run = await storedRun(redisUrl, keyPrefix, "render-report", runId);
+
+      const timeoutError = { name: "AttemptTimeoutError", message: 'Task "render-report" timed out after 1s' };
+      expect(lines.filter((line) => line.fields.err !== undefined)).toEqual([
+        expect.objectContaining({
+          message: "attempt failed",
+          fields: expect.objectContaining({ attempt: 1, err: expect.objectContaining(timeoutError) }),
+        }),
+        expect.objectContaining({
+          message: "run failed",
+          fields: expect.objectContaining({
+            attempt: 2,
+            reason: "retries exhausted",
+            err: expect.objectContaining(timeoutError),
+          }),
+        }),
+      ]);
+      expect(run).toMatchObject({
+        errors: [
+          { attempt: 1, ...timeoutError },
+          { attempt: 2, ...timeoutError },
+        ],
+      });
+    } finally {
+      await closeNextasking(nextasking);
+    }
+  },
+);

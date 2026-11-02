@@ -1,6 +1,7 @@
 import { Worker } from "bullmq";
 import type { Job, MinimalJob } from "bullmq";
 
+import { settleWithinTimeout } from "./attempt-timeout.js";
 import { backoffInMillisecondsFor } from "./backoff.js";
 import { closeRedisClient, createRedisClient } from "./connection.js";
 import type { ConnectionConfig } from "./connection.js";
@@ -51,7 +52,7 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
     runLogger.debug({}, "attempt started");
     const handler = task.handler as TaskHandler<unknown>;
     try {
-      await handler({ payload, runId, attempt, logger: runLogger });
+      await settleWithinTimeout(task.name, task.timeout, handler({ payload, runId, attempt, logger: runLogger }));
     } catch (thrownValue) {
       const error = errorFromThrownValue(thrownValue);
       const failedAt = new Date();

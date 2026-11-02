@@ -4,7 +4,7 @@
 
 This is `@flefebvre/nextasking`, a library published on npm. Its users are the apps that install it and the agents that write those apps, so the public API, and later the docs that ship in the package, are the product as much as the code. Every change is judged as something every consumer will install.
 
-The library's purpose and public API are not settled yet: the change that settles them rewrites this paragraph.
+Its purpose: a Next.js app on long-running Node hosting defines tasks and events in a few files, lists them in one `createNextasking` call, dispatches or emits them by literal name from server code, and a worker embedded in `next start` or run as a separate process executes them on BullMQ with Redis or Valkey. The public API is the root export (the definers such as `defineTask`, `createNextasking` and the instance it returns with `dispatch` and `startWorker`, the `Register` augmentation, the error classes and the public types) plus a `./testing` subpath. The v1 spec is issue #40; its tickets add to this surface one by one.
 
 ## Stack
 
@@ -20,7 +20,7 @@ The library's purpose and public API are not settled yet: the change that settle
 src/            The published package source; builds into dist/
 scripts/        Repo tooling, run with tsx
 tests/          The test harness and the scenarios that cross modules or processes
-docs/
+docs/           Top-level pages: the shipped manual, for consumers' agents
   agents/       Agent-skill config: issue tracker, triage labels, domain docs
   codebase/     Conventions, one file per area, linked from the AGENTS.md section it governs
 ```
@@ -72,7 +72,10 @@ Always reach for documentation rather than working from memory: the installed pa
 
 ## Comments and docs
 
-Don't write comments in the code — `pnpm lint` fails on any that isn't a directive. Do not touch `docs/` unless explicitly asked by the user.
+Don't write comments in the code — `pnpm lint` fails on any that isn't a directive.
+
+- The top-level pages of `docs/` are the shipped manual, written for consumers' agents first: short, imperative, example-dense. A change to the public interface updates the manual in the same PR; `docs/index.md` routes each job to its page.
+- Leave the `docs/` subfolders untouched unless the user asks.
 
 ## Language
 

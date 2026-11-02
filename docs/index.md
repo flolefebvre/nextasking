@@ -17,7 +17,10 @@ Events and background tasks for a Next.js app, on BullMQ with Redis or Valkey. D
 | Define a listener that reacts to an event         | [Tasks and events](tasks-and-events.md) |
 | Register tasks and events in `createNextasking`   | [Tasks and events](tasks-and-events.md) |
 | Dispatch a task                                   | [Tasks and events](tasks-and-events.md) |
+| Start a run later with `delay`                    | [Tasks and events](tasks-and-events.md) |
 | Emit an event, with or without listeners          | [Tasks and events](tasks-and-events.md) |
+| Run once per business fact with your own id       | [Tasks and events](tasks-and-events.md) |
+| Know how long a repeated id is dropped            | [Tasks and events](tasks-and-events.md) |
 | Dispatch or emit a name known only at runtime     | [Tasks and events](tasks-and-events.md) |
 | Handle dispatch and emit errors                   | [Tasks and events](tasks-and-events.md) |
 | Write a duration                                  | [Tasks and events](tasks-and-events.md) |
@@ -39,12 +42,16 @@ import {
   UnknownTaskError,
 } from "@flefebvre/nextasking";
 import type {
+  DispatchOptions,
   Duration,
+  EmitOptions,
   EventDefinition,
+  EventId,
   EventName,
   ListenerDefinition,
   Logger,
   Register,
+  RunId,
   TaskContext,
   TaskDefinition,
   TaskName,
@@ -60,12 +67,16 @@ import type {
 | `UnknownTaskError`    | Thrown by `dispatch` for a name the instance doesn't list                                         |
 | `UnknownEventError`   | Thrown by `emit` for a name the instance doesn't list                                             |
 | `InvalidPayloadError` | Thrown by `dispatch` and `emit` for a payload the schema refuses                                  |
+| `DispatchOptions`     | The type of `dispatch`'s third argument: `runId` and `delay`                                      |
 | `Duration`            | The type of a duration option: a whole number and `s`, `m`, `h` or `d`                            |
+| `EmitOptions`         | The type of `emit`'s third argument: `eventId`                                                    |
 | `EventDefinition`     | The type `defineEvent` returns                                                                    |
+| `EventId`             | The type of an event id: a string                                                                 |
 | `EventName`           | The union of the registered instance's event names; `never` without the `Register` augmentation   |
 | `ListenerDefinition`  | The type `defineListener` returns                                                                 |
 | `Logger`              | The type of the `logger` option and of the handler's `logger`                                     |
 | `Register`            | The interface you augment with your instance's type                                               |
+| `RunId`               | The type of a run id: a string                                                                    |
 | `TaskContext`         | The type of the object a handler receives                                                         |
 | `TaskDefinition`      | The type `defineTask` returns                                                                     |
 | `TaskName`            | The union of the registered instance's task names, listeners included; `never` without `Register` |

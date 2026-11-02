@@ -151,6 +151,16 @@ export async function signUp(formData: FormData) {
 - The payload is typed from the schema's input: a wrong payload doesn't compile.
 - At runtime, `dispatch` validates the payload and stores the schema's output; the handler receives that output.
 - A listener is a task: `dispatch("record-invoice-payment", payload)` takes its event's payload and starts one run of that listener alone. That run's log lines have no `eventName` or `eventId`.
+- `dispatch(name, payload, { runId, delay })` takes your own run id (see [Run once per business fact](#run-once-per-business-fact)) and a delay.
+
+### Start a run later
+
+```ts
+await nextasking.dispatch("send-trial-reminder", { userId: user.id }, { delay: "3d" });
+```
+
+- `delay` is a [duration](#durations): the run starts once it has passed, not before. Use it instead of a sleep in the handler.
+- An invalid `delay` passed through a cast or plain JavaScript makes `dispatch` throw an `Error` naming the task, before anything is stored.
 
 ## Emit an event
 
@@ -170,10 +180,51 @@ export async function POST(request: Request) {
 - The name and the payload are checked at compile time, like `dispatch`'s; at runtime, `emit` validates the payload and stores the schema's output.
 - The listeners are those of the release that emitted: a worker running another release still starts exactly those.
 - A listener's lines carry `eventName` and `eventId` on top of `task`, `runId` and `attempt`. See [Logging](logging.md).
+- `emit(name, payload, { eventId })` takes your own event id: see [Run once per business fact](#run-once-per-business-fact).
 
 ### An event with no listeners
 
 Emitting an event no listener subscribes to validates the payload, logs `no listeners for event` at warn with `eventName` and `eventId`, and does nothing else: nothing is stored and no connection opens. Emit the event before writing its first listener, then add listeners later.
+
+## Run once per business fact
+
+A webhook retried by its sender, or a form submitted twice, must not start the work twice. Pass your own `runId` to `dispatch`, or `eventId` to `emit`, built from the business fact itself.
+
+```ts
+// src/app/api/billing/webhook/route.ts
+export async function POST(request: Request) {
+  const stripeEvent = await readStripeEvent(request);
+  await nextasking.emit(
+    "invoice.paid",
+    { invoiceId: stripeEvent.data.invoiceId, amountInCents: stripeEvent.data.amountInCents },
+    { eventId: `stripe-${stripeEvent.id}` },
+  );
+  return new Response(null, { status: 204 });
+}
+
+// src/app/orders/actions.ts
+await nextasking.dispatch("ship-order", { orderId: order.id }, { runId: `ship-order-${order.id}` });
+```
+
+- Build the id from what makes the fact unique (the provider's event id, the order id, the user id and the day), never from the time of the call or a random value.
+- A repeat with the same id returns that same id, throws nothing, starts nothing, and logs `duplicate dispatch dropped` at debug. Its payload and its `delay` are ignored: the first call's payload is the one that runs.
+- A `runId` is scoped to its task: the same `runId` on two tasks starts two runs. An `eventId` is scoped to its event.
+- Each listener run of an emit with your `eventId` has a run id derived from that `eventId` and the listener name, so it is the same on every repeat.
+- The id must be a non-empty string; anything else makes the call throw an `Error` naming the task or event, before anything is stored.
+- Without your own id, every call gets a random one, and a repeat starts a second run.
+
+### The dedup window
+
+A repeat is dropped as long as the first call's stored run or fan-out exists:
+
+- while it waits, is delayed or executes;
+- once it has completed, for 24 hours;
+- once it has failed, for as long as the failure is kept.
+
+So the window lasts at least 24 hours after the dispatch, and longer when the run takes longer. Two limits to plan around:
+
+- The queue keeps at most 1,000 completed runs and fan-outs together. Under load, the oldest are removed before 24 hours, and a repeat of their id starts again.
+- An emit of an event with no listeners stores nothing, so it has no window: a repeat warns again.
 
 ## Narrow a name known only at runtime
 

@@ -1,3 +1,4 @@
+export type { ConnectionConfig } from "./connection.js";
 export { defineTask } from "./definitions.js";
 export type { PayloadSchema, TaskContext, TaskDefinition, TaskHandler, TaskOptions } from "./definitions.js";
 export { InvalidPayloadError, UnknownTaskError } from "./errors.js";

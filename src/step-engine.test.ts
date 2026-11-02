@@ -1,5 +1,6 @@
 import { describe, expect, expectTypeOf, test, vi } from "vitest";
 
+import type { Duration } from "./durations.js";
 import { StepMisuseError } from "./errors.js";
 import type { JsonValue } from "./json.js";
 import { openStepEngine } from "./step-engine.js";
@@ -17,8 +18,8 @@ function createInMemoryStepStore(serializedResultsByStepId: Record<string, strin
   };
 }
 
-function openAttempt(store: StepStore) {
-  return openStepEngine({ taskName: "send-invoice", runId: "run-7", store });
+function openAttempt(store: StepStore, attempt = 1) {
+  return openStepEngine({ taskName: "send-invoice", runId: "run-7", attempt, store });
 }
 
 function stringSerializedInBytes(sizeInBytes: number): string {
@@ -145,7 +146,7 @@ describe("step.run misuse", () => {
 
     await expect(step.run("send-email", sendEmailAgain)).rejects.toThrow(
       new StepMisuseError(
-        'Step id "send-email" is used twice in one run of task "send-invoice". Give each step.run call its own id.',
+        'Step id "send-email" is used twice in one run of task "send-invoice". Give each step its own id.',
       ),
     );
     expect(sendEmailAgain).not.toHaveBeenCalled();
@@ -271,5 +272,243 @@ describe("step.run types", () => {
       // @ts-expect-error a Map isn't JSON
       step.run("build-index", async () => new Map<string, number>()),
     ).resolves.toStrictEqual({});
+  });
+});
+
+const ONE_HOUR_IN_MILLISECONDS = 60 * 60 * 1000;
+
+function savedSleep(wakeAt: number, attempt = 1): string {
+  return JSON.stringify({ kind: "sleep", wakeAt, attempt });
+}
+
+describe("step.sleep and step.sleepUntil", () => {
+  test("save the wake time, then suspend the run until it, even when the handler catches the suspension", async () => {
+    const store = createInMemoryStepStore();
+    const { step, executeHandler } = await openAttempt(store, 2);
+    const wakeAt = Date.now() + ONE_HOUR_IN_MILLISECONDS;
+
+    const suspendedUntil = await executeHandler(async () => {
+      await step.sleepUntil("wait-for-trial-end", new Date(wakeAt)).catch(() => undefined);
+    });
+
+    expect(suspendedUntil).toBe(wakeAt);
+    expect(await store.load()).toStrictEqual({ "wait-for-trial-end": savedSleep(wakeAt, 2) });
+  });
+
+  test("sleep saves a wake time its duration away from now", async () => {
+    const { step, executeHandler } = await openAttempt(createInMemoryStepStore());
+    const threeDaysInMilliseconds = 3 * 24 * ONE_HOUR_IN_MILLISECONDS;
+    const sleepReachedAt = Date.now();
+
+    const suspendedUntil = await executeHandler(() => step.sleep("cool-down", "3d"));
+
+    expect(suspendedUntil).toBeGreaterThanOrEqual(sleepReachedAt + threeDaysInMilliseconds);
+    expect(suspendedUntil).toBeLessThanOrEqual(Date.now() + threeDaysInMilliseconds);
+  });
+
+  test("returns at once for a time in the past, and still saves it", async () => {
+    const store = createInMemoryStepStore();
+    const { step, executeHandler } = await openAttempt(store);
+    const pastTime = Date.now() - 1000;
+    const afterTheSleep = vi.fn();
+
+    const suspendedUntil = await executeHandler(async () => {
+      await step.sleepUntil("wait", new Date(pastTime));
+      afterTheSleep();
+    });
+
+    expect(suspendedUntil).toBeUndefined();
+    expect(afterTheSleep).toHaveBeenCalledOnce();
+    expect(await store.load()).toStrictEqual({ wait: savedSleep(pastTime) });
+  });
+
+  test("takes an ISO date string with Z or an offset", async () => {
+    const { step, executeHandler } = await openAttempt(createInMemoryStepStore());
+
+    const suspendedUntil = await executeHandler(async () => {
+      await Promise.all([
+        step.sleepUntil("wait-utc", "2999-01-01T00:00:00.000Z"),
+        step.sleepUntil("wait-offset", "2999-01-01T00:00:00+01:00"),
+      ]);
+    });
+
+    expect(suspendedUntil).toBe(Date.parse("2998-12-31T23:00:00.000Z"));
+  });
+
+  test("returns at once on resume when the saved wake time has passed, whatever the duration says", async () => {
+    const pastWakeAt = Date.now() - 1000;
+    const store = createInMemoryStepStore({ "cool-down": savedSleep(pastWakeAt) });
+    const { step, executeHandler } = await openAttempt(store);
+
+    const suspendedUntil = await executeHandler(() => step.sleep("cool-down", "3d"));
+
+    expect(suspendedUntil).toBeUndefined();
+    expect(await store.load()).toStrictEqual({ "cool-down": savedSleep(pastWakeAt) });
+  });
+
+  test("suspends again until the saved wake time when the run is picked up before it", async () => {
+    const savedWakeAt = Date.now() + ONE_HOUR_IN_MILLISECONDS;
+    const { step, executeHandler } = await openAttempt(createInMemoryStepStore({ wait: savedSleep(savedWakeAt) }));
+
+    const suspendedUntil = await executeHandler(() => step.sleepUntil("wait", new Date(0)));
+
+    expect(suspendedUntil).toBe(savedWakeAt);
+  });
+
+  test("suspends once the steps in flight settle, so their results are saved", async () => {
+    const store = createInMemoryStepStore();
+    const { step, executeHandler } = await openAttempt(store);
+    let finishSlowStep: (value: string) => void = () => undefined;
+    const slowStepResult = new Promise<string>((resolve) => {
+      finishSlowStep = resolve;
+    });
+    let isSuspended = false;
+
+    const suspension = executeHandler(async () => {
+      await Promise.all([step.run("slow-step", () => slowStepResult), step.sleep("wait", "1h")]);
+    }).then((suspendedUntil) => {
+      isSuspended = true;
+      return suspendedUntil;
+    });
+    await vi.waitFor(async () => {
+      expect(await store.load()).toHaveProperty("wait");
+    });
+    const isSuspendedBeforeTheSlowStepSettles = isSuspended;
+    finishSlowStep("slow");
+
+    expect(isSuspendedBeforeTheSlowStepSettles).toBe(false);
+    expect(await suspension).toBeGreaterThan(Date.now());
+    expect(await store.load()).toHaveProperty("slow-step", '["slow"]');
+  });
+
+  test("suspends until the earliest of two parallel sleeps", async () => {
+    const { step, executeHandler } = await openAttempt(createInMemoryStepStore());
+    const earliestWakeAt = Date.now() + ONE_HOUR_IN_MILLISECONDS;
+
+    const suspendedUntil = await executeHandler(async () => {
+      await Promise.all([
+        step.sleepUntil("wait-long", new Date(earliestWakeAt + ONE_HOUR_IN_MILLISECONDS)),
+        step.sleepUntil("wait-short", new Date(earliestWakeAt)),
+      ]);
+    });
+
+    expect(suspendedUntil).toBe(earliestWakeAt);
+  });
+
+  test("suspends even when the handler goes on to throw another error", async () => {
+    const { step, executeHandler } = await openAttempt(createInMemoryStepStore());
+
+    const suspendedUntil = await executeHandler(async () => {
+      await step.sleep("wait", "1h").catch(() => undefined);
+      throw new Error("handler error after the sleep");
+    });
+
+    expect(suspendedUntil).toBeGreaterThan(Date.now());
+  });
+
+  test("lets the handler's own error through when no sleep suspends the run", async () => {
+    const { executeHandler } = await openAttempt(createInMemoryStepStore());
+    const handlerError = new Error("upstream unavailable");
+
+    await expect(
+      executeHandler(async () => {
+        throw handlerError;
+      }),
+    ).rejects.toBe(handlerError);
+  });
+
+  test("rejects every later step of the stretch without running it", async () => {
+    const { step, executeHandler } = await openAttempt(createInMemoryStepStore());
+    const laterStep = vi.fn(() => "later");
+    let laterStepError: unknown;
+
+    await executeHandler(async () => {
+      await step.sleep("wait", "1h").catch(() => undefined);
+      laterStepError = await step.run("later-step", laterStep).catch((error: unknown) => error);
+    });
+
+    expect(laterStep).not.toHaveBeenCalled();
+    expect(laterStepError).toBeInstanceOf(Error);
+    expect(laterStepError).not.toBeInstanceOf(StepMisuseError);
+  });
+
+  test("fails the run with a misuse of the same stretch rather than suspending it", async () => {
+    const { step, executeHandler } = await openAttempt(createInMemoryStepStore());
+
+    await expect(
+      executeHandler(async () => {
+        await step.run("send-email", () => "sent");
+        await step.run("send-email", () => "sent").catch(() => undefined);
+        await step.sleep("wait", "1h");
+      }),
+    ).rejects.toThrow(StepMisuseError);
+  });
+
+  test("shares the step id namespace, so a sleep reusing a step's id is a misuse", async () => {
+    const { step, executeHandler } = await openAttempt(createInMemoryStepStore());
+
+    await expect(
+      executeHandler(async () => {
+        await step.run("wait", () => "done");
+        await step.sleep("wait", "1h");
+      }),
+    ).rejects.toThrow(
+      new StepMisuseError('Step id "wait" is used twice in one run of task "send-invoice". Give each step its own id.'),
+    );
+  });
+
+  test("rejects a sleep started inside a step's fn", async () => {
+    const { step, executeHandler } = await openAttempt(createInMemoryStepStore());
+
+    await expect(
+      executeHandler(async () => {
+        await step.run("outer", async () => {
+          await step.sleep("inner-wait", "1h");
+        });
+      }),
+    ).rejects.toThrow(
+      new StepMisuseError(
+        'Step "inner-wait" was started inside the fn of step "outer". Start every step from the handler itself.',
+      ),
+    );
+  });
+
+  test.each([
+    ["an invalid Date", () => new Date("not a date")],
+    ["a string that isn't a date", () => "next tuesday"],
+    ["an ISO string without Z or an offset", () => "2999-01-01T00:00:00"],
+    ["a number", () => Date.now() as unknown as Date],
+  ])("rejects %s as a wake time", async (_timeKind, invalidTime) => {
+    const store = createInMemoryStepStore();
+    const { step, executeHandler } = await openAttempt(store);
+
+    await expect(executeHandler(() => step.sleepUntil("wait", invalidTime()))).rejects.toThrow(
+      /^The wake time of step "wait" is not a Date or an ISO date string with Z or an offset/,
+    );
+    expect(await store.load()).toStrictEqual({});
+  });
+
+  test("rejects an invalid duration that slipped past the types", async () => {
+    const { step, executeHandler } = await openAttempt(createInMemoryStepStore());
+
+    await expect(executeHandler(() => step.sleep("wait", "0.5h" as Duration))).rejects.toThrow(
+      new StepMisuseError(
+        'The duration of step "wait" is invalid: "0.5h" is not a duration: a whole number followed by s, m, h or d, such as "30s"',
+      ),
+    );
+  });
+});
+
+describe("resuming after a sleep", () => {
+  test("is told apart from a retry by the attempt that saved the sleep", async () => {
+    const savedSteps = { wait: savedSleep(Date.now() - 1000, 2) };
+
+    const resumedAttempt = await openAttempt(createInMemoryStepStore(savedSteps), 2);
+    const retryAttempt = await openAttempt(createInMemoryStepStore(savedSteps), 3);
+    const firstAttempt = await openAttempt(createInMemoryStepStore(), 1);
+
+    expect(resumedAttempt.isResumingAfterSleep).toBe(true);
+    expect(retryAttempt.isResumingAfterSleep).toBe(false);
+    expect(firstAttempt.isResumingAfterSleep).toBe(false);
   });
 });

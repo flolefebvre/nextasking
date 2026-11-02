@@ -41,8 +41,7 @@ integrationTest(
           {
             attempt: 1,
             name: "StepMisuseError",
-            message:
-              'Step id "notify" is used twice in one run of task "notify-followers". Give each step.run call its own id.',
+            message: 'Step id "notify" is used twice in one run of task "notify-followers". Give each step its own id.',
           },
         ],
       });

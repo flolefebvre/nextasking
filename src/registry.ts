@@ -53,7 +53,7 @@ export function createNextasking<const Tasks extends readonly AnyTaskDefinition[
       if (task === undefined) {
         throw new UnknownTaskError(name, [...tasksByName.keys()]);
       }
-      const validatedPayload = await validatePayload(task, payload);
+      const validatedPayload = await validatePayload("task", task, payload);
       runQueue ??= createRunQueue(config.connection, prefix);
       const runId = await runQueue.enqueueRun(task.name, validatedPayload);
       logger.debug({ task: task.name, runId }, "run dispatched");

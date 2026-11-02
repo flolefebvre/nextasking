@@ -19,6 +19,8 @@ export type { Logger } from "./logger.js";
 export { createNextasking } from "./registry.js";
 export type {
   DispatchedRun,
+  DispatchOptions,
+  EmitOptions,
   EmittedEvent,
   EventName,
   Nextasking,

@@ -52,6 +52,8 @@ function createSpyLogger() {
   return { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() } satisfies Logger;
 }
 
+const VALID_WELCOME_PAYLOAD = { email: "ada@example.com", address: { zipCode: "75011" } };
+
 const RANDOM_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
 function networkResources(): string[] {
@@ -261,6 +263,42 @@ describe("dispatch", () => {
       .parameter(1)
       .toEqualTypeOf<{ invoiceId: string; amountInCents: number }>();
   });
+
+  test.each([
+    ["", '""'],
+    [42 as unknown as string, "42"],
+  ])("rejects the runId %j, naming the task, before connecting", async (runId, shownRunId) => {
+    const nextasking = createTestNextasking();
+
+    const dispatching = nextasking.dispatch("send-welcome-email", VALID_WELCOME_PAYLOAD, { runId });
+
+    await expect(dispatching).rejects.toThrow(
+      `Invalid runId for task "send-welcome-email": ${shownRunId} is not a non-empty string`,
+    );
+  });
+
+  test("rejects an invalid delay, naming the task, before connecting", async () => {
+    const nextasking = createTestNextasking();
+
+    const dispatching = nextasking.dispatch("send-welcome-email", VALID_WELCOME_PAYLOAD, {
+      delay: "0.5h" as Duration,
+    });
+
+    await expect(dispatching).rejects.toThrow(
+      'Invalid delay for task "send-welcome-email": "0.5h" is not a duration: a whole number followed by s, m, h or d, such as "30s"',
+    );
+    await expect(dispatching).rejects.toMatchObject({ cause: expect.any(Error) });
+  });
+
+  test("takes a runId and a delay duration, and rejects a delay that isn't one at compile time", () => {
+    const nextasking = createTestNextasking();
+
+    expectTypeOf(nextasking.dispatch<"send-welcome-email">)
+      .parameter(2)
+      .toEqualTypeOf<{ runId?: string; delay?: Duration } | undefined>();
+    // @ts-expect-error a space isn't a duration
+    void nextasking.dispatch("send-welcome-email", VALID_WELCOME_PAYLOAD, { delay: "5 m" }).catch(() => undefined);
+  });
 });
 
 describe("emit", () => {
@@ -322,6 +360,40 @@ describe("emit", () => {
       .toEqualTypeOf<{ invoiceId: string; amountInCents: number }>();
     // @ts-expect-error a wrong payload doesn't compile
     void nextasking.emit("invoice.paid", { invoiceId: "inv-1", amountInCents: "100" }).catch(() => undefined);
+  });
+
+  test("returns the eventId passed and warns with it when the event has no listeners", async () => {
+    const logger = createSpyLogger();
+    const nextasking = createTestNextasking(logger);
+
+    const emittedEvent = await nextasking.emit("user.signed-up", { userId: "user-7" }, { eventId: "signup-user-7" });
+
+    expect(emittedEvent).toEqual({ eventId: "signup-user-7" });
+    expect(logger.warn).toHaveBeenCalledExactlyOnceWith(
+      { eventName: "user.signed-up", eventId: "signup-user-7" },
+      "no listeners for event",
+    );
+  });
+
+  test.each([
+    ["", '""'],
+    [null as unknown as string, "null"],
+  ])("rejects the eventId %j, naming the event, before connecting", async (eventId, shownEventId) => {
+    const nextasking = createTestNextasking();
+
+    const emitting = nextasking.emit("invoice.paid", { invoiceId: "inv-1", amountInCents: 100 }, { eventId });
+
+    await expect(emitting).rejects.toThrow(
+      `Invalid eventId for event "invoice.paid": ${shownEventId} is not a non-empty string`,
+    );
+  });
+
+  test("takes an eventId and no delay", () => {
+    const nextasking = createTestNextasking();
+
+    expectTypeOf(nextasking.emit<"invoice.paid">)
+      .parameter(2)
+      .toEqualTypeOf<{ eventId?: string } | undefined>();
   });
 
   test("takes no name on an instance without events", () => {

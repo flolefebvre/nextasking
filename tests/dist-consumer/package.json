@@ -1,0 +1,14 @@
+{
+  "name": "dist-consumer",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Typechecks the built dist through the exports map, as a consumer does, on the TypeScript floor.",
+  "dependencies": {
+    "@flefebvre/nextasking": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "5.9.3",
+    "zod": "^4.6.7"
+  }
+}

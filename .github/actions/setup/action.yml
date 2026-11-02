@@ -1,5 +1,13 @@
 name: setup
-description: The toolchain and dependencies every ci job starts from.
+description: The toolchain and dependencies every ci and release job starts from.
+
+inputs:
+  registry-url:
+    description: The npm registry to set up auth for, read from NODE_AUTH_TOKEN. Empty sets up none.
+    default: ""
+  store-cache:
+    description: Whether to restore and save the pnpm store. A release build turns it off.
+    default: "true"
 
 runs:
   using: composite
@@ -12,7 +20,8 @@ runs:
       uses: actions/setup-node@v7
       with:
         node-version: 24
-        cache: pnpm
+        cache: ${{ inputs.store-cache == 'true' && 'pnpm' || '' }}
+        registry-url: ${{ inputs.registry-url }}
 
     - name: Install dependencies
       shell: bash

@@ -1,5 +1,5 @@
 {
-  "path": ["src", "scripts"],
+  "path": ["src", "scripts", "tests"],
   "format": ["typescript"],
   "minTokens": 50,
   "exitCode": 1,

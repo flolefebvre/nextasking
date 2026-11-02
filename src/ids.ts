@@ -6,6 +6,10 @@ export type EventId = string;
 
 export type JobId = string;
 
+export type StepId = string;
+
+export type IdempotencyKey = string;
+
 type Uuid = string;
 
 const NEXTASKING_NAMESPACE: Uuid = "8f6c1f0e-4a5d-4b8e-9c3a-2d7e5b1a6f40";
@@ -29,6 +33,10 @@ function uuidFromNameParts(nameParts: readonly string[]): Uuid {
 
 export function deriveListenerRunId(eventId: EventId, listenerName: string): RunId {
   return uuidFromNameParts(["listener-run", eventId, listenerName]);
+}
+
+export function deriveStepIdempotencyKey(taskName: string, runId: RunId, stepId: StepId): IdempotencyKey {
+  return uuidFromNameParts(["step", taskName, runId, stepId]);
 }
 
 export function deriveJobId(definitionName: string, consumerFacingId: RunId | EventId): JobId {

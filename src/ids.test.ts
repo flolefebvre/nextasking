@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 
-import { createRandomId, deriveJobId, deriveListenerRunId, nameBasedUuid } from "./ids.js";
+import { createRandomId, deriveJobId, deriveListenerRunId, deriveStepIdempotencyKey, nameBasedUuid } from "./ids.js";
 
 const RANDOM_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
@@ -35,6 +35,21 @@ describe("deriveListenerRunId", () => {
   test("derives a different run id for another listener of the same event", () => {
     expect(deriveListenerRunId("evt-1", "send-receipt")).not.toBe(
       deriveListenerRunId("evt-1", "record-invoice-payment"),
+    );
+  });
+});
+
+describe("deriveStepIdempotencyKey", () => {
+  test("derives the same version 5 UUID from the same task, run id and step id", () => {
+    const idempotencyKey = deriveStepIdempotencyKey("charge-card", "run-1", "create-charge");
+
+    expect(idempotencyKey).toBe("9c24dd31-8fba-5cc1-a4f2-c683ca4c3657");
+    expect(idempotencyKey).toMatch(NAME_BASED_UUID);
+  });
+
+  test("derives a different key for another run of the same step", () => {
+    expect(deriveStepIdempotencyKey("charge-card", "run-2", "create-charge")).not.toBe(
+      deriveStepIdempotencyKey("charge-card", "run-1", "create-charge"),
     );
   });
 });

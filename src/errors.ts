@@ -22,6 +22,10 @@ export class NonRetriableError extends Error {
   override readonly name = "NonRetriableError";
 }
 
+export class StepMisuseError extends Error {
+  override readonly name = "StepMisuseError";
+}
+
 export type PayloadIssue = {
   readonly path: string;
   readonly message: string;

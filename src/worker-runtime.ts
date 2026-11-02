@@ -12,8 +12,10 @@ import type { DurationInMilliseconds } from "./durations.js";
 import { errorFromThrownValue, errorRecordFor, failureReasonFor } from "./failed-attempts.js";
 import { loggerWithFields } from "./logger.js";
 import type { Logger } from "./logger.js";
+import { createRedisStepStore, keepSavedStepsForFailedRunRetention, removeSavedSteps } from "./redis-step-store.js";
 import { RUN_QUEUE_NAME } from "./run-queue.js";
 import type { RunQueue, StoredFanOut, StoredRun } from "./run-queue.js";
+import { openStepEngine } from "./step-engine.js";
 
 export type RunningWorker = {
   close: () => Promise<void>;
@@ -52,7 +54,16 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
     runLogger.debug({}, "attempt started");
     const handler = task.handler as TaskHandler<unknown>;
     try {
-      await settleWithinTimeout(task.name, task.timeout, handler({ payload, runId, attempt, logger: runLogger }));
+      const stepEngine = await openStepEngine({ taskName: task.name, runId, store: createRedisStepStore(client, job) });
+      try {
+        await settleWithinTimeout(
+          task.name,
+          task.timeout,
+          handler({ payload, step: stepEngine.step, runId, attempt, logger: runLogger }),
+        );
+      } finally {
+        stepEngine.throwRecordedMisuse();
+      }
     } catch (thrownValue) {
       const error = errorFromThrownValue(thrownValue);
       const failedAt = new Date();
@@ -68,6 +79,7 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
         backoffInMillisecondsByFailedJob.set(job, backoffInMilliseconds);
         runLogger.warn({ err: error, retriesLeft, backoffInMilliseconds }, "attempt failed");
       } else {
+        await keepSavedStepsForFailedRunRetention(client, job).catch(() => undefined);
         backoffInMillisecondsByFailedJob.set(job, NO_RETRY);
         runLogger.error({ err: error, reason, ...durationFieldsAt(failedAt.getTime()) }, "run failed");
       }
@@ -108,6 +120,9 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
     },
   );
   worker.on("error", () => undefined);
+  worker.on("completed", (job) => {
+    removeSavedSteps(client, job).catch(() => undefined);
+  });
   config.logger.info({}, "worker started");
 
   return {

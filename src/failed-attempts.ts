@@ -1,8 +1,14 @@
-import { NonRetriableError } from "./errors.js";
+import { NonRetriableError, StepMisuseError } from "./errors.js";
 import type { ErrorRecord, FailureReason } from "./run-queue.js";
 
+const NON_RETRIABLE_ERROR_NAMES = new Set(["NonRetriableError", "StepMisuseError"]);
+
 export function failureReasonFor(error: Error, retriesLeft: number): FailureReason | undefined {
-  if (error instanceof NonRetriableError || error.name === "NonRetriableError") {
+  if (
+    error instanceof NonRetriableError ||
+    error instanceof StepMisuseError ||
+    NON_RETRIABLE_ERROR_NAMES.has(error.name)
+  ) {
     return "non-retriable";
   }
   return retriesLeft > 0 ? undefined : "retries exhausted";

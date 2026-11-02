@@ -3,6 +3,7 @@ import { describe, expect, expectTypeOf, test } from "vitest";
 import { z } from "zod";
 
 import { defineEvent, defineListener, defineTask } from "./definitions.js";
+import type { StepTools } from "./step-engine.js";
 
 describe("defineTask", () => {
   test("takes a Zod schema and hands the handler the schema's output", () => {
@@ -28,12 +29,13 @@ describe("defineTask", () => {
     expect(generateInvoicePdf.name).toBe("generate-invoice-pdf");
   });
 
-  test("hands the handler the run id and the attempt number", () => {
+  test("hands the handler the run id, the attempt number and the step tools", () => {
     defineTask("purge-sessions", {
       schema: z.object({}),
-      handler: async ({ runId, attempt }) => {
+      handler: async ({ runId, attempt, step }) => {
         expectTypeOf(runId).toEqualTypeOf<string>();
         expectTypeOf(attempt).toEqualTypeOf<number>();
+        expectTypeOf(step).toEqualTypeOf<StepTools>();
       },
     });
   });

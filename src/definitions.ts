@@ -1,3 +1,4 @@
+import { InvalidPayloadError } from "./errors.js";
 import type { RunId } from "./ids.js";
 import type { StandardSchemaV1, StandardSchemaV1Input, StandardSchemaV1Output } from "./standard-schema.js";
 
@@ -31,6 +32,14 @@ export type AnyTaskDefinition = {
   readonly schema: PayloadSchema;
   readonly handler: (context: never) => Promise<void>;
 };
+
+export async function validatePayload(task: AnyTaskDefinition, payload: unknown): Promise<unknown> {
+  const result = await task.schema["~standard"].validate(payload);
+  if (result.issues !== undefined) {
+    throw new InvalidPayloadError(task.name, result.issues, payload);
+  }
+  return result.value;
+}
 
 export function defineTask<const Name extends string, Schema extends PayloadSchema>(
   name: Name,

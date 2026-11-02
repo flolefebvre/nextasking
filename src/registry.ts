@@ -88,6 +88,10 @@ export function createNextasking<
   }
   let runQueue: RunQueue | undefined;
   let runningWorker: RunningWorker | undefined;
+  const openRunQueue = (): RunQueue => {
+    runQueue ??= createRunQueue(config.connection, prefix);
+    return runQueue;
+  };
 
   const nextasking: Nextasking<Tasks[number], Events[number]> = {
     dispatch: async (name, payload) => {
@@ -96,8 +100,7 @@ export function createNextasking<
         throw new UnknownTaskError(name, [...tasksByName.keys()]);
       }
       const validatedPayload = await validatePayload("task", task, payload);
-      runQueue ??= createRunQueue(config.connection, prefix);
-      const runId = await runQueue.enqueueRun(task.name, validatedPayload);
+      const runId = await openRunQueue().enqueueRun(task.name, validatedPayload);
       logger.debug({ task: task.name, runId }, "run dispatched");
       return { runId };
     },
@@ -113,14 +116,20 @@ export function createNextasking<
         logger.warn({ eventName: event.name, eventId }, "no listeners for event");
         return { eventId };
       }
-      runQueue ??= createRunQueue(config.connection, prefix);
-      await runQueue.enqueueFanOut(event.name, { eventId, payload: validatedPayload, listenerNames });
+      await openRunQueue().enqueueFanOut(event.name, { eventId, payload: validatedPayload, listenerNames });
       return { eventId };
     },
     isTaskName: (name): name is Tasks[number]["name"] => tasksByName.has(name),
     isEventName: (name): name is Events[number]["name"] => eventsByName.has(name),
     startWorker: async () => {
-      runningWorker = startRunWorker({ connection: config.connection, prefix, logger, tasksByName });
+      runningWorker = startRunWorker({
+        connection: config.connection,
+        prefix,
+        logger,
+        tasksByName,
+        eventsByName,
+        openRunQueue,
+      });
     },
   };
 

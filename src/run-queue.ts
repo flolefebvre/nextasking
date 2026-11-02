@@ -2,7 +2,7 @@ import { Queue } from "bullmq";
 
 import { closeRedisClient, createRedisClient } from "./connection.js";
 import type { ConnectionConfig } from "./connection.js";
-import { createRunId } from "./ids.js";
+import { createRandomId } from "./ids.js";
 import type { RunId } from "./ids.js";
 
 export const RUN_QUEUE_NAME = "runs";
@@ -23,7 +23,7 @@ export function createRunQueue(connection: ConnectionConfig, prefix: string): Ru
 
   return {
     enqueueRun: async (taskName, payload) => {
-      const runId = createRunId();
+      const runId = createRandomId();
       await queue.add(taskName, payload, { jobId: runId, removeOnComplete: COMPLETED_RUN_RETENTION });
       return runId;
     },

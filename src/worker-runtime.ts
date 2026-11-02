@@ -8,11 +8,11 @@ import { backoffOf, retriesOf } from "./definitions.js";
 import type { AnyTaskDefinition, EventDefinition, TaskHandler } from "./definitions.js";
 import { parseDuration } from "./durations.js";
 import type { DurationInMilliseconds } from "./durations.js";
-import { errorFromThrownValue, errorRecordFor } from "./failed-attempts.js";
+import { errorFromThrownValue, errorRecordFor, failureReasonFor } from "./failed-attempts.js";
 import { loggerWithFields } from "./logger.js";
 import type { Logger } from "./logger.js";
 import { RUN_QUEUE_NAME } from "./run-queue.js";
-import type { FailureReason, RunQueue, StoredFanOut, StoredRun } from "./run-queue.js";
+import type { RunQueue, StoredFanOut, StoredRun } from "./run-queue.js";
 
 export type RunningWorker = {
   close: () => Promise<void>;
@@ -56,7 +56,7 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
       const error = errorFromThrownValue(thrownValue);
       const failedAt = new Date();
       const retriesLeft = (job.opts.attempts ?? 1) - attempt;
-      const reason: FailureReason | undefined = retriesLeft > 0 ? undefined : "retries exhausted";
+      const reason = failureReasonFor(error, retriesLeft);
       await job.updateData({
         ...job.data,
         errors: [...job.data.errors, errorRecordFor(error, attempt, failedAt)],

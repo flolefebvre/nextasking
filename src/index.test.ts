@@ -33,11 +33,12 @@ declare module "./index.js" {
 }
 
 describe("the root export", () => {
-  test("exports the definers, createNextasking and the call errors, and nothing else at runtime", () => {
+  test("exports the definers, createNextasking and the errors, and nothing else at runtime", () => {
     const exportedNames = Object.keys(root).sort();
 
     expect(exportedNames).toEqual([
       "InvalidPayloadError",
+      "NonRetriableError",
       "UnknownEventError",
       "UnknownTaskError",
       "createNextasking",

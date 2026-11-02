@@ -1,4 +1,12 @@
-import type { ErrorRecord } from "./run-queue.js";
+import { NonRetriableError } from "./errors.js";
+import type { ErrorRecord, FailureReason } from "./run-queue.js";
+
+export function failureReasonFor(error: Error, retriesLeft: number): FailureReason | undefined {
+  if (error instanceof NonRetriableError || error.name === "NonRetriableError") {
+    return "non-retriable";
+  }
+  return retriesLeft > 0 ? undefined : "retries exhausted";
+}
 
 export function errorFromThrownValue(thrownValue: unknown): Error {
   return thrownValue instanceof Error ? thrownValue : new Error(stringFormOf(thrownValue));

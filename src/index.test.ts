@@ -3,7 +3,7 @@ import { z } from "zod";
 
 import * as root from "./index.js";
 import { createNextasking, defineEvent, defineListener, defineTask } from "./index.js";
-import type { EventName, Register, TaskName } from "./index.js";
+import type { EventName, Register, TaskContext, TaskName } from "./index.js";
 import type { EventNameIn, TaskNameIn } from "./registry.js";
 
 const sendWelcomeEmail = defineTask("send-welcome-email", {
@@ -17,7 +17,9 @@ const userSignedUp = defineEvent("user.signed-up", {
 
 const createDefaultWorkspace = defineListener("create-default-workspace", {
   on: userSignedUp,
-  handler: async () => undefined,
+  handler: async ({ payload, dispatch }) => {
+    await dispatch("send-welcome-email", { email: `${payload.userId}@example.com` });
+  },
 });
 
 export const nextasking = createNextasking({
@@ -55,6 +57,23 @@ describe("the root export", () => {
       .parameter(0)
       .toEqualTypeOf<"send-welcome-email" | "create-default-workspace">();
     expectTypeOf<Register["nextasking"]["emit"]>().parameter(0).toEqualTypeOf<"user.signed-up">();
+  });
+
+  test("types a handler's emit and dispatch through the Register augmentation", () => {
+    const sendFromAHandler = async ({ dispatch, emit }: TaskContext<unknown>) => {
+      await dispatch("send-welcome-email", { email: "ada@example.com" }, { runId: "welcome-ada", delay: "5m" });
+      await emit("user.signed-up", { userId: "user-1" }, { eventId: "signed-up-user-1" });
+      // @ts-expect-error the payload doesn't match the event's schema
+      await emit("user.signed-up", { email: "ada@example.com" });
+      // @ts-expect-error the instance lists no such task
+      await dispatch("send-goodbye-email", { email: "ada@example.com" });
+    };
+
+    expectTypeOf(sendFromAHandler).returns.resolves.toBeVoid();
+    expectTypeOf<TaskContext<unknown>["dispatch"]>()
+      .parameter(0)
+      .toEqualTypeOf<"send-welcome-email" | "create-default-workspace">();
+    expectTypeOf<TaskContext<unknown>["emit"]>().parameter(0).toEqualTypeOf<"user.signed-up">();
   });
 
   test("exports the registered task and event names", () => {

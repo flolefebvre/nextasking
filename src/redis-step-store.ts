@@ -3,7 +3,7 @@ import type { Redis } from "ioredis";
 
 import type { RunId, StepId } from "./ids.js";
 import { FAILED_JOB_RETENTION } from "./run-queue.js";
-import type { SerializedStepResult, StepStore } from "./step-engine.js";
+import type { SerializedSavedStep, StepStore } from "./step-engine.js";
 
 class LostRunLockError extends Error {
   override readonly name = "LostRunLockError";
@@ -40,7 +40,7 @@ export function createRedisStepStore(client: Redis, job: Job<{ runId: RunId }>):
   const savedStepsKey = savedStepsKeyOf(job);
   return {
     load: () => client.hgetall(savedStepsKey),
-    save: async (stepId: StepId, serializedResult: SerializedStepResult) => {
+    save: async (stepId: StepId, serializedSavedStep: SerializedSavedStep) => {
       const outcome = await client.eval(
         SAVE_STEP_IF_LOCK_IS_HELD,
         2,
@@ -49,7 +49,7 @@ export function createRedisStepStore(client: Redis, job: Job<{ runId: RunId }>):
         job.token ?? "",
         SAVED_STEPS_TIME_TO_LIVE_IN_MILLISECONDS,
         stepId,
-        serializedResult,
+        serializedSavedStep,
       );
       if (outcome !== STEP_SAVED) {
         throw new LostRunLockError(stepId, job.data.runId);

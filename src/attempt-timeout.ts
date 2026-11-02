@@ -9,13 +9,13 @@ class AttemptTimeoutError extends Error {
   }
 }
 
-export async function settleWithinTimeout(
+export async function settleWithinTimeout<Outcome>(
   taskName: string,
   timeout: Duration | undefined,
-  attemptExecution: Promise<void>,
-): Promise<void> {
+  stretchExecution: Promise<Outcome>,
+): Promise<Outcome> {
   if (timeout === undefined) {
-    return attemptExecution;
+    return stretchExecution;
   }
   let timeoutTimer: NodeJS.Timeout | undefined;
   const timeoutExpiry = new Promise<never>((_resolve, reject) => {
@@ -24,7 +24,7 @@ export async function settleWithinTimeout(
     }, parseDuration(timeout));
   });
   try {
-    await Promise.race([attemptExecution, timeoutExpiry]);
+    return await Promise.race([stretchExecution, timeoutExpiry]);
   } finally {
     clearTimeout(timeoutTimer);
   }

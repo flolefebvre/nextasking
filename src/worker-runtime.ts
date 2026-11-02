@@ -1,4 +1,4 @@
-import { Worker } from "bullmq";
+import { DelayedError, Worker } from "bullmq";
 import type { Job, MinimalJob } from "bullmq";
 
 import { settleWithinTimeout } from "./attempt-timeout.js";
@@ -13,9 +13,11 @@ import { errorFromThrownValue, errorRecordFor, failureReasonFor } from "./failed
 import { loggerWithFields } from "./logger.js";
 import type { Logger } from "./logger.js";
 import { createRedisStepStore, keepSavedStepsForFailedRunRetention, removeSavedSteps } from "./redis-step-store.js";
+import type { DispatchByName, EmitByName } from "./registry.js";
 import { RUN_QUEUE_NAME } from "./run-queue.js";
 import type { RunQueue, StoredFanOut, StoredRun } from "./run-queue.js";
 import { openStepEngine } from "./step-engine.js";
+import type { WakeTimeInEpochMilliseconds } from "./step-engine.js";
 
 export type RunningWorker = {
   close: () => Promise<void>;
@@ -28,6 +30,8 @@ export type WorkerConfig = {
   tasksByName: ReadonlyMap<string, AnyTaskDefinition>;
   eventsByName: ReadonlyMap<string, EventDefinition>;
   openRunQueue: () => RunQueue;
+  dispatch: DispatchByName;
+  emit: EmitByName;
 };
 
 const NO_RETRY = -1;
@@ -42,27 +46,41 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
 
   const backoffInMillisecondsByFailedJob = new WeakMap<MinimalJob, DurationInMilliseconds>();
 
-  const executeRunAttempt = async (task: AnyTaskDefinition, job: Job<StoredRun>) => {
-    const attemptStartedAt = Date.now();
+  const executeRunAttempt = async (task: AnyTaskDefinition, job: Job<StoredRun>, token: string | undefined) => {
+    const stretchStartedAt = Date.now();
     const { runId, payload, sourceEvent } = job.data;
     const attempt = job.attemptsMade + 1;
     const runLogger = loggerWithFields(config.logger, { task: task.name, runId, attempt, ...sourceEvent });
     const durationFieldsAt = (runEndedAt: number) => ({
       runDurationInMilliseconds: runEndedAt - job.timestamp,
-      executionDurationInMilliseconds: runEndedAt - attemptStartedAt,
+      executionDurationInMilliseconds: runEndedAt - stretchStartedAt,
     });
-    runLogger.debug({}, "attempt started");
     const handler = task.handler as TaskHandler<unknown>;
+    let wakeAt: WakeTimeInEpochMilliseconds | undefined;
     try {
-      const stepEngine = await openStepEngine({ taskName: task.name, runId, store: createRedisStepStore(client, job) });
+      const stepEngine = await openStepEngine({
+        taskName: task.name,
+        runId,
+        attempt,
+        store: createRedisStepStore(client, job),
+        dispatch: config.dispatch,
+        emit: config.emit,
+      });
+      runLogger.debug({}, stepEngine.isResumingAfterSleep ? "run resumed" : "attempt started");
+      const { step, dispatch, emit } = stepEngine;
       try {
-        await settleWithinTimeout(
+        wakeAt = await settleWithinTimeout(
           task.name,
           task.timeout,
-          handler({ payload, step: stepEngine.step, runId, attempt, logger: runLogger }),
+          stepEngine.executeHandler(() =>
+            handler({ payload, step, emit, dispatch, runId, attempt, logger: runLogger }),
+          ),
         );
       } finally {
         stepEngine.throwRecordedMisuse();
+      }
+      if (wakeAt !== undefined) {
+        await job.moveToDelayed(wakeAt, token);
       }
     } catch (thrownValue) {
       const error = errorFromThrownValue(thrownValue);
@@ -85,13 +103,17 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
       }
       throw error;
     }
+    if (wakeAt !== undefined) {
+      runLogger.debug({ wakeAt: new Date(wakeAt).toISOString() }, "run suspended");
+      throw new DelayedError();
+    }
     runLogger.info(durationFieldsAt(Date.now()), "run completed");
   };
 
   const client = createRedisClient(config.connection, "worker");
   const worker = new Worker(
     RUN_QUEUE_NAME,
-    async (job) => {
+    async (job, token) => {
       if (config.eventsByName.has(job.name)) {
         const fanOut = job.data as StoredFanOut;
         await config.openRunQueue().enqueueListenerRuns(
@@ -108,7 +130,7 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
       if (task === undefined) {
         throw new Error(`Unknown task "${job.name}"`);
       }
-      await executeRunAttempt(task, job as Job<StoredRun>);
+      await executeRunAttempt(task, job as Job<StoredRun>, token);
     },
     {
       connection: client,

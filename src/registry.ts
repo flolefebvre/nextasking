@@ -41,6 +41,34 @@ export type EmittedEvent = {
   eventId: EventId;
 };
 
+export type DispatchByName = (name: string, payload: unknown, options?: DispatchOptions) => Promise<DispatchedRun>;
+
+export type EmitByName = (name: string, payload: unknown, options?: EmitOptions) => Promise<EmittedEvent>;
+
+type RegisteredDefinitions = Register extends { nextasking: Nextasking<infer Task, infer Event> }
+  ? { task: Task; event: Event }
+  : { task: never; event: never };
+
+type RegisteredTask = RegisteredDefinitions["task"];
+
+type RegisteredEvent = RegisteredDefinitions["event"];
+
+export interface RegisteredDispatch {
+  <Name extends TaskName>(
+    name: Name,
+    payload: PayloadInput<Extract<RegisteredTask, { name: Name }>["schema"]>,
+    options?: DispatchOptions,
+  ): Promise<DispatchedRun>;
+}
+
+export interface RegisteredEmit {
+  <Name extends EventName>(
+    name: Name,
+    payload: PayloadInput<Extract<RegisteredEvent, { name: Name }>["schema"]>,
+    options?: EmitOptions,
+  ): Promise<EmittedEvent>;
+}
+
 export type DispatchOptions = {
   runId?: RunId;
   delay?: Duration;
@@ -106,46 +134,50 @@ export function createNextasking<
     return runQueue;
   };
 
-  const nextasking: Nextasking<Tasks[number], Events[number]> = {
-    dispatch: async (name, payload, options = {}) => {
-      const task = tasksByName.get(name);
-      if (task === undefined) {
-        throw new UnknownTaskError(name, [...tasksByName.keys()]);
-      }
-      const runId = consumerFacingIdOrRandomId("task", task.name, "runId", options.runId);
-      const delayInMilliseconds = delayInMillisecondsOf(task.name, options.delay);
-      const validatedPayload = await validatePayload("task", task, payload);
-      const { isDuplicate } = await openRunQueue().enqueueRun(task.name, {
-        runId,
-        payload: validatedPayload,
-        retries: retriesOf(task),
-        ...(delayInMilliseconds === undefined ? {} : { delayInMilliseconds }),
-      });
-      logger.debug({ task: task.name, runId }, isDuplicate ? "duplicate dispatch dropped" : "run dispatched");
-      return { runId };
-    },
-    emit: async (name, payload, options = {}) => {
-      const event = eventsByName.get(name);
-      if (event === undefined) {
-        throw new UnknownEventError(name, [...eventsByName.keys()]);
-      }
-      const eventId = consumerFacingIdOrRandomId("event", event.name, "eventId", options.eventId);
-      const validatedPayload = await validatePayload("event", event, payload);
-      const listenerNames = listenerNamesByEventName.get(event.name) ?? [];
-      if (listenerNames.length === 0) {
-        logger.warn({ eventName: event.name, eventId }, "no listeners for event");
-        return { eventId };
-      }
-      const { isDuplicate } = await openRunQueue().enqueueFanOut(event.name, {
-        eventId,
-        payload: validatedPayload,
-        listenerNames,
-      });
-      if (isDuplicate) {
-        logger.debug({ eventName: event.name, eventId }, "duplicate dispatch dropped");
-      }
+  const dispatchByName: DispatchByName = async (name, payload, options = {}) => {
+    const task = tasksByName.get(name);
+    if (task === undefined) {
+      throw new UnknownTaskError(name, [...tasksByName.keys()]);
+    }
+    const runId = consumerFacingIdOrRandomId("task", task.name, "runId", options.runId);
+    const delayInMilliseconds = delayInMillisecondsOf(task.name, options.delay);
+    const validatedPayload = await validatePayload("task", task, payload);
+    const { isDuplicate } = await openRunQueue().enqueueRun(task.name, {
+      runId,
+      payload: validatedPayload,
+      retries: retriesOf(task),
+      ...(delayInMilliseconds === undefined ? {} : { delayInMilliseconds }),
+    });
+    logger.debug({ task: task.name, runId }, isDuplicate ? "duplicate dispatch dropped" : "run dispatched");
+    return { runId };
+  };
+
+  const emitByName: EmitByName = async (name, payload, options = {}) => {
+    const event = eventsByName.get(name);
+    if (event === undefined) {
+      throw new UnknownEventError(name, [...eventsByName.keys()]);
+    }
+    const eventId = consumerFacingIdOrRandomId("event", event.name, "eventId", options.eventId);
+    const validatedPayload = await validatePayload("event", event, payload);
+    const listenerNames = listenerNamesByEventName.get(event.name) ?? [];
+    if (listenerNames.length === 0) {
+      logger.warn({ eventName: event.name, eventId }, "no listeners for event");
       return { eventId };
-    },
+    }
+    const { isDuplicate } = await openRunQueue().enqueueFanOut(event.name, {
+      eventId,
+      payload: validatedPayload,
+      listenerNames,
+    });
+    if (isDuplicate) {
+      logger.debug({ eventName: event.name, eventId }, "duplicate dispatch dropped");
+    }
+    return { eventId };
+  };
+
+  const nextasking: Nextasking<Tasks[number], Events[number]> = {
+    dispatch: dispatchByName,
+    emit: emitByName,
     isTaskName: (name): name is Tasks[number]["name"] => tasksByName.has(name),
     isEventName: (name): name is Events[number]["name"] => eventsByName.has(name),
     startWorker: async () => {
@@ -156,6 +188,8 @@ export function createNextasking<
         tasksByName,
         eventsByName,
         openRunQueue,
+        dispatch: dispatchByName,
+        emit: emitByName,
       });
     },
   };

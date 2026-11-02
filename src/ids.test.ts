@@ -1,6 +1,13 @@
 import { describe, expect, test } from "vitest";
 
-import { createRandomId, deriveJobId, deriveListenerRunId, deriveStepIdempotencyKey, nameBasedUuid } from "./ids.js";
+import {
+  createRandomId,
+  deriveHandlerSendId,
+  deriveJobId,
+  deriveListenerRunId,
+  deriveStepIdempotencyKey,
+  nameBasedUuid,
+} from "./ids.js";
 
 const RANDOM_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
@@ -50,6 +57,35 @@ describe("deriveStepIdempotencyKey", () => {
   test("derives a different key for another run of the same step", () => {
     expect(deriveStepIdempotencyKey("charge-card", "run-2", "create-charge")).not.toBe(
       deriveStepIdempotencyKey("charge-card", "run-1", "create-charge"),
+    );
+  });
+});
+
+describe("deriveHandlerSendId", () => {
+  test("derives the same version 5 UUID from the same task, run id, scope and position", () => {
+    const sendId = deriveHandlerSendId("charge-card", "run-1", undefined, 0);
+
+    expect(sendId).toBe(deriveHandlerSendId("charge-card", "run-1", undefined, 0));
+    expect(sendId).toMatch(NAME_BASED_UUID);
+  });
+
+  test("derives a different id for each part that differs", () => {
+    const sendId = deriveHandlerSendId("charge-card", "run-1", undefined, 0);
+
+    expect(
+      new Set([
+        sendId,
+        deriveHandlerSendId("refund-card", "run-1", undefined, 0),
+        deriveHandlerSendId("charge-card", "run-2", undefined, 0),
+        deriveHandlerSendId("charge-card", "run-1", "create-charge", 0),
+        deriveHandlerSendId("charge-card", "run-1", undefined, 1),
+      ]).size,
+    ).toBe(5);
+  });
+
+  test("keeps the top level apart from a step whatever its id", () => {
+    expect(deriveHandlerSendId("charge-card", "run-1", "top-level", 0)).not.toBe(
+      deriveHandlerSendId("charge-card", "run-1", undefined, 0),
     );
   });
 });

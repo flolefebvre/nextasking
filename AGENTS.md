@@ -53,7 +53,7 @@ pnpm test:changed         Vitest, once, only the tests affected since $CHECK_BAS
 
 `<base-branch>` is the branch the change will merge into, `main` unless told otherwise. Run `check` after each step and each fix; it passed only if the output ends with `--check OK--`. A change is done when the pushed PR's `ci` check is green; a change that will not be pushed passes `pnpm gate` (ends with `--gate OK--`) once before it is handed over; later fixes re-run `check`, and CI re-validates the change when it is pushed. Any other ending is a failure, whatever the rest of the output says.
 
-The `check` and `gate` lines in package.json are the sequences: `,` separates stages run in order, `+` joins scripts run in parallel. Never join two scripts that write the same files. Add a check to the `gate` line and to the CI workflow, which runs one job per stage. See `docs/codebase/ci.md`.
+The `check` and `gate` lines in package.json are the sequences: `,` separates stages run in order, `+` joins scripts run in parallel. Never join two scripts that write the same files. Add a check to the `gate` line and to the CI workflow, which runs one job per stage, except the stages that read the built `dist`, which are steps of the `build` job. See `docs/codebase/ci.md`.
 
 ## Worktrees
 

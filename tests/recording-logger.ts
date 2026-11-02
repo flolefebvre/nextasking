@@ -1,3 +1,5 @@
+import { expect, vi } from "vitest";
+
 import type { Logger } from "../src/index.js";
 
 export type LogLevel = keyof Logger;
@@ -24,4 +26,13 @@ export function createRecordingLogger(): { logger: Logger; lines: RecordedLogLin
     },
     lines,
   };
+}
+
+export async function waitForLogMessage(lines: readonly RecordedLogLine[], message: string): Promise<void> {
+  await vi.waitFor(
+    () => {
+      expect(lines.map((line) => line.message)).toContain(message);
+    },
+    { timeout: 10_000 },
+  );
 }

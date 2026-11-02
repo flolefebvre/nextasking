@@ -12,7 +12,7 @@ export type {
   TaskOptions,
 } from "./definitions.js";
 export type { Duration } from "./durations.js";
-export { InvalidPayloadError, UnknownEventError, UnknownTaskError } from "./errors.js";
+export { InvalidPayloadError, NonRetriableError, UnknownEventError, UnknownTaskError } from "./errors.js";
 export type { PayloadIssue } from "./errors.js";
 export type { EventId, RunId } from "./ids.js";
 export type { Logger } from "./logger.js";

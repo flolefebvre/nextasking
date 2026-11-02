@@ -13,11 +13,13 @@ const SECONDS_IN_A_DAY = 24 * 60 * 60;
 
 const COMPLETED_JOB_RETENTION = { age: SECONDS_IN_A_DAY, count: 1000 };
 
-const FAILED_FAN_OUT_RETENTION = { age: 14 * SECONDS_IN_A_DAY };
+const FAILED_JOB_RETENTION = { age: 14 * SECONDS_IN_A_DAY, count: 10_000 };
 
 const FAN_OUT_RETRIES = 5;
 
 const FAN_OUT_FIRST_BACKOFF_IN_MILLISECONDS = 30_000;
+
+const RUN_BACKOFF = { type: "custom" };
 
 type WriteToken = string;
 
@@ -26,10 +28,22 @@ export type SourceEvent = {
   eventId: EventId;
 };
 
+export type ErrorRecord = {
+  attempt: number;
+  name: string;
+  message: string;
+  stack: string;
+  failedAt: string;
+};
+
+export type FailureReason = "retries exhausted" | "non-retriable";
+
 export type StoredRun = {
   runId: RunId;
   payload: unknown;
   sourceEvent?: SourceEvent;
+  errors: ErrorRecord[];
+  reason?: FailureReason;
   writeToken: WriteToken;
 };
 
@@ -43,6 +57,7 @@ export type StoredFanOut = {
 export type RunToEnqueue = {
   runId: RunId;
   payload: unknown;
+  retries: number;
   delayInMilliseconds?: DurationInMilliseconds;
 };
 
@@ -52,6 +67,11 @@ export type FanOutToEnqueue = {
   listenerNames: readonly string[];
 };
 
+export type ListenerRunToEnqueue = {
+  listenerName: string;
+  retries: number;
+};
+
 export type EnqueueOutcome = {
   isDuplicate: boolean;
 };
@@ -59,15 +79,25 @@ export type EnqueueOutcome = {
 export type RunQueue = {
   enqueueRun: (taskName: string, run: RunToEnqueue) => Promise<EnqueueOutcome>;
   enqueueFanOut: (eventName: string, fanOut: FanOutToEnqueue) => Promise<EnqueueOutcome>;
-  enqueueListenerRuns: (eventName: string, fanOut: StoredFanOut) => Promise<void>;
+  enqueueListenerRuns: (
+    eventName: string,
+    fanOut: StoredFanOut,
+    listenerRuns: readonly ListenerRunToEnqueue[],
+  ) => Promise<void>;
   close: () => Promise<void>;
 };
 
-function jobForRun(taskName: string, storedRun: StoredRun) {
+function jobForRun(taskName: string, storedRun: StoredRun, retries: number) {
   return {
     name: taskName,
     data: storedRun,
-    opts: { jobId: deriveJobId(taskName, storedRun.runId), removeOnComplete: COMPLETED_JOB_RETENTION },
+    opts: {
+      jobId: deriveJobId(taskName, storedRun.runId),
+      attempts: retries + 1,
+      backoff: RUN_BACKOFF,
+      removeOnComplete: COMPLETED_JOB_RETENTION,
+      removeOnFail: FAILED_JOB_RETENTION,
+    },
   };
 }
 
@@ -89,7 +119,11 @@ export function createRunQueue(connection: ConnectionConfig, prefix: string): Ru
 
   return {
     enqueueRun: async (taskName, run) => {
-      const job = jobForRun(taskName, { runId: run.runId, payload: run.payload, writeToken: createRandomId() });
+      const job = jobForRun(
+        taskName,
+        { runId: run.runId, payload: run.payload, errors: [], writeToken: createRandomId() },
+        run.retries,
+      );
       return addUnlessDuplicate(job.name, job.data, {
         ...job.opts,
         ...(run.delayInMilliseconds === undefined ? {} : { delay: run.delayInMilliseconds }),
@@ -102,19 +136,24 @@ export function createRunQueue(connection: ConnectionConfig, prefix: string): Ru
         attempts: FAN_OUT_RETRIES + 1,
         backoff: { type: "exponential", delay: FAN_OUT_FIRST_BACKOFF_IN_MILLISECONDS },
         removeOnComplete: COMPLETED_JOB_RETENTION,
-        removeOnFail: FAILED_FAN_OUT_RETENTION,
+        removeOnFail: FAILED_JOB_RETENTION,
       });
     },
-    enqueueListenerRuns: async (eventName, fanOut) => {
+    enqueueListenerRuns: async (eventName, fanOut, listenerRuns) => {
       const sourceEvent = { eventName, eventId: fanOut.eventId };
       await queue.addBulk(
-        fanOut.listenerNames.map((listenerName) =>
-          jobForRun(listenerName, {
-            runId: deriveListenerRunId(fanOut.eventId, listenerName),
-            payload: fanOut.payload,
-            sourceEvent,
-            writeToken: createRandomId(),
-          }),
+        listenerRuns.map(({ listenerName, retries }) =>
+          jobForRun(
+            listenerName,
+            {
+              runId: deriveListenerRunId(fanOut.eventId, listenerName),
+              payload: fanOut.payload,
+              sourceEvent,
+              errors: [],
+              writeToken: createRandomId(),
+            },
+            retries,
+          ),
         ),
       );
     },

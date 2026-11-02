@@ -18,6 +18,10 @@ export class UnknownEventError extends Error {
   }
 }
 
+export class NonRetriableError extends Error {
+  override readonly name = "NonRetriableError";
+}
+
 export type PayloadIssue = {
   readonly path: string;
   readonly message: string;

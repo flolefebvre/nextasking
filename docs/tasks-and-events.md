@@ -80,7 +80,7 @@ export const recordInvoicePayment = defineListener("record-invoice-payment", {
 ```
 
 - The payload is the event's schema output: a listener has no `schema` of its own.
-- It takes every task option (`retries`, `backoff`, `timeout`, `concurrency`) and the same handler context.
+- It takes every task option (`retries`, `backoff`, `timeout`, `concurrency`) and the same handler context. See [Retries and failures](retries-and-failures.md) for the first three.
 - `on` takes the event definition, not its name.
 - Give each reaction its own listener: one event can have any number of them, and each gets its own run.
 
@@ -122,6 +122,7 @@ declare module "@flefebvre/nextasking" {
 - a listener whose `on` event isn't listed in `events`
 - an event name starting with `nextasking/`, which is reserved for the library's built-in events
 - a `concurrency.limit` that isn't a positive integer
+- `retries` that isn't a whole number, 0 or more
 - a duration option that isn't a valid duration, such as `"-5s"` or `"0.5h"` passed through a cast or plain JavaScript
 
 ```text
@@ -129,6 +130,7 @@ Duplicate name "invoice.paid": every task and event needs its own name
 Listener "record-invoice-payment" listens to event "invoice.paid", which is not listed in events
 Event "nextasking/run.failed" has a reserved name: names starting with "nextasking/" belong to the built-in events
 Task "rebuild-index" has an invalid timeout: "0.5h" is not a duration: a whole number followed by s, m, h or d, such as "30s"
+Task "sync-account" has an invalid retries: -1 is not a non-negative integer
 ```
 
 The error is a startup crash: fix the definition, don't catch it.
@@ -219,11 +221,11 @@ A repeat is dropped as long as the first call's stored run or fan-out exists:
 
 - while it waits, is delayed or executes;
 - once it has completed, for 24 hours;
-- once it has failed, for as long as the failure is kept.
+- once it has failed, for as long as the failure is kept: 14 days. See [Retries and failures](retries-and-failures.md#what-a-failed-run-keeps).
 
 So the window lasts at least 24 hours after the dispatch, and longer when the run takes longer. Two limits to plan around:
 
-- The queue keeps at most 1,000 completed runs and fan-outs together. Under load, the oldest are removed before 24 hours, and a repeat of their id starts again.
+- The queue keeps at most 1,000 completed runs and fan-outs together, and 10,000 failed ones. Under load, the oldest are removed early, and a repeat of their id starts again.
 - An emit of an event with no listeners stores nothing, so it has no window: a repeat warns again.
 
 ## Narrow a name known only at runtime
@@ -290,4 +292,4 @@ export async function register() {
 - A process that never calls `startWorker()` only dispatches and emits.
 - Calling `startWorker()` a second time in the same process throws.
 - Completed runs and completed fan-outs are kept 24 hours, and at most 1,000.
-- A fan-out that fails is retried 5 times, waiting 30 seconds and doubling, and kept 14 days once it has failed. A retry skips the listeners that already have a run.
+- A fan-out that fails is retried 5 times, waiting 30 seconds and doubling, and kept 14 days once it has failed, like a failed run. A retry skips the listeners that already have a run.

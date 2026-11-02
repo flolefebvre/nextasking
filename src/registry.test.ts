@@ -134,6 +134,25 @@ describe("createNextasking", () => {
     );
   });
 
+  test.each([
+    [-1, "-1"],
+    [1.5, "1.5"],
+    [Number.POSITIVE_INFINITY, "Infinity"],
+    ["3" as unknown as number, '"3"'],
+  ])("rejects retries of %s", (retries, shownRetries) => {
+    const tasks = [defineTask("rebuild-index", { schema: z.object({}), retries, handler: async () => undefined })];
+
+    expect(() => createNextasking({ connection: { url: UNREACHABLE_URL }, tasks })).toThrow(
+      `Task "rebuild-index" has an invalid retries: ${shownRetries} is not a non-negative integer`,
+    );
+  });
+
+  test("accepts retries of 0, for a task that runs once", () => {
+    const tasks = [defineTask("rebuild-index", { schema: z.object({}), retries: 0, handler: async () => undefined })];
+
+    expect(() => createNextasking({ connection: { url: UNREACHABLE_URL }, tasks })).not.toThrow();
+  });
+
   test.each(["backoff", "timeout"] as const)("rejects an invalid %s, naming the task and the option", (option) => {
     const rebuildIndex = defineTask("rebuild-index", {
       schema: z.object({}),

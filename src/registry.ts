@@ -1,5 +1,5 @@
 import type { ConnectionConfig } from "./connection.js";
-import { validatePayload } from "./definitions.js";
+import { retriesOf, validatePayload } from "./definitions.js";
 import type { AnyTaskDefinition, EventDefinition, PayloadInput } from "./definitions.js";
 import { parseDuration } from "./durations.js";
 import type { Duration, DurationInMilliseconds } from "./durations.js";
@@ -118,6 +118,7 @@ export function createNextasking<
       const { isDuplicate } = await openRunQueue().enqueueRun(task.name, {
         runId,
         payload: validatedPayload,
+        retries: retriesOf(task),
         ...(delayInMilliseconds === undefined ? {} : { delayInMilliseconds }),
       });
       logger.debug({ task: task.name, runId }, isDuplicate ? "duplicate dispatch dropped" : "run dispatched");
@@ -232,8 +233,17 @@ function rejectInvalidTaskOptions(task: AnyTaskDefinition): void {
   if (task.concurrency !== undefined) {
     const limit: unknown = task.concurrency.limit;
     if (typeof limit !== "number" || !Number.isInteger(limit) || limit <= 0) {
-      const shownLimit = typeof limit === "string" ? JSON.stringify(limit) : String(limit);
-      throw new Error(`Task "${task.name}" has an invalid concurrency.limit: ${shownLimit} is not a positive integer`);
+      throw new Error(
+        `Task "${task.name}" has an invalid concurrency.limit: ${shownOptionValue(limit)} is not a positive integer`,
+      );
+    }
+  }
+  if (task.retries !== undefined) {
+    const retries: unknown = task.retries;
+    if (typeof retries !== "number" || !Number.isInteger(retries) || retries < 0) {
+      throw new Error(
+        `Task "${task.name}" has an invalid retries: ${shownOptionValue(retries)} is not a non-negative integer`,
+      );
     }
   }
   for (const option of DURATION_OPTIONS) {
@@ -247,6 +257,10 @@ function rejectInvalidTaskOptions(task: AnyTaskDefinition): void {
       throw new Error(`Task "${task.name}" has an invalid ${option}: ${(error as Error).message}`, { cause: error });
     }
   }
+}
+
+function shownOptionValue(optionValue: unknown): string {
+  return typeof optionValue === "string" ? JSON.stringify(optionValue) : String(optionValue);
 }
 
 export async function closeNextasking(nextasking: object): Promise<void> {

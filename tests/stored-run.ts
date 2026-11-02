@@ -1,9 +1,6 @@
-import { Redis } from "ioredis";
-
-import { deriveJobId } from "../src/ids.js";
 import type { RunId } from "../src/ids.js";
-
-const RUN_QUEUE_KEY_SEGMENT = ":runs:";
+import { runJobKey } from "./run-job-key.js";
+import { withRedis } from "./with-redis.js";
 
 export async function storedRun(
   redisUrl: string,
@@ -11,14 +8,8 @@ export async function storedRun(
   taskName: string,
   runId: RunId,
 ): Promise<Record<string, unknown> | undefined> {
-  const redis = new Redis(redisUrl, { lazyConnect: true });
-  redis.on("error", () => undefined);
-  try {
-    await redis.connect();
-    const jobKey = `${keyPrefix}${RUN_QUEUE_KEY_SEGMENT}${deriveJobId(taskName, runId)}`;
-    const storedData = await redis.hget(jobKey, "data");
+  return withRedis(redisUrl, async (redis) => {
+    const storedData = await redis.hget(runJobKey(keyPrefix, taskName, runId), "data");
     return storedData === null ? undefined : (JSON.parse(storedData) as Record<string, unknown>);
-  } finally {
-    await redis.quit().catch(() => undefined);
-  }
+  });
 }

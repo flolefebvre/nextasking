@@ -33,7 +33,13 @@ integrationTest(
       await vi.waitFor(
         () => {
           expect(recordedContexts).toEqual([
-            { payload: { email: "ada@example.com" }, runId, attempt: 1, logger: expect.any(Object) },
+            {
+              payload: { email: "ada@example.com" },
+              step: { run: expect.any(Function) },
+              runId,
+              attempt: 1,
+              logger: expect.any(Object),
+            },
           ]);
         },
         { timeout: 10_000 },

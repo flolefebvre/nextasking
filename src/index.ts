@@ -12,7 +12,13 @@ export type {
   TaskOptions,
 } from "./definitions.js";
 export type { Duration } from "./durations.js";
-export { InvalidPayloadError, NonRetriableError, UnknownEventError, UnknownTaskError } from "./errors.js";
+export {
+  InvalidPayloadError,
+  NonRetriableError,
+  StepMisuseError,
+  UnknownEventError,
+  UnknownTaskError,
+} from "./errors.js";
 export type { PayloadIssue } from "./errors.js";
 export type { EventId, RunId } from "./ids.js";
 export type { Logger } from "./logger.js";
@@ -29,3 +35,4 @@ export type {
   TaskName,
 } from "./registry.js";
 export type { StandardSchemaV1 } from "./standard-schema.js";
+export type { StepContext, StepTools } from "./step-engine.js";

@@ -5,6 +5,7 @@ import type { RunId } from "./ids.js";
 import type { JsonValue } from "./json.js";
 import type { Logger } from "./logger.js";
 import type { StandardSchemaV1, StandardSchemaV1Input, StandardSchemaV1Output } from "./standard-schema.js";
+import type { StepTools } from "./step-engine.js";
 
 export type PayloadSchema = StandardSchemaV1<JsonValue, JsonValue>;
 
@@ -14,6 +15,7 @@ export type Payload<Schema extends PayloadSchema> = StandardSchemaV1Output<Schem
 
 export type TaskContext<TaskPayload> = {
   payload: TaskPayload;
+  step: StepTools;
   runId: RunId;
   attempt: number;
   logger: Logger;

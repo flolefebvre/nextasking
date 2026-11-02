@@ -10,6 +10,14 @@ export class UnknownTaskError extends Error {
   }
 }
 
+export class UnknownEventError extends Error {
+  override readonly name = "UnknownEventError";
+
+  constructor(eventName: string, validEventNames: readonly string[]) {
+    super(`Unknown event "${eventName}". Valid event names: ${quotedList(validEventNames)}.`);
+  }
+}
+
 export type PayloadIssue = {
   readonly path: string;
   readonly message: string;

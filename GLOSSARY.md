@@ -88,6 +88,10 @@ _Avoid_: Wake, restart, retry
 Said of a run that is due and waits for a worker to start or continue its next attempt.
 _Avoid_: Queued, waiting, ready
 
+**Idle**:
+Said of the queue when no run is pending, executing or waiting for a concurrency slot, and no fan-out is left; runs that wait for a set time don't count.
+_Avoid_: Settled, drained, empty
+
 **Idempotency key**:
 A value that stays the same for one step of one run, handed to that step so an external service can recognise a repeat.
 _Avoid_: Dedup key, request id

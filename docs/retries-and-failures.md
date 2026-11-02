@@ -25,7 +25,7 @@ export const syncAccount = defineTask("sync-account", {
 - The default schedule waits up to 30 s, 1 min, 2 min, 4 min, then 8 min: about 12 to 16 minutes in all, enough to outlast a dependency's deploy.
 - The retry count is fixed when the run is stored, from the `retries` of the release that dispatched or emitted. Each wait uses the `backoff` of the worker that ran the failed attempt.
 - A listener takes the same options, for its own runs.
-- Make the handler safe to run again: a retry starts it from the top.
+- Make the handler safe to run again: a retry starts it from the top. Wrap each side effect in `step.run` so a retry reuses its result instead of repeating it; see [Steps](steps.md).
 
 ## Fail a run at once
 
@@ -49,6 +49,7 @@ export const chargeCard = defineTask("charge-card", {
 - The run fails after this attempt, whatever retries are left, with `reason: "non-retriable"`.
 - Only the thrown error counts: a `NonRetriableError` wrapped as the `cause` of another error is retried like any error.
 - `NonRetriableError` takes the arguments of `Error`: a message, and `{ cause }`.
+- A `StepMisuseError` fails the run at once the same way, even when the handler catches it. See [Steps](steps.md#misuse-fails-the-run-at-once).
 
 ## Bound an attempt with timeout
 
@@ -68,10 +69,10 @@ export const renderReport = defineTask("render-report", {
 
 ## What a failed run keeps
 
-A run fails for good when its last attempt fails, or when it throws `NonRetriableError`. It is then kept:
+A run fails for good when its last attempt fails, or when it throws `NonRetriableError` or misuses a step. It is then kept:
 
 - for 14 days, and at most 10,000 failed runs and fan-outs per queue: the oldest are removed first;
-- with its payload;
+- with its payload and its saved steps;
 - with one error record per failed attempt: `{ attempt, name, message, stack, failedAt }`, `failedAt` an ISO string;
 - with its `reason`: `"retries exhausted"` or `"non-retriable"`.
 

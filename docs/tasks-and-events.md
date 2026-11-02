@@ -22,6 +22,7 @@ export const sendWelcomeEmail = defineTask("send-welcome-email", {
 - `schema` takes any [Standard Schema](https://standardschema.dev) library: Zod, Valibot, ArkType and others.
 - The handler receives one object:
   - `payload`: the schema's output, already validated
+  - `step`: durable steps, whose results a retry reuses; see [Steps](steps.md)
   - `runId`: the id `dispatch` returned for this run
   - `attempt`: the attempt number, starting at 1
   - `logger`: a logger that tags every line with the run; see [Logging](logging.md)

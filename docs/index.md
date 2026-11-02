@@ -33,6 +33,7 @@ Events and background tasks for a Next.js app, on BullMQ with Redis or Valkey. D
 | Pass an idempotency key to a provider             | [Steps](steps.md)                               |
 | Sleep for minutes or days without holding workers | [Steps](steps.md)                               |
 | Skip work a sleep made unnecessary                | [Steps](steps.md)                               |
+| Emit or dispatch from a handler, once per run     | [Steps](steps.md)                               |
 | Know the step size limits                         | [Steps](steps.md)                               |
 | Fix a `StepMisuseError`                           | [Steps](steps.md)                               |
 | Set how often and how soon a failed run retries   | [Retries and failures](retries-and-failures.md) |
@@ -94,7 +95,7 @@ import type {
 | `EventName`           | The union of the registered instance's event names; `never` without the `Register` augmentation   |
 | `ListenerDefinition`  | The type `defineListener` returns                                                                 |
 | `Logger`              | The type of the `logger` option and of the handler's `logger`                                     |
-| `Register`            | The interface you augment with your instance's type                                               |
+| `Register`            | The interface you augment with your instance's type; it types names and a handler's calls         |
 | `RunId`               | The type of a run id: a string                                                                    |
 | `StepContext`         | The type of the object a step's `fn` receives: `idempotencyKey`                                   |
 | `StepTools`           | The type of the handler's `step`: `step.run`, `step.sleep` and `step.sleepUntil`                  |

@@ -23,6 +23,7 @@ export const sendWelcomeEmail = defineTask("send-welcome-email", {
 - The handler receives one object:
   - `payload`: the schema's output, already validated
   - `step`: durable steps, whose results a retry reuses, and sleeps; see [Steps](steps.md)
+  - `emit` and `dispatch`: the instance's calls, sent once per run; see [Steps](steps.md#emit-and-dispatch-from-a-handler)
   - `runId`: the id `dispatch` returned for this run
   - `attempt`: the attempt number, starting at 1
   - `logger`: a logger that tags every line with the run; see [Logging](logging.md)
@@ -113,7 +114,7 @@ declare module "@flefebvre/nextasking" {
 - `createNextasking` opens no connection. Importing the instance is safe anywhere, `next build` included; the first `dispatch` or `emit` connects.
 - `prefix` (default `"nextasking"`) puts every key of the instance under that prefix. Give two apps sharing one server different prefixes.
 - `logger` takes your app's logger; without it the library is silent. See [Logging](logging.md).
-- Without the `Register` augmentation, `TaskName` and `EventName` are `never`: add it once, next to the instance.
+- Without the `Register` augmentation, `TaskName` and `EventName` are `never`, and a handler's `emit` and `dispatch` take no name: add it once, next to the instance.
 
 ### Startup checks
 

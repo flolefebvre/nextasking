@@ -94,10 +94,10 @@ export const onboardUser = defineTask("onboard-user", {
 - The wake time is saved first, under the sleep's id. On resume the handler re-enters from the top: saved steps return their results, the sleep returns at once, and the code after it runs.
 - A resume keeps the same `attempt` and uses no retry.
 - A `sleepUntil` time already past returns at once, without suspending. It is still saved.
-- A sleep reached while other steps run in parallel suspends once they settle, so their results are saved.
+- A sleep reached while other steps, `emit` or `dispatch` calls run in parallel suspends once they settle, so they are saved.
 - Sleep ids follow the [step id](#step-ids) rules: unique within the run, shared with `step.run` ids, stable once deployed. Don't sleep inside a step's `fn`.
 - To start a run later, pass `delay` to `dispatch` rather than sleeping first.
-- The run suspends by throwing from the sleep. If your handler catches that error, the run still suspends, and every later step of the attempt throws without running.
+- The run suspends by throwing from the sleep. If your handler catches that error, the run still suspends, and every later step, `emit` or `dispatch` of the attempt throws without running.
 
 Sleep until a time a step returned. A step result is JSON, so the date comes back as an ISO string, which `sleepUntil` takes as is:
 
@@ -127,6 +127,31 @@ await step.run("send-reminder", async () => {
 
 - Read the fact after the sleep, never before: a value loaded before the sleep is as old as the sleep.
 - Returning completes the run.
+
+## Emit and dispatch from a handler
+
+Use the handler's `emit` and `dispatch`, not the instance's: a handler can't import the instance without a circular import, and these happen once per run.
+
+```ts
+// src/nextasking/tasks/sign-up-user.ts
+export const signUpUser = defineTask("sign-up-user", {
+  schema: z.object({ userId: z.string(), email: z.email() }),
+  handler: async ({ payload, step, emit, dispatch }) => {
+    await step.run("create-account", async () => {
+      await db.account.create({ userId: payload.userId });
+    });
+    await emit("user.signed-up", { userId: payload.userId });
+    await dispatch("send-welcome-email", { userId: payload.userId, email: payload.email }, { delay: "5m" });
+  },
+});
+```
+
+- They take the same names, payloads and options as the instance's, typed through the `Register` augmentation. Without it, no name compiles. See [Register the tasks and events](tasks-and-events.md#register-the-tasks-and-events).
+- Each call that succeeds is saved. A retry or a resume that reaches it again sends nothing, and resolves with the same `{ runId }` or `{ eventId }`.
+- A call is recognised by its position: the run, the enclosing step (or the top level), and how many `emit` and `dispatch` calls came before it in that scope during the attempt. Keep their order stable, and put a call that depends on data in its own step.
+- Without your own id, the run or event gets an id derived from that position, the same on every attempt. A `runId` or `eventId` you pass wins over it.
+- A call that throws is not saved: the next attempt sends it again.
+- Inside a step's `fn`, a call is counted within that step. Once the step is saved, its `fn`, and the calls in it, don't run again.
 
 ## Pass the idempotency key to the provider
 
@@ -173,7 +198,7 @@ import { StepMisuseError } from "@flefebvre/nextasking";
 
 ## Where steps are kept
 
-- Saved steps and wake times live in Redis next to the run, under the instance's `prefix`.
+- Saved steps, wake times and sent calls live in Redis next to the run, under the instance's `prefix`.
 - They are removed when the run completes.
 - A run that fails for good keeps its saved steps for as long as the run is kept: 14 days. See [Retries and failures](retries-and-failures.md#what-a-failed-run-keeps).
 - Only the attempt that currently owns the run can save a step. If another attempt has taken the run over, the next `step.run` of the old attempt throws and saves nothing.

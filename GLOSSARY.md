@@ -84,6 +84,10 @@ _Avoid_: Pause, park, yield
 To continue a suspended attempt once its time comes, reusing the steps it has already saved.
 _Avoid_: Wake, restart, retry
 
+**Pending**:
+Said of a run that is due and waits for a worker to start or continue its next attempt.
+_Avoid_: Queued, waiting, ready
+
 **Idempotency key**:
 A value that stays the same for one step of one run, handed to that step so an external service can recognise a repeat.
 _Avoid_: Dedup key, request id

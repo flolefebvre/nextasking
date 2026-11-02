@@ -1,10 +1,20 @@
 import type { StandardSchemaV1Issue } from "./standard-schema.js";
 
+export type DefinitionKind = "task" | "event";
+
 export class UnknownTaskError extends Error {
   override readonly name = "UnknownTaskError";
 
   constructor(taskName: string, validTaskNames: readonly string[]) {
     super(`Unknown task "${taskName}". Valid task names: ${quotedList(validTaskNames)}.`);
+  }
+}
+
+export class UnknownEventError extends Error {
+  override readonly name = "UnknownEventError";
+
+  constructor(eventName: string, validEventNames: readonly string[]) {
+    super(`Unknown event "${eventName}". Valid event names: ${quotedList(validEventNames)}.`);
   }
 }
 
@@ -17,13 +27,18 @@ export class InvalidPayloadError extends Error {
   override readonly name = "InvalidPayloadError";
   readonly issues: readonly PayloadIssue[];
 
-  constructor(taskName: string, schemaIssues: readonly StandardSchemaV1Issue[], payload: unknown) {
+  constructor(
+    definitionKind: DefinitionKind,
+    definitionName: string,
+    schemaIssues: readonly StandardSchemaV1Issue[],
+    payload: unknown,
+  ) {
     const issues = schemaIssues.map((schemaIssue) => ({
       path: issuePath(schemaIssue),
       message: redactPayloadValues(schemaIssue.message, payload),
     }));
     super(
-      `Invalid payload for task "${taskName}": ${issues.map((issue) => `${issue.path}: ${issue.message}`).join("; ")}`,
+      `Invalid payload for ${definitionKind} "${definitionName}": ${issues.map((issue) => `${issue.path}: ${issue.message}`).join("; ")}`,
     );
     this.issues = issues;
   }

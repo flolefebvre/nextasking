@@ -2,7 +2,7 @@ import * as v from "valibot";
 import { describe, expect, expectTypeOf, test } from "vitest";
 import { z } from "zod";
 
-import { defineTask } from "./definitions.js";
+import { defineEvent, defineListener, defineTask } from "./definitions.js";
 
 describe("defineTask", () => {
   test("takes a Zod schema and hands the handler the schema's output", () => {
@@ -147,6 +147,100 @@ describe("defineTask", () => {
         // @ts-expect-error the schema has no userId
         expectTypeOf(payload.userId).toBeString();
       },
+    });
+  });
+});
+
+const invoicePaid = defineEvent("invoice.paid", {
+  schema: z.object({ invoiceId: z.string(), amountInCents: z.string().transform((amount) => Number(amount)) }),
+});
+
+describe("defineEvent", () => {
+  test("records the name and the schema, and nothing else", () => {
+    expect(Object.keys(invoicePaid).sort()).toEqual(["name", "schema"]);
+    expect(invoicePaid.name).toBe("invoice.paid");
+    expectTypeOf(invoicePaid.name).toEqualTypeOf<"invoice.paid">();
+  });
+
+  test("rejects a schema whose output isn't JSON", () => {
+    defineEvent("reminder.due", {
+      // @ts-expect-error a Date isn't JSON
+      schema: z.object({ dueAt: z.date() }),
+    });
+  });
+
+  test("rejects an option an event doesn't take", () => {
+    defineEvent("invoice.voided", {
+      schema: z.object({}),
+      // @ts-expect-error an event has no handler
+      handler: async () => undefined,
+    });
+  });
+});
+
+describe("defineListener", () => {
+  test("hands the handler the event's schema output, the run id and the attempt", () => {
+    const recordInvoicePayment = defineListener("record-invoice-payment", {
+      on: invoicePaid,
+      handler: async ({ payload, runId, attempt }) => {
+        expectTypeOf(payload).toEqualTypeOf<{ invoiceId: string; amountInCents: number }>();
+        expectTypeOf(runId).toEqualTypeOf<string>();
+        expectTypeOf(attempt).toEqualTypeOf<number>();
+      },
+    });
+
+    expect(recordInvoicePayment.name).toBe("record-invoice-payment");
+    expectTypeOf(recordInvoicePayment.name).toEqualTypeOf<"record-invoice-payment">();
+    expect(recordInvoicePayment.on).toBe(invoicePaid);
+    expect(recordInvoicePayment.schema).toBe(invoicePaid.schema);
+  });
+
+  test("records the task options as passed, with no defaults", () => {
+    const sendReceipt = defineListener("send-receipt", {
+      on: invoicePaid,
+      retries: 3,
+      backoff: "1m",
+      timeout: "30s",
+      concurrency: { key: (payload) => payload.invoiceId, limit: 2 },
+      handler: async () => undefined,
+    });
+    const archiveInvoice = defineListener("archive-invoice", { on: invoicePaid, handler: async () => undefined });
+
+    expect(sendReceipt).toMatchObject({ retries: 3, backoff: "1m", timeout: "30s", concurrency: { limit: 2 } });
+    expect(sendReceipt.concurrency?.key?.({ invoiceId: "inv-7", amountInCents: 100 })).toBe("inv-7");
+    expect(Object.keys(archiveInvoice).sort()).toEqual(["handler", "name", "on", "schema"]);
+  });
+
+  test("rejects a handler typed for another payload", () => {
+    defineListener("record-invoice-payment", {
+      on: invoicePaid,
+      // @ts-expect-error the event gives amountInCents as a number
+      handler: async (context: { payload: { amountInCents: string } }) => {
+        expectTypeOf(context.payload.amountInCents).toBeString();
+      },
+    });
+  });
+
+  test("rejects a schema of its own and a misspelt option", () => {
+    defineListener("record-invoice-payment", {
+      on: invoicePaid,
+      // @ts-expect-error a listener takes its event's schema
+      schema: z.object({}),
+      handler: async () => undefined,
+    });
+    defineListener("record-invoice-payment", {
+      on: invoicePaid,
+      // @ts-expect-error retires is not an option
+      retires: 3,
+      handler: async () => undefined,
+    });
+  });
+
+  test("rejects an on that isn't an event definition", () => {
+    defineListener("record-invoice-payment", {
+      // @ts-expect-error on takes the event definition, not its name
+      on: "invoice.paid",
+      handler: async () => undefined,
     });
   });
 });

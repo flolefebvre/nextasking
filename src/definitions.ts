@@ -1,5 +1,6 @@
 import type { Duration } from "./durations.js";
 import { InvalidPayloadError } from "./errors.js";
+import type { DefinitionKind } from "./errors.js";
 import type { RunId } from "./ids.js";
 import type { JsonValue } from "./json.js";
 import type { Logger } from "./logger.js";
@@ -25,39 +26,50 @@ export type TaskConcurrency<TaskPayload> = {
   limit: number;
 };
 
-export type TaskOptions<Schema extends PayloadSchema> = {
-  schema: Schema;
+type SharedTaskOptions<TaskPayload> = {
   retries?: number;
   backoff?: Duration;
   timeout?: Duration;
-  concurrency?: TaskConcurrency<Payload<Schema>>;
-  handler: TaskHandler<Payload<Schema>>;
+  concurrency?: TaskConcurrency<TaskPayload>;
+  handler: TaskHandler<TaskPayload>;
 };
 
-export type TaskDefinition<Name extends string = string, Schema extends PayloadSchema = PayloadSchema> = {
+export type TaskOptions<Schema extends PayloadSchema> = { schema: Schema } & SharedTaskOptions<Payload<Schema>>;
+
+export type TaskDefinition<Name extends string = string, Schema extends PayloadSchema = PayloadSchema> = Readonly<
+  { name: Name; schema: Schema } & SharedTaskOptions<Payload<Schema>>
+>;
+
+export type EventOptions<Schema extends PayloadSchema> = {
+  schema: Schema;
+};
+
+export type EventDefinition<Name extends string = string, Schema extends PayloadSchema = PayloadSchema> = {
   readonly name: Name;
   readonly schema: Schema;
-  readonly retries?: number;
-  readonly backoff?: Duration;
-  readonly timeout?: Duration;
-  readonly concurrency?: TaskConcurrency<Payload<Schema>>;
-  readonly handler: TaskHandler<Payload<Schema>>;
 };
 
-export type AnyTaskDefinition = {
-  readonly name: string;
-  readonly schema: PayloadSchema;
-  readonly retries?: number;
-  readonly backoff?: Duration;
-  readonly timeout?: Duration;
-  readonly concurrency?: TaskConcurrency<never>;
-  readonly handler: (context: never) => Promise<void>;
-};
+export type ListenerOptions<Event extends EventDefinition> = { on: Event } & SharedTaskOptions<
+  Payload<Event["schema"]>
+>;
 
-export async function validatePayload(task: AnyTaskDefinition, payload: unknown): Promise<unknown> {
-  const result = await task.schema["~standard"].validate(payload);
+export type ListenerDefinition<
+  Name extends string = string,
+  Event extends EventDefinition = EventDefinition,
+> = Readonly<{ name: Name; schema: Event["schema"]; on: Event } & SharedTaskOptions<Payload<Event["schema"]>>>;
+
+export type AnyTaskDefinition = Readonly<
+  { name: string; schema: PayloadSchema; on?: EventDefinition } & SharedTaskOptions<never>
+>;
+
+export async function validatePayload(
+  definitionKind: DefinitionKind,
+  definition: { readonly name: string; readonly schema: PayloadSchema },
+  payload: unknown,
+): Promise<unknown> {
+  const result = await definition.schema["~standard"].validate(payload);
   if (result.issues !== undefined) {
-    throw new InvalidPayloadError(task.name, result.issues, payload);
+    throw new InvalidPayloadError(definitionKind, definition.name, result.issues, payload);
   }
   return result.value;
 }
@@ -67,4 +79,18 @@ export function defineTask<const Name extends string, Schema extends PayloadSche
   options: TaskOptions<Schema>,
 ): TaskDefinition<Name, Schema> {
   return { ...options, name };
+}
+
+export function defineEvent<const Name extends string, Schema extends PayloadSchema>(
+  name: Name,
+  options: EventOptions<Schema>,
+): EventDefinition<Name, Schema> {
+  return { schema: options.schema, name };
+}
+
+export function defineListener<const Name extends string, Event extends EventDefinition>(
+  name: Name,
+  options: ListenerOptions<Event>,
+): ListenerDefinition<Name, Event> {
+  return { ...options, schema: options.on.schema, name };
 }

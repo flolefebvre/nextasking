@@ -1,11 +1,12 @@
 import { setImmediate } from "node:timers/promises";
 import * as v from "valibot";
-import { describe, expect, expectTypeOf, test } from "vitest";
+import { describe, expect, expectTypeOf, test, vi } from "vitest";
 import { z } from "zod";
 
-import { defineTask } from "./definitions.js";
-import { InvalidPayloadError, UnknownTaskError } from "./errors.js";
+import { defineEvent, defineListener, defineTask } from "./definitions.js";
+import { InvalidPayloadError, UnknownEventError, UnknownTaskError } from "./errors.js";
 import type { Duration } from "./durations.js";
+import type { Logger } from "./logger.js";
 import { createNextasking } from "./registry.js";
 
 const UNREACHABLE_URL = "redis://nextasking.invalid:6379";
@@ -25,12 +26,35 @@ const countPageViews = defineTask("count-page-views", {
   handler: async () => undefined,
 });
 
-function createTestNextasking() {
+const invoicePaid = defineEvent("invoice.paid", {
+  schema: z.object({ invoiceId: z.string(), amountInCents: z.int().positive() }),
+});
+
+const userSignedUp = defineEvent("user.signed-up", {
+  schema: z.object({ userId: z.string() }),
+});
+
+const recordInvoicePayment = defineListener("record-invoice-payment", {
+  on: invoicePaid,
+  handler: async () => undefined,
+});
+
+function createTestNextasking(logger?: Logger) {
   return createNextasking({
     connection: { url: UNREACHABLE_URL },
-    tasks: [sendWelcomeEmail, generateInvoicePdf, countPageViews],
+    ...(logger === undefined ? {} : { logger }),
+    events: [invoicePaid, userSignedUp],
+    tasks: [sendWelcomeEmail, generateInvoicePdf, countPageViews, recordInvoicePayment],
   });
 }
+
+function createSpyLogger() {
+  return { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() } satisfies Logger;
+}
+
+const VALID_WELCOME_PAYLOAD = { email: "ada@example.com", address: { zipCode: "75011" } };
+
+const RANDOM_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
 function networkResources(): string[] {
   return process.getActiveResourcesInfo().filter((resource) => /TCP|GetAddrInfo|Pipe/.test(resource));
@@ -57,7 +81,39 @@ describe("createNextasking", () => {
         connection: { url: UNREACHABLE_URL },
         tasks: [sendWelcomeEmail, generateInvoicePdf, otherSendWelcomeEmail],
       }),
-    ).toThrow('Duplicate name "send-welcome-email": every task needs its own name');
+    ).toThrow('Duplicate name "send-welcome-email": every task and event needs its own name');
+  });
+
+  test("rejects a task and an event with the same name", () => {
+    const invoicePaidTask = defineTask("invoice.paid", { schema: z.object({}), handler: async () => undefined });
+
+    expect(() =>
+      createNextasking({ connection: { url: UNREACHABLE_URL }, events: [invoicePaid], tasks: [invoicePaidTask] }),
+    ).toThrow('Duplicate name "invoice.paid": every task and event needs its own name');
+  });
+
+  test("rejects a listener whose event is not listed in events", () => {
+    expect(() =>
+      createNextasking({ connection: { url: UNREACHABLE_URL }, events: [userSignedUp], tasks: [recordInvoicePayment] }),
+    ).toThrow('Listener "record-invoice-payment" listens to event "invoice.paid", which is not listed in events');
+    expect(() => createNextasking({ connection: { url: UNREACHABLE_URL }, tasks: [recordInvoicePayment] })).toThrow(
+      'Listener "record-invoice-payment" listens to event "invoice.paid", which is not listed in events',
+    );
+  });
+
+  test("rejects an event name starting with nextasking/", () => {
+    const reservedEvent = defineEvent("nextasking/run.failed", { schema: z.object({}) });
+
+    expect(() =>
+      createNextasking({ connection: { url: UNREACHABLE_URL }, events: [reservedEvent], tasks: [] }),
+    ).toThrow(
+      'Event "nextasking/run.failed" has a reserved name: names starting with "nextasking/" belong to the built-in events',
+    );
+  });
+
+  test("accepts events and their listeners, and no events at all", () => {
+    expect(() => createTestNextasking()).not.toThrow();
+    expect(() => createNextasking({ connection: { url: UNREACHABLE_URL }, tasks: [sendWelcomeEmail] })).not.toThrow();
   });
 
   test.each([
@@ -130,7 +186,7 @@ describe("dispatch", () => {
 
     await expect(dispatching).rejects.toThrow(UnknownTaskError);
     await expect(dispatching).rejects.toThrow(
-      'Unknown task "send-welcom-email". Valid task names: "send-welcome-email", "generate-invoice-pdf", "count-page-views".',
+      'Unknown task "send-welcom-email". Valid task names: "send-welcome-email", "generate-invoice-pdf", "count-page-views", "record-invoice-payment".',
     );
   });
 
@@ -198,5 +254,181 @@ describe("dispatch", () => {
       .toEqualTypeOf<{ views: string }>();
     // @ts-expect-error a wrong payload doesn't compile
     void nextasking.dispatch("count-page-views", { views: 12 }).catch(() => undefined);
+  });
+
+  test("takes a listener's name with its event's input", () => {
+    const nextasking = createTestNextasking();
+
+    expectTypeOf(nextasking.dispatch<"record-invoice-payment">)
+      .parameter(1)
+      .toEqualTypeOf<{ invoiceId: string; amountInCents: number }>();
+  });
+
+  test.each([
+    ["", '""'],
+    [42 as unknown as string, "42"],
+  ])("rejects the runId %j, naming the task, before connecting", async (runId, shownRunId) => {
+    const nextasking = createTestNextasking();
+
+    const dispatching = nextasking.dispatch("send-welcome-email", VALID_WELCOME_PAYLOAD, { runId });
+
+    await expect(dispatching).rejects.toThrow(
+      `Invalid runId for task "send-welcome-email": ${shownRunId} is not a non-empty string`,
+    );
+  });
+
+  test("rejects an invalid delay, naming the task, before connecting", async () => {
+    const nextasking = createTestNextasking();
+
+    const dispatching = nextasking.dispatch("send-welcome-email", VALID_WELCOME_PAYLOAD, {
+      delay: "0.5h" as Duration,
+    });
+
+    await expect(dispatching).rejects.toThrow(
+      'Invalid delay for task "send-welcome-email": "0.5h" is not a duration: a whole number followed by s, m, h or d, such as "30s"',
+    );
+    await expect(dispatching).rejects.toMatchObject({ cause: expect.any(Error) });
+  });
+
+  test("takes a runId and a delay duration, and rejects a delay that isn't one at compile time", () => {
+    const nextasking = createTestNextasking();
+
+    expectTypeOf(nextasking.dispatch<"send-welcome-email">)
+      .parameter(2)
+      .toEqualTypeOf<{ runId?: string; delay?: Duration } | undefined>();
+    // @ts-expect-error a space isn't a duration
+    void nextasking.dispatch("send-welcome-email", VALID_WELCOME_PAYLOAD, { delay: "5 m" }).catch(() => undefined);
+  });
+});
+
+describe("emit", () => {
+  test("rejects an unknown event name, listing the valid names", async () => {
+    const nextasking = createTestNextasking();
+
+    // @ts-expect-error an unknown event name doesn't compile
+    const emitting = nextasking.emit("invoice.payed", { invoiceId: "inv-1", amountInCents: 100 });
+
+    await expect(emitting).rejects.toThrow(UnknownEventError);
+    await expect(emitting).rejects.toThrow(
+      'Unknown event "invoice.payed". Valid event names: "invoice.paid", "user.signed-up".',
+    );
+  });
+
+  test("rejects a task name", async () => {
+    const nextasking = createTestNextasking();
+
+    // @ts-expect-error a task name is not an event name
+    const emitting = nextasking.emit("send-welcome-email", { email: "ada@example.com" });
+
+    await expect(emitting).rejects.toThrow(UnknownEventError);
+  });
+
+  test("rejects a payload the event's schema refuses, naming the event", async () => {
+    const nextasking = createTestNextasking();
+
+    const emitting = nextasking.emit("invoice.paid", { invoiceId: "inv-1" } as never);
+
+    await expect(emitting).rejects.toThrow(InvalidPayloadError);
+    await expect(emitting).rejects.toMatchObject({
+      message:
+        'Invalid payload for event "invoice.paid": amountInCents: Invalid input: expected number, received undefined',
+    });
+  });
+
+  test("validates an event with no listeners, warns and opens no connection", async () => {
+    const logger = createSpyLogger();
+    const nextasking = createTestNextasking(logger);
+    const networkResourcesBefore = networkResources();
+
+    const { eventId } = await nextasking.emit("user.signed-up", { userId: "user-7" });
+    await setImmediate();
+
+    expect(eventId).toMatch(RANDOM_UUID);
+    expect(logger.warn).toHaveBeenCalledExactlyOnceWith(
+      { eventName: "user.signed-up", eventId },
+      "no listeners for event",
+    );
+    expect(networkResources()).toEqual(networkResourcesBefore);
+    await expect(nextasking.emit("user.signed-up", { userId: 7 } as never)).rejects.toThrow(InvalidPayloadError);
+  });
+
+  test("takes the event's input and rejects a wrong payload at compile time", () => {
+    const nextasking = createTestNextasking();
+
+    expectTypeOf(nextasking.emit<"invoice.paid">)
+      .parameter(1)
+      .toEqualTypeOf<{ invoiceId: string; amountInCents: number }>();
+    // @ts-expect-error a wrong payload doesn't compile
+    void nextasking.emit("invoice.paid", { invoiceId: "inv-1", amountInCents: "100" }).catch(() => undefined);
+  });
+
+  test("returns the eventId passed and warns with it when the event has no listeners", async () => {
+    const logger = createSpyLogger();
+    const nextasking = createTestNextasking(logger);
+
+    const emittedEvent = await nextasking.emit("user.signed-up", { userId: "user-7" }, { eventId: "signup-user-7" });
+
+    expect(emittedEvent).toEqual({ eventId: "signup-user-7" });
+    expect(logger.warn).toHaveBeenCalledExactlyOnceWith(
+      { eventName: "user.signed-up", eventId: "signup-user-7" },
+      "no listeners for event",
+    );
+  });
+
+  test.each([
+    ["", '""'],
+    [null as unknown as string, "null"],
+  ])("rejects the eventId %j, naming the event, before connecting", async (eventId, shownEventId) => {
+    const nextasking = createTestNextasking();
+
+    const emitting = nextasking.emit("invoice.paid", { invoiceId: "inv-1", amountInCents: 100 }, { eventId });
+
+    await expect(emitting).rejects.toThrow(
+      `Invalid eventId for event "invoice.paid": ${shownEventId} is not a non-empty string`,
+    );
+  });
+
+  test("takes an eventId and no delay", () => {
+    const nextasking = createTestNextasking();
+
+    expectTypeOf(nextasking.emit<"invoice.paid">)
+      .parameter(2)
+      .toEqualTypeOf<{ eventId?: string } | undefined>();
+  });
+
+  test("takes no name on an instance without events", () => {
+    const nextasking = createNextasking({ connection: { url: UNREACHABLE_URL }, tasks: [sendWelcomeEmail] });
+
+    expectTypeOf(nextasking.emit).parameter(0).toBeNever();
+  });
+});
+
+describe("isTaskName and isEventName", () => {
+  test("tell the instance's task and listener names from its event names and unknown names", () => {
+    const nextasking = createTestNextasking();
+
+    expect(
+      ["send-welcome-email", "record-invoice-payment", "invoice.paid", "unknown"].map(nextasking.isTaskName),
+    ).toEqual([true, true, false, false]);
+    expect(["invoice.paid", "user.signed-up", "send-welcome-email", "unknown"].map(nextasking.isEventName)).toEqual([
+      true,
+      true,
+      false,
+      false,
+    ]);
+  });
+
+  test("narrow a runtime string to the names dispatch and emit take", () => {
+    const nextasking = createTestNextasking();
+    const name: string = "invoice.paid";
+
+    if (nextasking.isEventName(name)) {
+      expectTypeOf(name).toEqualTypeOf<"invoice.paid" | "user.signed-up">();
+    }
+    if (nextasking.isTaskName(name)) {
+      expectTypeOf(name).toEqualTypeOf<
+        "send-welcome-email" | "generate-invoice-pdf" | "count-page-views" | "record-invoice-payment"
+      >();
+    }
   });
 });

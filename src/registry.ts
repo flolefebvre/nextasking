@@ -1,5 +1,5 @@
 import type { ConnectionConfig } from "./connection.js";
-import { validatePayload } from "./definitions.js";
+import { retriesOf, validatePayload } from "./definitions.js";
 import type { AnyTaskDefinition, EventDefinition, PayloadInput } from "./definitions.js";
 import { parseDuration } from "./durations.js";
 import type { Duration, DurationInMilliseconds } from "./durations.js";
@@ -118,6 +118,7 @@ export function createNextasking<
       const { isDuplicate } = await openRunQueue().enqueueRun(task.name, {
         runId,
         payload: validatedPayload,
+        retries: retriesOf(task),
         ...(delayInMilliseconds === undefined ? {} : { delayInMilliseconds }),
       });
       logger.debug({ task: task.name, runId }, isDuplicate ? "duplicate dispatch dropped" : "run dispatched");

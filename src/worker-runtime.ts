@@ -1,13 +1,18 @@
 import { Worker } from "bullmq";
-import type { Job } from "bullmq";
+import type { Job, MinimalJob } from "bullmq";
 
+import { backoffInMillisecondsFor } from "./backoff.js";
 import { closeRedisClient, createRedisClient } from "./connection.js";
 import type { ConnectionConfig } from "./connection.js";
+import { backoffOf, retriesOf } from "./definitions.js";
 import type { AnyTaskDefinition, EventDefinition, TaskHandler } from "./definitions.js";
+import { parseDuration } from "./durations.js";
+import type { DurationInMilliseconds } from "./durations.js";
+import { errorFromThrownValue, errorRecordFor } from "./failed-attempts.js";
 import { loggerWithFields } from "./logger.js";
 import type { Logger } from "./logger.js";
 import { RUN_QUEUE_NAME } from "./run-queue.js";
-import type { RunQueue, StoredFanOut, StoredRun } from "./run-queue.js";
+import type { FailureReason, RunQueue, StoredFanOut, StoredRun } from "./run-queue.js";
 
 export type RunningWorker = {
   close: () => Promise<void>;
@@ -22,6 +27,8 @@ export type WorkerConfig = {
   openRunQueue: () => RunQueue;
 };
 
+const NO_RETRY = -1;
+
 let isWorkerRunningInThisProcess = false;
 
 export function startRunWorker(config: WorkerConfig): RunningWorker {
@@ -30,22 +37,42 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
   }
   isWorkerRunningInThisProcess = true;
 
+  const backoffInMillisecondsByFailedJob = new WeakMap<MinimalJob, DurationInMilliseconds>();
+
   const executeRunAttempt = async (task: AnyTaskDefinition, job: Job<StoredRun>) => {
     const attemptStartedAt = Date.now();
     const { runId, payload, sourceEvent } = job.data;
     const attempt = job.attemptsMade + 1;
     const runLogger = loggerWithFields(config.logger, { task: task.name, runId, attempt, ...sourceEvent });
+    const durationFieldsAt = (runEndedAt: number) => ({
+      runDurationInMilliseconds: runEndedAt - job.timestamp,
+      executionDurationInMilliseconds: runEndedAt - attemptStartedAt,
+    });
     runLogger.debug({}, "attempt started");
     const handler = task.handler as TaskHandler<unknown>;
-    await handler({ payload, runId, attempt, logger: runLogger });
-    const runCompletedAt = Date.now();
-    runLogger.info(
-      {
-        runDurationInMilliseconds: runCompletedAt - job.timestamp,
-        executionDurationInMilliseconds: runCompletedAt - attemptStartedAt,
-      },
-      "run completed",
-    );
+    try {
+      await handler({ payload, runId, attempt, logger: runLogger });
+    } catch (thrownValue) {
+      const error = errorFromThrownValue(thrownValue);
+      const failedAt = new Date();
+      const retriesLeft = (job.opts.attempts ?? 1) - attempt;
+      const reason: FailureReason | undefined = retriesLeft > 0 ? undefined : "retries exhausted";
+      await job.updateData({
+        ...job.data,
+        errors: [...job.data.errors, errorRecordFor(error, attempt, failedAt)],
+        ...(reason === undefined ? {} : { reason }),
+      });
+      if (reason === undefined) {
+        const backoffInMilliseconds = backoffInMillisecondsFor(parseDuration(backoffOf(task)), attempt, Math.random());
+        backoffInMillisecondsByFailedJob.set(job, backoffInMilliseconds);
+        runLogger.warn({ err: error, retriesLeft, backoffInMilliseconds }, "attempt failed");
+      } else {
+        backoffInMillisecondsByFailedJob.set(job, NO_RETRY);
+        runLogger.error({ err: error, reason, ...durationFieldsAt(failedAt.getTime()) }, "run failed");
+      }
+      throw error;
+    }
+    runLogger.info(durationFieldsAt(Date.now()), "run completed");
   };
 
   const client = createRedisClient(config.connection, "worker");
@@ -53,7 +80,15 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
     RUN_QUEUE_NAME,
     async (job) => {
       if (config.eventsByName.has(job.name)) {
-        await config.openRunQueue().enqueueListenerRuns(job.name, job.data as StoredFanOut);
+        const fanOut = job.data as StoredFanOut;
+        await config.openRunQueue().enqueueListenerRuns(
+          job.name,
+          fanOut,
+          fanOut.listenerNames.map((listenerName) => ({
+            listenerName,
+            retries: retriesOf(config.tasksByName.get(listenerName)),
+          })),
+        );
         return;
       }
       const task = config.tasksByName.get(job.name);
@@ -62,7 +97,14 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
       }
       await executeRunAttempt(task, job as Job<StoredRun>);
     },
-    { connection: client, prefix: config.prefix },
+    {
+      connection: client,
+      prefix: config.prefix,
+      settings: {
+        backoffStrategy: (_attemptsMade, _backoffType, _error, job) =>
+          (job === undefined ? undefined : backoffInMillisecondsByFailedJob.get(job)) ?? NO_RETRY,
+      },
+    },
   );
   worker.on("error", () => undefined);
   config.logger.info({}, "worker started");

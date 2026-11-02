@@ -62,6 +62,18 @@ export type AnyTaskDefinition = Readonly<
   { name: string; schema: PayloadSchema; on?: EventDefinition } & SharedTaskOptions<never>
 >;
 
+const DEFAULT_RETRIES = 5;
+
+const DEFAULT_BACKOFF: Duration = "30s";
+
+export function retriesOf(task: AnyTaskDefinition | undefined): number {
+  return task?.retries ?? DEFAULT_RETRIES;
+}
+
+export function backoffOf(task: AnyTaskDefinition): Duration {
+  return task.backoff ?? DEFAULT_BACKOFF;
+}
+
 export async function validatePayload(
   definitionKind: DefinitionKind,
   definition: { readonly name: string; readonly schema: PayloadSchema },

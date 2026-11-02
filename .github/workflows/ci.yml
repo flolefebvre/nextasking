@@ -4,8 +4,12 @@ on:
   pull_request:
   push:
     branches: [main]
+  # release.yml runs this gate before publishing.
+  workflow_call:
 
-# Cancel superseded runs, except on main, where every push keeps its run.
+# Cancel superseded runs, except on main, where every push keeps its run. Under release.yml,
+# `github.workflow` is `release`, so the group is `release-refs/tags/vX.Y.Z`: keep release.yml's
+# own group distinct from that, or this would cancel the release run that called it.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
@@ -82,6 +86,13 @@ jobs:
 
       - name: Build
         run: pnpm build
+
+      # After Build, in the same job: both read the built dist.
+      - name: Pack check
+        run: pnpm pack:check
+
+      - name: Typecheck dist
+        run: pnpm typecheck:dist
 
   # The main ruleset requires a check named `ci`: keep this job's name. A skipped required check
   # counts as passing, so this job runs whatever the others did and fails unless every one succeeded.

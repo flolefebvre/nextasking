@@ -20,6 +20,7 @@ Its purpose: a Next.js app on long-running Node hosting defines tasks and events
 src/            The published package source; builds into dist/
 scripts/        Repo tooling, run with tsx
 tests/          The test harness and the scenarios that cross modules or processes
+skills/         The git-only skill stub pointing consumers' agents at the shipped manual; never shipped
 docs/           Top-level pages: the shipped manual, for consumers' agents
   agents/       Agent-skill config: issue tracker, triage labels, domain docs
   codebase/     Conventions, one file per area, linked from the AGENTS.md section it governs
@@ -29,8 +30,10 @@ docs/           Top-level pages: the shipped manual, for consumers' agents
 
 ```
 pnpm check                Format check, lint, duplication, typecheck, then the tests affected since $CHECK_BASE (default origin/main) — the inner loop
-pnpm gate                 Format check, lint, duplication, typecheck, then test and build — the full check, the same as CI
+pnpm gate                 Format check, lint, duplication, typecheck, then test, build, then pack check and dist typecheck — the full check, the same as CI
 pnpm build                Build the package into dist/
+pnpm pack:check           Check the tarball after build: exports and bin targets and manual pages ship, nothing else does, no install script
+pnpm typecheck:dist       Typecheck tests/dist-consumer against the built dist, on the TypeScript floor and the newest
 pnpm format               Prettier, rewriting files in place
 pnpm format:check         Prettier in check mode (fails on unformatted files)
 pnpm lint                 ESLint flat config (eslint.config.mjs), warnings are failures
@@ -50,7 +53,7 @@ pnpm test:changed         Vitest, once, only the tests affected since $CHECK_BAS
 
 `<base-branch>` is the branch the change will merge into, `main` unless told otherwise. Run `check` after each step and each fix; it passed only if the output ends with `--check OK--`. A change is done when the pushed PR's `ci` check is green; a change that will not be pushed passes `pnpm gate` (ends with `--gate OK--`) once before it is handed over; later fixes re-run `check`, and CI re-validates the change when it is pushed. Any other ending is a failure, whatever the rest of the output says.
 
-The `check` and `gate` lines in package.json are the sequences: `,` separates stages run in order, `+` joins scripts run in parallel. Never join two scripts that write the same files. Add a check to the `gate` line and to the CI workflow, which runs one job per stage. See `docs/codebase/ci.md`.
+The `check` and `gate` lines in package.json are the sequences: `,` separates stages run in order, `+` joins scripts run in parallel. Never join two scripts that write the same files. Add a check to the `gate` line and to the CI workflow, which runs one job per stage, except the stages that read the built `dist`, which are steps of the `build` job. See `docs/codebase/ci.md`.
 
 ## Worktrees
 

@@ -1,0 +1,106 @@
+name: release
+
+# Publishing is driven by version tags alone: bump `version` in package.json, merge, then
+# `git tag v0.1.0 && git push origin v0.1.0`. Nothing here runs on a merge to main.
+on:
+  push:
+    tags: ["v*"]
+
+# Overlapping releases queue rather than cancel: a half-finished publish is the state to avoid.
+#
+# A constant group on purpose: inside a reusable call, `github.workflow` is the caller's name, so
+# the called ci.yml computes its group as `release-refs/tags/vX.Y.Z`. A group of
+# `release-${{ github.ref }}` here would be the same one, and ci.yml cancels in progress on any
+# ref but main, so starting the `ci` job would cancel this very run.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  # Cheap pre-flight, before the full gate: a publish is close to irreversible.
+  guard:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      # Delete this step when moving to trusted publishing: there is no secret to check then.
+      - name: npm credentials are configured
+        run: |
+          if [ -z "$NPM_TOKEN" ]; then
+            echo "No NPM_TOKEN secret is set, so the publish job would fail after the full gate." >&2
+            echo "Add an npm automation token as the NPM_TOKEN repository secret, or configure" >&2
+            echo "trusted publishing on npmjs.com and delete this step and the publish job's env." >&2
+            exit 1
+          fi
+          echo "NPM_TOKEN is set."
+
+      # No template literals: this is a double-quoted shell string, so the shell would expand `${...}`.
+      - name: Tag matches the package.json version
+        run: |
+          node --input-type=module -e "
+            import { readFileSync } from 'node:fs';
+            const { version } = JSON.parse(readFileSync('package.json', 'utf8'));
+            const tagVersion = process.env.GITHUB_REF_NAME.replace(/^v/, '');
+            if (tagVersion !== version) {
+              console.error('Tag ' + process.env.GITHUB_REF_NAME + ' implies version ' + tagVersion + ', but package.json says ' + version + '.');
+              console.error('Bump the version or move the tag so they agree, then push again.');
+              process.exit(1);
+            }
+            console.log('Tag and package.json agree on ' + version);
+          "
+
+  # The everyday gate, unmodified, so the release path and the everyday path never drift apart.
+  # This job stays in progress until every job in ci.yml finishes.
+  ci:
+    needs: guard
+    uses: ./.github/workflows/ci.yml
+
+  publish:
+    needs: ci
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      # Write, to cut the GitHub release for the tag.
+      contents: write
+      # The OIDC token npm exchanges for a provenance attestation; `--provenance` fails without it.
+      id-token: write
+    # Job-scoped: the `.npmrc` that `registry-url` writes holds a literal `${NODE_AUTH_TOKEN}`, which
+    # `pnpm install` expands too, before the publish step.
+    env:
+      NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      # No store cache: the tarball comes from a cold resolve of the committed lockfile.
+      - name: Setup
+        uses: ./.github/actions/setup
+        with:
+          registry-url: https://registry.npmjs.org
+          store-cache: "false"
+
+      # npm, because `pnpm publish` has no `--provenance`. `prepublishOnly` rebuilds dist from this
+      # commit. `--access public` is required for the first publish of a scoped package.
+      #
+      # NODE_AUTH_TOKEN covers the first publish, before the package exists on npm to configure a
+      # trusted publisher. Once 0.1.0 is live, add this repository and release.yml as its trusted
+      # publisher on npmjs.com, then delete this job's `env:`, the guard's credential step and the
+      # NPM_TOKEN secret. Provenance comes from the OIDC token either way.
+      - name: Publish to npm
+        run: npm publish --provenance --access public
+
+      # `--verify-tag` refuses a tag that is not on the remote; `--generate-notes` makes the merged
+      # pull requests since the previous tag the changelog.
+      - name: Create the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" --generate-notes --verify-tag

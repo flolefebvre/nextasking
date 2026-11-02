@@ -23,6 +23,7 @@
   },
   "files": [
     "dist",
+    "docs/*.md",
     "LICENSE"
   ],
   "packageManager": "pnpm@11.15.0",
@@ -36,6 +37,7 @@
     "check": "tsx scripts/gate.ts format:check+lint+duplication+typecheck,test:changed",
     "gate": "tsx scripts/gate.ts format:check+lint+duplication+typecheck,test+build",
     "build": "rm -rf dist && tsc -p tsconfig.build.json",
+    "pack:check": "tsx scripts/pack-check.ts",
     "prepublishOnly": "pnpm run build",
     "format": "prettier --cache --write .",
     "format:check": "prettier --cache --check .",

@@ -29,8 +29,10 @@ docs/           Top-level pages: the shipped manual, for consumers' agents
 
 ```
 pnpm check                Format check, lint, duplication, typecheck, then the tests affected since $CHECK_BASE (default origin/main) — the inner loop
-pnpm gate                 Format check, lint, duplication, typecheck, then test and build — the full check, the same as CI
+pnpm gate                 Format check, lint, duplication, typecheck, then test, build, then pack check and dist typecheck — the full check, the same as CI
 pnpm build                Build the package into dist/
+pnpm pack:check           Check the tarball after build: exports and bin targets and manual pages ship, nothing else does, no install script
+pnpm typecheck:dist       Typecheck tests/dist-consumer against the built dist, on the TypeScript floor and the newest
 pnpm format               Prettier, rewriting files in place
 pnpm format:check         Prettier in check mode (fails on unformatted files)
 pnpm lint                 ESLint flat config (eslint.config.mjs), warnings are failures

@@ -22,7 +22,7 @@ export const syncAccount = defineTask("sync-account", {
 - `retries` (default `5`) counts the retries after the first attempt: `retries: 0` runs once, the default makes up to 6 attempts. It must be a whole number, 0 or more, or `createNextasking` throws.
 - `backoff` (default `"30s"`) is the wait before the first retry. Each later wait doubles.
 - Each wait is jittered to between 80% and 100% of its value, so runs that failed together don't retry together.
-- The default schedule waits up to 30 s, 1 min, 2 min, 4 min, then 8 min: 12 to 15 minutes in all, enough to outlast a dependency's deploy.
+- The default schedule waits up to 30 s, 1 min, 2 min, 4 min, then 8 min: about 12 to 16 minutes in all, enough to outlast a dependency's deploy.
 - The retry count is fixed when the run is stored, from the `retries` of the release that dispatched or emitted. Each wait uses the `backoff` of the worker that ran the failed attempt.
 - A listener takes the same options, for its own runs.
 - Make the handler safe to run again: a retry starts it from the top.

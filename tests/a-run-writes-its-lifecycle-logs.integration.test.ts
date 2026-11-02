@@ -1,0 +1,64 @@
+import { expect, vi } from "vitest";
+import { z } from "zod";
+
+import { createNextasking, defineTask } from "../src/index.js";
+import { closeNextasking } from "../src/registry.js";
+import { integrationTest } from "./integration-test.js";
+import { createRecordingLogger } from "./recording-logger.js";
+
+integrationTest(
+  "a run writes its lifecycle logs, and the handler's own lines carry the run",
+  async ({ redisUrl, keyPrefix }) => {
+    const { logger, lines } = createRecordingLogger();
+    const sendWelcomeEmail = defineTask("send-welcome-email", {
+      schema: z.object({ email: z.email() }),
+      handler: async (context) => {
+        context.logger.info({ template: "welcome", task: "spoofed-task" }, "welcome email sent");
+      },
+    });
+    const nextasking = createNextasking({
+      connection: { url: redisUrl },
+      prefix: keyPrefix,
+      logger,
+      tasks: [sendWelcomeEmail],
+    });
+
+    try {
+      await nextasking.startWorker();
+      const { runId } = await nextasking.dispatch("send-welcome-email", { email: "ada@example.com" });
+      await vi.waitFor(
+        () => {
+          expect(lines.map((line) => line.message)).toContain("run completed");
+        },
+        { timeout: 10_000 },
+      );
+      await closeNextasking(nextasking);
+
+      const runFields = { task: "send-welcome-email", runId };
+      const attemptFields = { ...runFields, attempt: 1 };
+      expect(lines.at(0)).toEqual({ level: "info", fields: {}, message: "worker started" });
+      expect(lines.at(-1)).toEqual({ level: "info", fields: {}, message: "worker stopped" });
+      expect(lines).toContainEqual({ level: "debug", fields: runFields, message: "run dispatched" });
+      expect(lines.filter((line) => line.fields.attempt !== undefined)).toEqual([
+        { level: "debug", fields: attemptFields, message: "attempt started" },
+        { level: "info", fields: { template: "welcome", ...attemptFields }, message: "welcome email sent" },
+        {
+          level: "info",
+          fields: {
+            ...attemptFields,
+            runDurationInMilliseconds: expect.any(Number),
+            executionDurationInMilliseconds: expect.any(Number),
+          },
+          message: "run completed",
+        },
+      ]);
+      const runCompletedFields = lines.find((line) => line.message === "run completed")?.fields;
+      expect(runCompletedFields?.executionDurationInMilliseconds).toBeGreaterThanOrEqual(0);
+      expect(runCompletedFields?.runDurationInMilliseconds).toBeGreaterThanOrEqual(
+        runCompletedFields?.executionDurationInMilliseconds as number,
+      );
+    } finally {
+      await closeNextasking(nextasking);
+    }
+  },
+);

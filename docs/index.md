@@ -10,26 +10,32 @@ Background tasks for a Next.js app, on BullMQ with Redis or Valkey. Define a tas
 
 ## Where to go
 
-| Job                                        | Page                                    |
-| ------------------------------------------ | --------------------------------------- |
-| Define a task and its payload schema       | [Tasks and events](tasks-and-events.md) |
-| Register tasks in `createNextasking`       | [Tasks and events](tasks-and-events.md) |
-| Dispatch a task and handle dispatch errors | [Tasks and events](tasks-and-events.md) |
-| Start the embedded worker                  | [Tasks and events](tasks-and-events.md) |
+| Job                                               | Page                                    |
+| ------------------------------------------------- | --------------------------------------- |
+| Define a task and its payload schema              | [Tasks and events](tasks-and-events.md) |
+| Register tasks in `createNextasking`              | [Tasks and events](tasks-and-events.md) |
+| Dispatch a task and handle dispatch errors        | [Tasks and events](tasks-and-events.md) |
+| Write a duration                                  | [Tasks and events](tasks-and-events.md) |
+| Fix an error `createNextasking` throws at startup | [Tasks and events](tasks-and-events.md) |
+| Start the embedded worker                         | [Tasks and events](tasks-and-events.md) |
+| Pass a logger and read the lifecycle lines        | [Logging](logging.md)                   |
+| Log from a handler                                | [Logging](logging.md)                   |
 
 ## Import map
 
 ```ts
 import { createNextasking, defineTask, InvalidPayloadError, UnknownTaskError } from "@flefebvre/nextasking";
-import type { Register, TaskContext, TaskDefinition } from "@flefebvre/nextasking";
+import type { Duration, Logger, Register, TaskContext, TaskDefinition } from "@flefebvre/nextasking";
 ```
 
-| Export                | What it is                                                             |
-| --------------------- | ---------------------------------------------------------------------- |
-| `defineTask`          | Defines a task: a name, a Standard Schema payload schema and a handler |
-| `createNextasking`    | Builds the instance from the connection, the prefix and the task list  |
-| `UnknownTaskError`    | Thrown by `dispatch` for a name the instance doesn't list              |
-| `InvalidPayloadError` | Thrown by `dispatch` for a payload the task's schema refuses           |
-| `Register`            | The interface you augment with your instance's type                    |
-| `TaskContext`         | The type of the object a handler receives                              |
-| `TaskDefinition`      | The type `defineTask` returns                                          |
+| Export                | What it is                                                                        |
+| --------------------- | --------------------------------------------------------------------------------- |
+| `defineTask`          | Defines a task: a name, a Standard Schema payload schema and a handler            |
+| `createNextasking`    | Builds the instance from the connection, the prefix, the logger and the task list |
+| `UnknownTaskError`    | Thrown by `dispatch` for a name the instance doesn't list                         |
+| `InvalidPayloadError` | Thrown by `dispatch` for a payload the task's schema refuses                      |
+| `Duration`            | The type of a duration option: a whole number and `s`, `m`, `h` or `d`            |
+| `Logger`              | The type of the `logger` option and of the handler's `logger`                     |
+| `Register`            | The interface you augment with your instance's type                               |
+| `TaskContext`         | The type of the object a handler receives                                         |
+| `TaskDefinition`      | The type `defineTask` returns                                                     |

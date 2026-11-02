@@ -36,6 +36,8 @@ integrationTest(
             {
               payload: { email: "ada@example.com" },
               step: { run: expect.any(Function), sleep: expect.any(Function), sleepUntil: expect.any(Function) },
+              emit: expect.any(Function),
+              dispatch: expect.any(Function),
               runId,
               attempt: 1,
               logger: expect.any(Object),

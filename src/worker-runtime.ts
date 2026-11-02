@@ -13,6 +13,7 @@ import { errorFromThrownValue, errorRecordFor, failureReasonFor } from "./failed
 import { loggerWithFields } from "./logger.js";
 import type { Logger } from "./logger.js";
 import { createRedisStepStore, keepSavedStepsForFailedRunRetention, removeSavedSteps } from "./redis-step-store.js";
+import type { DispatchByName, EmitByName } from "./registry.js";
 import { RUN_QUEUE_NAME } from "./run-queue.js";
 import type { RunQueue, StoredFanOut, StoredRun } from "./run-queue.js";
 import { openStepEngine } from "./step-engine.js";
@@ -29,6 +30,8 @@ export type WorkerConfig = {
   tasksByName: ReadonlyMap<string, AnyTaskDefinition>;
   eventsByName: ReadonlyMap<string, EventDefinition>;
   openRunQueue: () => RunQueue;
+  dispatch: DispatchByName;
+  emit: EmitByName;
 };
 
 const NO_RETRY = -1;
@@ -60,14 +63,17 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
         runId,
         attempt,
         store: createRedisStepStore(client, job),
+        dispatch: config.dispatch,
+        emit: config.emit,
       });
       runLogger.debug({}, stepEngine.isResumingAfterSleep ? "run resumed" : "attempt started");
+      const { step, dispatch, emit } = stepEngine;
       try {
         wakeAt = await settleWithinTimeout(
           task.name,
           task.timeout,
           stepEngine.executeHandler(() =>
-            handler({ payload, step: stepEngine.step, runId, attempt, logger: runLogger }),
+            handler({ payload, step, emit, dispatch, runId, attempt, logger: runLogger }),
           ),
         );
       } finally {

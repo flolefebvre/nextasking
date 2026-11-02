@@ -39,6 +39,18 @@ export function deriveStepIdempotencyKey(taskName: string, runId: RunId, stepId:
   return uuidFromNameParts(["step", taskName, runId, stepId]);
 }
 
+export type HandlerSendId = Uuid;
+
+export function deriveHandlerSendId(
+  taskName: string,
+  runId: RunId,
+  enclosingStepId: StepId | undefined,
+  positionInScope: number,
+): HandlerSendId {
+  const scope = enclosingStepId === undefined ? ["top-level"] : ["step", enclosingStepId];
+  return uuidFromNameParts(["handler-send", taskName, runId, ...scope, String(positionInScope)]);
+}
+
 export function deriveJobId(definitionName: string, consumerFacingId: RunId | EventId): JobId {
   return uuidFromNameParts(["job", definitionName, consumerFacingId]);
 }

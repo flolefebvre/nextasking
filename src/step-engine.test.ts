@@ -2,7 +2,9 @@ import { describe, expect, expectTypeOf, test, vi } from "vitest";
 
 import type { Duration } from "./durations.js";
 import { StepMisuseError } from "./errors.js";
+import { deriveHandlerSendId } from "./ids.js";
 import type { JsonValue } from "./json.js";
+import type { DispatchByName, DispatchOptions, EmitByName, EmitOptions } from "./registry.js";
 import { openStepEngine } from "./step-engine.js";
 import type { StepStore } from "./step-engine.js";
 
@@ -18,8 +20,43 @@ function createInMemoryStepStore(serializedResultsByStepId: Record<string, strin
   };
 }
 
-function openAttempt(store: StepStore, attempt = 1) {
-  return openStepEngine({ taskName: "send-invoice", runId: "run-7", attempt, store });
+type RecordedSend = {
+  kind: "dispatch" | "emit";
+  name: string;
+  payload: unknown;
+  options: DispatchOptions & EmitOptions;
+};
+
+type RecordingSends = {
+  sends: RecordedSend[];
+  dispatch: DispatchByName;
+  emit: EmitByName;
+};
+
+function createRecordingSends(): RecordingSends {
+  const sends: RecordedSend[] = [];
+  return {
+    sends,
+    dispatch: async (name, payload, options = {}) => {
+      sends.push({ kind: "dispatch", name, payload, options });
+      return { runId: options.runId ?? "random-run-id" };
+    },
+    emit: async (name, payload, options = {}) => {
+      sends.push({ kind: "emit", name, payload, options });
+      return { eventId: options.eventId ?? "random-event-id" };
+    },
+  };
+}
+
+function openAttempt(store: StepStore, attempt = 1, recordingSends: RecordingSends = createRecordingSends()) {
+  return openStepEngine({
+    taskName: "send-invoice",
+    runId: "run-7",
+    attempt,
+    store,
+    dispatch: recordingSends.dispatch,
+    emit: recordingSends.emit,
+  });
 }
 
 function stringSerializedInBytes(sizeInBytes: number): string {
@@ -510,5 +547,144 @@ describe("resuming after a sleep", () => {
     expect(resumedAttempt.isResumingAfterSleep).toBe(true);
     expect(retryAttempt.isResumingAfterSleep).toBe(false);
     expect(firstAttempt.isResumingAfterSleep).toBe(false);
+  });
+});
+
+function topLevelSendId(positionInScope: number): string {
+  return deriveHandlerSendId("send-invoice", "run-7", undefined, positionInScope);
+}
+
+describe("handler dispatch and emit", () => {
+  test("send under ids derived from the run and their position, and save a marker for each", async () => {
+    const store = createInMemoryStepStore();
+    const recordingSends = createRecordingSends();
+    const { dispatch, emit } = await openAttempt(store, 1, recordingSends);
+
+    const dispatchedRun = await dispatch("send-receipt", { invoiceId: "inv-1" });
+    const emittedEvent = await emit("invoice.sent", { invoiceId: "inv-1" });
+
+    expect(dispatchedRun).toStrictEqual({ runId: topLevelSendId(0) });
+    expect(emittedEvent).toStrictEqual({ eventId: topLevelSendId(1) });
+    expect(recordingSends.sends).toStrictEqual([
+      {
+        kind: "dispatch",
+        name: "send-receipt",
+        payload: { invoiceId: "inv-1" },
+        options: { runId: topLevelSendId(0) },
+      },
+      { kind: "emit", name: "invoice.sent", payload: { invoiceId: "inv-1" }, options: { eventId: topLevelSendId(1) } },
+    ]);
+    expect(await store.load()).toStrictEqual({
+      [topLevelSendId(0)]: JSON.stringify({ kind: "dispatch", runId: topLevelSendId(0) }),
+      [topLevelSendId(1)]: JSON.stringify({ kind: "emit", eventId: topLevelSendId(1) }),
+    });
+  });
+
+  test("skip a send a previous attempt made, and resolve with what it sent", async () => {
+    const store = createInMemoryStepStore();
+    const firstAttempt = await openAttempt(store, 1);
+    const firstDispatchedRun = await firstAttempt.dispatch("send-receipt", { invoiceId: "inv-1" });
+    const firstEmittedEvent = await firstAttempt.emit("invoice.sent", { invoiceId: "inv-1" });
+    const recordingSends = createRecordingSends();
+    const secondAttempt = await openAttempt(store, 2, recordingSends);
+
+    const secondDispatchedRun = await secondAttempt.dispatch("send-receipt", { invoiceId: "inv-1" });
+    const secondEmittedEvent = await secondAttempt.emit("invoice.sent", { invoiceId: "inv-1" });
+
+    expect(secondDispatchedRun).toStrictEqual(firstDispatchedRun);
+    expect(secondEmittedEvent).toStrictEqual(firstEmittedEvent);
+    expect(recordingSends.sends).toStrictEqual([]);
+  });
+
+  test("let an explicit runId or eventId win, keyed by position all the same", async () => {
+    const store = createInMemoryStepStore();
+    const recordingSends = createRecordingSends();
+    const firstAttempt = await openAttempt(store, 1, recordingSends);
+    await firstAttempt.dispatch("ship-order", { orderId: "ord-1" }, { runId: "ship-order-ord-1", delay: "5m" });
+    await firstAttempt.emit("order.shipped", { orderId: "ord-1" }, { eventId: "order-shipped-ord-1" });
+    const secondAttempt = await openAttempt(store, 2, recordingSends);
+
+    const repeatedDispatch = await secondAttempt.dispatch("ship-order", { orderId: "ord-1" }, { runId: "other" });
+    const repeatedEmit = await secondAttempt.emit("order.shipped", { orderId: "ord-1" });
+
+    expect(recordingSends.sends.map((send) => send.options)).toStrictEqual([
+      { runId: "ship-order-ord-1", delay: "5m" },
+      { eventId: "order-shipped-ord-1" },
+    ]);
+    expect(repeatedDispatch).toStrictEqual({ runId: "ship-order-ord-1" });
+    expect(repeatedEmit).toStrictEqual({ eventId: "order-shipped-ord-1" });
+    expect(await store.load()).toStrictEqual({
+      [topLevelSendId(0)]: JSON.stringify({ kind: "dispatch", runId: "ship-order-ord-1" }),
+      [topLevelSendId(1)]: JSON.stringify({ kind: "emit", eventId: "order-shipped-ord-1" }),
+    });
+  });
+
+  test("number the sends inside a step's fn apart from the top level", async () => {
+    const recordingSends = createRecordingSends();
+    const { step, emit } = await openAttempt(createInMemoryStepStore(), 1, recordingSends);
+
+    await step.run("notify", async () => {
+      await emit("invoice.sent", { invoiceId: "inv-1" });
+    });
+    await emit("invoice.sent", { invoiceId: "inv-1" });
+
+    expect(recordingSends.sends.map((send) => send.options.eventId)).toStrictEqual([
+      deriveHandlerSendId("send-invoice", "run-7", "notify", 0),
+      topLevelSendId(0),
+    ]);
+  });
+
+  test("save no marker for a send that fails, so a later attempt sends again under the same id", async () => {
+    const store = createInMemoryStepStore();
+    const failingSends = createRecordingSends();
+    failingSends.emit = async () => {
+      throw new Error("Redis unavailable");
+    };
+    const firstAttempt = await openAttempt(store, 1, failingSends);
+    await firstAttempt.emit("invoice.sent", {}).catch(() => undefined);
+    const recordingSends = createRecordingSends();
+    const secondAttempt = await openAttempt(store, 2, recordingSends);
+
+    await secondAttempt.emit("invoice.sent", {});
+
+    expect(recordingSends.sends.map((send) => send.options.eventId)).toStrictEqual([topLevelSendId(0)]);
+  });
+
+  test("throw without sending once a sleep suspended the stretch", async () => {
+    const recordingSends = createRecordingSends();
+    const { step, emit, executeHandler } = await openAttempt(createInMemoryStepStore(), 1, recordingSends);
+    let emitError: unknown;
+
+    await executeHandler(async () => {
+      await step.sleep("wait", "1h").catch(() => undefined);
+      emitError = await emit("invoice.sent", {}).catch((error: unknown) => error);
+    });
+
+    expect(emitError).toBeInstanceOf(Error);
+    expect(recordingSends.sends).toStrictEqual([]);
+  });
+
+  test("are awaited by a sleep, so their markers are saved before the run suspends", async () => {
+    const store = createInMemoryStepStore();
+    const slowSends = createRecordingSends();
+    let finishEmit: () => void = () => undefined;
+    slowSends.emit = async () => {
+      await new Promise<void>((resolve) => {
+        finishEmit = resolve;
+      });
+      return { eventId: "evt-1" };
+    };
+    const { step, emit, executeHandler } = await openAttempt(store, 1, slowSends);
+
+    const suspension = executeHandler(async () => {
+      await Promise.all([emit("invoice.sent", {}), step.sleep("wait", "1h")]);
+    });
+    await vi.waitFor(async () => {
+      expect(await store.load()).toHaveProperty("wait");
+    });
+    finishEmit();
+
+    expect(await suspension).toBeGreaterThan(Date.now());
+    expect(await store.load()).toHaveProperty([topLevelSendId(0)], JSON.stringify({ kind: "emit", eventId: "evt-1" }));
   });
 });

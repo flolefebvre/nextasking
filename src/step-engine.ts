@@ -3,9 +3,10 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { parseDuration } from "./durations.js";
 import type { Duration } from "./durations.js";
 import { StepMisuseError } from "./errors.js";
-import { deriveStepIdempotencyKey } from "./ids.js";
-import type { IdempotencyKey, RunId, StepId } from "./ids.js";
+import { deriveHandlerSendId, deriveStepIdempotencyKey } from "./ids.js";
+import type { HandlerSendId, IdempotencyKey, RunId, StepId } from "./ids.js";
 import type { JsonValue } from "./json.js";
+import type { DispatchByName, DispatchedRun, EmitByName, EmittedEvent } from "./registry.js";
 
 export type SerializedSavedStep = string;
 
@@ -31,6 +32,8 @@ export type WakeTimeInEpochMilliseconds = number;
 
 export type StepEngine = {
   step: StepTools;
+  dispatch: DispatchByName;
+  emit: EmitByName;
   isResumingAfterSleep: boolean;
   executeHandler: (handlerExecution: () => Promise<void>) => Promise<WakeTimeInEpochMilliseconds | undefined>;
   throwRecordedMisuse: () => void;
@@ -41,6 +44,8 @@ export type StepEngineConfig = {
   runId: RunId;
   attempt: number;
   store: StepStore;
+  dispatch: DispatchByName;
+  emit: EmitByName;
 };
 
 type SavedSleep = {
@@ -49,14 +54,18 @@ type SavedSleep = {
   attempt: number;
 };
 
-type SavedStep = { kind: "result"; result: unknown } | SavedSleep;
+type SavedDispatch = { kind: "dispatch" } & DispatchedRun;
+
+type SavedEmit = { kind: "emit" } & EmittedEvent;
+
+type SavedStep = { kind: "result"; result: unknown } | SavedSleep | SavedDispatch | SavedEmit;
 
 class RunSuspension extends Error {
   override readonly name = "RunSuspension";
 
-  constructor(stepId: StepId, wakeAt: WakeTimeInEpochMilliseconds) {
+  constructor(wakeAt: WakeTimeInEpochMilliseconds) {
     super(
-      `The run is suspended by step "${stepId}" until ${new Date(wakeAt).toISOString()}. Let this error through: the run resumes at that time.`,
+      `The run is suspended until ${new Date(wakeAt).toISOString()}. Let this error through: the run resumes at that time.`,
     );
   }
 }
@@ -104,15 +113,15 @@ export async function openStepEngine(config: StepEngineConfig): Promise<StepEngi
     }
   };
 
-  const throwIfStretchIsOver = (stepId: StepId) => {
+  const throwIfStretchIsOver = () => {
     throwRecordedMisuse();
     if (recordedWakeAt !== undefined) {
-      throw new RunSuspension(stepId, recordedWakeAt);
+      throw new RunSuspension(recordedWakeAt);
     }
   };
 
   const checkStepCanStart = (stepId: StepId) => {
-    throwIfStretchIsOver(stepId);
+    throwIfStretchIsOver();
     const enclosingStepId = enclosingStepIdScope.getStore();
     if (enclosingStepId !== undefined) {
       throw recordMisuse(
@@ -202,7 +211,31 @@ export async function openStepEngine(config: StepEngineConfig): Promise<StepEngi
       return;
     }
     recordedWakeAt = Math.min(recordedWakeAt ?? wakeAt, wakeAt);
-    throw new RunSuspension(stepId, wakeAt);
+    throw new RunSuspension(wakeAt);
+  };
+
+  const sendCountsByEnclosingStepId = new Map<StepId | undefined, number>();
+
+  const sendOnce = async <Sent extends SavedDispatch | SavedEmit>(
+    kind: Sent["kind"],
+    send: (sendId: HandlerSendId) => Promise<Sent>,
+  ): Promise<Sent> => {
+    throwIfStretchIsOver();
+    const enclosingStepId = enclosingStepIdScope.getStore();
+    const positionInScope = sendCountsByEnclosingStepId.get(enclosingStepId) ?? 0;
+    sendCountsByEnclosingStepId.set(enclosingStepId, positionInScope + 1);
+    const sendId = deriveHandlerSendId(config.taskName, config.runId, enclosingStepId, positionInScope);
+    const savedSend = savedStepsByStepId.get(sendId);
+    if (savedSend?.kind === kind) {
+      return savedSend as Sent;
+    }
+    return trackInFlight(
+      (async () => {
+        const sent = await send(sendId);
+        await saveStep(sendId, JSON.stringify(sent));
+        return sent;
+      })(),
+    );
   };
 
   const step: StepTools = {
@@ -235,6 +268,20 @@ export async function openStepEngine(config: StepEngineConfig): Promise<StepEngi
 
   return {
     step,
+    dispatch: async (name, payload, options = {}) => {
+      const { runId } = await sendOnce<SavedDispatch>("dispatch", async (sendId) => {
+        const dispatchedRun = await config.dispatch(name, payload, { ...options, runId: options.runId ?? sendId });
+        return { kind: "dispatch", runId: dispatchedRun.runId };
+      });
+      return { runId };
+    },
+    emit: async (name, payload, options = {}) => {
+      const { eventId } = await sendOnce<SavedEmit>("emit", async (sendId) => {
+        const emittedEvent = await config.emit(name, payload, { ...options, eventId: options.eventId ?? sendId });
+        return { kind: "emit", eventId: emittedEvent.eventId };
+      });
+      return { eventId };
+    },
     isResumingAfterSleep: [...savedStepsByStepId.values()].some(
       (savedStep) => savedStep.kind === "sleep" && savedStep.attempt === config.attempt,
     ),

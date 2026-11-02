@@ -11,8 +11,12 @@ A named piece of work a consumer defines, with a payload schema and a handler.
 _Avoid_: Job, function, workflow
 
 **Event**:
-A named fact a consumer defines, with a payload schema, that tasks can subscribe to.
+A named fact, defined by a consumer or by the library, with a payload schema, that tasks can subscribe to.
 _Avoid_: Message, signal
+
+**Built-in event**:
+An event the library defines and emits itself when a run or a fan-out fails; a consumer can listen to it but not emit it.
+_Avoid_: System event, hook, notification
 
 **Listener**:
 A task subscribed to exactly one event, declared by the task itself, whose payload is that event's payload.

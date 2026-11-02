@@ -48,8 +48,14 @@ jobs:
         run: pnpm typecheck
 
   test:
+    name: test (${{ matrix.image }})
     runs-on: ubuntu-latest
     timeout-minutes: 15
+
+    strategy:
+      fail-fast: false
+      matrix:
+        image: [valkey/valkey:8, valkey/valkey:9, redis:8]
 
     steps:
       - name: Checkout repository
@@ -60,6 +66,8 @@ jobs:
 
       - name: Test
         run: pnpm test
+        env:
+          NEXTASKING_TEST_IMAGE: ${{ matrix.image }}
 
   build:
     runs-on: ubuntu-latest

@@ -1,6 +1,6 @@
 # CI
 
-`.github/workflows/ci.yml` runs on every pull request, whatever its base branch, and every push to `main`. A superseded run on the same ref is cancelled, except on `main`, where every push keeps its run. Its jobs run in parallel: `static`, `test`, `build`, then `ci`, which waits for the other three.
+`.github/workflows/ci.yml` runs on every pull request, whatever its base branch, and every push to `main`. A superseded run on the same ref is cancelled, except on `main`, where every push keeps its run. Its jobs run in parallel: `static`, `test` (one cell per server image: `valkey/valkey:8`, `valkey/valkey:9`, `redis:8`, passed as `NEXTASKING_TEST_IMAGE`), `build`, then `ci`, which waits for the other three.
 
 - Give each stage of the `gate` line in package.json its own job, and each script in it its own step, in the gate's order, so a failing check names itself in the run summary.
 - Keep the summary job named `ci`: it is the status check the `main` ruleset (`.github/rulesets/main.json`) requires, so a renamed job blocks every merge. Add every new job to its `needs`, and keep its `if: ${{ !cancelled() }}` and its check that every needed job succeeded — a required check that is skipped counts as passing, so without them a failed job would leave a mergeable PR.

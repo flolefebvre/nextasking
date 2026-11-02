@@ -26,21 +26,24 @@ export const nextasking = createNextasking({
 
 Each message is fixed: filter and alert on it.
 
-| Level   | Message                      | Fields                                                                                     |
-| ------- | ---------------------------- | ------------------------------------------------------------------------------------------ |
-| `debug` | `run dispatched`             | `task`, `runId`                                                                            |
-| `debug` | `duplicate dispatch dropped` | `task`, `runId` for a dispatch; `eventName`, `eventId` for an emit                         |
-| `debug` | `attempt started`            | `task`, `runId`, `attempt`                                                                 |
-| `info`  | `run completed`              | `task`, `runId`, `attempt`, `runDurationInMilliseconds`, `executionDurationInMilliseconds` |
-| `info`  | `worker started`             | none                                                                                       |
-| `info`  | `worker stopped`             | none                                                                                       |
-| `warn`  | `no listeners for event`     | `eventName`, `eventId`                                                                     |
+| Level   | Message                      | Fields                                                                                                      |
+| ------- | ---------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `debug` | `run dispatched`             | `task`, `runId`                                                                                             |
+| `debug` | `duplicate dispatch dropped` | `task`, `runId` for a dispatch; `eventName`, `eventId` for an emit                                          |
+| `debug` | `attempt started`            | `task`, `runId`, `attempt`                                                                                  |
+| `info`  | `run completed`              | `task`, `runId`, `attempt`, `runDurationInMilliseconds`, `executionDurationInMilliseconds`                  |
+| `info`  | `worker started`             | none                                                                                                        |
+| `info`  | `worker stopped`             | none                                                                                                        |
+| `warn`  | `no listeners for event`     | `eventName`, `eventId`                                                                                      |
+| `warn`  | `attempt failed`             | `task`, `runId`, `attempt`, `err`, `retriesLeft`, `backoffInMilliseconds`                                   |
+| `error` | `run failed`                 | `task`, `runId`, `attempt`, `err`, `reason`, `runDurationInMilliseconds`, `executionDurationInMilliseconds` |
 
 - `run dispatched` comes before any attempt, so it has no `attempt`. Every line about an attempt has `task`, `runId` and `attempt`.
 - A listener's run adds `eventName` and `eventId` to each of its lines, the handler's own included.
 - `run dispatched` is written by `dispatch` only: a listener's run started by an emit has no such line. `emit` itself writes no line, unless the event has no listeners or the call repeats an `eventId`.
 - `duplicate dispatch dropped` replaces `run dispatched` when the call repeats a `runId` or an `eventId` still within its dedup window. See [Tasks and events](tasks-and-events.md#the-dedup-window).
-- `runDurationInMilliseconds`: from the dispatch to the completion. `executionDurationInMilliseconds`: from the start of the completing attempt to the completion.
+- `runDurationInMilliseconds`: from the dispatch to the completion or the final failure. `executionDurationInMilliseconds`: from the start of the last attempt to its end.
+- `attempt failed` is written only when a retry follows, and `run failed` when the run fails for good: `err` is the attempt's `Error`, `reason` is `"retries exhausted"` or `"non-retriable"`. See [Retries and failures](retries-and-failures.md).
 - `worker started` is written when `startWorker()` has started the worker, before it has reached the server.
 - Payloads are never logged, at any level.
 

@@ -1,5 +1,6 @@
 import { InvalidPayloadError } from "./errors.js";
 import type { RunId } from "./ids.js";
+import type { Logger } from "./logger.js";
 import type { StandardSchemaV1, StandardSchemaV1Input, StandardSchemaV1Output } from "./standard-schema.js";
 
 export type PayloadSchema = StandardSchemaV1;
@@ -12,6 +13,7 @@ export type TaskContext<TaskPayload> = {
   payload: TaskPayload;
   runId: RunId;
   attempt: number;
+  logger: Logger;
 };
 
 export type TaskHandler<TaskPayload> = (context: TaskContext<TaskPayload>) => Promise<void>;

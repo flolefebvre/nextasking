@@ -3,6 +3,8 @@ import { validatePayload } from "./definitions.js";
 import type { AnyTaskDefinition, PayloadInput } from "./definitions.js";
 import { UnknownTaskError } from "./errors.js";
 import type { RunId } from "./ids.js";
+import { silentLogger } from "./logger.js";
+import type { Logger } from "./logger.js";
 import { createRunQueue } from "./run-queue.js";
 import type { RunQueue } from "./run-queue.js";
 import { startRunWorker } from "./worker-runtime.js";
@@ -26,6 +28,7 @@ export type Nextasking<Task extends AnyTaskDefinition> = {
 export type NextaskingConfig<Tasks extends readonly AnyTaskDefinition[]> = {
   connection: ConnectionConfig;
   prefix?: string;
+  logger?: Logger;
   tasks: Tasks;
 };
 
@@ -37,6 +40,7 @@ export function createNextasking<const Tasks extends readonly AnyTaskDefinition[
   config: NextaskingConfig<Tasks>,
 ): Nextasking<Tasks[number]> {
   const prefix = config.prefix ?? DEFAULT_PREFIX;
+  const logger = config.logger ?? silentLogger;
   const tasksByName = new Map<string, AnyTaskDefinition>(config.tasks.map((task) => [task.name, task]));
   let runQueue: RunQueue | undefined;
   let runningWorker: RunningWorker | undefined;
@@ -50,10 +54,11 @@ export function createNextasking<const Tasks extends readonly AnyTaskDefinition[
       const validatedPayload = await validatePayload(task, payload);
       runQueue ??= createRunQueue(config.connection, prefix);
       const runId = await runQueue.enqueueRun(task.name, validatedPayload);
+      logger.debug({ task: task.name, runId }, "run dispatched");
       return { runId };
     },
     startWorker: async () => {
-      runningWorker = startRunWorker({ connection: config.connection, prefix, tasksByName });
+      runningWorker = startRunWorker({ connection: config.connection, prefix, logger, tasksByName });
     },
   };
 

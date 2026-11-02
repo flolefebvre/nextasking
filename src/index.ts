@@ -4,6 +4,7 @@ export type { PayloadSchema, TaskContext, TaskDefinition, TaskHandler, TaskOptio
 export { InvalidPayloadError, UnknownTaskError } from "./errors.js";
 export type { PayloadIssue } from "./errors.js";
 export type { RunId } from "./ids.js";
+export type { Logger } from "./logger.js";
 export { createNextasking } from "./registry.js";
 export type { DispatchedRun, Nextasking, NextaskingConfig, Register } from "./registry.js";
 export type { StandardSchemaV1 } from "./standard-schema.js";

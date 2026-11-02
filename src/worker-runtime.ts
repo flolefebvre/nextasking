@@ -3,6 +3,8 @@ import { Worker } from "bullmq";
 import { closeRedisClient, createRedisClient } from "./connection.js";
 import type { ConnectionConfig } from "./connection.js";
 import type { AnyTaskDefinition, TaskHandler } from "./definitions.js";
+import { loggerWithFields } from "./logger.js";
+import type { Logger } from "./logger.js";
 import { RUN_QUEUE_NAME } from "./run-queue.js";
 
 export type RunningWorker = {
@@ -12,6 +14,7 @@ export type RunningWorker = {
 export type WorkerConfig = {
   connection: ConnectionConfig;
   prefix: string;
+  logger: Logger;
   tasksByName: ReadonlyMap<string, AnyTaskDefinition>;
 };
 
@@ -31,18 +34,33 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
       if (task === undefined) {
         throw new Error(`Unknown task "${job.name}"`);
       }
+      const attemptStartedAt = Date.now();
+      const runId = String(job.id);
+      const attempt = job.attemptsMade + 1;
+      const runLogger = loggerWithFields(config.logger, { task: task.name, runId, attempt });
+      runLogger.debug({}, "attempt started");
       const handler = task.handler as TaskHandler<unknown>;
-      await handler({ payload: job.data, runId: String(job.id), attempt: job.attemptsMade + 1 });
+      await handler({ payload: job.data, runId, attempt, logger: runLogger });
+      const runCompletedAt = Date.now();
+      runLogger.info(
+        {
+          runDurationInMilliseconds: runCompletedAt - job.timestamp,
+          executionDurationInMilliseconds: runCompletedAt - attemptStartedAt,
+        },
+        "run completed",
+      );
     },
     { connection: client, prefix: config.prefix },
   );
   worker.on("error", () => undefined);
+  config.logger.info({}, "worker started");
 
   return {
     close: async () => {
       await worker.close();
       await closeRedisClient(client);
       isWorkerRunningInThisProcess = false;
+      config.logger.info({}, "worker stopped");
     },
   };
 }

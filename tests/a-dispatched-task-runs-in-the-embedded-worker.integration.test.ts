@@ -32,7 +32,9 @@ integrationTest(
       expect(runId).toMatch(RANDOM_UUID);
       await vi.waitFor(
         () => {
-          expect(recordedContexts).toEqual([{ payload: { email: "ada@example.com" }, runId, attempt: 1 }]);
+          expect(recordedContexts).toEqual([
+            { payload: { email: "ada@example.com" }, runId, attempt: 1, logger: expect.any(Object) },
+          ]);
         },
         { timeout: 10_000 },
       );

@@ -24,6 +24,7 @@ export const sendWelcomeEmail = defineTask("send-welcome-email", {
   - `payload`: the schema's output, already validated
   - `runId`: the id `dispatch` returned for this run
   - `attempt`: the attempt number, starting at 1
+  - `logger`: a logger that tags every line with the run; see [Logging](logging.md)
 - Keep the payload small and JSON: ids and short values, not whole records. Load the rest in the handler.
 
 ## Register the tasks
@@ -49,6 +50,7 @@ declare module "@flefebvre/nextasking" {
 
 - `createNextasking` opens no connection. Importing the instance is safe anywhere, `next build` included; the first `dispatch` connects.
 - `prefix` (default `"nextasking"`) puts every key of the instance under that prefix. Give two apps sharing one server different prefixes.
+- `logger` takes your app's logger; without it the library is silent. See [Logging](logging.md).
 
 ## Dispatch a task
 

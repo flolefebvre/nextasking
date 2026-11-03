@@ -3,7 +3,7 @@ import * as v from "valibot";
 import { describe, expect, expectTypeOf, test, vi } from "vitest";
 import { z } from "zod";
 
-import { defineEvent, defineListener, defineTask } from "./definitions.js";
+import { defineEvent, defineListener, defineScheduledTask, defineTask } from "./definitions.js";
 import { InvalidPayloadError, UnknownEventError, UnknownTaskError } from "./errors.js";
 import type { Duration } from "./durations.js";
 import type { Logger } from "./logger.js";
@@ -419,6 +419,95 @@ describe("emit", () => {
     const nextasking = createNextasking({ connection: { url: UNREACHABLE_URL }, tasks: [sendWelcomeEmail] });
 
     expectTypeOf(nextasking.emit).parameter(0).toBeNever();
+  });
+});
+
+function createScheduledTaskNextasking(schedule: { cron: string; timezone?: string }) {
+  const purgeExpiredSessions = defineScheduledTask("purge-expired-sessions", {
+    schedule,
+    handler: async () => undefined,
+  });
+  return createNextasking({ connection: { url: UNREACHABLE_URL }, tasks: [sendWelcomeEmail, purgeExpiredSessions] });
+}
+
+describe("createNextasking with a scheduled task", () => {
+  test.each([
+    ["61 * * * *", '"61 * * * *" is not a cron expression: Constraint error, got value 61 expected range 0-59'],
+    ["every day", '"every day" is not a cron expression: Validation error, cannot resolve alias "eve"'],
+    ["", '"" is not a cron expression: it is empty'],
+    ["  ", '"  " is not a cron expression: it is empty'],
+    [42 as unknown as string, "42 is not a cron expression: it is not a string"],
+  ])("rejects the cron %j, naming the task", (cron, shownError) => {
+    expect(() => createScheduledTaskNextasking({ cron })).toThrow(
+      `Task "purge-expired-sessions" has an invalid schedule.cron: ${shownError}`,
+    );
+  });
+
+  test("rejects a timezone that isn't an IANA time zone, naming the task", () => {
+    const creating = () => createScheduledTaskNextasking({ cron: "0 3 * * *", timezone: "Mars/Olympus" });
+
+    expect(creating).toThrow(
+      'Task "purge-expired-sessions" has an invalid schedule.timezone: "Mars/Olympus" is not an IANA time zone',
+    );
+    expect(creating).toThrow(expect.objectContaining({ cause: expect.any(RangeError) }));
+  });
+
+  test("names the timezone first when both the cron and the timezone are invalid", () => {
+    expect(() => createScheduledTaskNextasking({ cron: "61 * * * *", timezone: "Mars/Olympus" })).toThrow(
+      'Task "purge-expired-sessions" has an invalid schedule.timezone: "Mars/Olympus" is not an IANA time zone',
+    );
+  });
+
+  test("accepts a cron with a seconds field, an IANA alias and no timezone at all", () => {
+    expect(() => createScheduledTaskNextasking({ cron: "*/5 * * * * *", timezone: "US/Pacific" })).not.toThrow();
+    expect(() => createScheduledTaskNextasking({ cron: "0 3 * * *", timezone: "Europe/Paris" })).not.toThrow();
+    expect(() => createScheduledTaskNextasking({ cron: "0 3 * * *" })).not.toThrow();
+  });
+
+  test("rejects an invalid schedule before opening any connection", async () => {
+    const networkResourcesBefore = networkResources();
+
+    expect(() => createScheduledTaskNextasking({ cron: "0 3 * * *", timezone: "Nowhere" })).toThrow();
+    await setImmediate();
+
+    expect(networkResources()).toEqual(networkResourcesBefore);
+  });
+});
+
+describe("dispatch of a scheduled task", () => {
+  test("takes no payload, and an optional runId and delay", () => {
+    const nextasking = createScheduledTaskNextasking({ cron: "0 3 * * *" });
+
+    expectTypeOf(nextasking.dispatch<"purge-expired-sessions">).toBeCallableWith("purge-expired-sessions");
+    expectTypeOf(nextasking.dispatch<"purge-expired-sessions">).toBeCallableWith("purge-expired-sessions", undefined, {
+      runId: "purge-now",
+      delay: "5m",
+    });
+    expectTypeOf(nextasking.dispatch<"send-welcome-email">)
+      .parameter(1)
+      .toEqualTypeOf<{ email: string; address: { zipCode: string } }>();
+  });
+
+  test("rejects a payload in its types and at runtime, before connecting", async () => {
+    const nextasking = createScheduledTaskNextasking({ cron: "0 3 * * *" });
+    const networkResourcesBefore = networkResources();
+
+    // @ts-expect-error a scheduled task takes no payload
+    const dispatching = nextasking.dispatch("purge-expired-sessions", { olderThanDays: 30 });
+
+    await expect(dispatching).rejects.toThrow(
+      'Scheduled task "purge-expired-sessions" takes no payload: dispatch it by its name alone to run it now',
+    );
+    await expect(dispatching).rejects.not.toThrow(InvalidPayloadError);
+    await setImmediate();
+    expect(networkResources()).toEqual(networkResourcesBefore);
+  });
+
+  test("is a task name for isTaskName", () => {
+    const nextasking = createScheduledTaskNextasking({ cron: "0 3 * * *" });
+
+    expect(nextasking.isTaskName("purge-expired-sessions")).toBe(true);
+    expectTypeOf(nextasking.dispatch).parameter(0).toEqualTypeOf<"send-welcome-email" | "purge-expired-sessions">();
   });
 });
 

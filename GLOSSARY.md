@@ -68,6 +68,14 @@ _Avoid_: Try, execution
 An attempt of a run that starts while another attempt of the same run is still executing, after the first lost its lock.
 _Avoid_: Zombie, double run
 
+**Lock**:
+The hold an attempt has on its run while it executes, renewed by its worker; an attempt that loses it can no longer save or complete anything, and another attempt of the run may start.
+_Avoid_: Lease, claim, mutex
+
+**Stall**:
+An attempt that lost its lock because its process crashed, was killed, or blocked its event loop past the lock duration; the run goes back to pending, and the third stall with no step saved in between fails it.
+_Avoid_: Crash, timeout, zombie
+
 **Backoff**:
 The wait between a failed attempt and the next attempt of the same run.
 _Avoid_: Delay, cooldown
@@ -82,11 +90,19 @@ _Avoid_: Retry, rerun, redrive
 
 **Suspend**:
 To pause a run's attempt at a step until a set time, so it holds no worker and no concurrency slot while it waits.
-_Avoid_: Pause, park, yield
+_Avoid_: Pause, park; not yield, which is the hand-back at shutdown (see **Yield**)
 
 **Resume**:
 To continue a suspended attempt once its time comes, reusing the steps it has already saved.
 _Avoid_: Wake, restart, retry
+
+**Yield**:
+To send a running attempt's run back to pending at a step boundary because its worker is shutting down, once its steps in flight are saved, using no retry and counting no stall.
+_Avoid_: Suspend, requeue, hand back
+
+**Drain**:
+The state of a worker between the shutdown signal and its exit, in which it takes no new attempt and lets the running ones yield or finish until its shutdown timeout.
+_Avoid_: Stopping, winding down
 
 **Pending**:
 Said of a run that is due and waits for a worker to start or continue its next attempt.
@@ -94,7 +110,7 @@ _Avoid_: Queued, waiting, ready
 
 **Idle**:
 Said of the queue when no run is pending, executing or waiting for a concurrency slot, and no fan-out is left; runs that wait for a set time don't count.
-_Avoid_: Settled, drained, empty
+_Avoid_: Settled, empty; not drained, which describes a worker shutting down (see **Drain**)
 
 **Idempotency key**:
 A value that stays the same for one step of one run, handed to that step so an external service can recognise a repeat.

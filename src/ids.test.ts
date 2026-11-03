@@ -2,6 +2,7 @@ import { describe, expect, test } from "vitest";
 
 import {
   createRandomId,
+  deriveFiringRunId,
   deriveHandlerSendId,
   deriveJobId,
   deriveListenerRunId,
@@ -43,6 +44,26 @@ describe("deriveListenerRunId", () => {
     expect(deriveListenerRunId("evt-1", "send-receipt")).not.toBe(
       deriveListenerRunId("evt-1", "record-invoice-payment"),
     );
+  });
+});
+
+describe("deriveFiringRunId", () => {
+  test("derives the same version 5 UUID from the same task and planned instant", () => {
+    const plannedInstant = Date.UTC(2026, 10, 3, 3, 0, 0);
+
+    const runId = deriveFiringRunId("purge-expired-sessions", plannedInstant);
+
+    expect(runId).toBe(deriveFiringRunId("purge-expired-sessions", plannedInstant));
+    expect(runId).toMatch(NAME_BASED_UUID);
+  });
+
+  test("derives a different run id for another planned instant, another task or a listener run", () => {
+    const plannedInstant = Date.UTC(2026, 10, 3, 3, 0, 0);
+    const runId = deriveFiringRunId("purge-expired-sessions", plannedInstant);
+
+    expect(deriveFiringRunId("purge-expired-sessions", plannedInstant + 1000)).not.toBe(runId);
+    expect(deriveFiringRunId("send-digest", plannedInstant)).not.toBe(runId);
+    expect(deriveListenerRunId(String(plannedInstant), "purge-expired-sessions")).not.toBe(runId);
   });
 });
 

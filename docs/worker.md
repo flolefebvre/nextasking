@@ -19,6 +19,7 @@ export async function register() {
 | `shutdownTimeout` | `"25s"`   | How long a shutdown waits for running attempts before it aborts them  |
 
 - `startWorker` rejects an invalid option before opening any connection.
+- Before it takes its first attempt, `startWorker` reconciles the schedules stored in Redis with the instance's scheduled tasks. See [Scheduled tasks](scheduled-tasks.md#what-a-deploy-does-to-schedules).
 - Type the options with `StartWorkerOptions`.
 
 ## Cap the attempts in flight with concurrency

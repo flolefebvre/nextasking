@@ -5,6 +5,7 @@ import type { RunId } from "./ids.js";
 import type { JsonValue } from "./json.js";
 import type { Logger } from "./logger.js";
 import type { RegisteredDispatch, RegisteredEmit } from "./registry.js";
+import type { Schedule } from "./schedules.js";
 import type { StandardSchemaV1, StandardSchemaV1Input, StandardSchemaV1Output } from "./standard-schema.js";
 import type { StepTools } from "./step-engine.js";
 
@@ -64,9 +65,40 @@ export type ListenerDefinition<
   Event extends EventDefinition = EventDefinition,
 > = Readonly<{ name: Name; schema: Event["schema"]; on: Event } & SharedTaskOptions<Payload<Event["schema"]>>>;
 
-export type AnyTaskDefinition = Readonly<
-  { name: string; schema: PayloadSchema; on?: EventDefinition } & SharedTaskOptions<never>
+export type ScheduledTaskContext = Omit<TaskContext<never>, "payload"> & {
+  scheduledAt: Date | undefined;
+};
+
+export type ScheduledTaskHandler = (context: ScheduledTaskContext) => Promise<void>;
+
+export type ScheduledTaskOptions = {
+  schedule: Schedule;
+  retries?: number;
+  backoff?: Duration;
+  timeout?: Duration;
+  concurrency?: { limit: number };
+  handler: ScheduledTaskHandler;
+};
+
+export type ScheduledTaskDefinition<Name extends string = string> = Readonly<{ name: Name } & ScheduledTaskOptions>;
+
+type AnyTaskOptions = {
+  retries?: number;
+  backoff?: Duration;
+  timeout?: Duration;
+  concurrency?: TaskConcurrency<never>;
+  handler: (context: never) => Promise<void>;
+};
+
+export type AnyUnscheduledTaskDefinition = Readonly<
+  { name: string; schema: PayloadSchema; on?: EventDefinition; schedule?: undefined } & AnyTaskOptions
 >;
+
+export type AnyScheduledTaskDefinition = Readonly<
+  { name: string; schedule: Schedule; schema?: undefined; on?: undefined } & AnyTaskOptions
+>;
+
+export type AnyTaskDefinition = AnyUnscheduledTaskDefinition | AnyScheduledTaskDefinition;
 
 const DEFAULT_RETRIES = 5;
 
@@ -96,6 +128,13 @@ export function defineTask<const Name extends string, Schema extends PayloadSche
   name: Name,
   options: TaskOptions<Schema>,
 ): TaskDefinition<Name, Schema> {
+  return { ...options, name };
+}
+
+export function defineScheduledTask<const Name extends string>(
+  name: Name,
+  options: ScheduledTaskOptions,
+): ScheduledTaskDefinition<Name> {
   return { ...options, name };
 }
 

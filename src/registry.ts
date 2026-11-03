@@ -1,6 +1,6 @@
 import type { ConnectionConfig } from "./connection.js";
 import { retriesOf, validatePayload } from "./definitions.js";
-import type { AnyTaskDefinition, EventDefinition, PayloadInput } from "./definitions.js";
+import type { AnyTaskDefinition, EventDefinition, PayloadInput, PayloadSchema } from "./definitions.js";
 import { parseDuration } from "./durations.js";
 import type { Duration, DurationInMilliseconds } from "./durations.js";
 import { UnknownEventError, UnknownTaskError } from "./errors.js";
@@ -11,6 +11,7 @@ import { silentLogger } from "./logger.js";
 import type { Logger } from "./logger.js";
 import { createRunQueue } from "./run-queue.js";
 import type { RunQueue } from "./run-queue.js";
+import { rejectInvalidSchedule, timezoneOf } from "./schedules.js";
 import {
   MISSING_MANUAL_SIGNAL_HANDLING_WARNING,
   exitOnShutdownSignals,
@@ -47,7 +48,7 @@ export type EmittedEvent = {
   eventId: EventId;
 };
 
-export type DispatchByName = (name: string, payload: unknown, options?: DispatchOptions) => Promise<DispatchedRun>;
+export type DispatchByName = (name: string, payload?: unknown, options?: DispatchOptions) => Promise<DispatchedRun>;
 
 export type EmitByName = (name: string, payload: unknown, options?: EmitOptions) => Promise<EmittedEvent>;
 
@@ -59,11 +60,14 @@ type RegisteredTask = RegisteredDefinitions["task"];
 
 type RegisteredEvent = RegisteredDefinitions["event"];
 
+export type DispatchArguments<Task> = Task extends { schema: infer Schema extends PayloadSchema }
+  ? [payload: PayloadInput<Schema>, options?: DispatchOptions]
+  : [payload?: undefined, options?: DispatchOptions];
+
 export interface RegisteredDispatch {
   <Name extends TaskName>(
     name: Name,
-    payload: PayloadInput<Extract<RegisteredTask, { name: Name }>["schema"]>,
-    options?: DispatchOptions,
+    ...dispatchArguments: DispatchArguments<Extract<RegisteredTask, { name: Name }>>
   ): Promise<DispatchedRun>;
 }
 
@@ -87,8 +91,7 @@ export type EmitOptions = {
 export type Nextasking<Task extends AnyTaskDefinition, Event extends EventDefinition = never> = {
   readonly dispatch: <Name extends Task["name"]>(
     name: Name,
-    payload: PayloadInput<Extract<Task, { name: Name }>["schema"]>,
-    options?: DispatchOptions,
+    ...dispatchArguments: DispatchArguments<Extract<Task, { name: Name }>>
   ) => Promise<DispatchedRun>;
   readonly emit: <Name extends Event["name"]>(
     name: Name,
@@ -133,6 +136,11 @@ export function createNextasking<
       listenerNamesByEventName.get(task.on.name)?.push(task.name);
     }
   }
+  const declaredSchedules = config.tasks.flatMap((task) =>
+    task.schedule === undefined
+      ? []
+      : [{ taskName: task.name, cron: task.schedule.cron, timezone: timezoneOf(task.schedule) }],
+  );
   let runQueue: RunQueue | undefined;
   let runningWorker: RunningWorker | undefined;
   const openRunQueue = (): RunQueue => {
@@ -147,7 +155,10 @@ export function createNextasking<
     }
     const runId = consumerFacingIdOrRandomId("task", task.name, "runId", options.runId);
     const delayInMilliseconds = delayInMillisecondsOf(task.name, options.delay);
-    const validatedPayload = await validatePayload("task", task, payload);
+    if (task.schedule !== undefined && payload !== undefined) {
+      throw new Error(`Scheduled task "${task.name}" takes no payload: dispatch it by its name alone to run it now`);
+    }
+    const validatedPayload = task.schedule === undefined ? await validatePayload("task", task, payload) : undefined;
     const { isDuplicate } = await openRunQueue().enqueueRun(task.name, {
       runId,
       payload: validatedPayload,
@@ -187,8 +198,13 @@ export function createNextasking<
     isTaskName: (name): name is Tasks[number]["name"] => tasksByName.has(name),
     isEventName: (name): name is Events[number]["name"] => eventsByName.has(name),
     startWorker: async (options = {}) => {
+      const workerOptions = workerOptionsFrom(options);
+      const scheduleChanges = await openRunQueue().syncSchedules(declaredSchedules);
+      for (const { kind, taskName, cron, timezone } of scheduleChanges) {
+        logger.info({ task: taskName, cron, timezone }, `schedule ${kind}`);
+      }
       runningWorker = startRunWorker({
-        options: workerOptionsFrom(options),
+        options: workerOptions,
         connection: config.connection,
         prefix,
         logger,
@@ -283,6 +299,9 @@ function rejectDuplicateNames(definitionNames: readonly string[]): void {
 const DURATION_OPTIONS = ["backoff", "timeout"] as const;
 
 function rejectInvalidTaskOptions(task: AnyTaskDefinition): void {
+  if (task.schedule !== undefined) {
+    rejectInvalidSchedule(task.name, task.schedule);
+  }
   if (task.concurrency !== undefined) {
     const limit: unknown = task.concurrency.limit;
     if (typeof limit !== "number" || !Number.isInteger(limit) || limit <= 0) {

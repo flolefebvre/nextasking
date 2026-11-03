@@ -35,6 +35,10 @@ Each message is fixed: filter and alert on it.
 | `debug` | `run resumed`                                                                                                   | `task`, `runId`, `attempt`                                                                                  |
 | `debug` | `run yielded at shutdown`                                                                                       | `task`, `runId`, `attempt`                                                                                  |
 | `debug` | `attempt aborted: lock lost`                                                                                    | `task`, `runId`, `attempt`                                                                                  |
+| `debug` | `firing dropped: task not scheduled`                                                                            | `task`, `scheduledAt`                                                                                       |
+| `info`  | `schedule added`                                                                                                | `task`, `cron`, `timezone`                                                                                  |
+| `info`  | `schedule changed`                                                                                              | `task`, `cron`, `timezone`                                                                                  |
+| `info`  | `schedule removed`                                                                                              | `task`, `cron`, `timezone`                                                                                  |
 | `info`  | `run completed`                                                                                                 | `task`, `runId`, `attempt`, `runDurationInMilliseconds`, `executionDurationInMilliseconds`                  |
 | `info`  | `worker started`                                                                                                | none                                                                                                        |
 | `info`  | `worker stopped`                                                                                                | none                                                                                                        |
@@ -48,7 +52,7 @@ Each message is fixed: filter and alert on it.
 
 - `run dispatched` comes before any attempt, so it has no `attempt`. Every line about an attempt has `task`, `runId` and `attempt`.
 - A listener's run adds `eventName` and `eventId` to each of its lines, the handler's own included.
-- `run dispatched` is written by `dispatch` only: a listener's run started by an emit has no such line. `emit` itself writes no line, unless the event has no listeners or the call repeats an `eventId`.
+- `run dispatched` is written by `dispatch` only: a listener's run started by an emit has no such line. Neither has a scheduled task's run started by a firing, and a repeated firing writes no `duplicate dispatch dropped`: it collapses into the same run through its run id. `emit` itself writes no line, unless the event has no listeners or the call repeats an `eventId`.
 - `duplicate dispatch dropped` replaces `run dispatched` when the call repeats a `runId` or an `eventId` still within its dedup window. See [Tasks and events](tasks-and-events.md#the-dedup-window).
 - `run suspended` is written when a sleep suspends the run, with `wakeAt` as an ISO string. `run resumed` replaces `attempt started` when the run is picked up again after it: the attempt is the same. See [Steps](steps.md#sleep-for-minutes-or-days).
 - `runDurationInMilliseconds`: from the dispatch to the completion or the final failure. `executionDurationInMilliseconds`: from the start, or the resume, of the last attempt to its end.
@@ -56,7 +60,8 @@ Each message is fixed: filter and alert on it.
 - `run completed` is written once the completion is stored: an attempt that lost its lock never writes it.
 - `run yielded at shutdown`, `attempt aborted: lock lost`, `attempt stalled`, `attempts aborted at shutdown deadline`, `worker shutdown failed` and the `NEXT_MANUAL_SIG_HANDLE` warning come from the worker's shutdown and lock handling. See [Worker](worker.md).
 - `attempt stalled` is written by the worker that found the stall, which may be another instance than the one that ran the attempt.
-- `worker started` is written when `startWorker()` has started the worker, before it has reached the server. The `NEXT_MANUAL_SIG_HANDLE` warning, when it applies, comes right after it.
+- `schedule added`, `schedule changed` and `schedule removed` are written by `startWorker()`, one per schedule it reconciles, before `worker started`. `cron` and `timezone` are the new values, or for `schedule removed` the stored ones. `firing dropped: task not scheduled` is written when a firing reaches a release that no longer schedules its task, with `scheduledAt` as an ISO string. See [Scheduled tasks](scheduled-tasks.md#what-a-deploy-does-to-schedules).
+- `worker started` is written when `startWorker()` has reconciled the schedules and started the worker. The `NEXT_MANUAL_SIG_HANDLE` warning, when it applies, comes right after it.
 - Payloads are never logged, at any level.
 
 ## Log from a handler

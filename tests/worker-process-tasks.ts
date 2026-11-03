@@ -1,7 +1,9 @@
 import { setTimeout as sleep } from "node:timers/promises";
 import { z } from "zod";
 
-import { defineTask } from "../src/index.js";
+import { defineScheduledTask, defineTask } from "../src/index.js";
+
+const SCHEDULED_BLOCK_IN_MILLISECONDS = 4000;
 
 export type WriteRecord = (taskName: string, record: unknown) => Promise<void>;
 
@@ -88,5 +90,19 @@ export function workerProcessTasks(writeRecord: WriteRecord) {
     },
   });
 
-  return [blockEventLoopTask, recordAbortAfterBlocking, waitThenRecord, waitForAbortTask] as const;
+  const blockEventLoopOnSchedule = defineScheduledTask("block-event-loop-on-schedule", {
+    schedule: { cron: "0 0 1 1 *" },
+    handler: async ({ runId, scheduledAt }) => {
+      await writeRecord("block-event-loop-on-schedule", { runId, scheduledAt, event: "started" });
+      blockEventLoop(SCHEDULED_BLOCK_IN_MILLISECONDS);
+    },
+  });
+
+  return [
+    blockEventLoopTask,
+    recordAbortAfterBlocking,
+    waitThenRecord,
+    waitForAbortTask,
+    blockEventLoopOnSchedule,
+  ] as const;
 }

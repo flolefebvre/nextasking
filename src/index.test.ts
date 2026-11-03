@@ -2,8 +2,8 @@ import { describe, expect, expectTypeOf, test } from "vitest";
 import { z } from "zod";
 
 import * as root from "./index.js";
-import { createNextasking, defineEvent, defineListener, defineTask } from "./index.js";
-import type { EventName, Register, TaskContext, TaskName } from "./index.js";
+import { createNextasking, defineEvent, defineListener, defineScheduledTask, defineTask } from "./index.js";
+import type { EventName, Register, ScheduledTaskContext, TaskContext, TaskName } from "./index.js";
 import type { EventNameIn, TaskNameIn } from "./registry.js";
 
 const sendWelcomeEmail = defineTask("send-welcome-email", {
@@ -22,10 +22,15 @@ const createDefaultWorkspace = defineListener("create-default-workspace", {
   },
 });
 
+const purgeExpiredSessions = defineScheduledTask("purge-expired-sessions", {
+  schedule: { cron: "0 3 * * *" },
+  handler: async () => undefined,
+});
+
 export const nextasking = createNextasking({
   connection: { url: "redis://nextasking.invalid:6379" },
   events: [userSignedUp],
-  tasks: [sendWelcomeEmail, createDefaultWorkspace],
+  tasks: [sendWelcomeEmail, createDefaultWorkspace, purgeExpiredSessions],
 });
 
 declare module "./index.js" {
@@ -33,6 +38,8 @@ declare module "./index.js" {
     nextasking: typeof nextasking;
   }
 }
+
+type RegisteredTaskName = "send-welcome-email" | "create-default-workspace" | "purge-expired-sessions";
 
 describe("the root export", () => {
   test("exports the definers, createNextasking and the errors, and nothing else at runtime", () => {
@@ -47,15 +54,14 @@ describe("the root export", () => {
       "createNextasking",
       "defineEvent",
       "defineListener",
+      "defineScheduledTask",
       "defineTask",
     ]);
   });
 
   test("lets an app register its instance through the Register augmentation", () => {
     expectTypeOf<Register["nextasking"]>().toEqualTypeOf<typeof nextasking>();
-    expectTypeOf<Register["nextasking"]["dispatch"]>()
-      .parameter(0)
-      .toEqualTypeOf<"send-welcome-email" | "create-default-workspace">();
+    expectTypeOf<Register["nextasking"]["dispatch"]>().parameter(0).toEqualTypeOf<RegisteredTaskName>();
     expectTypeOf<Register["nextasking"]["emit"]>().parameter(0).toEqualTypeOf<"user.signed-up">();
   });
 
@@ -70,14 +76,23 @@ describe("the root export", () => {
     };
 
     expectTypeOf(sendFromAHandler).returns.resolves.toBeVoid();
-    expectTypeOf<TaskContext<unknown>["dispatch"]>()
-      .parameter(0)
-      .toEqualTypeOf<"send-welcome-email" | "create-default-workspace">();
+    expectTypeOf<TaskContext<unknown>["dispatch"]>().parameter(0).toEqualTypeOf<RegisteredTaskName>();
     expectTypeOf<TaskContext<unknown>["emit"]>().parameter(0).toEqualTypeOf<"user.signed-up">();
   });
 
+  test("types a handler's dispatch of a scheduled task with no payload", () => {
+    const runScheduledTaskNow = async ({ dispatch }: ScheduledTaskContext) => {
+      await dispatch("purge-expired-sessions");
+      await dispatch("purge-expired-sessions", undefined, { runId: "purge-now" });
+      // @ts-expect-error a scheduled task takes no payload
+      await dispatch("purge-expired-sessions", { olderThanDays: 30 });
+    };
+
+    expectTypeOf(runScheduledTaskNow).returns.resolves.toBeVoid();
+  });
+
   test("exports the registered task and event names", () => {
-    expectTypeOf<TaskName>().toEqualTypeOf<"send-welcome-email" | "create-default-workspace">();
+    expectTypeOf<TaskName>().toEqualTypeOf<RegisteredTaskName>();
     expectTypeOf<EventName>().toEqualTypeOf<"user.signed-up">();
   });
 

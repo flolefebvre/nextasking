@@ -8,17 +8,18 @@ import { backoffInMillisecondsFor } from "./backoff.js";
 import { closeRedisClient, createRedisClient } from "./connection.js";
 import type { ConnectionConfig } from "./connection.js";
 import { backoffOf, retriesOf } from "./definitions.js";
-import type { AnyTaskDefinition, EventDefinition, TaskHandler } from "./definitions.js";
+import type { AnyTaskDefinition, EventDefinition, ScheduledTaskContext, TaskContext } from "./definitions.js";
 import { parseDuration } from "./durations.js";
-import type { Duration, DurationInMilliseconds } from "./durations.js";
+import type { Duration, DurationInMilliseconds, EpochMilliseconds } from "./durations.js";
 import { StalledRunError, errorFromThrownValue, errorRecordFor, failureReasonFor } from "./failed-attempts.js";
+import { deriveFiringRunId } from "./ids.js";
 import type { RunId } from "./ids.js";
 import { loggerWithFields } from "./logger.js";
 import type { Logger } from "./logger.js";
 import { createRedisStepStore, keepSavedStepsForFailedRunRetention, removeSavedSteps } from "./redis-step-store.js";
 import type { DispatchByName, EmitByName } from "./registry.js";
-import { RUN_QUEUE_NAME } from "./run-queue.js";
-import type { FailureReason, RunQueue, StoredFanOut, StoredRun } from "./run-queue.js";
+import { FIRING_JOB_NAME, RUN_QUEUE_NAME, plannedInstantOfFiring, scheduledAtOf } from "./run-queue.js";
+import type { FailureReason, RunQueue, StoredFanOut, StoredFiring, StoredRun } from "./run-queue.js";
 import { openStepEngine } from "./step-engine.js";
 import type { HandlerOutcome } from "./step-engine.js";
 import { bullmqMaxStalledCountOf, workerTiming } from "./worker-timing.js";
@@ -76,7 +77,7 @@ type RunDurationFields = {
   executionDurationInMilliseconds: DurationInMilliseconds;
 };
 
-type EpochMilliseconds = number;
+type AnyTaskHandler = (context: TaskContext<unknown> | ScheduledTaskContext) => Promise<void>;
 
 function runDurationFieldsOf(
   job: MinimalJob,
@@ -177,7 +178,7 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
     const attempt = job.attemptsMade + 1;
     const runLogger = runLoggerOf(job, attempt);
     const durationFieldsAt = (runEndedAt: number) => runDurationFieldsOf(job, stretchStartedAt, runEndedAt);
-    const handler = task.handler as TaskHandler<unknown>;
+    const handler = task.handler as AnyTaskHandler;
     const handOff = async (moveJob: () => Promise<unknown>) => {
       try {
         await moveJob();
@@ -208,9 +209,14 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
         outcome = await settleWithinTimeout(
           task.name,
           task.timeout,
-          stepEngine.executeHandler(() =>
-            handler({ payload, step, emit, dispatch, runId, attempt, logger: runLogger, abortSignal }),
-          ),
+          stepEngine.executeHandler(() => {
+            const runContext = { step, emit, dispatch, runId, attempt, logger: runLogger, abortSignal };
+            return handler(
+              task.schedule === undefined
+                ? { ...runContext, payload }
+                : { ...runContext, scheduledAt: scheduledAtOf(job.data) },
+            );
+          }),
         );
       } finally {
         stepEngine.throwRecordedMisuse();
@@ -294,7 +300,30 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
         (job === undefined ? undefined : backoffInMillisecondsByFailedJob.get(job)) ?? NO_RETRY,
     },
   });
+  async function enqueueFiringRun(firingJob: Job<StoredFiring>): Promise<void> {
+    const { taskName } = firingJob.data;
+    const plannedInstant: EpochMilliseconds = plannedInstantOfFiring(firingJob.id, taskName);
+    const scheduledAt = new Date(plannedInstant);
+    const task = config.tasksByName.get(taskName);
+    if (task?.schedule === undefined) {
+      config.logger.debug(
+        { task: taskName, scheduledAt: scheduledAt.toISOString() },
+        "firing dropped: task not scheduled",
+      );
+      return;
+    }
+    await config.openRunQueue().enqueueRun(taskName, {
+      runId: deriveFiringRunId(taskName, plannedInstant),
+      payload: undefined,
+      retries: retriesOf(task),
+      scheduledAt,
+    });
+  }
   async function processJob(job: Job, token: string | undefined): Promise<void> {
+    if (job.name === FIRING_JOB_NAME) {
+      await enqueueFiringRun(job as Job<StoredFiring>);
+      return;
+    }
     if (config.eventsByName.has(job.name)) {
       const fanOut = job.data as StoredFanOut;
       await config.openRunQueue().enqueueListenerRuns(

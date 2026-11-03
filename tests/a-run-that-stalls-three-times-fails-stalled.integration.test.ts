@@ -3,33 +3,17 @@ import { expect } from "vitest";
 import { fixtureRecordsOf } from "./fixture-records.js";
 import { integrationTest } from "./integration-test.js";
 import { waitForLogMessage } from "./recording-logger.js";
+import { startStallCheckedWorkerProcesses } from "./stall-checked-worker-processes.js";
 import { storedRun } from "./stored-run.js";
-import { startWorkerProcess } from "./worker-process.js";
-import { createWorkerProcessNextasking } from "./worker-process-nextasking.js";
-
-const FAST_STALLS = { lockDurationInMilliseconds: 1000, stallIntervalInMilliseconds: 1000 };
 
 integrationTest(
   "a run whose attempts stall three times with no step saved fails stalled, in a worker other than the one that counted the stalls",
   { timeout: 60_000 },
   async ({ redisUrl, keyPrefix }) => {
-    const nextasking = createWorkerProcessNextasking(redisUrl, keyPrefix);
-    const stallCheckingProcess = await startWorkerProcess({
+    const { nextasking, stallCheckingProcess, blockingProcess, stop } = await startStallCheckedWorkerProcesses(
       redisUrl,
       keyPrefix,
-      timing: FAST_STALLS,
-      startWorkerOptions: { concurrency: 1 },
-    });
-    const blockingProcess = await (async () => {
-      await nextasking.dispatch("wait-for-abort", {});
-      await expect
-        .poll(() => fixtureRecordsOf(redisUrl, keyPrefix, "wait-for-abort"), { timeout: 10_000 })
-        .toHaveLength(1);
-      return startWorkerProcess({ redisUrl, keyPrefix, timing: FAST_STALLS });
-    })().catch(async (error: unknown) => {
-      await stallCheckingProcess.stop();
-      throw error;
-    });
+    );
 
     try {
       const { runId } = await nextasking.dispatch("block-event-loop", { blockInMilliseconds: 4000 });
@@ -68,8 +52,7 @@ integrationTest(
         errors: [{ attempt: 1, name: "StalledRunError", message: expect.stringContaining("stalled 3 times") }],
       });
     } finally {
-      await Promise.all([stallCheckingProcess.stop(), blockingProcess.stop()]);
-      await nextasking.close();
+      await stop();
     }
   },
 );

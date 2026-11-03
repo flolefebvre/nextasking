@@ -42,6 +42,11 @@ integrationTest(
         },
       ]);
       expect(workerProcess.logLines.filter((line) => line.message !== "run yielded at shutdown")).toEqual([
+        {
+          level: "info",
+          fields: { task: "block-event-loop-on-schedule", cron: "0 0 1 1 *", timezone: "UTC" },
+          message: "schedule added",
+        },
         { level: "info", fields: {}, message: "worker started" },
         { level: "debug", fields: { task: "wait-for-abort", runId, attempt: 1 }, message: "attempt started" },
         { level: "warn", fields: {}, message: "attempts aborted at shutdown deadline" },

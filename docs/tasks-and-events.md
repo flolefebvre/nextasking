@@ -127,6 +127,7 @@ declare module "@flefebvre/nextasking" {
 - a `concurrency.limit` that isn't a positive integer
 - `retries` that isn't a whole number, 0 or more
 - a duration option that isn't a valid duration, such as `"-5s"` or `"0.5h"` passed through a cast or plain JavaScript
+- a scheduled task's cron or time zone that isn't valid; see [Scheduled tasks](scheduled-tasks.md#startup-checks)
 
 ```text
 Duplicate name "invoice.paid": every task and event needs its own name

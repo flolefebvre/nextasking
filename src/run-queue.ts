@@ -3,11 +3,15 @@ import type { JobsOptions } from "bullmq";
 
 import { closeRedisClient, createRedisClient } from "./connection.js";
 import type { ConnectionConfig } from "./connection.js";
-import type { DurationInMilliseconds } from "./durations.js";
+import type { DurationInMilliseconds, EpochMilliseconds } from "./durations.js";
 import { createRandomId, deriveJobId, deriveListenerRunId } from "./ids.js";
-import type { EventId, RunId } from "./ids.js";
+import type { EventId, JobId, RunId } from "./ids.js";
+import { scheduleChangesBetween } from "./schedules.js";
+import type { DeclaredSchedule, ScheduleChange } from "./schedules.js";
 
 export const RUN_QUEUE_NAME = "runs";
+
+export const FIRING_JOB_NAME = "nextasking/firing";
 
 const SECONDS_IN_A_DAY = 24 * 60 * 60;
 
@@ -42,6 +46,7 @@ export type StoredRun = {
   runId: RunId;
   payload: unknown;
   sourceEvent?: SourceEvent;
+  scheduledAt?: IsoTimestamp;
   errors: ErrorRecord[];
   reason?: FailureReason;
   writeToken: WriteToken;
@@ -54,12 +59,32 @@ export type StoredFanOut = {
   writeToken: WriteToken;
 };
 
+export type StoredFiring = {
+  taskName: string;
+};
+
+type IsoTimestamp = string;
+
 export type RunToEnqueue = {
   runId: RunId;
   payload: unknown;
   retries: number;
   delayInMilliseconds?: DurationInMilliseconds;
+  scheduledAt?: Date;
 };
+
+export function scheduledAtOf(storedRun: StoredRun): Date | undefined {
+  return storedRun.scheduledAt === undefined ? undefined : new Date(storedRun.scheduledAt);
+}
+
+export function plannedInstantOfFiring(firingJobId: JobId | undefined, taskName: string): EpochMilliseconds {
+  const firingJobIdPrefix = `repeat:${taskName}:`;
+  const plannedInstant = Number(firingJobId?.slice(firingJobIdPrefix.length));
+  if (firingJobId?.startsWith(firingJobIdPrefix) !== true || !Number.isSafeInteger(plannedInstant)) {
+    throw new Error(`Firing job "${String(firingJobId)}" of task "${taskName}" has no planned instant in its id`);
+  }
+  return plannedInstant;
+}
 
 export type FanOutToEnqueue = {
   eventId: EventId;
@@ -84,7 +109,15 @@ export type RunQueue = {
     fanOut: StoredFanOut,
     listenerRuns: readonly ListenerRunToEnqueue[],
   ) => Promise<void>;
+  syncSchedules: (declaredSchedules: readonly DeclaredSchedule[]) => Promise<ScheduleChange[]>;
   close: () => Promise<void>;
+};
+
+const FAN_OUT_AND_FIRING_JOB_OPTIONS = {
+  attempts: FAN_OUT_RETRIES + 1,
+  backoff: { type: "exponential", delay: FAN_OUT_FIRST_BACKOFF_IN_MILLISECONDS },
+  removeOnComplete: COMPLETED_JOB_RETENTION,
+  removeOnFail: FAILED_JOB_RETENTION,
 };
 
 function jobForRun(taskName: string, storedRun: StoredRun, retries: number) {
@@ -121,7 +154,13 @@ export function createRunQueue(connection: ConnectionConfig, prefix: string): Ru
     enqueueRun: async (taskName, run) => {
       const job = jobForRun(
         taskName,
-        { runId: run.runId, payload: run.payload, errors: [], writeToken: createRandomId() },
+        {
+          runId: run.runId,
+          payload: run.payload,
+          ...(run.scheduledAt === undefined ? {} : { scheduledAt: run.scheduledAt.toISOString() }),
+          errors: [],
+          writeToken: createRandomId(),
+        },
         run.retries,
       );
       return addUnlessDuplicate(job.name, job.data, {
@@ -132,11 +171,8 @@ export function createRunQueue(connection: ConnectionConfig, prefix: string): Ru
     enqueueFanOut: async (eventName, fanOut) => {
       const storedFanOut: StoredFanOut = { ...fanOut, writeToken: createRandomId() };
       return addUnlessDuplicate(eventName, storedFanOut, {
+        ...FAN_OUT_AND_FIRING_JOB_OPTIONS,
         jobId: deriveJobId(eventName, fanOut.eventId),
-        attempts: FAN_OUT_RETRIES + 1,
-        backoff: { type: "exponential", delay: FAN_OUT_FIRST_BACKOFF_IN_MILLISECONDS },
-        removeOnComplete: COMPLETED_JOB_RETENTION,
-        removeOnFail: FAILED_JOB_RETENTION,
       });
     },
     enqueueListenerRuns: async (eventName, fanOut, listenerRuns) => {
@@ -156,6 +192,30 @@ export function createRunQueue(connection: ConnectionConfig, prefix: string): Ru
           ),
         ),
       );
+    },
+    syncSchedules: async (declaredSchedules) => {
+      const storedSchedulers = await queue.getJobSchedulers(0, -1);
+      const scheduleChanges = scheduleChangesBetween(
+        storedSchedulers.map((storedScheduler) => ({
+          taskName: storedScheduler.key,
+          cron: storedScheduler.pattern,
+          timezone: storedScheduler.tz,
+        })),
+        declaredSchedules,
+      );
+      for (const scheduleChange of scheduleChanges) {
+        if (scheduleChange.kind === "removed") {
+          await queue.removeJobScheduler(scheduleChange.taskName);
+          continue;
+        }
+        const storedFiring: StoredFiring = { taskName: scheduleChange.taskName };
+        await queue.upsertJobScheduler(
+          scheduleChange.taskName,
+          { pattern: scheduleChange.cron, tz: scheduleChange.timezone },
+          { name: FIRING_JOB_NAME, data: storedFiring, opts: FAN_OUT_AND_FIRING_JOB_OPTIONS },
+        );
+      }
+      return scheduleChanges;
     },
     close: async () => {
       await queue.close();

@@ -58,16 +58,13 @@ export async function startTcpProxy(targetUrl: string): Promise<TcpProxy> {
     }
   };
 
-  const cutOnceRepliesArrive = (clientSocket: Socket, targetSocket: Socket, { markCut }: ArmedReplyCut) => {
+  const cutOnceRepliesArrive = (targetSocket: Socket, { markCut }: ArmedReplyCut) => {
     const lastReplyMarker = `tcp-proxy-last-reply-${randomUUID()}`;
     let repliesSinceCut = "";
     targetSocket.on("data", (reply: Buffer) => {
       repliesSinceCut += reply.toString();
       if (repliesSinceCut.includes(lastReplyMarker)) {
-        server.close();
-        reset(clientSocket);
-        reset(targetSocket);
-        markCut();
+        void cut().then(markCut);
       }
     });
     targetSocket.resume();
@@ -90,7 +87,7 @@ export async function startTcpProxy(targetUrl: string): Promise<TcpProxy> {
         armedReplyCut = undefined;
         clientSocket.unpipe(targetSocket);
         targetSocket.unpipe(clientSocket);
-        cutOnceRepliesArrive(clientSocket, targetSocket, replyCut);
+        cutOnceRepliesArrive(targetSocket, replyCut);
       }
     });
   });

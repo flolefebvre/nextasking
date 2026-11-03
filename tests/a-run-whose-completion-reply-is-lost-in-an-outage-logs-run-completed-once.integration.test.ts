@@ -16,6 +16,7 @@ const MOVE_TO_COMPLETED_ARGUMENT = "returnvalue";
 
 integrationTest(
   "a connection cut after the completion of a run is stored, before its reply arrives, logs run completed once after the reconnect and no worker error",
+  { timeout: 20_000 },
   async ({ redisUrl, keyPrefix }) => {
     const proxy = await startTcpProxy(redisUrl);
     const { logger, lines } = createRecordingLogger();

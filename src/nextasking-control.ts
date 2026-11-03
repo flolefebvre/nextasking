@@ -5,6 +5,7 @@ import { createRedisConnections } from "./connection.js";
 import type { ConnectionConfig } from "./connection.js";
 import { parseDuration } from "./durations.js";
 import type { Duration, DurationInMilliseconds } from "./durations.js";
+import { deriveFiringRunId } from "./ids.js";
 import type { RunId } from "./ids.js";
 import { silentLogger } from "./logger.js";
 import { forEachBatchOfJobIds, readJobFields } from "./queue-reader.js";
@@ -23,6 +24,7 @@ export type NextaskingControlOptions = {
 export type NextaskingControl = {
   readonly waitForIdle: (options?: { timeout?: Duration }) => Promise<void>;
   readonly makeRunsDueNow: (options?: { task?: string }) => Promise<{ task: string; runId: RunId }[]>;
+  readonly fireSchedule: (taskName: string) => Promise<{ runId: RunId }>;
   readonly close: () => Promise<void>;
   readonly [Symbol.asyncDispose]: () => Promise<void>;
 };
@@ -132,6 +134,19 @@ export function createNextaskingControl(options: NextaskingControlOptions): Next
           }
         }
         return runsMadeDue;
+      }),
+
+    fireSchedule: async (taskName) =>
+      callOnQueue(async (openRunQueue) => {
+        const storedScheduler = await openRunQueue.bullmqQueue.getJobScheduler(taskName);
+        if (storedScheduler === undefined || storedScheduler === null) {
+          throw new Error(
+            `No schedule is stored for task "${taskName}": fire a scheduled task whose worker has started once`,
+          );
+        }
+        const plannedInstant = Date.now();
+        await openRunQueue.enqueueFiring(taskName, plannedInstant);
+        return { runId: deriveFiringRunId(taskName, plannedInstant) };
       }),
 
     close,

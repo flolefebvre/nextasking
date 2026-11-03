@@ -111,6 +111,7 @@ function storedFanOutAfterReplay(storedFanOut: StoredFanOut): StoredFanOut {
 
 export type StoredFiring = {
   taskName: string;
+  plannedInstant?: EpochMilliseconds;
 };
 
 export type IsoTimestamp = string;
@@ -167,6 +168,7 @@ export type RunQueue = {
     listenerRuns: readonly ListenerRunToEnqueue[],
   ) => Promise<void>;
   syncSchedules: (declaredSchedules: readonly DeclaredSchedule[]) => Promise<ScheduleChange[]>;
+  enqueueFiring: (taskName: string, plannedInstant: EpochMilliseconds) => Promise<void>;
   readonly bullmqQueue: Queue;
   readonly client: Redis;
   readonly hasFailedToOpen: boolean;
@@ -315,6 +317,13 @@ export function createRunQueue(
         );
       }
       return scheduleChanges;
+    },
+    enqueueFiring: async (taskName, plannedInstant) => {
+      const storedFiring: StoredFiring = { taskName, plannedInstant };
+      await queue.add(FIRING_JOB_NAME, storedFiring, {
+        ...FAN_OUT_AND_FIRING_JOB_OPTIONS,
+        jobId: deriveJobId(FIRING_JOB_NAME, `${taskName}:${plannedInstant}`),
+      });
     },
     close: async () => {
       await queue.close();

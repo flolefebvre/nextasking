@@ -368,7 +368,8 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
   const concurrencySlots = createConcurrencySlots(client, worker, timing.lockDurationInMilliseconds);
   async function enqueueFiringRun(firingJob: Job<StoredFiring>): Promise<void> {
     const { taskName } = firingJob.data;
-    const plannedInstant: EpochMilliseconds = plannedInstantOfFiring(firingJob.id, taskName);
+    const plannedInstant: EpochMilliseconds =
+      firingJob.data.plannedInstant ?? plannedInstantOfFiring(firingJob.id, taskName);
     const scheduledAt = new Date(plannedInstant);
     const task = config.tasksByName.get(taskName);
     if (task?.schedule === undefined) {

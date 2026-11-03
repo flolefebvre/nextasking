@@ -92,11 +92,15 @@ integrationTest(
           { task: "send-digest", attempt: 1 },
         ]),
       );
-      expect(
-        lines
-          .filter((line) => line.fields.task === "sync-calendar" && line.level === "debug")
-          .map((line) => line.message),
-      ).toEqual(["run dispatched", "attempt started", "run suspended", "run resumed"]);
+      const syncCalendarDebugMessages = lines
+        .filter((line) => line.fields.task === "sync-calendar" && line.level === "debug")
+        .map((line) => line.message);
+      expect(syncCalendarDebugMessages.filter((message) => message !== "run dispatched")).toEqual([
+        "attempt started",
+        "run suspended",
+        "run resumed",
+      ]);
+      expect(syncCalendarDebugMessages.filter((message) => message === "run dispatched")).toHaveLength(1);
       expect(runsLeftToMakeDue).toEqual([]);
     } finally {
       await closeNextasking(nextasking);

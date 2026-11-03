@@ -8,6 +8,14 @@ import { runJobKey } from "../tests/run-job-key.js";
 import { defineScheduledTask, defineTask } from "./definitions.js";
 import { deriveJobId } from "./ids.js";
 import { closeNextasking, createNextasking } from "./registry.js";
+import { DEFAULT_WORKER_TIMING } from "./worker-timing.js";
+
+const { lockDurationInMilliseconds } = DEFAULT_WORKER_TIMING;
+
+async function serverTimeInMillisecondsOf(redis: Redis): Promise<number> {
+  const [seconds, microseconds] = await redis.time();
+  return Number(seconds) * 1000 + Math.floor(Number(microseconds) / 1000);
+}
 
 function openGate() {
   let open = () => undefined as void;
@@ -51,6 +59,7 @@ integrationTest(
     try {
       await redis.connect();
       await nextasking.startWorker();
+      const beforeTakeAt = await serverTimeInMillisecondsOf(redis);
       const holdingRun = await nextasking.dispatch("rebuild-index", { accountId: "eu:7 b", shouldWaitForGate: true });
       await waitForLogMessage(lines, "attempt started");
       const waitingRun = await nextasking.dispatch("rebuild-index", { accountId: "eu:7 b", shouldWaitForGate: false });
@@ -62,13 +71,13 @@ integrationTest(
         },
         { timeout: 10_000 },
       );
-      const takenAt = Date.now();
       const holdersOfKey = await redis.zrange(
         `${runQueueKey}:concurrency-slots:rebuild-index:eu%3A7%20b`,
         0,
         -1,
         "WITHSCORES",
       );
+      const afterReadAt = await serverTimeInMillisecondsOf(redis);
       const holdersOfTask = await redis.zrange(`${runQueueKey}:concurrency-slots:reports%3Apurge`, 0, -1);
       const waitingJobIds = await redis.lrange(`${runQueueKey}:concurrency-waiting:rebuild-index:eu%3A7%20b`, 0, -1);
       const holdingRunLockToken = await redis.get(`${runJobKey(keyPrefix, "rebuild-index", holdingRun.runId)}:lock`);
@@ -81,8 +90,8 @@ integrationTest(
       );
 
       expect(holdersOfKey).toEqual([holdingRunLockToken, expect.any(String)]);
-      expect(Number(holdersOfKey[1]) - takenAt).toBeGreaterThan(100_000);
-      expect(Number(holdersOfKey[1]) - takenAt).toBeLessThanOrEqual(120_000);
+      expect(Number(holdersOfKey[1])).toBeGreaterThanOrEqual(beforeTakeAt + lockDurationInMilliseconds);
+      expect(Number(holdersOfKey[1])).toBeLessThanOrEqual(afterReadAt + lockDurationInMilliseconds);
       expect(holdersOfTask).toHaveLength(1);
       expect(waitingJobIds).toEqual([deriveJobId("rebuild-index", waitingRun.runId)]);
       expect(await redis.keys(`${runQueueKey}:concurrency-*`)).toEqual([]);

@@ -48,7 +48,7 @@ for (const followerId of payload.followerIds) {
 }
 ```
 
-- Keep an id stable once deployed: a saved result is found by its id. Renaming a step makes runs already in progress run it again.
+- Keep an id stable once deployed: a saved result is found by its id. Renaming a step makes runs already in progress run it again. See [Deploys](deploys.md#rename-or-rework-a-step).
 - A saved step whose id no longer appears in the code is ignored.
 
 ## Results are JSON

@@ -42,6 +42,11 @@ Events and background tasks for a Next.js app, on BullMQ with Redis or Valkey. D
 | Stop a handler cleanly with `abortSignal`          | [Worker](worker.md)                             |
 | Know what a stall is and when a run fails stalled  | [Worker](worker.md)                             |
 | Know what happens to runs during a deploy overlap  | [Worker](worker.md)                             |
+| Know which release decides each task option        | [Deploys](deploys.md)                           |
+| Change a payload schema without breaking runs      | [Deploys](deploys.md)                           |
+| Rename or rework a step that is already deployed   | [Deploys](deploys.md)                           |
+| Remove a task, a listener or an event              | [Deploys](deploys.md)                           |
+| Rename a task or an event                          | [Deploys](deploys.md)                           |
 | Pick the Valkey or Redis for the queues            | [Worker](worker.md)                             |
 | Set `maxmemory-policy` to `noeviction`             | [Worker](worker.md)                             |
 | Know what the worker does when Redis is down       | [Worker](worker.md)                             |

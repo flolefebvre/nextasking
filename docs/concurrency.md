@@ -65,7 +65,7 @@ export const purgeExpiredSessions = defineScheduledTask("purge-expired-sessions"
 - A waiting run is also picked up again every 2 minutes, as a safety net, and goes back to waiting if no slot is free. A key with 1,000 waiting runs costs about 8 pickups per second.
 - A worker killed while executing holds its slot until the slot expires, 2 minutes after its last renewal: a key at its limit stays blocked for 2 to 3 minutes, until the killed run comes back as a stall or a waiting run's safety-net pickup finds the slot free.
 - An attempt that can no longer renew its slot is aborted as having lost its lock, like an attempt that loses its run's lock. See [Worker](worker.md#stop-a-handler-cleanly-with-abortsignal).
-- The limit and `key` are read from the release running the attempt; a change applies to the attempts it starts.
+- The limit is read from the release running the attempt; a change applies to the attempts it starts. The key is the one stored with the run, computed by the release that stored it; the release running the attempt computes it only for a run stored without one. See [Deploys](deploys.md#which-release-decides-what).
 
 ## Log lines
 

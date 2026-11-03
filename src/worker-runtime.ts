@@ -199,6 +199,19 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
 
   type TrackedAttempt = ReturnType<typeof trackAttemptInFlight>;
 
+  const trackRunFailure = (job: Job<StoredRun>, token: string | undefined, runLogger: Logger) => {
+    finishesInFlight.trackFinish(
+      job.id ?? "",
+      runFailureInFlight({
+        processedOn: job.processedOn,
+        attemptsMade: job.attemptsMade,
+        token,
+        runLogger,
+        sendFailureNotice: () => sendFailureNotice(client, job, config.sendBuiltInEvent),
+      }),
+    );
+  };
+
   const executeRunAttempt = async (task: AnyTaskDefinition, job: Job<StoredRun>, token: string | undefined) => {
     if (isDraining) {
       return yieldAtShutdown(job, token, runLoggerOf(job, attemptOf(job, "executing")));
@@ -364,16 +377,7 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
         throw writeError;
       });
       backoffInMillisecondsByFailedJob.set(job, backoffInMilliseconds);
-      finishesInFlight.trackFinish(
-        job.id ?? "",
-        runFailureInFlight({
-          processedOn: job.processedOn,
-          attemptsMade: job.attemptsMade,
-          token,
-          runLogger,
-          sendFailureNotice: () => sendFailureNotice(client, job, config.sendBuiltInEvent),
-        }),
-      );
+      trackRunFailure(job, token, runLogger);
       throw error;
     }
     if (outcome.kind === "suspended") {
@@ -526,10 +530,11 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
         attempt,
         executionStartedAt: now.getTime(),
         failedAt: now,
-        runLogger: runLoggerOf(job, attempt),
+        runLogger,
       },
       (data) => saveRunDataIfLockIsHeld(client, job, token, data),
     );
+    trackRunFailure(job, token, runLogger);
     throw error;
   }
   async function handBackFanOutOfUnknownEvent(job: Job<StoredFanOut>, token: string | undefined): Promise<void> {

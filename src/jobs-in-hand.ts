@@ -1,9 +1,6 @@
 export type JobsInHand = {
   isJobInHand: (jobId: string) => boolean;
-  holdWhileDelivering: <DeliveredJob>(
-    jobId: string | undefined,
-    deliver: () => Promise<DeliveredJob | undefined>,
-  ) => Promise<DeliveredJob | undefined>;
+  holdWhileDelivering: <Delivery>(jobId: string | undefined, deliver: () => Promise<Delivery>) => Promise<Delivery>;
   releaseWhenProcessed: <ProcessingResult>(
     jobId: string | undefined,
     process: () => Promise<ProcessingResult>,
@@ -32,17 +29,17 @@ export function createJobsInHand(): JobsInHand {
     isJobInHand: (jobId) => holdCountByJobId.has(jobId),
     holdWhileDelivering: async (jobId, deliver) => {
       hold(jobId);
-      let deliveredJob: Awaited<ReturnType<typeof deliver>>;
+      let delivery: Awaited<ReturnType<typeof deliver>>;
       try {
-        deliveredJob = await deliver();
+        delivery = await deliver();
       } catch (deliveryError) {
         release(jobId);
         throw deliveryError;
       }
-      if (deliveredJob === undefined) {
+      if (delivery === undefined) {
         release(jobId);
       }
-      return deliveredJob;
+      return delivery;
     },
     releaseWhenProcessed: async (jobId, process) => {
       try {

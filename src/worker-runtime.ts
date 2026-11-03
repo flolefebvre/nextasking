@@ -10,8 +10,8 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { UnknownTaskRunError } from "./attempt-errors.js";
 import { createConcurrencySlots } from "./concurrency-slots.js";
 import type { ConcurrencySlot } from "./concurrency-slots.js";
-import { closeRedisClient, createRedisClient } from "./connection.js";
-import type { ConnectionConfig } from "./connection.js";
+import { closeRedisClient } from "./connection.js";
+import type { RedisConnections } from "./connection.js";
 import { concurrencyKeyOf, retriesOf } from "./definitions.js";
 import type { AnyTaskDefinition, EventDefinition, ScheduledTaskContext, TaskContext } from "./definitions.js";
 import { parseDuration, shownDurationOf } from "./durations.js";
@@ -78,7 +78,7 @@ export function workerOptionsFrom(options: StartWorkerOptions): WorkerOptions {
 
 export type WorkerConfig = {
   options: WorkerOptions;
-  connection: ConnectionConfig;
+  connections: RedisConnections;
   prefix: string;
   logger: Logger;
   tasksByName: ReadonlyMap<string, AnyTaskDefinition>;
@@ -349,7 +349,7 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
   };
 
   const timing = workerTiming();
-  const client = createRedisClient(config.connection, "worker");
+  const client = config.connections.createClient("worker");
   const attemptSettlements = new Set<Promise<void>>();
   const trackSettlement = (execution: Promise<void>): Promise<void> => {
     const settlement = execution.then(

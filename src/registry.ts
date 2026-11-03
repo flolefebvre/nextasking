@@ -1,6 +1,6 @@
 import { BUILT_IN_EVENTS, isBuiltInEventName } from "./built-in-events.js";
 import type { BuiltInEvent, BuiltInEventName } from "./built-in-events.js";
-import { giveUpAfterInMillisecondsOf } from "./connection.js";
+import { createRedisConnections } from "./connection.js";
 import type { ConnectionConfig } from "./connection.js";
 import { concurrencyKeyOf, retriesOf, validatePayload } from "./definitions.js";
 import type { AnyTaskDefinition, EventDefinition, PayloadInput, PayloadSchema } from "./definitions.js";
@@ -188,10 +188,10 @@ export function createNextasking<
 >(config: NextaskingConfig<Tasks, Events>): Nextasking<Tasks[number], Events[number] | BuiltInEvent> {
   const appEvents: readonly EventDefinition[] = config.events ?? [];
   rejectInvalidConfig(config.tasks, appEvents);
-  giveUpAfterInMillisecondsOf(config.connection);
   const events: readonly EventDefinition[] = [...appEvents, ...BUILT_IN_EVENTS];
   const prefix = config.prefix ?? DEFAULT_PREFIX;
   const logger = config.logger ?? silentLogger;
+  const connections = createRedisConnections(config.connection, logger);
   const tasksByName = new Map<string, AnyTaskDefinition>(config.tasks.map((task) => [task.name, task]));
   const eventsByName = new Map<string, EventDefinition>(events.map((event) => [event.name, event]));
   const listenerNamesByEventName = new Map<string, string[]>(events.map((event) => [event.name, []]));
@@ -208,7 +208,7 @@ export function createNextasking<
   let runQueue: RunQueue | undefined;
   let runningWorker: RunningWorker | undefined;
   const openRunQueue = (): RunQueue => {
-    runQueue ??= createRunQueue(config.connection, prefix);
+    runQueue ??= createRunQueue(connections, "instance", prefix);
     return runQueue;
   };
 
@@ -325,7 +325,7 @@ export function createNextasking<
       await sendUnsentFailureNotices(openRunQueue(), sendBuiltInEvent);
       runningWorker = startRunWorker({
         options: workerOptions,
-        connection: config.connection,
+        connections,
         prefix,
         logger,
         tasksByName,

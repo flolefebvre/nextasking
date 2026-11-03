@@ -24,3 +24,14 @@ export function parseDuration(duration: Duration): DurationInMilliseconds {
   }
   return Number(match[1]) * MILLISECONDS_BY_UNIT[match[2] as DurationUnit];
 }
+
+const UNITS_FROM_LARGEST: readonly DurationUnit[] = ["d", "h", "m", "s"];
+
+export function shownDurationOf(durationInMilliseconds: DurationInMilliseconds): string {
+  const unit = UNITS_FROM_LARGEST.find(
+    (candidateUnit) => durationInMilliseconds % MILLISECONDS_BY_UNIT[candidateUnit] === 0,
+  );
+  return unit === undefined
+    ? `${String(durationInMilliseconds)}ms`
+    : `${String(durationInMilliseconds / MILLISECONDS_BY_UNIT[unit])}${unit}`;
+}

@@ -1,6 +1,6 @@
 import { describe, expect, expectTypeOf, test } from "vitest";
 
-import { parseDuration } from "./durations.js";
+import { parseDuration, shownDurationOf } from "./durations.js";
 import type { Duration } from "./durations.js";
 
 describe("parseDuration", () => {
@@ -42,5 +42,18 @@ describe("Duration", () => {
     const inWeeks: Duration = "2w";
 
     expect([spaced, fractional, inWeeks]).toHaveLength(3);
+  });
+});
+
+describe("shownDurationOf", () => {
+  test.each([
+    [1_800_000, "30m"],
+    [10_000, "10s"],
+    [90_000, "90s"],
+    [7_200_000, "2h"],
+    [172_800_000, "2d"],
+    [2500, "2500ms"],
+  ] as const)("shows %i milliseconds as %s", (milliseconds, expectedText) => {
+    expect(shownDurationOf(milliseconds)).toBe(expectedText);
   });
 });

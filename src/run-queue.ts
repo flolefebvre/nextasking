@@ -41,7 +41,7 @@ export type ErrorRecord = {
   failedAt: string;
 };
 
-export type FailureReason = "retries exhausted" | "non-retriable" | "stalled";
+export type FailureReason = "retries exhausted" | "non-retriable" | "stalled" | "unknown task";
 
 export type StoredRun = {
   runId: RunId;
@@ -49,6 +49,7 @@ export type StoredRun = {
   sourceEvent?: SourceEvent;
   scheduledAt?: IsoTimestamp;
   concurrencyKey?: ConcurrencyKey;
+  firstFoundUnknownAt?: IsoTimestamp;
   errors: ErrorRecord[];
   reason?: FailureReason;
   writeToken: WriteToken;
@@ -58,6 +59,7 @@ export type StoredFanOut = {
   eventId: EventId;
   payload: unknown;
   listenerNames: readonly string[];
+  firstFoundUnknownAt?: IsoTimestamp;
   writeToken: WriteToken;
 };
 
@@ -65,7 +67,7 @@ export type StoredFiring = {
   taskName: string;
 };
 
-type IsoTimestamp = string;
+export type IsoTimestamp = string;
 
 export type RunToEnqueue = {
   runId: RunId;

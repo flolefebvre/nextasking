@@ -92,6 +92,10 @@ export type StoredFanOut = {
   writeToken: WriteToken;
 };
 
+function storedFanOutAfterReplay(storedFanOut: StoredFanOut): StoredFanOut {
+  return { ...storedFanOut, firstFoundUnknownAt: undefined };
+}
+
 export type StoredFiring = {
   taskName: string;
 };
@@ -142,6 +146,7 @@ export type RunQueue = {
   enqueueRun: (taskName: string, run: RunToEnqueue) => Promise<EnqueueOutcome>;
   replayRun: (taskName: string, runId: RunId) => Promise<ReplayOutcome>;
   enqueueFanOut: (eventName: string, fanOut: FanOutToEnqueue) => Promise<EnqueueOutcome>;
+  replayFanOut: (eventName: string, eventId: EventId) => Promise<ReplayOutcome>;
   enqueueListenerRuns: (
     eventName: string,
     fanOut: StoredFanOut,
@@ -215,6 +220,7 @@ export function createRunQueue(connection: ConnectionConfig, prefix: string): Ru
     bullmqQueue: queue,
     client,
     replayRun: (taskName, runId) => replayFailedJob(deriveJobId(taskName, runId), storedRunAfterReplay),
+    replayFanOut: (eventName, eventId) => replayFailedJob(deriveJobId(eventName, eventId), storedFanOutAfterReplay),
     enqueueRun: async (taskName, run) => {
       const job = jobForRun(
         taskName,

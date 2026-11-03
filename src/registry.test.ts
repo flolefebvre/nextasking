@@ -637,3 +637,27 @@ describe("replay", () => {
     expectTypeOf(nextasking.replay).returns.resolves.toEqualTypeOf<{ runId: string }>();
   });
 });
+
+describe("replayEvent", () => {
+  test("rejects an unknown event name, listing the valid names, before opening any connection", async () => {
+    const nextasking = createTestNextasking();
+    const networkResourcesBefore = networkResources();
+
+    // @ts-expect-error an unknown event name doesn't compile
+    const replaying = nextasking.replayEvent("invoice.payed", "event-7");
+
+    await expect(replaying).rejects.toThrow(UnknownEventError);
+    await expect(replaying).rejects.toThrow(
+      'Unknown event "invoice.payed". Valid event names: "invoice.paid", "user.signed-up".',
+    );
+    await setImmediate();
+    expect(networkResources()).toEqual(networkResourcesBefore);
+  });
+
+  test("takes an event name and an event id and resolves with the event id", () => {
+    const nextasking = createTestNextasking();
+
+    expectTypeOf(nextasking.replayEvent<"invoice.paid">).parameters.toEqualTypeOf<["invoice.paid", string]>();
+    expectTypeOf(nextasking.replayEvent).returns.resolves.toEqualTypeOf<{ eventId: string }>();
+  });
+});

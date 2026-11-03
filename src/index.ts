@@ -18,6 +18,7 @@ export type {
 export type { EventDefinitionSummary, TaskDefinitionSummary } from "./definition-summaries.js";
 export type { Duration } from "./durations.js";
 export {
+  FanOutNotReplayableError,
   InvalidPayloadError,
   NonRetriableError,
   RunNotReplayableError,
@@ -43,6 +44,7 @@ export type {
   Nextasking,
   NextaskingConfig,
   Register,
+  ReplayedEvent,
   ReplayedRun,
   Run,
   RunCounts,

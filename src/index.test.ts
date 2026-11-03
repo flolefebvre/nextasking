@@ -61,6 +61,7 @@ describe("the root export", () => {
     const exportedNames = Object.keys(root).sort();
 
     expect(exportedNames).toEqual([
+      "FanOutNotReplayableError",
       "InvalidPayloadError",
       "NonRetriableError",
       "RunNotReplayableError",

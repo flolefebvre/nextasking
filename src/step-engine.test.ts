@@ -6,7 +6,7 @@ import { deriveHandlerSendId } from "./ids.js";
 import type { JsonValue } from "./json.js";
 import type { DispatchByName, DispatchOptions, EmitByName, EmitOptions } from "./registry.js";
 import { openStepEngine } from "./step-engine.js";
-import type { StepStore } from "./step-engine.js";
+import type { HandlerOutcome, StepStore } from "./step-engine.js";
 
 const ONE_MEBIBYTE = 1024 * 1024;
 
@@ -48,7 +48,17 @@ function createRecordingSends(): RecordingSends {
   };
 }
 
-function openAttempt(store: StepStore, attempt = 1, recordingSends: RecordingSends = createRecordingSends()) {
+type AttemptControls = {
+  abortSignal?: AbortSignal;
+  isWorkerDraining?: () => boolean;
+};
+
+function openAttempt(
+  store: StepStore,
+  attempt = 1,
+  recordingSends: RecordingSends = createRecordingSends(),
+  { abortSignal = new AbortController().signal, isWorkerDraining = () => false }: AttemptControls = {},
+) {
   return openStepEngine({
     taskName: "send-invoice",
     runId: "run-7",
@@ -56,6 +66,8 @@ function openAttempt(store: StepStore, attempt = 1, recordingSends: RecordingSen
     store,
     dispatch: recordingSends.dispatch,
     emit: recordingSends.emit,
+    abortSignal,
+    isWorkerDraining,
   });
 }
 
@@ -314,6 +326,10 @@ describe("step.run types", () => {
 
 const ONE_HOUR_IN_MILLISECONDS = 60 * 60 * 1000;
 
+function wakeAtOf(outcome: HandlerOutcome): number | undefined {
+  return outcome.kind === "suspended" ? outcome.wakeAt : undefined;
+}
+
 function savedSleep(wakeAt: number, attempt = 1): string {
   return JSON.stringify({ kind: "sleep", wakeAt, attempt });
 }
@@ -324,11 +340,11 @@ describe("step.sleep and step.sleepUntil", () => {
     const { step, executeHandler } = await openAttempt(store, 2);
     const wakeAt = Date.now() + ONE_HOUR_IN_MILLISECONDS;
 
-    const suspendedUntil = await executeHandler(async () => {
+    const outcome = await executeHandler(async () => {
       await step.sleepUntil("wait-for-trial-end", new Date(wakeAt)).catch(() => undefined);
     });
 
-    expect(suspendedUntil).toBe(wakeAt);
+    expect(outcome).toEqual({ kind: "suspended", wakeAt: wakeAt });
     expect(await store.load()).toStrictEqual({ "wait-for-trial-end": savedSleep(wakeAt, 2) });
   });
 
@@ -337,10 +353,10 @@ describe("step.sleep and step.sleepUntil", () => {
     const threeDaysInMilliseconds = 3 * 24 * ONE_HOUR_IN_MILLISECONDS;
     const sleepReachedAt = Date.now();
 
-    const suspendedUntil = await executeHandler(() => step.sleep("cool-down", "3d"));
+    const outcome = await executeHandler(() => step.sleep("cool-down", "3d"));
 
-    expect(suspendedUntil).toBeGreaterThanOrEqual(sleepReachedAt + threeDaysInMilliseconds);
-    expect(suspendedUntil).toBeLessThanOrEqual(Date.now() + threeDaysInMilliseconds);
+    expect(wakeAtOf(outcome)).toBeGreaterThanOrEqual(sleepReachedAt + threeDaysInMilliseconds);
+    expect(wakeAtOf(outcome)).toBeLessThanOrEqual(Date.now() + threeDaysInMilliseconds);
   });
 
   test("returns at once for a time in the past, and still saves it", async () => {
@@ -349,12 +365,12 @@ describe("step.sleep and step.sleepUntil", () => {
     const pastTime = Date.now() - 1000;
     const afterTheSleep = vi.fn();
 
-    const suspendedUntil = await executeHandler(async () => {
+    const outcome = await executeHandler(async () => {
       await step.sleepUntil("wait", new Date(pastTime));
       afterTheSleep();
     });
 
-    expect(suspendedUntil).toBeUndefined();
+    expect(outcome).toEqual({ kind: "completed" });
     expect(afterTheSleep).toHaveBeenCalledOnce();
     expect(await store.load()).toStrictEqual({ wait: savedSleep(pastTime) });
   });
@@ -362,14 +378,14 @@ describe("step.sleep and step.sleepUntil", () => {
   test("takes an ISO date string with Z or an offset", async () => {
     const { step, executeHandler } = await openAttempt(createInMemoryStepStore());
 
-    const suspendedUntil = await executeHandler(async () => {
+    const outcome = await executeHandler(async () => {
       await Promise.all([
         step.sleepUntil("wait-utc", "2999-01-01T00:00:00.000Z"),
         step.sleepUntil("wait-offset", "2999-01-01T00:00:00+01:00"),
       ]);
     });
 
-    expect(suspendedUntil).toBe(Date.parse("2998-12-31T23:00:00.000Z"));
+    expect(outcome).toEqual({ kind: "suspended", wakeAt: Date.parse("2998-12-31T23:00:00.000Z") });
   });
 
   test("returns at once on resume when the saved wake time has passed, whatever the duration says", async () => {
@@ -377,9 +393,9 @@ describe("step.sleep and step.sleepUntil", () => {
     const store = createInMemoryStepStore({ "cool-down": savedSleep(pastWakeAt) });
     const { step, executeHandler } = await openAttempt(store);
 
-    const suspendedUntil = await executeHandler(() => step.sleep("cool-down", "3d"));
+    const outcome = await executeHandler(() => step.sleep("cool-down", "3d"));
 
-    expect(suspendedUntil).toBeUndefined();
+    expect(outcome).toEqual({ kind: "completed" });
     expect(await store.load()).toStrictEqual({ "cool-down": savedSleep(pastWakeAt) });
   });
 
@@ -387,9 +403,9 @@ describe("step.sleep and step.sleepUntil", () => {
     const savedWakeAt = Date.now() + ONE_HOUR_IN_MILLISECONDS;
     const { step, executeHandler } = await openAttempt(createInMemoryStepStore({ wait: savedSleep(savedWakeAt) }));
 
-    const suspendedUntil = await executeHandler(() => step.sleepUntil("wait", new Date(0)));
+    const outcome = await executeHandler(() => step.sleepUntil("wait", new Date(0)));
 
-    expect(suspendedUntil).toBe(savedWakeAt);
+    expect(outcome).toEqual({ kind: "suspended", wakeAt: savedWakeAt });
   });
 
   test("suspends once the steps in flight settle, so their results are saved", async () => {
@@ -403,9 +419,9 @@ describe("step.sleep and step.sleepUntil", () => {
 
     const suspension = executeHandler(async () => {
       await Promise.all([step.run("slow-step", () => slowStepResult), step.sleep("wait", "1h")]);
-    }).then((suspendedUntil) => {
+    }).then((outcome) => {
       isSuspended = true;
-      return suspendedUntil;
+      return outcome;
     });
     await vi.waitFor(async () => {
       expect(await store.load()).toHaveProperty("wait");
@@ -414,7 +430,7 @@ describe("step.sleep and step.sleepUntil", () => {
     finishSlowStep("slow");
 
     expect(isSuspendedBeforeTheSlowStepSettles).toBe(false);
-    expect(await suspension).toBeGreaterThan(Date.now());
+    expect(wakeAtOf(await suspension)).toBeGreaterThan(Date.now());
     expect(await store.load()).toHaveProperty("slow-step", '["slow"]');
   });
 
@@ -422,25 +438,25 @@ describe("step.sleep and step.sleepUntil", () => {
     const { step, executeHandler } = await openAttempt(createInMemoryStepStore());
     const earliestWakeAt = Date.now() + ONE_HOUR_IN_MILLISECONDS;
 
-    const suspendedUntil = await executeHandler(async () => {
+    const outcome = await executeHandler(async () => {
       await Promise.all([
         step.sleepUntil("wait-long", new Date(earliestWakeAt + ONE_HOUR_IN_MILLISECONDS)),
         step.sleepUntil("wait-short", new Date(earliestWakeAt)),
       ]);
     });
 
-    expect(suspendedUntil).toBe(earliestWakeAt);
+    expect(outcome).toEqual({ kind: "suspended", wakeAt: earliestWakeAt });
   });
 
   test("suspends even when the handler goes on to throw another error", async () => {
     const { step, executeHandler } = await openAttempt(createInMemoryStepStore());
 
-    const suspendedUntil = await executeHandler(async () => {
+    const outcome = await executeHandler(async () => {
       await step.sleep("wait", "1h").catch(() => undefined);
       throw new Error("handler error after the sleep");
     });
 
-    expect(suspendedUntil).toBeGreaterThan(Date.now());
+    expect(wakeAtOf(outcome)).toBeGreaterThan(Date.now());
   });
 
   test("lets the handler's own error through when no sleep suspends the run", async () => {
@@ -684,7 +700,121 @@ describe("handler dispatch and emit", () => {
     });
     finishEmit();
 
-    expect(await suspension).toBeGreaterThan(Date.now());
+    expect(wakeAtOf(await suspension)).toBeGreaterThan(Date.now());
     expect(await store.load()).toHaveProperty([topLevelSendId(0)], JSON.stringify({ kind: "emit", eventId: "evt-1" }));
+  });
+});
+
+describe("an aborted attempt", () => {
+  test("throws the abort reason from every step, emit and dispatch, without running or saving any", async () => {
+    const store = createInMemoryStepStore();
+    const recordingSends = createRecordingSends();
+    const abortController = new AbortController();
+    const abortReason = new Error("the attempt lost its lock");
+    const { step, emit, dispatch } = await openAttempt(store, 1, recordingSends, {
+      abortSignal: abortController.signal,
+    });
+    const chargeCard = vi.fn(() => "charged");
+    abortController.abort(abortReason);
+
+    const thrownValues = await Promise.all([
+      step.run("charge-card", chargeCard).catch((error: unknown) => error),
+      step.sleep("cool-down", "1h").catch((error: unknown) => error),
+      step.sleepUntil("follow-up", new Date(0)).catch((error: unknown) => error),
+      emit("invoice.sent", {}).catch((error: unknown) => error),
+      dispatch("send-receipt", {}).catch((error: unknown) => error),
+    ]);
+
+    expect(thrownValues).toStrictEqual([abortReason, abortReason, abortReason, abortReason, abortReason]);
+    expect(chargeCard).not.toHaveBeenCalled();
+    expect(recordingSends.sends).toStrictEqual([]);
+    expect(await store.load()).toStrictEqual({});
+  });
+
+  test("still serves no saved result once aborted, so a replayed step throws too", async () => {
+    const abortController = new AbortController();
+    const abortReason = new Error("the worker reached its shutdown deadline");
+    const { step } = await openAttempt(createInMemoryStepStore({ "charge-card": '["charged"]' }), 2, undefined, {
+      abortSignal: abortController.signal,
+    });
+    abortController.abort(abortReason);
+
+    await expect(step.run("charge-card", () => "charged again")).rejects.toBe(abortReason);
+  });
+});
+
+describe("an attempt in a draining worker", () => {
+  test("yields at its next step once the steps in flight have settled and saved", async () => {
+    const store = createInMemoryStepStore();
+    let isWorkerDraining = false;
+    const { step, executeHandler } = await openAttempt(store, 1, undefined, {
+      isWorkerDraining: () => isWorkerDraining,
+    });
+    let finishSlowStep: (value: string) => void = () => undefined;
+    const slowStepResult = new Promise<string>((resolve) => {
+      finishSlowStep = resolve;
+    });
+    const sendInvoice = vi.fn(() => "sent");
+    let yieldError: unknown;
+    let isOutcomeSettled = false;
+
+    const outcome = executeHandler(async () => {
+      const slowStep = step.run("render-pdf", () => slowStepResult);
+      isWorkerDraining = true;
+      yieldError = await step.run("send-invoice", sendInvoice).catch((error: unknown) => error);
+      await slowStep;
+      await step.run("archive-invoice", () => "archived");
+    }).finally(() => {
+      isOutcomeSettled = true;
+    });
+    await vi.waitFor(() => {
+      expect(yieldError).toBeInstanceOf(Error);
+    });
+    const isOutcomeSettledBeforeTheSlowStep = isOutcomeSettled;
+    finishSlowStep("rendered");
+
+    expect(await outcome).toEqual({ kind: "yielded" });
+    expect(isOutcomeSettledBeforeTheSlowStep).toBe(false);
+    expect(yieldError).toMatchObject({ name: "RunYield" });
+    expect(sendInvoice).not.toHaveBeenCalled();
+    expect(await store.load()).toStrictEqual({ "render-pdf": '["rendered"]' });
+  });
+
+  test("yields at an emit or a dispatch without sending it, even when the handler catches the yield", async () => {
+    const recordingSends = createRecordingSends();
+    const { emit, dispatch, executeHandler } = await openAttempt(createInMemoryStepStore(), 1, recordingSends, {
+      isWorkerDraining: () => true,
+    });
+
+    const outcome = await executeHandler(async () => {
+      await emit("invoice.sent", {}).catch(() => undefined);
+      await dispatch("send-receipt", {});
+    });
+
+    expect(outcome).toEqual({ kind: "yielded" });
+    expect(recordingSends.sends).toStrictEqual([]);
+  });
+
+  test("completes when the handler reaches no step boundary", async () => {
+    const { executeHandler } = await openAttempt(createInMemoryStepStore(), 1, undefined, {
+      isWorkerDraining: () => true,
+    });
+
+    expect(await executeHandler(async () => undefined)).toEqual({ kind: "completed" });
+  });
+
+  test("suspends rather than yields when a sleep came first", async () => {
+    let isWorkerDraining = false;
+    const { step, executeHandler } = await openAttempt(createInMemoryStepStore(), 1, undefined, {
+      isWorkerDraining: () => isWorkerDraining,
+    });
+
+    const outcome = await executeHandler(async () => {
+      await step.sleep("cool-down", "1h").catch(() => undefined);
+      isWorkerDraining = true;
+      await step.run("send-invoice", () => "sent");
+    });
+
+    expect(outcome).toMatchObject({ kind: "suspended" });
   });
 });

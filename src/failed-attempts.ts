@@ -1,5 +1,16 @@
 import { NonRetriableError, StepMisuseError } from "./errors.js";
+import type { RunId } from "./ids.js";
 import type { ErrorRecord, FailureReason } from "./run-queue.js";
+
+export class StalledRunError extends Error {
+  override readonly name = "StalledRunError";
+
+  constructor(runId: RunId, stallCount: number) {
+    super(
+      `Run "${runId}" stalled ${String(stallCount)} times with no step saved in between: each attempt lost its lock, from a crash, a kill or an event loop blocked past the lock duration.`,
+    );
+  }
+}
 
 const NON_RETRIABLE_ERROR_NAMES = new Set(["NonRetriableError", "StepMisuseError"]);
 

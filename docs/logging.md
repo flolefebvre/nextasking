@@ -26,19 +26,25 @@ export const nextasking = createNextasking({
 
 Each message is fixed: filter and alert on it.
 
-| Level   | Message                      | Fields                                                                                                      |
-| ------- | ---------------------------- | ----------------------------------------------------------------------------------------------------------- |
-| `debug` | `run dispatched`             | `task`, `runId`                                                                                             |
-| `debug` | `duplicate dispatch dropped` | `task`, `runId` for a dispatch; `eventName`, `eventId` for an emit                                          |
-| `debug` | `attempt started`            | `task`, `runId`, `attempt`                                                                                  |
-| `debug` | `run suspended`              | `task`, `runId`, `attempt`, `wakeAt`                                                                        |
-| `debug` | `run resumed`                | `task`, `runId`, `attempt`                                                                                  |
-| `info`  | `run completed`              | `task`, `runId`, `attempt`, `runDurationInMilliseconds`, `executionDurationInMilliseconds`                  |
-| `info`  | `worker started`             | none                                                                                                        |
-| `info`  | `worker stopped`             | none                                                                                                        |
-| `warn`  | `no listeners for event`     | `eventName`, `eventId`                                                                                      |
-| `warn`  | `attempt failed`             | `task`, `runId`, `attempt`, `err`, `retriesLeft`, `backoffInMilliseconds`                                   |
-| `error` | `run failed`                 | `task`, `runId`, `attempt`, `err`, `reason`, `runDurationInMilliseconds`, `executionDurationInMilliseconds` |
+| Level   | Message                                                                                                         | Fields                                                                                                      |
+| ------- | --------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `debug` | `run dispatched`                                                                                                | `task`, `runId`                                                                                             |
+| `debug` | `duplicate dispatch dropped`                                                                                    | `task`, `runId` for a dispatch; `eventName`, `eventId` for an emit                                          |
+| `debug` | `attempt started`                                                                                               | `task`, `runId`, `attempt`                                                                                  |
+| `debug` | `run suspended`                                                                                                 | `task`, `runId`, `attempt`, `wakeAt`                                                                        |
+| `debug` | `run resumed`                                                                                                   | `task`, `runId`, `attempt`                                                                                  |
+| `debug` | `run yielded at shutdown`                                                                                       | `task`, `runId`, `attempt`                                                                                  |
+| `debug` | `attempt aborted: lock lost`                                                                                    | `task`, `runId`, `attempt`                                                                                  |
+| `info`  | `run completed`                                                                                                 | `task`, `runId`, `attempt`, `runDurationInMilliseconds`, `executionDurationInMilliseconds`                  |
+| `info`  | `worker started`                                                                                                | none                                                                                                        |
+| `info`  | `worker stopped`                                                                                                | none                                                                                                        |
+| `warn`  | `no listeners for event`                                                                                        | `eventName`, `eventId`                                                                                      |
+| `warn`  | `attempt failed`                                                                                                | `task`, `runId`, `attempt`, `err`, `retriesLeft`, `backoffInMilliseconds`                                   |
+| `warn`  | `attempt stalled`                                                                                               | `task`, `runId`, `attempt`                                                                                  |
+| `warn`  | `attempts aborted at shutdown deadline`                                                                         | none                                                                                                        |
+| `warn`  | `NEXT_MANUAL_SIG_HANDLE is not set: on SIGTERM Next exits at once and cuts the attempts running in this worker` | none                                                                                                        |
+| `error` | `run failed`                                                                                                    | `task`, `runId`, `attempt`, `err`, `reason`, `runDurationInMilliseconds`, `executionDurationInMilliseconds` |
+| `error` | `worker shutdown failed`                                                                                        | `err`                                                                                                       |
 
 - `run dispatched` comes before any attempt, so it has no `attempt`. Every line about an attempt has `task`, `runId` and `attempt`.
 - A listener's run adds `eventName` and `eventId` to each of its lines, the handler's own included.
@@ -46,8 +52,11 @@ Each message is fixed: filter and alert on it.
 - `duplicate dispatch dropped` replaces `run dispatched` when the call repeats a `runId` or an `eventId` still within its dedup window. See [Tasks and events](tasks-and-events.md#the-dedup-window).
 - `run suspended` is written when a sleep suspends the run, with `wakeAt` as an ISO string. `run resumed` replaces `attempt started` when the run is picked up again after it: the attempt is the same. See [Steps](steps.md#sleep-for-minutes-or-days).
 - `runDurationInMilliseconds`: from the dispatch to the completion or the final failure. `executionDurationInMilliseconds`: from the start, or the resume, of the last attempt to its end.
-- `attempt failed` is written only when a retry follows, and `run failed` when the run fails for good: `err` is the attempt's `Error`, `reason` is `"retries exhausted"` or `"non-retriable"`. See [Retries and failures](retries-and-failures.md).
-- `worker started` is written when `startWorker()` has started the worker, before it has reached the server.
+- `attempt failed` is written only when a retry follows, and `run failed` when the run fails for good: `err` is the attempt's `Error`, `reason` is `"retries exhausted"`, `"non-retriable"` or `"stalled"`. See [Retries and failures](retries-and-failures.md).
+- `run completed` is written once the completion is stored: an attempt that lost its lock never writes it.
+- `run yielded at shutdown`, `attempt aborted: lock lost`, `attempt stalled`, `attempts aborted at shutdown deadline`, `worker shutdown failed` and the `NEXT_MANUAL_SIG_HANDLE` warning come from the worker's shutdown and lock handling. See [Worker](worker.md).
+- `attempt stalled` is written by the worker that found the stall, which may be another instance than the one that ran the attempt.
+- `worker started` is written when `startWorker()` has started the worker, before it has reached the server. The `NEXT_MANUAL_SIG_HANDLE` warning, when it applies, comes right after it.
 - Payloads are never logged, at any level.
 
 ## Log from a handler

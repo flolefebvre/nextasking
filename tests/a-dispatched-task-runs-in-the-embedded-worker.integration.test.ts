@@ -41,6 +41,7 @@ integrationTest(
               runId,
               attempt: 1,
               logger: expect.any(Object),
+              abortSignal: expect.objectContaining({ aborted: false }),
             },
           ]);
         },

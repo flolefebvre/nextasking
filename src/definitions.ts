@@ -22,6 +22,7 @@ export type TaskContext<TaskPayload> = {
   runId: RunId;
   attempt: number;
   logger: Logger;
+  abortSignal: AbortSignal;
 };
 
 export type TaskHandler<TaskPayload> = (context: TaskContext<TaskPayload>) => Promise<void>;

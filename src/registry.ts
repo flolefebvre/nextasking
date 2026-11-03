@@ -11,8 +11,14 @@ import { silentLogger } from "./logger.js";
 import type { Logger } from "./logger.js";
 import { createRunQueue } from "./run-queue.js";
 import type { RunQueue } from "./run-queue.js";
-import { startRunWorker } from "./worker-runtime.js";
-import type { RunningWorker } from "./worker-runtime.js";
+import {
+  MISSING_MANUAL_SIGNAL_HANDLING_WARNING,
+  exitOnShutdownSignals,
+  isDevelopment,
+  isSignalHandlingLeftToTheApp,
+} from "./shutdown-signals.js";
+import { startRunWorker, workerOptionsFrom } from "./worker-runtime.js";
+import type { RunningWorker, StartWorkerOptions } from "./worker-runtime.js";
 
 // eslint-disable-next-line @typescript-eslint/no-empty-object-type
 export interface Register {}
@@ -91,7 +97,7 @@ export type Nextasking<Task extends AnyTaskDefinition, Event extends EventDefini
   ) => Promise<EmittedEvent>;
   readonly isTaskName: (name: string) => name is Task["name"];
   readonly isEventName: (name: string) => name is Event["name"];
-  readonly startWorker: () => Promise<void>;
+  readonly startWorker: (options?: StartWorkerOptions) => Promise<void>;
 };
 
 export type NextaskingConfig<
@@ -180,8 +186,9 @@ export function createNextasking<
     emit: emitByName,
     isTaskName: (name): name is Tasks[number]["name"] => tasksByName.has(name),
     isEventName: (name): name is Events[number]["name"] => eventsByName.has(name),
-    startWorker: async () => {
+    startWorker: async (options = {}) => {
       runningWorker = startRunWorker({
+        options: workerOptionsFrom(options),
         connection: config.connection,
         prefix,
         logger,
@@ -191,15 +198,27 @@ export function createNextasking<
         dispatch: dispatchByName,
         emit: emitByName,
       });
+      if (isSignalHandlingLeftToTheApp()) {
+        stopExitingOnShutdownSignals = exitOnShutdownSignals(() => closeInstance({ isDraining: true }), logger);
+      } else if (!isDevelopment()) {
+        logger.warn({}, MISSING_MANUAL_SIGNAL_HANDLING_WARNING);
+      }
     },
   };
 
-  closeByNextasking.set(nextasking, async () => {
-    await runningWorker?.close();
+  let stopExitingOnShutdownSignals: (() => void) | undefined;
+  const closeInstance = async ({ isDraining }: { isDraining: boolean }) => {
+    if (!isDraining) {
+      stopExitingOnShutdownSignals?.();
+      stopExitingOnShutdownSignals = undefined;
+    }
+    await (isDraining ? runningWorker?.shutDown() : runningWorker?.close());
     runningWorker = undefined;
     await runQueue?.close();
     runQueue = undefined;
-  });
+  };
+
+  closeByNextasking.set(nextasking, () => closeInstance({ isDraining: false }));
 
   return nextasking;
 }

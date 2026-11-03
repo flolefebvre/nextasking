@@ -14,6 +14,13 @@
 - Write an integration test with `integrationTest` from `tests/integration-test.ts` rather than `test`: it hands the test `redisUrl` and a `keyPrefix` of its own. Put every key the test touches under that prefix, so tests sharing the server never see each other's keys; never build a prefix in the test.
 - The test opens its own client on `redisUrl`, with an `error` listener attached before it connects, and closes it in a `finally`, so a failed assertion leaves no open handle.
 
+## Worker processes
+
+- Run a worker in a child process, with `startWorkerProcess` from `tests/worker-process.ts`, when the test must signal, SIGKILL or block it, or needs several workers. Never install signal handlers in the Vitest process: the child sets `NEXT_MANUAL_SIG_HANDLE`, the in-process workers don't.
+- The child runs `tests/worker-process-entry.ts` under `tsx`: it applies the `timing` override from `src/worker-timing.ts` (give lock and stall interval 1–2 s), starts the worker with `startWorkerOptions`, and runs the tasks of `tests/worker-process-tasks.ts`. Add a fixture task there; it blocks its own event loop when the test needs it, since a blocked child takes no command.
+- Dispatch from the test with `createWorkerProcessNextasking` (`tests/worker-process-nextasking.ts`). Assert on the child's `logLines`, parsed from its NDJSON stdout into the same shape as `tests/recording-logger.ts`, its `exited` code and signal, and the records its tasks write (`fixtureRecordsOf`, `tests/fixture-records.ts`). `stop()` it in a `finally`.
+- Give a test that waits on stalls or shutdowns its own `timeout`.
+
 ## E2E harness
 
 - The e2e project proves the library the way a consumer uses it: packed, installed by name, bundled by Next, started from `instrumentation.ts`. Its scenarios, its harness and its fixture app live in `tests/e2e/`; the fixture app, `tests/e2e/fixture-app/`, is the manual's example made real, with no `next.config` so that a missing `serverExternalPackages` entry would fail it.
@@ -22,7 +29,7 @@
 - The fixture pins `next` to the floor of the peer range; `NEXTASKING_E2E_NEXT_VERSION` replaces that pin in the copy (`16.4.3`, `latest`). `latest` resolves through pnpm's minimum release age, so it can be one release behind npm's `latest` tag.
 - Write a scenario with `e2eTest` from `tests/e2e/e2e-test.ts`: it hands the test `redisUrl`, `keyPrefix`, `fixtureAppDir` and `fixtureAppEnv`, the environment that points the fixture at that server, under that prefix, with the embedded worker on.
 - Start every process the scenario needs with `startNext` from `tests/e2e/next-process.ts` (`next start` or `next dev`, on a free port, waiting until it answers), and `stop()` it in a `finally`. Scenarios run one file at a time.
-- Assert on what a consumer observes: HTTP responses, the process output, and the records the fixture's tasks write under the scenario's prefix (`fixtureRecordsOf`). Drive a server action as a browser without JavaScript does, with `submitServerActionForm`.
+- Assert on what a consumer observes: HTTP responses, the process output, and the records the fixture's tasks write under the scenario's prefix (`fixtureRecordsOf` from `tests/fixture-records.ts`). Drive a server action as a browser without JavaScript does, with `submitServerActionForm`.
 - Run the project alone with `pnpm build`, then `pnpm test:e2e`; it needs Docker, unless `NEXTASKING_TEST_REDIS_URL` is set, and the npm registry.
 
 ## Waiting

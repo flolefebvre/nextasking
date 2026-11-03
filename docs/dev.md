@@ -33,10 +33,10 @@ pnpm dev
 
 ## What Ctrl-C does to the attempt in flight
 
-On Ctrl-C, `next dev` forwards the signal to its server process and kills it 100 ms later. An attempt in flight is cut where it stands: no drain, no step boundary.
+On Ctrl-C, `next dev` forwards the signal to its server process and kills it 100 ms later. An attempt in flight is cut where it stands: no drain, no step boundary, even with `NEXT_MANUAL_SIG_HANDLE` set. That is why the worker doesn't warn about the variable under `next dev`.
 
-- The cut attempt comes back as stalled once its lock expires (30 s) and a stall check runs (every 30 s): within about a minute, in the next dev server that starts on the same prefix.
-- It counts as one stall. A run allows one: a run cut a second time fails for good with `job stalled more than allowable limit`, whatever retries it has left.
+- The cut attempt comes back as stalled once its lock expires (2 minutes) and a stall check finds it (one runs every 30 seconds): within about three minutes, in the next dev server that starts on the same prefix.
+- It counts as one stall. The third stall with no step saved in between fails the run for good with `reason: "stalled"`, whatever retries it has left. See [Worker](worker.md#stalls).
 - Next's own restarts cut it the same way: an edit to `next.config`, or the dev overlay's restart button.
 - To keep a long run safe across restarts, put its side effects in steps: the next attempt reuses what they saved. See [Steps](steps.md).
 

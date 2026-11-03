@@ -1,6 +1,6 @@
 import { expect, vi } from "vitest";
 
-import { fixtureRecordsOf } from "./fixture-records.js";
+import { fixtureRecordsOf } from "../fixture-records.js";
 
 export async function postWelcomeEmail(appUrl: string, email: string): Promise<Response> {
   return fetch(`${appUrl}/api/welcome-emails`, {

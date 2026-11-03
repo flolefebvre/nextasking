@@ -36,3 +36,4 @@ export type {
 } from "./registry.js";
 export type { StandardSchemaV1 } from "./standard-schema.js";
 export type { StepContext, StepTools } from "./step-engine.js";
+export type { StartWorkerOptions } from "./worker-runtime.js";

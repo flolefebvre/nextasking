@@ -201,4 +201,5 @@ import { StepMisuseError } from "@flefebvre/nextasking";
 - Saved steps, wake times and sent calls live in Redis next to the run, under the instance's `prefix`.
 - They are removed when the run completes.
 - A run that fails for good keeps its saved steps for as long as the run is kept: 14 days. See [Retries and failures](retries-and-failures.md#what-a-failed-run-keeps).
-- Only the attempt that currently owns the run can save a step. If another attempt has taken the run over, the next `step.run` of the old attempt throws and saves nothing.
+- Only the attempt that currently owns the run can save a step. If another attempt has taken the run over, the next `step.run` of the old attempt throws and saves nothing, and its `abortSignal` aborts. See [Worker](worker.md#stop-a-handler-cleanly-with-abortsignal).
+- Each saved step resets the run's stall count. See [Worker](worker.md#stalls).

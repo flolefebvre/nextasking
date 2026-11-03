@@ -26,6 +26,13 @@ Events and background tasks for a Next.js app, on BullMQ with Redis or Valkey. D
 | Write a duration                                  | [Tasks and events](tasks-and-events.md)         |
 | Fix an error `createNextasking` throws at startup | [Tasks and events](tasks-and-events.md)         |
 | Start the embedded worker                         | [Tasks and events](tasks-and-events.md)         |
+| Pass `startWorker` options                        | [Worker](worker.md)                             |
+| Cap the attempts in flight with `concurrency`     | [Worker](worker.md)                             |
+| Let a deploy finish running attempts              | [Worker](worker.md)                             |
+| Stop a handler cleanly with `abortSignal`         | [Worker](worker.md)                             |
+| Know what a stall is and when a run fails stalled | [Worker](worker.md)                             |
+| Pick the Valkey or Redis for the queues           | [Worker](worker.md)                             |
+| Configure webpack with `serverExternalPackages`   | [Worker](worker.md)                             |
 | Make a side effect run once across retries        | [Steps](steps.md)                               |
 | Name steps, in a loop too                         | [Steps](steps.md)                               |
 | Return a step result that compiles                | [Steps](steps.md)                               |
@@ -72,6 +79,7 @@ import type {
   Logger,
   Register,
   RunId,
+  StartWorkerOptions,
   StepContext,
   StepTools,
   TaskContext,
@@ -101,6 +109,7 @@ import type {
 | `Logger`              | The type of the `logger` option and of the handler's `logger`                                     |
 | `Register`            | The interface you augment with your instance's type; it types names and a handler's calls         |
 | `RunId`               | The type of a run id: a string                                                                    |
+| `StartWorkerOptions`  | The type of `startWorker`'s argument: `concurrency` and `shutdownTimeout`                         |
 | `StepContext`         | The type of the object a step's `fn` receives: `idempotencyKey`                                   |
 | `StepTools`           | The type of the handler's `step`: `step.run`, `step.sleep` and `step.sleepUntil`                  |
 | `TaskContext`         | The type of the object a handler receives                                                         |

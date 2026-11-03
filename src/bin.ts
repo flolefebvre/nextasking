@@ -38,11 +38,13 @@ async function loadNextServerFactory(appDir: string): Promise<NextServerFactory>
 
 async function runWorker(appDir: string): Promise<void> {
   const standaloneConfig = standaloneConfigOf(appDir);
-  if (standaloneConfig !== undefined) {
+  if (standaloneConfig === undefined) {
+    process.env.NODE_ENV ??= "production";
+  } else {
     process.env.__NEXT_PRIVATE_STANDALONE_CONFIG = standaloneConfig;
+    process.env.NODE_ENV = "production";
   }
   process.env.NEXT_MANUAL_SIG_HANDLE = "1";
-  process.env.NODE_ENV ??= "production";
   const next = await loadNextServerFactory(appDir);
   await next({ dev: false, dir: appDir }).prepare();
   if (!hasStartWorkerBeenCalled()) {

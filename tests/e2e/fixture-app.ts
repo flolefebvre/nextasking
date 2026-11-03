@@ -20,7 +20,9 @@ const COMMAND_OUTPUT_LIMIT_IN_BYTES = 64 * 1024 * 1024;
 
 export const NEXT_TELEMETRY_ENV = { NEXT_TELEMETRY_DISABLED: "1" };
 
-export type PreparedFixtureApp = { fixtureAppDir: string; remove: () => Promise<void> };
+const STANDALONE_BUILD_ENV = { NEXTASKING_E2E_STANDALONE: "1" };
+
+export type PreparedFixtureApp = { fixtureAppDir: string; standaloneAppDir: string; remove: () => Promise<void> };
 
 export function fixtureNextVersion(env: NodeJS.ProcessEnv = process.env): string | undefined {
   return env.NEXTASKING_E2E_NEXT_VERSION?.trim() || undefined;
@@ -30,11 +32,17 @@ export function nextBinOf(fixtureAppDir: string): string {
   return join(fixtureAppDir, "node_modules", ".bin", "next");
 }
 
-async function runInDir(dir: string, command: string, args: string[], failure: string): Promise<void> {
+async function runInDir(
+  dir: string,
+  command: string,
+  args: string[],
+  failure: string,
+  env: Record<string, string> = {},
+): Promise<void> {
   try {
     await runFile(command, args, {
       cwd: dir,
-      env: { ...process.env, ...NEXT_TELEMETRY_ENV },
+      env: { ...process.env, ...env, ...NEXT_TELEMETRY_ENV },
       maxBuffer: COMMAND_OUTPUT_LIMIT_IN_BYTES,
     });
   } catch (error) {
@@ -54,8 +62,11 @@ export async function prepareFixtureApp(): Promise<PreparedFixtureApp> {
   if (!existsSync(join(REPO_ROOT_DIR, "dist"))) {
     throw new Error("dist/ is missing: the e2e project installs the packed package, run `pnpm build` first.");
   }
-  const fixtureAppDir = await mkdtemp(join(tmpdir(), "nextasking-e2e-"));
-  const remove = () => rm(fixtureAppDir, { recursive: true, force: true });
+  const preparedDir = await mkdtemp(join(tmpdir(), "nextasking-e2e-"));
+  const fixtureAppDir = join(preparedDir, "app");
+  const standaloneBuildDir = join(preparedDir, "standalone-build");
+  const standaloneAppDir = join(preparedDir, "standalone");
+  const remove = () => rm(preparedDir, { recursive: true, force: true });
   try {
     await cp(FIXTURE_APP_SOURCE_DIR, fixtureAppDir, {
       recursive: true,
@@ -72,10 +83,23 @@ export async function prepareFixtureApp(): Promise<PreparedFixtureApp> {
       await pinNextVersion(fixtureAppDir, nextVersion);
     }
     await runInDir(fixtureAppDir, "pnpm", ["install"], "the fixture app failed to install");
+    await cp(fixtureAppDir, standaloneBuildDir, { recursive: true, verbatimSymlinks: true });
     await runInDir(fixtureAppDir, nextBinOf(fixtureAppDir), ["build"], "the fixture app failed to build");
+    await runInDir(
+      standaloneBuildDir,
+      nextBinOf(standaloneBuildDir),
+      ["build"],
+      "the fixture app failed to build with standalone output",
+      STANDALONE_BUILD_ENV,
+    );
+    await cp(join(standaloneBuildDir, ".next", "standalone"), standaloneAppDir, {
+      recursive: true,
+      verbatimSymlinks: true,
+    });
+    await rm(standaloneBuildDir, { recursive: true, force: true });
   } catch (error) {
     await remove();
     throw error;
   }
-  return { fixtureAppDir, remove };
+  return { fixtureAppDir, standaloneAppDir, remove };
 }

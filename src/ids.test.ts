@@ -2,6 +2,7 @@ import { describe, expect, test } from "vitest";
 
 import {
   createRandomId,
+  deriveFailureNoticeEventId,
   deriveFiringRunId,
   deriveHandlerSendId,
   deriveJobId,
@@ -64,6 +65,24 @@ describe("deriveFiringRunId", () => {
     expect(deriveFiringRunId("purge-expired-sessions", plannedInstant + 1000)).not.toBe(runId);
     expect(deriveFiringRunId("send-digest", plannedInstant)).not.toBe(runId);
     expect(deriveListenerRunId(String(plannedInstant), "purge-expired-sessions")).not.toBe(runId);
+  });
+});
+
+describe("deriveFailureNoticeEventId", () => {
+  test("derives the same version 5 UUID from the same definition name, id and failure number", () => {
+    const eventId = deriveFailureNoticeEventId("sync-account", "run-1", 1);
+
+    expect(eventId).toBe(deriveFailureNoticeEventId("sync-account", "run-1", 1));
+    expect(eventId).toMatch(NAME_BASED_UUID);
+  });
+
+  test("derives a different event id for another failure, another run or another definition", () => {
+    const eventId = deriveFailureNoticeEventId("sync-account", "run-1", 1);
+
+    expect(deriveFailureNoticeEventId("sync-account", "run-1", 2)).not.toBe(eventId);
+    expect(deriveFailureNoticeEventId("sync-account", "run-2", 1)).not.toBe(eventId);
+    expect(deriveFailureNoticeEventId("invoice.paid", "run-1", 1)).not.toBe(eventId);
+    expect(deriveJobId("sync-account", "run-1")).not.toBe(eventId);
   });
 });
 

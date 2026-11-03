@@ -10,8 +10,8 @@ import type { DurationInMilliseconds, EpochMilliseconds } from "./durations.js";
 import { saveRunDataIfLockIsHeld } from "./job-lock.js";
 import type { Logger } from "./logger.js";
 import { keepSavedStepsForFailedRunRetention } from "./redis-step-store.js";
-import { storedRunAfterFinalFailure } from "./run-queue.js";
-import type { FailureReason, StoredRun } from "./run-queue.js";
+import { storedFanOutAfterFinalFailure, storedRunAfterFinalFailure } from "./run-queue.js";
+import type { FailureReason, StoredFanOut, StoredRun } from "./run-queue.js";
 
 export const NO_RETRY: DurationInMilliseconds = -1;
 
@@ -94,6 +94,12 @@ export async function recordFinalFailure(
     { err: error, reason, ...runDurationFieldsOf(job, executionStartedAt, failedAt.getTime()) },
     "run failed",
   );
+}
+
+export async function recordFanOutFailure(job: Job<StoredFanOut>, error: Error, logger: Logger): Promise<void> {
+  const failedAt = new Date(job.finishedOn ?? Date.now());
+  await job.updateData(storedFanOutAfterFinalFailure(job.data, errorRecordFor(error, job.attemptsMade, failedAt)));
+  logger.error({ eventName: job.name, eventId: job.data.eventId, err: error }, "fan-out failed");
 }
 
 export async function recordRunFailedForStalling(

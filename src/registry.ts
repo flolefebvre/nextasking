@@ -25,7 +25,8 @@ import { eventDefinitionSummariesOf, taskDefinitionSummariesOf } from "./definit
 import type { EventDefinitionSummary, TaskDefinitionSummary } from "./definition-summaries.js";
 import { createRunQueue } from "./run-queue.js";
 import type { RunState } from "./run-states.js";
-import type { RunQueue } from "./run-queue.js";
+import type { EnqueueOutcome, RunQueue } from "./run-queue.js";
+import type { SendBuiltInEvent } from "./failure-notices.js";
 import { rejectInvalidSchedule, timezoneOf } from "./schedules.js";
 import {
   MISSING_MANUAL_SIGNAL_HANDLING_WARNING,
@@ -248,20 +249,29 @@ export function createNextasking<
     }
     const eventId = consumerFacingIdOrRandomId("event", event.name, "eventId", options.eventId);
     const validatedPayload = await validatePayload("event", event, payload);
-    const listenerNames = listenerNamesByEventName.get(event.name) ?? [];
-    if (listenerNames.length === 0) {
+    const fanOutEnqueueing = await enqueueFanOutToListeners(event.name, eventId, validatedPayload);
+    if (fanOutEnqueueing === "no listeners") {
       logger.warn({ eventName: event.name, eventId }, "no listeners for event");
-      return { eventId };
-    }
-    const { isDuplicate } = await openRunQueue().enqueueFanOut(event.name, {
-      eventId,
-      payload: validatedPayload,
-      listenerNames,
-    });
-    if (isDuplicate) {
+    } else if (fanOutEnqueueing.isDuplicate) {
       logger.debug({ eventName: event.name, eventId }, "duplicate dispatch dropped");
     }
     return { eventId };
+  };
+
+  const enqueueFanOutToListeners = async (
+    eventName: string,
+    eventId: EventId,
+    validatedPayload: unknown,
+  ): Promise<EnqueueOutcome | "no listeners"> => {
+    const listenerNames = listenerNamesByEventName.get(eventName) ?? [];
+    if (listenerNames.length === 0) {
+      return "no listeners";
+    }
+    return openRunQueue().enqueueFanOut(eventName, { eventId, payload: validatedPayload, listenerNames });
+  };
+
+  const sendBuiltInEvent: SendBuiltInEvent = async (eventName, eventId, payload) => {
+    await enqueueFanOutToListeners(eventName, eventId, payload);
   };
 
   const replay = async (name: string, runId: RunId): Promise<ReplayedRun> => {
@@ -319,6 +329,7 @@ export function createNextasking<
         openRunQueue,
         dispatch: dispatchByName,
         emit: emitByName,
+        sendBuiltInEvent,
       });
       if (isSignalHandlingLeftToTheApp()) {
         stopExitingOnShutdownSignals = exitOnShutdownSignals(() => closeInstance({ isDraining: true }), logger);

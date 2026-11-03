@@ -61,6 +61,7 @@ export type StoredRun = {
   errors: ErrorRecord[];
   reason?: FailureReason;
   failureCount?: number;
+  notifiedFailureCount?: number;
   delayedRunState?: StoredDelayedRunState;
   writeToken: WriteToken;
 };
@@ -89,11 +90,22 @@ export type StoredFanOut = {
   payload: unknown;
   listenerNames: readonly string[];
   firstFoundUnknownAt?: IsoTimestamp;
+  finalError?: ErrorRecord;
+  failureCount?: number;
+  notifiedFailureCount?: number;
   writeToken: WriteToken;
 };
 
+export function storedFanOutAfterFinalFailure(storedFanOut: StoredFanOut, finalError: ErrorRecord) {
+  return {
+    ...storedFanOut,
+    finalError,
+    failureCount: (storedFanOut.failureCount ?? 0) + 1,
+  } satisfies StoredFanOut;
+}
+
 function storedFanOutAfterReplay(storedFanOut: StoredFanOut): StoredFanOut {
-  return { ...storedFanOut, firstFoundUnknownAt: undefined };
+  return { ...storedFanOut, firstFoundUnknownAt: undefined, finalError: undefined };
 }
 
 export type StoredFiring = {

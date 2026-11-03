@@ -19,11 +19,14 @@ import type { Duration, DurationInMilliseconds, EpochMilliseconds } from "./dura
 import {
   NO_RETRY,
   recordFailedAttempt,
+  recordFanOutFailure,
   recordFinalFailure,
   recordRunFailedForStalling,
   runDurationFieldsOf,
 } from "./failure-recording.js";
 import type { RunDurationFields } from "./failure-recording.js";
+import { sendFailureNotice } from "./failure-notices.js";
+import type { SendBuiltInEvent } from "./failure-notices.js";
 import { deriveFiringRunId } from "./ids.js";
 import type { RunId } from "./ids.js";
 import { LostRunLockError, runDataDescriptionOf, saveRunDataIfLockIsHeld } from "./job-lock.js";
@@ -83,6 +86,7 @@ export type WorkerConfig = {
   openRunQueue: () => RunQueue;
   dispatch: DispatchByName;
   emit: EmitByName;
+  sendBuiltInEvent: SendBuiltInEvent;
 };
 
 type AnyTaskHandler = (context: TaskContext<unknown> | ScheduledTaskContext) => Promise<void>;
@@ -501,9 +505,17 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
   worker.on("stalled", (jobId) => {
     logAttemptStalled(jobId).catch(() => undefined);
   });
+  const recordFinalFailureOfJob = async (job: Job, error: Error) => {
+    if ("listenerNames" in (job.data as object)) {
+      await recordFanOutFailure(job as Job<StoredFanOut>, error, config.logger);
+    } else if (error.message === STALL_LIMIT_FAILED_REASON && config.tasksByName.has(job.name)) {
+      await failRunForStalling(job as Job<StoredRun>);
+    }
+    await sendFailureNotice(client, job, config.sendBuiltInEvent);
+  };
   worker.on("failed", (job, error) => {
-    if (job !== undefined && error.message === STALL_LIMIT_FAILED_REASON && config.tasksByName.has(job.name)) {
-      failRunForStalling(job as Job<StoredRun>).catch(() => undefined);
+    if (job !== undefined && typeof job.finishedOn === "number") {
+      recordFinalFailureOfJob(job, error).catch(() => undefined);
     }
   });
   config.logger.info({}, "worker started");

@@ -28,6 +28,13 @@ export function createRecordingLogger(): { logger: Logger; lines: RecordedLogLin
   };
 }
 
+export function expectOneConnectionErrorAndOneConnectionRestored(lines: readonly RecordedLogLine[]): void {
+  expect(lines.filter((line) => line.message.startsWith("connection "))).toEqual([
+    { level: "error", fields: { err: expect.any(Error) }, message: "connection error" },
+    { level: "info", fields: {}, message: "connection restored" },
+  ]);
+}
+
 export async function waitForLogMessage(
   lines: readonly RecordedLogLine[],
   message: string,

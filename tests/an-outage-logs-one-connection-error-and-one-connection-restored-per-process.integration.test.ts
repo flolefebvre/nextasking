@@ -3,7 +3,11 @@ import { expect, vi } from "vitest";
 import { closeNextasking } from "../src/registry.js";
 import { createGiveUpAfterOneSecondNextasking } from "./give-up-after-one-second-nextasking.js";
 import { integrationTest } from "./integration-test.js";
-import { createRecordingLogger, waitForLogMessage } from "./recording-logger.js";
+import {
+  createRecordingLogger,
+  expectOneConnectionErrorAndOneConnectionRestored,
+  waitForLogMessage,
+} from "./recording-logger.js";
 import { startTcpProxy } from "./tcp-proxy.js";
 
 const OUTAGE_DURATION_IN_MILLISECONDS = 3_000;
@@ -31,11 +35,7 @@ integrationTest(
       await nextasking.dispatch("send-welcome-email", { email: "grace@example.com" });
       await vi.waitFor(() => expect(completedEmails).toContain("grace@example.com"), { timeout: 10_000 });
 
-      const connectionLines = lines.filter((line) => line.message.startsWith("connection "));
-      expect(connectionLines).toEqual([
-        { level: "error", fields: { err: expect.any(Error) }, message: "connection error" },
-        { level: "info", fields: {}, message: "connection restored" },
-      ]);
+      expectOneConnectionErrorAndOneConnectionRestored(lines);
       expect(lines.filter((line) => line.message === "queue error" || line.message === "worker error")).toEqual([]);
     } finally {
       await closeNextasking(nextasking);

@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { connect, createServer } from "node:net";
 import type { AddressInfo, Server, Socket } from "node:net";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -7,6 +8,7 @@ export type TcpProxy = {
   cut: () => Promise<void>;
   restore: () => Promise<void>;
   cutFor: (outageDurationInMilliseconds: number) => Promise<void>;
+  cutBeforeReplyTo: (isRequestToCut: (request: string) => boolean) => Promise<void>;
   stop: () => Promise<void>;
 };
 
@@ -31,10 +33,20 @@ async function closeListener(server: Server): Promise<void> {
   await new Promise<void>((resolve) => server.close(() => resolve()));
 }
 
+function echoCommandOf(text: string): string {
+  return `*2\r\n$4\r\nECHO\r\n$${Buffer.byteLength(text)}\r\n${text}\r\n`;
+}
+
+type ArmedReplyCut = {
+  isRequestToCut: (request: string) => boolean;
+  markCut: () => void;
+};
+
 export async function startTcpProxy(targetUrl: string): Promise<TcpProxy> {
   const target = new URL(targetUrl);
   const targetPort = target.port === "" ? DEFAULT_REDIS_PORT : Number(target.port);
   const liveSockets = new Set<Socket>();
+  let armedReplyCut: ArmedReplyCut | undefined;
 
   const track = (socket: Socket) => {
     liveSockets.add(socket);
@@ -44,6 +56,19 @@ export async function startTcpProxy(targetUrl: string): Promise<TcpProxy> {
     if (!socket.destroyed) {
       socket.resetAndDestroy();
     }
+  };
+
+  const cutOnceRepliesArrive = (targetSocket: Socket, { markCut }: ArmedReplyCut) => {
+    const lastReplyMarker = `tcp-proxy-last-reply-${randomUUID()}`;
+    let repliesSinceCut = "";
+    targetSocket.on("data", (reply: Buffer) => {
+      repliesSinceCut += reply.toString();
+      if (repliesSinceCut.includes(lastReplyMarker)) {
+        void cut().then(markCut);
+      }
+    });
+    targetSocket.resume();
+    targetSocket.write(echoCommandOf(lastReplyMarker));
   };
 
   const server = createServer((clientSocket) => {
@@ -56,6 +81,15 @@ export async function startTcpProxy(targetUrl: string): Promise<TcpProxy> {
     targetSocket.on("close", () => reset(clientSocket));
     clientSocket.pipe(targetSocket);
     targetSocket.pipe(clientSocket);
+    clientSocket.on("data", (request: Buffer) => {
+      const replyCut = armedReplyCut;
+      if (replyCut?.isRequestToCut(request.toString()) === true) {
+        armedReplyCut = undefined;
+        clientSocket.unpipe(targetSocket);
+        targetSocket.unpipe(clientSocket);
+        cutOnceRepliesArrive(targetSocket, replyCut);
+      }
+    });
   });
   await listen(server, 0);
   const proxyPort = (server.address() as AddressInfo).port;
@@ -85,6 +119,10 @@ export async function startTcpProxy(targetUrl: string): Promise<TcpProxy> {
       await sleep(outageDurationInMilliseconds);
       await restore();
     },
+    cutBeforeReplyTo: (isRequestToCut) =>
+      new Promise<void>((markCut) => {
+        armedReplyCut = { isRequestToCut, markCut };
+      }),
     stop: cut,
   };
 }

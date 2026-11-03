@@ -100,7 +100,7 @@ export type ListedScheduleOf<TaskName extends string> = {
 };
 
 export type QueueReaderConfig = {
-  openRunQueue: () => RunQueue;
+  openRunQueue: () => Promise<RunQueue>;
   tasksByName: ReadonlyMap<string, AnyTaskDefinition>;
   listenerNamesByEventName: ReadonlyMap<string, readonly string[]>;
   declaredSchedules: readonly DeclaredSchedule[];
@@ -233,7 +233,7 @@ export function createQueueReader(config: QueueReaderConfig): QueueReader {
     jobIds: readonly JobId[],
     fieldNames: readonly string[],
   ): Promise<{ jobKey: string; fieldValues: JobFieldValues }[]> => {
-    const { bullmqQueue, client } = config.openRunQueue();
+    const { bullmqQueue, client } = await config.openRunQueue();
     const jobKeys = jobIds.map((jobId) => bullmqQueue.toKey(jobId));
     const pipeline = client.pipeline();
     for (const jobKey of jobKeys) {
@@ -255,7 +255,7 @@ export function createQueueReader(config: QueueReaderConfig): QueueReader {
     });
 
   const jobIdsIn = async (set: BullmqJobSet, offset: number): Promise<JobId[]> =>
-    config.openRunQueue().bullmqQueue.getRanges([set], offset, offset + JOBS_READ_PER_BATCH - 1, false);
+    (await config.openRunQueue()).bullmqQueue.getRanges([set], offset, offset + JOBS_READ_PER_BATCH - 1, false);
 
   const forEachBatchOfJobIds = async (
     set: BullmqJobSet,
@@ -275,7 +275,7 @@ export function createQueueReader(config: QueueReaderConfig): QueueReader {
 
   const getRun: QueueReader["getRun"] = async (taskName, runId) => {
     rejectUnknownTask(taskName);
-    const { bullmqQueue, client } = config.openRunQueue();
+    const { bullmqQueue, client } = await config.openRunQueue();
     const jobId = deriveJobId(taskName, runId);
     const [[record], bullmqState] = await Promise.all([readRunJobRecords([jobId]), bullmqQueue.getJobState(jobId)]);
     const runSummary = record === undefined ? undefined : runSummaryOf(record, bullmqState);
@@ -358,7 +358,7 @@ export function createQueueReader(config: QueueReaderConfig): QueueReader {
         throw new UnknownEventError(eventName, [...config.listenerNamesByEventName.keys()]);
       }
       const [fanOutBullmqState, ...listenerRuns] = await Promise.all([
-        config.openRunQueue().bullmqQueue.getJobState(deriveJobId(eventName, eventId)),
+        (await config.openRunQueue()).bullmqQueue.getJobState(deriveJobId(eventName, eventId)),
         ...listenerNames.map((listenerName) => getRun(listenerName, deriveListenerRunId(eventId, listenerName))),
       ]);
       return {
@@ -372,7 +372,7 @@ export function createQueueReader(config: QueueReaderConfig): QueueReader {
     },
 
     listSchedules: async () => {
-      const storedSchedulers = await config.openRunQueue().bullmqQueue.getJobSchedulers(0, -1);
+      const storedSchedulers = await (await config.openRunQueue()).bullmqQueue.getJobSchedulers(0, -1);
       const storedSchedulersByTaskName = new Map(storedSchedulers.map((scheduler) => [scheduler.key, scheduler]));
       return config.declaredSchedules.map((declaredSchedule) => {
         const { taskName, cron, timezone } = declaredSchedule;

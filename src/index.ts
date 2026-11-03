@@ -19,10 +19,19 @@ export type {
 } from "./definitions.js";
 export type { EventDefinitionSummary, TaskDefinitionSummary } from "./definition-summaries.js";
 export type { Duration } from "./durations.js";
+export type {
+  DispatchedRun,
+  DispatchOptions,
+  EmitOptions,
+  EmittedEvent,
+  ReplayedEvent,
+  ReplayedRun,
+} from "./enqueuer.js";
 export {
   FanOutNotReplayableError,
   InvalidPayloadError,
   NonRetriableError,
+  RedisUnavailableError,
   RunNotReplayableError,
   StepMisuseError,
   UnknownEventError,
@@ -34,10 +43,6 @@ export type { Logger } from "./logger.js";
 export type { FanOutState, PreviousFiring, RunError } from "./queue-reader.js";
 export { createNextasking } from "./registry.js";
 export type {
-  DispatchedRun,
-  DispatchOptions,
-  EmitOptions,
-  EmittedEvent,
   EventName,
   EventWithRuns,
   ListedRun,
@@ -46,8 +51,6 @@ export type {
   Nextasking,
   NextaskingConfig,
   Register,
-  ReplayedEvent,
-  ReplayedRun,
   Run,
   RunCounts,
   RunPage,

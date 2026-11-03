@@ -10,8 +10,6 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { UnknownTaskRunError } from "./attempt-errors.js";
 import { createConcurrencySlots } from "./concurrency-slots.js";
 import type { ConcurrencySlot } from "./concurrency-slots.js";
-import { closeRedisClient, createRedisClient } from "./connection.js";
-import type { ConnectionConfig } from "./connection.js";
 import { concurrencyKeyOf, retriesOf } from "./definitions.js";
 import type { AnyTaskDefinition, EventDefinition, ScheduledTaskContext, TaskContext } from "./definitions.js";
 import { parseDuration, shownDurationOf } from "./durations.js";
@@ -33,7 +31,7 @@ import { LostRunLockError, runDataDescriptionOf, saveRunDataIfLockIsHeld } from 
 import { loggerWithFields } from "./logger.js";
 import type { Logger } from "./logger.js";
 import { createRedisStepStore, removeSavedSteps } from "./redis-step-store.js";
-import type { DispatchByName, EmitByName } from "./registry.js";
+import type { DispatchByName, EmitByName } from "./enqueuer.js";
 import { FIRING_JOB_NAME, RUN_QUEUE_NAME, plannedInstantOfFiring, scheduledAtOf } from "./run-queue.js";
 import type { RunQueue, StoredDelayedRunState, StoredFanOut, StoredFiring, StoredRun } from "./run-queue.js";
 import { attemptOf } from "./run-states.js";
@@ -78,12 +76,11 @@ export function workerOptionsFrom(options: StartWorkerOptions): WorkerOptions {
 
 export type WorkerConfig = {
   options: WorkerOptions;
-  connection: ConnectionConfig;
+  runQueue: RunQueue;
   prefix: string;
   logger: Logger;
   tasksByName: ReadonlyMap<string, AnyTaskDefinition>;
   eventsByName: ReadonlyMap<string, EventDefinition>;
-  openRunQueue: () => RunQueue;
   dispatch: DispatchByName;
   emit: EmitByName;
   sendBuiltInEvent: SendBuiltInEvent;
@@ -94,8 +91,6 @@ type AnyTaskHandler = (context: TaskContext<unknown> | ScheduledTaskContext) => 
 const STALL_LIMIT_FAILED_REASON = "job stalled more than allowable limit";
 
 const LOCK_ERROR_CODES = new Set<unknown>([ErrorCode.JobLockNotExist, ErrorCode.JobLockMismatch]);
-
-let isWorkerRunningInThisProcess = false;
 
 async function moveRunToDelayed(
   client: Redis,
@@ -121,7 +116,7 @@ async function yieldAtShutdown(job: Job, token: string | undefined, runLogger: L
   throw new WaitingError();
 }
 
-async function isSettledWithin(settlement: Promise<void>, timeoutInMilliseconds: DurationInMilliseconds) {
+export async function isSettledWithin(settlement: Promise<void>, timeoutInMilliseconds: DurationInMilliseconds) {
   let timeoutTimer: NodeJS.Timeout | undefined;
   const timeoutExpiry = new Promise<false>((resolve) => {
     timeoutTimer = setTimeout(() => {
@@ -136,11 +131,6 @@ async function isSettledWithin(settlement: Promise<void>, timeoutInMilliseconds:
 }
 
 export function startRunWorker(config: WorkerConfig): RunningWorker {
-  if (isWorkerRunningInThisProcess) {
-    throw new Error("The nextasking worker is already started in this process");
-  }
-  isWorkerRunningInThisProcess = true;
-
   const backoffInMillisecondsByFailedJob = new WeakMap<MinimalJob, DurationInMilliseconds>();
   const durationFieldsByCompletedJob = new WeakMap<MinimalJob, RunDurationFields>();
 
@@ -349,7 +339,7 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
   };
 
   const timing = workerTiming();
-  const client = createRedisClient(config.connection, "worker");
+  const { client } = config.runQueue;
   const attemptSettlements = new Set<Promise<void>>();
   const trackSettlement = (execution: Promise<void>): Promise<void> => {
     const settlement = execution.then(
@@ -390,7 +380,7 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
       );
       return;
     }
-    await config.openRunQueue().enqueueRun(taskName, {
+    await config.runQueue.enqueueRun(taskName, {
       runId: deriveFiringRunId(taskName, plannedInstant),
       payload: undefined,
       retries: retriesOf(task),
@@ -404,7 +394,7 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
     }
     if (config.eventsByName.has(job.name)) {
       const fanOut = job.data as StoredFanOut;
-      await config.openRunQueue().enqueueListenerRuns(
+      await config.runQueue.enqueueListenerRuns(
         job.name,
         fanOut,
         fanOut.listenerNames.map((listenerName) => {
@@ -522,8 +512,6 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
 
   const closeWorker = async (shouldForce: boolean) => {
     await worker.close(shouldForce);
-    await closeRedisClient(client);
-    isWorkerRunningInThisProcess = false;
     config.logger.info({}, "worker stopped");
   };
 

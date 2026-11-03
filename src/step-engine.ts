@@ -6,7 +6,7 @@ import { StepMisuseError } from "./errors.js";
 import { deriveHandlerSendId, deriveStepIdempotencyKey } from "./ids.js";
 import type { HandlerSendId, IdempotencyKey, RunId, StepId } from "./ids.js";
 import type { JsonValue } from "./json.js";
-import type { DispatchByName, DispatchedRun, EmitByName, EmittedEvent } from "./registry.js";
+import type { DispatchByName, DispatchedRun, EmitByName, EmittedEvent } from "./enqueuer.js";
 
 export type SerializedSavedStep = string;
 

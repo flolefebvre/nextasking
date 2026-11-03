@@ -64,6 +64,7 @@ describe("the root export", () => {
       "FanOutNotReplayableError",
       "InvalidPayloadError",
       "NonRetriableError",
+      "RedisUnavailableError",
       "RunNotReplayableError",
       "StepMisuseError",
       "UnknownEventError",

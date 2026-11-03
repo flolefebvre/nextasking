@@ -23,6 +23,8 @@ Events and background tasks for a Next.js app, on BullMQ with Redis or Valkey. D
 | Know how long a repeated id is dropped            | [Tasks and events](tasks-and-events.md)         |
 | Dispatch or emit a name known only at runtime     | [Tasks and events](tasks-and-events.md)         |
 | Handle dispatch and emit errors                   | [Tasks and events](tasks-and-events.md)         |
+| Answer 503 when Redis is down                     | [Tasks and events](tasks-and-events.md)         |
+| Set how long a call waits with `giveUpAfter`      | [Tasks and events](tasks-and-events.md)         |
 | Write a duration                                  | [Tasks and events](tasks-and-events.md)         |
 | Fix an error `createNextasking` throws at startup | [Tasks and events](tasks-and-events.md)         |
 | Start the embedded worker                         | [Tasks and events](tasks-and-events.md)         |
@@ -33,6 +35,8 @@ Events and background tasks for a Next.js app, on BullMQ with Redis or Valkey. D
 | Know what a stall is and when a run fails stalled | [Worker](worker.md)                             |
 | Know what happens to runs during a deploy overlap | [Worker](worker.md)                             |
 | Pick the Valkey or Redis for the queues           | [Worker](worker.md)                             |
+| Set `maxmemory-policy` to `noeviction`            | [Worker](worker.md)                             |
+| Know what the worker does when Redis is down      | [Worker](worker.md)                             |
 | Configure webpack with `serverExternalPackages`   | [Worker](worker.md)                             |
 | Limit a task's attempts across every instance     | [Concurrency](concurrency.md)                   |
 | Limit a task's attempts per account or other key  | [Concurrency](concurrency.md)                   |
@@ -90,6 +94,7 @@ import {
   FanOutNotReplayableError,
   InvalidPayloadError,
   NonRetriableError,
+  RedisUnavailableError,
   runFailed,
   RunNotReplayableError,
   StepMisuseError,
@@ -97,6 +102,7 @@ import {
   UnknownTaskError,
 } from "@flefebvre/nextasking";
 import type {
+  ConnectionConfig,
   DispatchOptions,
   Duration,
   EmitOptions,
@@ -154,7 +160,9 @@ import type {
 | `FanOutNotReplayableError` | Thrown by `replayEvent` for a fan-out that is unknown, removed or not failed                                            |
 | `InvalidPayloadError`      | Thrown by `dispatch` and `emit` for a payload the schema refuses                                                        |
 | `NonRetriableError`        | Thrown by a handler to fail its run at once, skipping the retries left                                                  |
+| `RedisUnavailableError`    | Thrown by every call on the instance when Redis doesn't answer within `giveUpAfter`; carries `runId` or `eventId`       |
 | `StepMisuseError`          | Thrown by a step on a bug: a repeated id, a nested step, a bad result, duration or wake time                            |
+| `ConnectionConfig`         | The type of `createNextasking`'s `connection`: `url` and `giveUpAfter` (default `"5s"`)                                 |
 | `DispatchOptions`          | The type of `dispatch`'s third argument: `runId` and `delay`                                                            |
 | `Duration`                 | The type of a duration option: a whole number and `s`, `m`, `h` or `d`                                                  |
 | `EmitOptions`              | The type of `emit`'s third argument: `eventId`                                                                          |

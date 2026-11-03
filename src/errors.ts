@@ -1,3 +1,6 @@
+import { shownDurationOf } from "./durations.js";
+import type { DurationInMilliseconds } from "./durations.js";
+import type { EventId, RunId } from "./ids.js";
 import type { StandardSchemaV1Issue } from "./standard-schema.js";
 
 export type DefinitionKind = "task" | "event";
@@ -43,6 +46,27 @@ export class FanOutNotReplayableError extends Error {
     super(
       `Fan-out "${eventId}" of event "${eventName}" can't be replayed: ${shownReplayRefusalOf(replayRefusal, "fan-out", "event id")}.`,
     );
+  }
+}
+
+export type RedisCallIds = {
+  runId?: RunId;
+  eventId?: EventId;
+};
+
+export class RedisUnavailableError extends Error {
+  override readonly name = "RedisUnavailableError";
+  readonly runId?: RunId;
+  readonly eventId?: EventId;
+
+  constructor(giveUpAfterInMilliseconds: DurationInMilliseconds, callIds: RedisCallIds, unansweredError: unknown) {
+    super(`Redis didn't answer within ${shownDurationOf(giveUpAfterInMilliseconds)}`, { cause: unansweredError });
+    if (callIds.runId !== undefined) {
+      this.runId = callIds.runId;
+    }
+    if (callIds.eventId !== undefined) {
+      this.eventId = callIds.eventId;
+    }
   }
 }
 

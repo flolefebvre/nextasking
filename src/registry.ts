@@ -1,18 +1,24 @@
 import { BUILT_IN_EVENTS, isBuiltInEventName } from "./built-in-events.js";
 import type { BuiltInEvent, BuiltInEventName } from "./built-in-events.js";
+import { createRedisConnections } from "./connection.js";
 import type { ConnectionConfig } from "./connection.js";
-import { concurrencyKeyOf, retriesOf, validatePayload } from "./definitions.js";
 import type { AnyTaskDefinition, EventDefinition, PayloadInput, PayloadSchema } from "./definitions.js";
 import { parseDuration } from "./durations.js";
-import type { Duration, DurationInMilliseconds } from "./durations.js";
-import { FanOutNotReplayableError, RunNotReplayableError, UnknownEventError, UnknownTaskError } from "./errors.js";
-import type { DefinitionKind } from "./errors.js";
-import { createRandomId } from "./ids.js";
+import { RESERVED_NAME_PREFIX, createEnqueuer } from "./enqueuer.js";
+import type {
+  DispatchedRun,
+  DispatchOptions,
+  EmitOptions,
+  EmittedEvent,
+  ReplayedEvent,
+  ReplayedRun,
+} from "./enqueuer.js";
 import type { EventId, RunId } from "./ids.js";
 import { silentLogger } from "./logger.js";
 import type { Logger } from "./logger.js";
 import { createQueueReader } from "./queue-reader.js";
 import type {
+  QueueReader,
   EventWithRunsOf,
   ListRunsOptionsOf,
   ListedRunOfTask,
@@ -25,9 +31,8 @@ import { eventDefinitionSummariesOf, taskDefinitionSummariesOf } from "./definit
 import type { EventDefinitionSummary, TaskDefinitionSummary } from "./definition-summaries.js";
 import { createRunQueue } from "./run-queue.js";
 import type { RunState } from "./run-states.js";
-import type { EnqueueOutcome, RunQueue } from "./run-queue.js";
-import { sendUnsentFailureNotices } from "./failure-notices.js";
-import type { SendBuiltInEvent } from "./failure-notices.js";
+import type { RunQueue } from "./run-queue.js";
+import { bootWorker } from "./worker-boot.js";
 import { rejectInvalidSchedule, timezoneOf } from "./schedules.js";
 import {
   MISSING_MANUAL_SIGNAL_HANDLING_WARNING,
@@ -56,26 +61,6 @@ export type EventNameIn<Registration> = Registration extends {
 export type TaskName = TaskNameIn<Register>;
 
 export type EventName = EventNameIn<Register>;
-
-export type DispatchedRun = {
-  runId: RunId;
-};
-
-export type EmittedEvent = {
-  eventId: EventId;
-};
-
-export type ReplayedRun = {
-  runId: RunId;
-};
-
-export type ReplayedEvent = {
-  eventId: EventId;
-};
-
-export type DispatchByName = (name: string, payload?: unknown, options?: DispatchOptions) => Promise<DispatchedRun>;
-
-export type EmitByName = (name: string, payload: unknown, options?: EmitOptions) => Promise<EmittedEvent>;
 
 type RegisteredDefinitions = Register extends { nextasking: Nextasking<infer Task, infer Event> }
   ? { task: Task; event: Event }
@@ -123,15 +108,6 @@ export interface RegisteredEmit {
   ): Promise<EmittedEvent>;
 }
 
-export type DispatchOptions = {
-  runId?: RunId;
-  delay?: Duration;
-};
-
-export type EmitOptions = {
-  eventId?: EventId;
-};
-
 export type Nextasking<Task extends AnyTaskDefinition, Event extends EventDefinition = never> = {
   readonly dispatch: <Name extends Task["name"]>(
     name: Name,
@@ -177,7 +153,7 @@ export type NextaskingConfig<
 
 const DEFAULT_PREFIX = "nextasking";
 
-const RESERVED_NAME_PREFIX = "nextasking/";
+let isWorkerStartedInThisProcess = false;
 
 const closeByNextasking = new WeakMap<object, () => Promise<void>>();
 
@@ -190,6 +166,7 @@ export function createNextasking<
   const events: readonly EventDefinition[] = [...appEvents, ...BUILT_IN_EVENTS];
   const prefix = config.prefix ?? DEFAULT_PREFIX;
   const logger = config.logger ?? silentLogger;
+  const connections = createRedisConnections(config.connection, logger);
   const tasksByName = new Map<string, AnyTaskDefinition>(config.tasks.map((task) => [task.name, task]));
   const eventsByName = new Map<string, EventDefinition>(events.map((event) => [event.name, event]));
   const listenerNamesByEventName = new Map<string, string[]>(events.map((event) => [event.name, []]));
@@ -205,134 +182,101 @@ export function createNextasking<
   );
   let runQueue: RunQueue | undefined;
   let runningWorker: RunningWorker | undefined;
-  const openRunQueue = (): RunQueue => {
-    runQueue ??= createRunQueue(config.connection, prefix);
+  let runQueueOfWorker: RunQueue | undefined;
+  const openRunQueue = async (): Promise<RunQueue> => {
+    if (runQueue?.hasFailedToOpen === true) {
+      const failedRunQueue = runQueue;
+      runQueue = undefined;
+      await failedRunQueue.close();
+    }
+    runQueue ??= createRunQueue(connections, "instance", prefix);
+    await connections.waitUntilReadyWithinGiveUpAfter(runQueue.client);
     return runQueue;
   };
+  const { callOnRedis } = connections;
 
   const queueReader = createQueueReader({ openRunQueue, tasksByName, listenerNamesByEventName, declaredSchedules });
-
-  const dispatchByName: DispatchByName = async (name, payload, options = {}) => {
-    const task = tasksByName.get(name);
-    if (task === undefined) {
-      throw new UnknownTaskError(name, [...tasksByName.keys()]);
-    }
-    const runId = consumerFacingIdOrRandomId("task", task.name, "runId", options.runId);
-    const delayInMilliseconds = delayInMillisecondsOf(task.name, options.delay);
-    if (task.schedule !== undefined && payload !== undefined) {
-      throw new Error(`Scheduled task "${task.name}" takes no payload: dispatch it by its name alone to run it now`);
-    }
-    const validatedPayload = task.schedule === undefined ? await validatePayload("task", task, payload) : undefined;
-    const concurrencyKey = concurrencyKeyOf(task, validatedPayload);
-    const { isDuplicate } = await openRunQueue().enqueueRun(task.name, {
-      runId,
-      payload: validatedPayload,
-      retries: retriesOf(task),
-      ...(concurrencyKey === undefined ? {} : { concurrencyKey }),
-      ...(delayInMilliseconds === undefined ? {} : { delayInMilliseconds }),
-    });
-    logger.debug({ task: task.name, runId }, isDuplicate ? "duplicate dispatch dropped" : "run dispatched");
-    return { runId };
-  };
-
-  const emitByName: EmitByName = async (name, payload, options = {}) => {
-    if (isBuiltInEventName(name)) {
-      throw new Error(
-        `Event "${name}" is built in: names starting with "${RESERVED_NAME_PREFIX}" belong to the built-in events, which only the library emits`,
-      );
-    }
-    const event = eventsByName.get(name);
-    if (event === undefined) {
-      throw new UnknownEventError(
-        name,
-        appEvents.map((appEvent) => appEvent.name),
-      );
-    }
-    const eventId = consumerFacingIdOrRandomId("event", event.name, "eventId", options.eventId);
-    const validatedPayload = await validatePayload("event", event, payload);
-    const fanOutEnqueueing = await enqueueFanOutToListeners(event.name, eventId, validatedPayload);
-    if (fanOutEnqueueing === "no listeners") {
-      logger.warn({ eventName: event.name, eventId }, "no listeners for event");
-    } else if (fanOutEnqueueing.isDuplicate) {
-      logger.debug({ eventName: event.name, eventId }, "duplicate dispatch dropped");
-    }
-    return { eventId };
-  };
-
-  const enqueueFanOutToListeners = async (
-    eventName: string,
-    eventId: EventId,
-    validatedPayload: unknown,
-  ): Promise<EnqueueOutcome | "no listeners"> => {
-    const listenerNames = listenerNamesByEventName.get(eventName) ?? [];
-    if (listenerNames.length === 0) {
-      return "no listeners";
-    }
-    return openRunQueue().enqueueFanOut(eventName, { eventId, payload: validatedPayload, listenerNames });
-  };
-
-  const sendBuiltInEvent: SendBuiltInEvent = async (eventName, eventId, payload) => {
-    await enqueueFanOutToListeners(eventName, eventId, payload);
-  };
-
-  const replay = async (name: string, runId: RunId): Promise<ReplayedRun> => {
-    if (!tasksByName.has(name)) {
-      throw new UnknownTaskError(name, [...tasksByName.keys()]);
-    }
-    const replayOutcome = await openRunQueue().replayRun(name, runId);
-    if (replayOutcome !== "replayed") {
-      throw new RunNotReplayableError(name, runId, replayOutcome);
-    }
-    logger.info({ task: name, runId }, "run replayed");
-    return { runId };
-  };
-
-  const replayEvent = async (name: string, eventId: EventId): Promise<ReplayedEvent> => {
-    if (!eventsByName.has(name)) {
-      throw new UnknownEventError(name, [...eventsByName.keys()]);
-    }
-    const replayOutcome = await openRunQueue().replayFanOut(name, eventId);
-    if (replayOutcome !== "replayed") {
-      throw new FanOutNotReplayableError(name, eventId, replayOutcome);
-    }
-    return { eventId };
-  };
+  const enqueuerConfig = { tasksByName, eventsByName, listenerNamesByEventName, logger };
+  const { dispatch, emit, replay, replayEvent } = createEnqueuer({
+    ...enqueuerConfig,
+    runQueueAccess: { openRunQueue, callOnRedis },
+  });
 
   type Instance = Nextasking<Tasks[number], Events[number] | BuiltInEvent>;
   const nextasking: Instance = {
-    dispatch: dispatchByName,
-    emit: emitByName,
+    dispatch,
+    emit,
     replay,
     replayEvent,
     isTaskName: (name): name is Tasks[number]["name"] => tasksByName.has(name),
     isEventName: (name): name is EmittableEventNameOf<Events[number] | BuiltInEvent> =>
       eventsByName.has(name) && !isBuiltInEventName(name),
-    getRun: queueReader.getRun as Instance["getRun"],
-    listRuns: queueReader.listRuns as Instance["listRuns"],
-    countRuns: queueReader.countRuns as Instance["countRuns"],
-    getEvent: queueReader.getEvent as Instance["getEvent"],
-    listSchedules: queueReader.listSchedules as Instance["listSchedules"],
+    getRun: ((taskName: string, runId: RunId) =>
+      callOnRedis({ runId }, () => queueReader.getRun(taskName, runId))) as Instance["getRun"],
+    listRuns: ((options: Parameters<QueueReader["listRuns"]>[0]) =>
+      callOnRedis({}, () => queueReader.listRuns(options))) as Instance["listRuns"],
+    countRuns: (() => callOnRedis({}, () => queueReader.countRuns())) as Instance["countRuns"],
+    getEvent: ((eventName: string, eventId: EventId) =>
+      callOnRedis({ eventId }, () => queueReader.getEvent(eventName, eventId))) as Instance["getEvent"],
+    listSchedules: (() => callOnRedis({}, () => queueReader.listSchedules())) as Instance["listSchedules"],
     taskDefinitions: taskDefinitionSummariesOf(config.tasks) as Instance["taskDefinitions"],
     eventDefinitions: eventDefinitionSummariesOf(events, listenerNamesByEventName) as Instance["eventDefinitions"],
     startWorker: async (options = {}) => {
       const workerOptions = workerOptionsFrom(options);
-      const scheduleChanges = await openRunQueue().syncSchedules(declaredSchedules);
-      for (const { kind, taskName, cron, timezone } of scheduleChanges) {
-        logger.info({ task: taskName, cron, timezone }, `schedule ${kind}`);
+      if (isWorkerStartedInThisProcess) {
+        throw new Error("The nextasking worker is already started in this process");
       }
-      await sendUnsentFailureNotices(openRunQueue(), sendBuiltInEvent);
-      runningWorker = startRunWorker({
-        options: workerOptions,
-        connection: config.connection,
-        prefix,
-        logger,
-        tasksByName,
-        eventsByName,
-        openRunQueue,
-        dispatch: dispatchByName,
-        emit: emitByName,
-        sendBuiltInEvent,
+      isWorkerStartedInThisProcess = true;
+      const workerRunQueue = createRunQueue(connections, "worker", prefix);
+      runQueueOfWorker = workerRunQueue;
+      const workerEnqueuer = createEnqueuer({
+        ...enqueuerConfig,
+        runQueueAccess: { openRunQueue: async () => workerRunQueue, callOnRedis: (_callIds, call) => call() },
       });
+      const isWorkerRunQueueOpen = () => runQueueOfWorker === workerRunQueue;
+      const startTheWorker = () => {
+        runningWorker = startRunWorker({
+          options: workerOptions,
+          runQueue: workerRunQueue,
+          prefix,
+          logger,
+          tasksByName,
+          eventsByName,
+          dispatch: workerEnqueuer.dispatch,
+          emit: workerEnqueuer.emit,
+          sendBuiltInEvent: workerEnqueuer.sendBuiltInEvent,
+        });
+      };
+      const { isFirstRoundTripAnswered, completion } = await bootWorker({
+        runQueue: workerRunQueue,
+        declaredSchedules,
+        logger,
+        sendBuiltInEvent: workerEnqueuer.sendBuiltInEvent,
+        giveUpAfterInMilliseconds: connections.giveUpAfterInMilliseconds,
+      });
+      if (isFirstRoundTripAnswered) {
+        try {
+          await completion;
+        } catch (error) {
+          await closeWorkerRunQueue();
+          throw error;
+        }
+        startTheWorker();
+      } else {
+        completion.then(
+          () => {
+            if (isWorkerRunQueueOpen()) {
+              startTheWorker();
+            }
+          },
+          async (error: unknown) => {
+            if (isWorkerRunQueueOpen()) {
+              logger.error({ err: error }, "worker not started");
+              await closeWorkerRunQueue();
+            }
+          },
+        );
+      }
       if (isSignalHandlingLeftToTheApp()) {
         stopExitingOnShutdownSignals = exitOnShutdownSignals(() => closeInstance({ isDraining: true }), logger);
       } else if (!isDevelopment()) {
@@ -342,6 +286,15 @@ export function createNextasking<
   };
 
   let stopExitingOnShutdownSignals: (() => void) | undefined;
+  const closeWorkerRunQueue = async () => {
+    const closedRunQueue = runQueueOfWorker;
+    if (closedRunQueue === undefined) {
+      return;
+    }
+    runQueueOfWorker = undefined;
+    await closedRunQueue.close();
+    isWorkerStartedInThisProcess = false;
+  };
   const closeInstance = async ({ isDraining }: { isDraining: boolean }) => {
     if (!isDraining) {
       stopExitingOnShutdownSignals?.();
@@ -349,6 +302,7 @@ export function createNextasking<
     }
     await (isDraining ? runningWorker?.shutDown() : runningWorker?.close());
     runningWorker = undefined;
+    await closeWorkerRunQueue();
     await runQueue?.close();
     runQueue = undefined;
   };
@@ -356,35 +310,6 @@ export function createNextasking<
   closeByNextasking.set(nextasking, () => closeInstance({ isDraining: false }));
 
   return nextasking;
-}
-
-function consumerFacingIdOrRandomId(
-  definitionKind: DefinitionKind,
-  definitionName: string,
-  idOption: "runId" | "eventId",
-  consumerFacingId: unknown,
-): string {
-  if (consumerFacingId === undefined) {
-    return createRandomId();
-  }
-  if (typeof consumerFacingId !== "string" || consumerFacingId === "") {
-    const shownId = JSON.stringify(consumerFacingId) ?? String(consumerFacingId);
-    throw new Error(
-      `Invalid ${idOption} for ${definitionKind} "${definitionName}": ${shownId} is not a non-empty string`,
-    );
-  }
-  return consumerFacingId;
-}
-
-function delayInMillisecondsOf(taskName: string, delay: Duration | undefined): DurationInMilliseconds | undefined {
-  if (delay === undefined) {
-    return undefined;
-  }
-  try {
-    return parseDuration(delay);
-  } catch (error) {
-    throw new Error(`Invalid delay for task "${taskName}": ${(error as Error).message}`, { cause: error });
-  }
 }
 
 function rejectInvalidConfig(tasks: readonly AnyTaskDefinition[], events: readonly EventDefinition[]): void {

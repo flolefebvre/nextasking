@@ -113,6 +113,7 @@ declare module "@flefebvre/nextasking" {
 
 - `events` is optional: an app with tasks alone leaves it out.
 - `createNextasking` opens no connection. Importing the instance is safe anywhere, `next build` included; the first `dispatch` or `emit` connects.
+- `connection.giveUpAfter` (default `"5s"`) bounds how long a call waits for Redis before it throws. See [When Redis is down](#when-redis-is-down).
 - `prefix` (default `"nextasking"`) puts every key of the instance under that prefix. Give two apps sharing one server different prefixes.
 - `logger` takes your app's logger; without it the library is silent. See [Logging](logging.md).
 - Without the `Register` augmentation, `TaskName` and `EventName` are `never`, and a handler's `emit` and `dispatch` take no name: add it once, next to the instance.
@@ -127,7 +128,7 @@ declare module "@flefebvre/nextasking" {
 - a built-in event listed in `events`: it is added automatically
 - a `concurrency.limit` that isn't a positive integer
 - `retries` that isn't a whole number, 0 or more
-- a duration option that isn't a valid duration, such as `"-5s"` or `"0.5h"` passed through a cast or plain JavaScript
+- a duration option that isn't a valid duration, such as `"-5s"` or `"0.5h"` passed through a cast or plain JavaScript, `connection.giveUpAfter` included
 - a scheduled task's cron or time zone that isn't valid; see [Scheduled tasks](scheduled-tasks.md#startup-checks)
 
 ```text
@@ -138,6 +139,7 @@ Event "nextasking/run.failed" is built in and added automatically: remove it fro
 Task "nextasking/sync" has a reserved name: names starting with "nextasking/" are reserved for the library
 Task "rebuild-index" has an invalid timeout: "0.5h" is not a duration: a whole number followed by s, m, h or d, such as "30s"
 Task "sync-account" has an invalid retries: -1 is not a non-negative integer
+Invalid connection.giveUpAfter: "0.5h" is not a duration: a whole number followed by s, m, h or d, such as "30s"
 ```
 
 Fix the definition; don't catch the error.
@@ -282,6 +284,39 @@ try {
 - `UnknownEventError`: `emit` got a name that isn't in `events`. Its message lists the valid event names. Reached only through a cast or plain JavaScript.
 - `InvalidPayloadError`: the schema refused the payload. `issues` lists each issue as `{ path, message }`, with `path` dotted (`address.zipCode`) or `(root)`. Messages are redacted of payload values (`[redacted]`), so the error is safe to log. Its message names the task or the event.
 - All three are thrown before anything is stored.
+- `RedisUnavailableError`: Redis didn't answer in time. See [When Redis is down](#when-redis-is-down).
+
+## When Redis is down
+
+Answer 503 when a call throws `RedisUnavailableError`, and let the client retry.
+
+```ts
+// src/app/api/welcome-emails/route.ts
+import { RedisUnavailableError } from "@flefebvre/nextasking";
+import { nextasking } from "@/nextasking";
+
+export async function POST(request: Request) {
+  const { email } = (await request.json()) as { email: string };
+  try {
+    const { runId } = await nextasking.dispatch("send-welcome-email", { email });
+    return Response.json({ runId }, { status: 202 });
+  } catch (error) {
+    if (error instanceof RedisUnavailableError) {
+      return Response.json({ runId: error.runId }, { status: 503, headers: { "retry-after": "5" } });
+    }
+    throw error;
+  }
+}
+```
+
+- Every call on the instance throws `RedisUnavailableError` when Redis doesn't answer within `giveUpAfter`: `dispatch`, `emit`, `replay`, `replayEvent`, `getRun`, `listRuns`, `countRuns`, `getEvent` and `listSchedules`. It never hangs.
+- `giveUpAfter` bounds each wait, not the whole call: the first connection, then each round trip. Set it on `connection`: `connection: { url, giveUpAfter: "2s" }`. The default is `"5s"`.
+- `error.cause` is the original error, such as `connect ECONNREFUSED` or `Command timed out`. `error.runId` or `error.eventId` is the id the call used, yours or the random one; reads carry the id they were given.
+- A `dispatch` or `emit` that threw may still be stored once Redis is back. Retry it with the id on the error, so the retry is deduplicated: `dispatch(name, payload, { runId: error.runId })`, `emit(name, payload, { eventId: error.eventId })`. See [Run once per business fact](#run-once-per-business-fact).
+- A failover shorter than `giveUpAfter` is a slow call, not an error: on a `READONLY` reply the library reconnects to the new primary and resends the command.
+- Validation errors come first: an unknown name or an invalid payload throws its own error, Redis down or not.
+- In a handler, `emit` and `dispatch` never throw `RedisUnavailableError`: like every command of the worker, they wait for Redis to come back, and the attempt goes on without spending a retry.
+- An outage writes one `connection error` line, then one `connection restored` line, per process. See [Logging](logging.md).
 
 ## Start the worker
 
@@ -299,6 +334,7 @@ export async function register() {
 - `startWorker()` runs one worker in this process, executing every task the instance lists and fanning out every event it lists.
 - A process that never calls `startWorker()` only dispatches and emits.
 - Calling `startWorker()` a second time in the same process throws.
+- With Redis down, `startWorker()` resolves anyway and the worker starts once Redis is back, so pages keep rendering. See [Worker](worker.md#when-redis-is-down-at-boot).
 - Set `NEXT_MANUAL_SIG_HANDLE=1` in the environment of `next start`, so a deploy lets running attempts finish instead of cutting them. See [Worker](worker.md) for this, `concurrency` and the other options.
 - Completed runs and completed fan-outs are kept 24 hours, and at most 1,000.
 - A fan-out that fails is retried 5 times, waiting 30 seconds and doubling, and kept 14 days once it has failed, like a failed run. A retry skips the listeners that already have a run.

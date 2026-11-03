@@ -19,8 +19,10 @@ export async function register() {
 | `shutdownTimeout` | `"25s"`   | How long a shutdown waits for running attempts before it aborts them  |
 
 - `startWorker` rejects an invalid option before opening any connection.
+- Then it checks the server's `maxmemory-policy`. See [Give queues their own Valkey or Redis](#give-queues-their-own-valkey-or-redis).
 - Before it takes its first attempt, `startWorker` reconciles the schedules stored in Redis with the instance's scheduled tasks. See [Scheduled tasks](scheduled-tasks.md#what-a-deploy-does-to-schedules).
 - Then it re-sends the failure notices a crash lost among the failures of the last 24 hours. See [Retries and failures](retries-and-failures.md#react-to-a-failure).
+- These boot steps finish before `worker started` is written and before `startWorker()` resolves, unless Redis is down. See [When Redis is down at boot](#when-redis-is-down-at-boot).
 - Type the options with `StartWorkerOptions`.
 
 ## Cap the attempts in flight with concurrency
@@ -107,6 +109,26 @@ During a deploy, an old and a new release run side by side. A worker that picks 
 
 Point `connection` at a Valkey or Redis that holds only queues, not your cache or sessions. A cache evicts keys when memory runs short; a queue loses runs that way. A dedicated server also keeps a cache flush or a busy cache from stalling attempts.
 
+Set `maxmemory-policy noeviction` on it. The worker reads the policy at boot:
+
+- A readable policy other than `noeviction` makes `startWorker()` reject with a one-line error naming it. An evicted lock lets a second worker run the same attempt.
+- A policy it can't read, `CONFIG` being disabled or denied as on many managed services, writes `maxmemory-policy unreadable` at warn with `err`, and the worker starts. Check the policy in your provider's console.
+
+```text
+maxmemory-policy is "allkeys-lru": the Valkey or Redis holding the queues must use "noeviction", or it evicts locks and runs
+```
+
+## When Redis is down at boot
+
+`startWorker()` never blocks `next start` on Redis:
+
+- When Redis doesn't answer its first command within `connection.giveUpAfter` (default `"5s"`), `startWorker()` resolves anyway and writes `connection error`. Pages keep rendering; route handlers calling the instance get `RedisUnavailableError`, see [Tasks and events](tasks-and-events.md#when-redis-is-down).
+- The boot steps wait for Redis in the background: once it answers, the worker checks the policy, reconciles the schedules, re-sends the lost failure notices, then writes `worker started` and takes attempts. No attempt starts before.
+- An evicting policy found in the background writes `worker not started` at error, `err` naming the policy, and the worker stays off until the process restarts.
+- A SIGTERM while the worker waits for Redis stops it at once: nothing to drain.
+
+Once started, the worker waits out an outage: its commands, and a handler's `emit` and `dispatch`, wait for Redis to come back instead of failing the attempt. A lock that expires during a long outage aborts the attempt like any lost lock; see [Stalls](#stalls).
+
 ## Bundling
 
 Turbopack, the default bundler of `next dev` and `next build`, needs no `next.config` entry. With webpack (`next build --webpack`), list the library in `serverExternalPackages`:
@@ -132,6 +154,8 @@ export default nextConfig;
 | `debug` | `attempt aborted: lock lost`            | `task`, `runId`, `attempt` |
 | `warn`  | `attempt stalled`                       | `task`, `runId`, `attempt` |
 | `warn`  | `attempts aborted at shutdown deadline` | none                       |
+| `warn`  | `maxmemory-policy unreadable`           | `err`                      |
 | `error` | `worker shutdown failed`                | `err`                      |
+| `error` | `worker not started`                    | `err`                      |
 
 See [Logging](logging.md) for the other lines.

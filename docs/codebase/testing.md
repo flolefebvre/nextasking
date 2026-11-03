@@ -13,6 +13,7 @@
 - Set `NEXTASKING_TEST_REDIS_URL` to a full URL (credentials, port, `rediss:` included) to run against a server already running instead; no container starts then. An empty variable counts as unset, for both.
 - Write an integration test with `integrationTest` from `tests/integration-test.ts` rather than `test`: it hands the test `redisUrl` and a `keyPrefix` of its own. Put every key the test touches under that prefix, so tests sharing the server never see each other's keys; never build a prefix in the test.
 - The test opens its own client on `redisUrl`, with an `error` listener attached before it connects, and closes it in a `finally`, so a failed assertion leaves no open handle.
+- Cut the connection with `startTcpProxy(redisUrl)` from `tests/tcp-proxy.ts`: point the instance at its `url`; `cut()` resets the live sockets and refuses new connections as a down server does, `restore()` accepts them again, `cutFor(milliseconds)` does both around a wait, and `stop()` goes in the `finally`. The one test that needs a server configured otherwise (an evicting `maxmemory-policy`) starts its own container and is skipped with `skipIf` when `NEXTASKING_TEST_REDIS_URL` is set, so that variable still means no Docker.
 
 ## Worker processes
 

@@ -70,20 +70,20 @@ function cronRejectionOf(cron: unknown, timezone: IanaTimeZone): CronRejection |
 export function rejectInvalidSchedule(taskName: string, schedule: Schedule): void {
   const cron: unknown = schedule.cron;
   const timezone = timezoneOf(schedule);
-  const cronRejection = cronRejectionOf(cron, timezone);
-  if (cronRejection !== undefined) {
-    const shownCron = typeof cron === "string" ? JSON.stringify(cron) : String(cron);
-    throw new Error(
-      `Task "${taskName}" has an invalid schedule.cron: ${shownCron} is not a cron expression: ${cronRejection.reason}`,
-      cronRejection.cause === undefined ? undefined : { cause: cronRejection.cause },
-    );
-  }
   try {
     new Intl.DateTimeFormat(undefined, { timeZone: timezone });
   } catch (error) {
     throw new Error(
       `Task "${taskName}" has an invalid schedule.timezone: ${JSON.stringify(timezone)} is not an IANA time zone`,
       { cause: error },
+    );
+  }
+  const cronRejection = cronRejectionOf(cron, timezone);
+  if (cronRejection !== undefined) {
+    const shownCron = typeof cron === "string" ? JSON.stringify(cron) : String(cron);
+    throw new Error(
+      `Task "${taskName}" has an invalid schedule.cron: ${shownCron} is not a cron expression: ${cronRejection.reason}`,
+      cronRejection.cause === undefined ? undefined : { cause: cronRejection.cause },
     );
   }
 }

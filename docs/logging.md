@@ -52,7 +52,7 @@ Each message is fixed: filter and alert on it.
 
 - `run dispatched` comes before any attempt, so it has no `attempt`. Every line about an attempt has `task`, `runId` and `attempt`.
 - A listener's run adds `eventName` and `eventId` to each of its lines, the handler's own included.
-- `run dispatched` is written by `dispatch` only: a listener's run started by an emit has no such line. `emit` itself writes no line, unless the event has no listeners or the call repeats an `eventId`.
+- `run dispatched` is written by `dispatch` only: a listener's run started by an emit has no such line. Neither has a scheduled task's run started by a firing, and a repeated firing writes no `duplicate dispatch dropped`: it collapses into the same run through its run id. `emit` itself writes no line, unless the event has no listeners or the call repeats an `eventId`.
 - `duplicate dispatch dropped` replaces `run dispatched` when the call repeats a `runId` or an `eventId` still within its dedup window. See [Tasks and events](tasks-and-events.md#the-dedup-window).
 - `run suspended` is written when a sleep suspends the run, with `wakeAt` as an ISO string. `run resumed` replaces `attempt started` when the run is picked up again after it: the attempt is the same. See [Steps](steps.md#sleep-for-minutes-or-days).
 - `runDurationInMilliseconds`: from the dispatch to the completion or the final failure. `executionDurationInMilliseconds`: from the start, or the resume, of the last attempt to its end.

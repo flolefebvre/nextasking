@@ -452,6 +452,12 @@ describe("createNextasking with a scheduled task", () => {
     expect(creating).toThrow(expect.objectContaining({ cause: expect.any(RangeError) }));
   });
 
+  test("names the timezone first when both the cron and the timezone are invalid", () => {
+    expect(() => createScheduledTaskNextasking({ cron: "61 * * * *", timezone: "Mars/Olympus" })).toThrow(
+      'Task "purge-expired-sessions" has an invalid schedule.timezone: "Mars/Olympus" is not an IANA time zone',
+    );
+  });
+
   test("accepts a cron with a seconds field, an IANA alias and no timezone at all", () => {
     expect(() => createScheduledTaskNextasking({ cron: "*/5 * * * * *", timezone: "US/Pacific" })).not.toThrow();
     expect(() => createScheduledTaskNextasking({ cron: "0 3 * * *", timezone: "Europe/Paris" })).not.toThrow();

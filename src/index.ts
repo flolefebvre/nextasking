@@ -1,11 +1,15 @@
 export type { ConnectionConfig } from "./connection.js";
-export { defineEvent, defineListener, defineTask } from "./definitions.js";
+export { defineEvent, defineListener, defineScheduledTask, defineTask } from "./definitions.js";
 export type {
   EventDefinition,
   EventOptions,
   ListenerDefinition,
   ListenerOptions,
   PayloadSchema,
+  ScheduledTaskContext,
+  ScheduledTaskDefinition,
+  ScheduledTaskHandler,
+  ScheduledTaskOptions,
   TaskContext,
   TaskDefinition,
   TaskHandler,
@@ -34,6 +38,7 @@ export type {
   Register,
   TaskName,
 } from "./registry.js";
+export type { CronExpression, IanaTimeZone, Schedule } from "./schedules.js";
 export type { StandardSchemaV1 } from "./standard-schema.js";
 export type { StepContext, StepTools } from "./step-engine.js";
 export type { StartWorkerOptions } from "./worker-runtime.js";

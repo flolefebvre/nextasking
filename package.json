@@ -69,6 +69,7 @@
   },
   "dependencies": {
     "bullmq": "6.5.3",
+    "cron-parser": "5.10.2",
     "ioredis": "~5.11.1"
   },
   "peerDependencies": {

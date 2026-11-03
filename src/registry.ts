@@ -1,6 +1,6 @@
 import type { ConnectionConfig } from "./connection.js";
 import { retriesOf, validatePayload } from "./definitions.js";
-import type { AnyTaskDefinition, EventDefinition, PayloadInput } from "./definitions.js";
+import type { AnyTaskDefinition, EventDefinition, PayloadInput, PayloadSchema } from "./definitions.js";
 import { parseDuration } from "./durations.js";
 import type { Duration, DurationInMilliseconds } from "./durations.js";
 import { UnknownEventError, UnknownTaskError } from "./errors.js";
@@ -11,6 +11,7 @@ import { silentLogger } from "./logger.js";
 import type { Logger } from "./logger.js";
 import { createRunQueue } from "./run-queue.js";
 import type { RunQueue } from "./run-queue.js";
+import { rejectInvalidSchedule } from "./schedules.js";
 import {
   MISSING_MANUAL_SIGNAL_HANDLING_WARNING,
   exitOnShutdownSignals,
@@ -47,7 +48,7 @@ export type EmittedEvent = {
   eventId: EventId;
 };
 
-export type DispatchByName = (name: string, payload: unknown, options?: DispatchOptions) => Promise<DispatchedRun>;
+export type DispatchByName = (name: string, payload?: unknown, options?: DispatchOptions) => Promise<DispatchedRun>;
 
 export type EmitByName = (name: string, payload: unknown, options?: EmitOptions) => Promise<EmittedEvent>;
 
@@ -59,11 +60,14 @@ type RegisteredTask = RegisteredDefinitions["task"];
 
 type RegisteredEvent = RegisteredDefinitions["event"];
 
+export type DispatchArguments<Task> = Task extends { schema: infer Schema extends PayloadSchema }
+  ? [payload: PayloadInput<Schema>, options?: DispatchOptions]
+  : [payload?: undefined, options?: DispatchOptions];
+
 export interface RegisteredDispatch {
   <Name extends TaskName>(
     name: Name,
-    payload: PayloadInput<Extract<RegisteredTask, { name: Name }>["schema"]>,
-    options?: DispatchOptions,
+    ...dispatchArguments: DispatchArguments<Extract<RegisteredTask, { name: Name }>>
   ): Promise<DispatchedRun>;
 }
 
@@ -87,8 +91,7 @@ export type EmitOptions = {
 export type Nextasking<Task extends AnyTaskDefinition, Event extends EventDefinition = never> = {
   readonly dispatch: <Name extends Task["name"]>(
     name: Name,
-    payload: PayloadInput<Extract<Task, { name: Name }>["schema"]>,
-    options?: DispatchOptions,
+    ...dispatchArguments: DispatchArguments<Extract<Task, { name: Name }>>
   ) => Promise<DispatchedRun>;
   readonly emit: <Name extends Event["name"]>(
     name: Name,
@@ -147,7 +150,10 @@ export function createNextasking<
     }
     const runId = consumerFacingIdOrRandomId("task", task.name, "runId", options.runId);
     const delayInMilliseconds = delayInMillisecondsOf(task.name, options.delay);
-    const validatedPayload = await validatePayload("task", task, payload);
+    if (task.schedule !== undefined && payload !== undefined) {
+      throw new Error(`Scheduled task "${task.name}" takes no payload: dispatch it by its name alone to run it now`);
+    }
+    const validatedPayload = task.schedule === undefined ? await validatePayload("task", task, payload) : undefined;
     const { isDuplicate } = await openRunQueue().enqueueRun(task.name, {
       runId,
       payload: validatedPayload,
@@ -283,6 +289,9 @@ function rejectDuplicateNames(definitionNames: readonly string[]): void {
 const DURATION_OPTIONS = ["backoff", "timeout"] as const;
 
 function rejectInvalidTaskOptions(task: AnyTaskDefinition): void {
+  if (task.schedule !== undefined) {
+    rejectInvalidSchedule(task.name, task.schedule);
+  }
   if (task.concurrency !== undefined) {
     const limit: unknown = task.concurrency.limit;
     if (typeof limit !== "number" || !Number.isInteger(limit) || limit <= 0) {

@@ -2,6 +2,7 @@ import {
   createNextasking,
   defineEvent,
   defineListener,
+  defineScheduledTask,
   defineTask,
   InvalidPayloadError,
   NonRetriableError,
@@ -29,6 +30,11 @@ import type {
   PayloadSchema,
   Register,
   RunId,
+  Schedule,
+  ScheduledTaskContext,
+  ScheduledTaskDefinition,
+  ScheduledTaskHandler,
+  ScheduledTaskOptions,
   StandardSchemaV1,
   StartWorkerOptions,
   StepContext,
@@ -50,6 +56,8 @@ const userSignedUpSchema = z.object({ userId: z.string() });
 type WelcomeEmailPayload = { email: string; locale: string };
 
 type WelcomeEmailInput = { email: string; locale?: string | undefined };
+
+type RegisteredTaskName = "send-welcome-email" | "create-default-workspace" | "purge-expired-sessions";
 
 type UserSignedUpPayload = { userId: string };
 
@@ -83,6 +91,31 @@ export const createDefaultWorkspace = defineListener("create-default-workspace",
     await emit("user.signed-up", { email: "ada@example.com" });
   },
 });
+
+export const purgeExpiredSessions = defineScheduledTask("purge-expired-sessions", {
+  schedule: { cron: "0 3 * * *", timezone: "Europe/Paris" },
+  retries: 2,
+  concurrency: { limit: 1 },
+  handler: async ({ scheduledAt, dispatch }) => {
+    await Promise.resolve(scheduledAt?.toISOString());
+    await dispatch("purge-expired-sessions");
+    // @ts-expect-error a scheduled task takes no payload
+    await dispatch("purge-expired-sessions", { olderThanDays: 30 });
+  },
+});
+
+export type ScheduledTaskHandlerGetsScheduledAt = Expect<
+  IsEqual<ScheduledTaskContext["scheduledAt"], Date | undefined>
+>;
+
+export type ScheduledTaskIsAScheduledTaskDefinition = Expect<
+  IsEqual<typeof purgeExpiredSessions, ScheduledTaskDefinition<"purge-expired-sessions">>
+>;
+
+export const purgeExpiredSessionsOptions: ScheduledTaskOptions = {
+  schedule: { cron: "0 3 * * *" } satisfies Schedule,
+  handler: (async () => undefined) satisfies ScheduledTaskHandler,
+};
 
 type WelcomeEmailContext = Parameters<(typeof sendWelcomeEmail)["handler"]>[0];
 
@@ -120,7 +153,7 @@ export const nextasking = createNextasking({
   connection,
   prefix: "dist-consumer",
   events: [userSignedUp],
-  tasks: [sendWelcomeEmail, createDefaultWorkspace],
+  tasks: [sendWelcomeEmail, createDefaultWorkspace, purgeExpiredSessions],
 });
 
 declare module "@flefebvre/nextasking" {
@@ -131,12 +164,12 @@ declare module "@flefebvre/nextasking" {
 
 export type RegisterHoldsTheInstance = Expect<IsEqual<Register["nextasking"], typeof nextasking>>;
 
-export type TaskNameIsTheRegisteredTasks = Expect<IsEqual<TaskName, "send-welcome-email" | "create-default-workspace">>;
+export type TaskNameIsTheRegisteredTasks = Expect<IsEqual<TaskName, RegisteredTaskName>>;
 
 export type EventNameIsTheRegisteredEvents = Expect<IsEqual<EventName, "user.signed-up">>;
 
 export type DispatchTakesARegisteredTaskName = Expect<
-  IsEqual<Parameters<typeof nextasking.dispatch>[0], "send-welcome-email" | "create-default-workspace">
+  IsEqual<Parameters<typeof nextasking.dispatch>[0], RegisteredTaskName>
 >;
 
 export type EmitTakesARegisteredEventName = Expect<IsEqual<Parameters<typeof nextasking.emit>[0], "user.signed-up">>;
@@ -170,7 +203,13 @@ export type StartWorkerTakesItsOptions = Expect<
 >;
 
 export type InstanceIsANextasking = Expect<
-  IsEqual<typeof nextasking, Nextasking<typeof sendWelcomeEmail | typeof createDefaultWorkspace, typeof userSignedUp>>
+  IsEqual<
+    typeof nextasking,
+    Nextasking<
+      typeof sendWelcomeEmail | typeof createDefaultWorkspace | typeof purgeExpiredSessions,
+      typeof userSignedUp
+    >
+  >
 >;
 
 export type TaskIsATaskDefinition = Expect<
@@ -241,5 +280,14 @@ export const emittedUnknownEvent = nextasking.emit("user.deleted", { userId: "us
 
 // @ts-expect-error a delay needs a unit
 export const dispatchedBadDelay = nextasking.dispatch("send-welcome-email", { email: "a@b.c" }, { delay: "5" });
+
+export const scheduledTaskRunNow = nextasking.dispatch("purge-expired-sessions");
+
+export const scheduledTaskRunNowWithItsOwnId = nextasking.dispatch("purge-expired-sessions", undefined, {
+  runId: "purge-now",
+});
+
+// @ts-expect-error a scheduled task takes no payload
+export const scheduledTaskGivenAPayload = nextasking.dispatch("purge-expired-sessions", { olderThanDays: 30 });
 
 export const workerStarted: Promise<void> = nextasking.startWorker();

@@ -11,6 +11,9 @@ importers:
       bullmq:
         specifier: 6.5.3
         version: 6.5.3(ioredis@5.11.1)
+      cron-parser:
+        specifier: 5.10.2
+        version: 5.10.2
       ioredis:
         specifier: ~5.11.1
         version: 5.11.1

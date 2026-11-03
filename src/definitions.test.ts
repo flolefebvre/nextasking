@@ -2,7 +2,7 @@ import * as v from "valibot";
 import { describe, expect, expectTypeOf, test } from "vitest";
 import { z } from "zod";
 
-import { defineEvent, defineListener, defineTask } from "./definitions.js";
+import { defineEvent, defineListener, defineScheduledTask, defineTask } from "./definitions.js";
 import type { StepTools } from "./step-engine.js";
 
 describe("defineTask", () => {
@@ -242,6 +242,69 @@ describe("defineListener", () => {
     defineListener("record-invoice-payment", {
       // @ts-expect-error on takes the event definition, not its name
       on: "invoice.paid",
+      handler: async () => undefined,
+    });
+  });
+});
+
+describe("defineScheduledTask", () => {
+  test("hands the handler scheduledAt and no payload, with the other context fields of a task", () => {
+    const purgeExpiredSessions = defineScheduledTask("purge-expired-sessions", {
+      schedule: { cron: "0 3 * * *", timezone: "Europe/Paris" },
+      handler: async (context) => {
+        expectTypeOf(context.scheduledAt).toEqualTypeOf<Date | undefined>();
+        expectTypeOf(context.runId).toEqualTypeOf<string>();
+        expectTypeOf(context.attempt).toEqualTypeOf<number>();
+        expectTypeOf(context.step).toEqualTypeOf<StepTools>();
+        expectTypeOf(context).not.toHaveProperty("payload");
+      },
+    });
+
+    expect(purgeExpiredSessions.name).toBe("purge-expired-sessions");
+    expectTypeOf(purgeExpiredSessions.name).toEqualTypeOf<"purge-expired-sessions">();
+  });
+
+  test("records the schedule and the task options as passed, with no defaults", () => {
+    const sendDigest = defineScheduledTask("send-digest", {
+      schedule: { cron: "0 8 * * 1", timezone: "America/New_York" },
+      retries: 2,
+      backoff: "1m",
+      timeout: "10m",
+      concurrency: { limit: 1 },
+      handler: async () => undefined,
+    });
+    const purgeExpiredSessions = defineScheduledTask("purge-expired-sessions", {
+      schedule: { cron: "0 3 * * *" },
+      handler: async () => undefined,
+    });
+
+    expect(sendDigest).toMatchObject({
+      schedule: { cron: "0 8 * * 1", timezone: "America/New_York" },
+      retries: 2,
+      backoff: "1m",
+      timeout: "10m",
+      concurrency: { limit: 1 },
+    });
+    expect(Object.keys(purgeExpiredSessions).sort()).toEqual(["handler", "name", "schedule"]);
+    expect(purgeExpiredSessions.schedule).toEqual({ cron: "0 3 * * *" });
+  });
+
+  test("rejects a schema, a concurrency key and a schedule without a cron", () => {
+    defineScheduledTask("purge-expired-sessions", {
+      schedule: { cron: "0 3 * * *" },
+      // @ts-expect-error a scheduled task takes no payload, so no schema
+      schema: z.object({}),
+      handler: async () => undefined,
+    });
+    defineScheduledTask("purge-expired-sessions", {
+      schedule: { cron: "0 3 * * *" },
+      // @ts-expect-error a scheduled task has no payload to key on
+      concurrency: { key: () => "all", limit: 1 },
+      handler: async () => undefined,
+    });
+    defineScheduledTask("purge-expired-sessions", {
+      // @ts-expect-error a schedule needs its cron
+      schedule: { timezone: "UTC" },
       handler: async () => undefined,
     });
   });

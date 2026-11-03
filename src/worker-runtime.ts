@@ -12,6 +12,7 @@ import {
   LOCK_ERROR_CODES,
   createFinishesInFlight,
   fanOutCompletionInFlight,
+  fanOutFailureInFlight,
   firingCompletionInFlight,
   runCompletionInFlight,
   runFailureInFlight,
@@ -550,9 +551,29 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
       config.logger.debug({ eventName: job.name, eventId: job.data.eventId }, "fan-out handed back: unknown event");
       throw new DelayedError();
     }
-    throw new UnrecoverableError(
+    const error = new UnrecoverableError(
       `No worker defined event "${job.name}" within ${shownDurationOf(timing.unknownNameGiveUpDelayInMilliseconds)} after a worker first found event "${job.data.eventId}" unknown.`,
     );
+    const jobId = job.id ?? "";
+    finishesInFlight.trackFinish(
+      jobId,
+      fanOutFailureInFlight({
+        processedOn: job.processedOn,
+        attemptsMade: job.attemptsMade,
+        token,
+        logger: config.logger,
+        eventName: job.name,
+        eventId: job.data.eventId,
+        recordFanOutFailure: async () => {
+          const failedJob = await Job.fromId(worker, jobId);
+          if (failedJob === undefined) {
+            throw new Error(`The fan-out of event "${job.data.eventId}" is gone from Redis.`);
+          }
+          await recordFinalFailureOfJob(failedJob, error);
+        },
+      }),
+    );
+    throw error;
   }
   const logAttemptStalled = async (jobId: string) => {
     const job = (await Job.fromId(worker, jobId)) as Job<StoredRun> | undefined;
@@ -580,7 +601,7 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
     } else if (error.message === STALL_LIMIT_FAILED_REASON && config.tasksByName.has(job.name)) {
       await failRunForStalling(job as Job<StoredRun>);
     }
-    await sendFailureNotice(client, job, config.sendBuiltInEvent);
+    await sendFailureNotice(client, job, config.sendBuiltInEvent).catch(() => undefined);
   };
   worker.on("failed", (job, error) => {
     if (job?.id !== undefined) {

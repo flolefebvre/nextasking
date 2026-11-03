@@ -4,6 +4,7 @@ import { describe, expect, test } from "vitest";
 import {
   createFinishesInFlight,
   fanOutCompletionInFlight,
+  fanOutFailureInFlight,
   firingCompletionInFlight,
   runCompletionInFlight,
   runFailureInFlight,
@@ -315,66 +316,6 @@ describe("a run failure in flight", () => {
     expect(lines).toEqual([{ level: "error", fields: { err: laterLockError }, message: "worker error" }]);
   });
 
-  test.each([
-    {
-      heldJob: "waiting after a stall, its attempts unchanged",
-      jobOnServer: { state: "waiting", processedOn: PROCESSED_ON, attemptsMade: ATTEMPTS_MADE_AT_ACTIVATION },
-    },
-    {
-      heldJob: "still active",
-      jobOnServer: { state: "active", processedOn: PROCESSED_ON, attemptsMade: ATTEMPTS_MADE_AT_ACTIVATION },
-    },
-    {
-      heldJob: "failed by a later activation",
-      jobOnServer: {
-        state: "failed",
-        processedOn: PROCESSED_ON + 5_000,
-        attemptsMade: ATTEMPTS_MADE_AT_ACTIVATION + 1,
-      },
-    },
-    {
-      heldJob: "completed",
-      jobOnServer: { state: "completed", processedOn: PROCESSED_ON, attemptsMade: ATTEMPTS_MADE_AT_ACTIVATION + 1 },
-    },
-  ])("logs its lock error as a worker error when the server holds the job $heldJob", async ({ jobOnServer }) => {
-    const { finishesInFlight, trackFailureOfJob, lines } = finishesInFlightReading(async () => jobOnServer);
-    trackFailureOfJob(JOB_ID);
-    const lockError = failureLockError(JOB_ID);
-
-    finishesInFlight.routeWorkerError(lockError);
-    await settlePendingConfirmations();
-
-    expect(lines).toEqual([{ level: "error", fields: { err: lockError }, message: "worker error" }]);
-  });
-
-  test("writes one run failure unconfirmed warning, with the lock error, when the job is gone from the server", async () => {
-    const { finishesInFlight, trackFailureOfJob, lines } = finishesInFlightReading(async () => undefined);
-    trackFailureOfJob(JOB_ID);
-    const lockError = failureLockError(JOB_ID);
-
-    finishesInFlight.routeWorkerError(lockError);
-    await settlePendingConfirmations();
-
-    expect(lines).toEqual([
-      { level: "warn", fields: { err: lockError, ...RUN_FIELDS }, message: "run failure unconfirmed" },
-    ]);
-  });
-
-  test("writes one run failure unconfirmed warning, with the read error, when the server can't be read", async () => {
-    const readError = new Error("Connection is closed.");
-    const { finishesInFlight, trackFailureOfJob, lines } = finishesInFlightReading(async () => {
-      throw readError;
-    });
-    trackFailureOfJob(JOB_ID);
-
-    finishesInFlight.routeWorkerError(failureLockError(JOB_ID));
-    await settlePendingConfirmations();
-
-    expect(lines).toEqual([
-      { level: "warn", fields: { err: readError, ...RUN_FIELDS }, message: "run failure unconfirmed" },
-    ]);
-  });
-
   test("sends no failure notice when the server can't tell", async () => {
     const { finishesInFlight, trackFailureOfJob, failureNoticeSends } = finishesInFlightReading(async () => undefined);
     trackFailureOfJob(JOB_ID);
@@ -383,6 +324,161 @@ describe("a run failure in flight", () => {
     await settlePendingConfirmations();
 
     expect(failureNoticeSends).toEqual([]);
+  });
+});
+
+const FAN_OUT_FIELDS = { eventName: "account.closed", eventId: "event-7" };
+
+function fanOutFailureTracking(
+  jobOnServer: () => Promise<JobOnServer | undefined>,
+  recordFanOutFailure: () => Promise<void> = async () => undefined,
+) {
+  const fanOutFailureRecords: string[] = [];
+  const reading = finishesInFlightReading(jobOnServer);
+  reading.trackFinishOfJob(JOB_ID, (logger) =>
+    fanOutFailureInFlight({
+      processedOn: PROCESSED_ON,
+      attemptsMade: ATTEMPTS_MADE_AT_ACTIVATION,
+      token: TOKEN,
+      logger,
+      ...FAN_OUT_FIELDS,
+      recordFanOutFailure: async () => {
+        fanOutFailureRecords.push(JOB_ID);
+        await recordFanOutFailure();
+      },
+    }),
+  );
+  return { ...reading, fanOutFailureRecords };
+}
+
+const FAILED_BY_THIS_ACTIVATION: JobOnServer = {
+  state: "failed",
+  processedOn: PROCESSED_ON,
+  attemptsMade: ATTEMPTS_MADE_AT_ACTIVATION + 1,
+};
+
+describe("a fan-out failure in flight", () => {
+  test("records the fan-out failure once, from the server, when the server holds the job failed by this activation", async () => {
+    const { finishesInFlight, lines, readJobIds, fanOutFailureRecords } = fanOutFailureTracking(
+      async () => FAILED_BY_THIS_ACTIVATION,
+    );
+
+    finishesInFlight.routeWorkerError(failureLockError(JOB_ID));
+    await settlePendingConfirmations();
+
+    expect(lines).toEqual([]);
+    expect(readJobIds).toEqual([JOB_ID]);
+    expect(fanOutFailureRecords).toEqual([JOB_ID]);
+  });
+
+  test("records nothing when the worker reports the job failed, since the failed listener records it", () => {
+    const { finishesInFlight, lines, readJobIds, fanOutFailureRecords } = fanOutFailureTracking(async () => undefined);
+
+    finishesInFlight.recordFinishReported(JOB_ID, "failed");
+
+    expect(lines).toEqual([]);
+    expect(readJobIds).toEqual([]);
+    expect(fanOutFailureRecords).toEqual([]);
+  });
+
+  test("writes one fan-out failure unconfirmed warning, with the record's error and no worker error, when the failure can't be recorded", async () => {
+    const recordError = new Error("The fan-out is gone from Redis");
+    const { finishesInFlight, lines } = fanOutFailureTracking(
+      async () => FAILED_BY_THIS_ACTIVATION,
+      async () => {
+        throw recordError;
+      },
+    );
+
+    finishesInFlight.routeWorkerError(failureLockError(JOB_ID));
+    await settlePendingConfirmations();
+
+    expect(lines).toEqual([
+      { level: "warn", fields: { ...FAN_OUT_FIELDS, err: recordError }, message: "fan-out failure unconfirmed" },
+    ]);
+  });
+});
+
+const HELD_JOBS_THAT_NO_FAILURE_OF_THIS_ACTIVATION_EXPLAINS = [
+  {
+    heldJob: "waiting after a stall, its attempts unchanged",
+    jobOnServer: { state: "waiting", processedOn: PROCESSED_ON, attemptsMade: ATTEMPTS_MADE_AT_ACTIVATION },
+  },
+  {
+    heldJob: "still active",
+    jobOnServer: { state: "active", processedOn: PROCESSED_ON, attemptsMade: ATTEMPTS_MADE_AT_ACTIVATION },
+  },
+  {
+    heldJob: "failed by a later activation",
+    jobOnServer: { ...FAILED_BY_THIS_ACTIVATION, processedOn: PROCESSED_ON + 5_000 },
+  },
+  {
+    heldJob: "completed",
+    jobOnServer: { ...FAILED_BY_THIS_ACTIVATION, state: "completed" },
+  },
+];
+
+describe.each([
+  {
+    failure: "a run failure in flight",
+    trackFailureReading: (readJobOnServer: () => Promise<JobOnServer | undefined>) => {
+      const reading = finishesInFlightReading(readJobOnServer);
+      reading.trackFailureOfJob(JOB_ID);
+      return reading;
+    },
+    heldJobsThatDoNotConfirm: HELD_JOBS_THAT_NO_FAILURE_OF_THIS_ACTIVATION_EXPLAINS,
+    unconfirmedMessage: "run failure unconfirmed",
+    unconfirmedFields: RUN_FIELDS,
+  },
+  {
+    failure: "a fan-out failure in flight",
+    trackFailureReading: (readJobOnServer: () => Promise<JobOnServer | undefined>) =>
+      fanOutFailureTracking(readJobOnServer),
+    heldJobsThatDoNotConfirm: [
+      ...HELD_JOBS_THAT_NO_FAILURE_OF_THIS_ACTIVATION_EXPLAINS,
+      { heldJob: "delayed by this activation", jobOnServer: { ...FAILED_BY_THIS_ACTIVATION, state: "delayed" } },
+    ],
+    unconfirmedMessage: "fan-out failure unconfirmed",
+    unconfirmedFields: FAN_OUT_FIELDS,
+  },
+])("$failure", ({ trackFailureReading, heldJobsThatDoNotConfirm, unconfirmedMessage, unconfirmedFields }) => {
+  test.each(heldJobsThatDoNotConfirm)(
+    "logs its lock error as a worker error when the server holds the job $heldJob",
+    async ({ jobOnServer }) => {
+      const { finishesInFlight, lines } = trackFailureReading(async () => jobOnServer);
+      const lockError = failureLockError(JOB_ID);
+
+      finishesInFlight.routeWorkerError(lockError);
+      await settlePendingConfirmations();
+
+      expect(lines).toEqual([{ level: "error", fields: { err: lockError }, message: "worker error" }]);
+    },
+  );
+
+  test("writes one unconfirmed warning, with the lock error, when the job is gone from the server", async () => {
+    const { finishesInFlight, lines } = trackFailureReading(async () => undefined);
+    const lockError = failureLockError(JOB_ID);
+
+    finishesInFlight.routeWorkerError(lockError);
+    await settlePendingConfirmations();
+
+    expect(lines).toEqual([
+      { level: "warn", fields: { err: lockError, ...unconfirmedFields }, message: unconfirmedMessage },
+    ]);
+  });
+
+  test("writes one unconfirmed warning, with the read error, when the server can't be read", async () => {
+    const readError = new Error("Connection is closed.");
+    const { finishesInFlight, lines } = trackFailureReading(async () => {
+      throw readError;
+    });
+
+    finishesInFlight.routeWorkerError(failureLockError(JOB_ID));
+    await settlePendingConfirmations();
+
+    expect(lines).toEqual([
+      { level: "warn", fields: { err: readError, ...unconfirmedFields }, message: unconfirmedMessage },
+    ]);
   });
 });
 

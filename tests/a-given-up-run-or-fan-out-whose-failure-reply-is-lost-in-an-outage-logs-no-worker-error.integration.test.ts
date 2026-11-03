@@ -26,6 +26,11 @@ const archiveAccount = defineTask("archive-account", {
   handler: async () => undefined,
 });
 
+const notifyAccountClosed = defineListener("notify-account-closed", {
+  on: accountClosed,
+  handler: async () => undefined,
+});
+
 async function storeFirstFoundUnknownLongerAgoThanTheGiveUpDelay(
   redisUrl: string,
   keyPrefix: string,
@@ -62,7 +67,7 @@ async function withGivenUpFailureReplyCut(
     connection: { url: redisUrl },
     prefix: keyPrefix,
     events: [accountClosed],
-    tasks: [archiveAccount],
+    tasks: [archiveAccount, notifyAccountClosed],
   });
   const olderReleaseNextasking = createNextasking({
     connection: { url: proxy.url, giveUpAfter: "1s" },
@@ -132,6 +137,45 @@ integrationTest(
         expect(lines.filter((line) => line.message === "run failed").map((line) => line.fields.reason)).toEqual([
           "unknown task",
         ]);
+      },
+    );
+  },
+);
+
+integrationTest(
+  "a connection cut after a given-up fan-out of an unknown event is stored as failed, before its reply arrives, logs no worker error and one fan-out failed",
+  { timeout: 30_000 },
+  async ({ redisUrl, keyPrefix }) => {
+    let eventId = "";
+    await withGivenUpFailureReplyCut(
+      { redisUrl, keyPrefix },
+      async (nextReleaseNextasking) => {
+        ({ eventId } = await nextReleaseNextasking.emit("account.closed", { accountId: "account-7" }));
+        return { jobId: deriveJobId("account.closed", eventId) };
+      },
+      async ({ lines }) => {
+        await waitForLogMessage(lines, "fan-out failed");
+        const failedFanOut = await withRunQueue(redisUrl, keyPrefix, async (runQueue) => {
+          const fanOutJob = await runQueue.getJob(deriveJobId("account.closed", eventId));
+          const { finalError, failureCount } = fanOutJob?.data as {
+            finalError?: { name: string };
+            failureCount?: number;
+          };
+          return { state: await fanOutJob?.getState(), finalErrorName: finalError?.name, failureCount };
+        });
+
+        expect(lines.filter((line) => line.message === "fan-out failed")).toEqual([
+          {
+            level: "error",
+            fields: {
+              eventName: "account.closed",
+              eventId,
+              err: expect.objectContaining({ name: "UnrecoverableError" }),
+            },
+            message: "fan-out failed",
+          },
+        ]);
+        expect(failedFanOut).toEqual({ state: "failed", finalErrorName: "UnrecoverableError", failureCount: 1 });
       },
     );
   },

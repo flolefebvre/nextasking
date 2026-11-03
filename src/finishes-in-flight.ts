@@ -139,6 +139,53 @@ export function firingCompletionInFlight({
 
 const STATES_AFTER_A_STORED_FAILURE = new Set(["failed", "delayed", "waiting"]);
 
+const STATES_AFTER_A_STORED_FINAL_FAILURE = new Set(["failed"]);
+
+function isFailureStoredByActivation(
+  statesAfterTheFailure: ReadonlySet<string>,
+  processedOn: EpochMilliseconds | undefined,
+  attemptsMade: number,
+) {
+  return (jobOnServer: JobOnServer) =>
+    statesAfterTheFailure.has(jobOnServer.state) &&
+    processedOn !== undefined &&
+    jobOnServer.processedOn === processedOn &&
+    jobOnServer.attemptsMade === attemptsMade + 1;
+}
+
+export function fanOutFailureInFlight({
+  processedOn,
+  attemptsMade,
+  token,
+  logger,
+  eventName,
+  eventId,
+  recordFanOutFailure,
+}: {
+  processedOn: EpochMilliseconds | undefined;
+  attemptsMade: number;
+  token: string | undefined;
+  logger: Logger;
+  eventName: string;
+  eventId: string;
+  recordFanOutFailure: () => Promise<void>;
+}): FinishInFlight {
+  const warnFailureUnconfirmed = (error: unknown) => {
+    logger.warn({ eventName, eventId, err: error }, "fan-out failure unconfirmed");
+  };
+  return {
+    token,
+    reportedBy: "failed",
+    isConfirmedBy: isFailureStoredByActivation(STATES_AFTER_A_STORED_FINAL_FAILURE, processedOn, attemptsMade),
+    onConfirmed: (jobOnServer) => {
+      if (jobOnServer !== undefined) {
+        recordFanOutFailure().catch(warnFailureUnconfirmed);
+      }
+    },
+    onUnconfirmed: warnFailureUnconfirmed,
+  };
+}
+
 export function runFailureInFlight({
   processedOn,
   attemptsMade,
@@ -155,11 +202,7 @@ export function runFailureInFlight({
   return {
     token,
     reportedBy: "failed",
-    isConfirmedBy: (jobOnServer) =>
-      STATES_AFTER_A_STORED_FAILURE.has(jobOnServer.state) &&
-      processedOn !== undefined &&
-      jobOnServer.processedOn === processedOn &&
-      jobOnServer.attemptsMade === attemptsMade + 1,
+    isConfirmedBy: isFailureStoredByActivation(STATES_AFTER_A_STORED_FAILURE, processedOn, attemptsMade),
     onConfirmed: (jobOnServer) => {
       if (jobOnServer?.state === "failed") {
         sendFailureNotice().catch(() => undefined);

@@ -1,5 +1,5 @@
 import type { ConnectionConfig } from "./connection.js";
-import { retriesOf, validatePayload } from "./definitions.js";
+import { concurrencyKeyOf, retriesOf, validatePayload } from "./definitions.js";
 import type { AnyTaskDefinition, EventDefinition, PayloadInput, PayloadSchema } from "./definitions.js";
 import { parseDuration } from "./durations.js";
 import type { Duration, DurationInMilliseconds } from "./durations.js";
@@ -159,10 +159,12 @@ export function createNextasking<
       throw new Error(`Scheduled task "${task.name}" takes no payload: dispatch it by its name alone to run it now`);
     }
     const validatedPayload = task.schedule === undefined ? await validatePayload("task", task, payload) : undefined;
+    const concurrencyKey = concurrencyKeyOf(task, validatedPayload);
     const { isDuplicate } = await openRunQueue().enqueueRun(task.name, {
       runId,
       payload: validatedPayload,
       retries: retriesOf(task),
+      ...(concurrencyKey === undefined ? {} : { concurrencyKey }),
       ...(delayInMilliseconds === undefined ? {} : { delayInMilliseconds }),
     });
     logger.debug({ task: task.name, runId }, isDuplicate ? "duplicate dispatch dropped" : "run dispatched");

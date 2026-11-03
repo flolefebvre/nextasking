@@ -2,7 +2,7 @@ import * as v from "valibot";
 import { describe, expect, expectTypeOf, test } from "vitest";
 import { z } from "zod";
 
-import { defineEvent, defineListener, defineScheduledTask, defineTask } from "./definitions.js";
+import { concurrencyKeyOf, defineEvent, defineListener, defineScheduledTask, defineTask } from "./definitions.js";
 import type { StepTools } from "./step-engine.js";
 
 describe("defineTask", () => {
@@ -110,6 +110,66 @@ describe("defineTask", () => {
       },
       handler: async () => undefined,
     });
+  });
+
+  test("computes no concurrency key without a key function", () => {
+    const rebuildIndex = defineTask("rebuild-index", {
+      schema: z.object({ accountId: z.string() }),
+      concurrency: { limit: 2 },
+      handler: async () => undefined,
+    });
+    const purgeSessions = defineTask("purge-sessions", { schema: z.object({}), handler: async () => undefined });
+
+    expect(concurrencyKeyOf(rebuildIndex, { accountId: "account-7" })).toBeUndefined();
+    expect(concurrencyKeyOf(purgeSessions, {})).toBeUndefined();
+  });
+
+  test("computes the concurrency key from the payload", () => {
+    const rebuildIndex = defineTask("rebuild-index", {
+      schema: z.object({ accountId: z.string() }),
+      concurrency: { key: (payload) => payload.accountId, limit: 1 },
+      handler: async () => undefined,
+    });
+
+    expect(concurrencyKeyOf(rebuildIndex, { accountId: "account-7" })).toBe("account-7");
+  });
+
+  test("rejects a concurrency key function that throws, naming the task, with the thrown error as cause", () => {
+    const keyError = new Error("no account");
+    const rebuildIndex = defineTask("rebuild-index", {
+      schema: z.object({ accountId: z.string() }),
+      concurrency: {
+        key: () => {
+          throw keyError;
+        },
+        limit: 1,
+      },
+      handler: async () => undefined,
+    });
+
+    const computeKey = () => concurrencyKeyOf(rebuildIndex, { accountId: "account-7" });
+
+    expect(computeKey).toThrow('Task "rebuild-index" has an invalid concurrency.key: it threw "no account"');
+    expect(() => computeKey()).toThrow(expect.objectContaining({ cause: keyError }));
+  });
+
+  test("rejects a concurrency key that is empty or not a string, without showing the value", () => {
+    const keyOf = (key: (payload: { accountId: string }) => string) =>
+      concurrencyKeyOf(
+        defineTask("rebuild-index", {
+          schema: z.object({ accountId: z.string() }),
+          concurrency: { key, limit: 1 },
+          handler: async () => undefined,
+        }),
+        { accountId: "account-7" },
+      );
+
+    expect(() => keyOf(() => "")).toThrow(
+      'Task "rebuild-index" has an invalid concurrency.key: it returned an empty string, not a non-empty string',
+    );
+    expect(() => keyOf(() => 7 as unknown as string)).toThrow(
+      'Task "rebuild-index" has an invalid concurrency.key: it returned a number, not a non-empty string',
+    );
   });
 
   test("rejects a misspelt option on its own line", () => {

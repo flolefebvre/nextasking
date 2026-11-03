@@ -318,6 +318,33 @@ describe("dispatch", () => {
     // @ts-expect-error a space isn't a duration
     void nextasking.dispatch("send-welcome-email", VALID_WELCOME_PAYLOAD, { delay: "5 m" }).catch(() => undefined);
   });
+
+  test("rejects a run whose concurrency key function throws or returns an empty string, naming the task", async () => {
+    const rebuildIndex = defineTask("rebuild-index", {
+      schema: z.object({ accountId: z.string() }),
+      concurrency: {
+        key: (payload) => {
+          if (payload.accountId === "unknown") {
+            throw new Error("no account");
+          }
+          return payload.accountId;
+        },
+        limit: 1,
+      },
+      handler: async () => undefined,
+    });
+    const nextasking = createNextasking({ connection: { url: UNREACHABLE_URL }, tasks: [rebuildIndex] });
+
+    const throwingKeyDispatch = nextasking.dispatch("rebuild-index", { accountId: "unknown" });
+    const emptyKeyDispatch = nextasking.dispatch("rebuild-index", { accountId: "" });
+
+    await expect(throwingKeyDispatch).rejects.toThrow(
+      'Task "rebuild-index" has an invalid concurrency.key: it threw "no account"',
+    );
+    await expect(emptyKeyDispatch).rejects.toThrow(
+      'Task "rebuild-index" has an invalid concurrency.key: it returned an empty string, not a non-empty string',
+    );
+  });
 });
 
 describe("emit", () => {

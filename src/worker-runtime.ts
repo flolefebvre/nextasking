@@ -7,7 +7,7 @@ import { settleWithinTimeout } from "./attempt-timeout.js";
 import { backoffInMillisecondsFor } from "./backoff.js";
 import { closeRedisClient, createRedisClient } from "./connection.js";
 import type { ConnectionConfig } from "./connection.js";
-import { backoffOf, retriesOf } from "./definitions.js";
+import { backoffOf, concurrencyKeyOf, retriesOf } from "./definitions.js";
 import type { AnyTaskDefinition, EventDefinition, ScheduledTaskContext, TaskContext } from "./definitions.js";
 import { parseDuration } from "./durations.js";
 import type { Duration, DurationInMilliseconds, EpochMilliseconds } from "./durations.js";
@@ -329,10 +329,14 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
       await config.openRunQueue().enqueueListenerRuns(
         job.name,
         fanOut,
-        fanOut.listenerNames.map((listenerName) => ({
-          listenerName,
-          retries: retriesOf(config.tasksByName.get(listenerName)),
-        })),
+        fanOut.listenerNames.map((listenerName) => {
+          const listener = config.tasksByName.get(listenerName);
+          return {
+            listenerName,
+            retries: retriesOf(listener),
+            concurrencyKey: listener === undefined ? undefined : concurrencyKeyOf(listener, fanOut.payload),
+          };
+        }),
       );
       return;
     }

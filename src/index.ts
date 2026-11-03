@@ -23,6 +23,7 @@ export {
   FanOutNotReplayableError,
   InvalidPayloadError,
   NonRetriableError,
+  RedisUnavailableError,
   RunNotReplayableError,
   StepMisuseError,
   UnknownEventError,

@@ -8,6 +8,7 @@ import {
   FanOutNotReplayableError,
   InvalidPayloadError,
   NonRetriableError,
+  RedisUnavailableError,
   runFailed,
   RunNotReplayableError,
   StepMisuseError,
@@ -171,7 +172,7 @@ export const savedMessageId = step.run("send", () => "message-1" as const);
 
 export type StepResultKeepsItsType = Expect<IsEqual<typeof savedMessageId, Promise<"message-1">>>;
 
-const connection: ConnectionConfig = { url: "redis://nextasking.invalid:6379" };
+const connection: ConnectionConfig = { url: "redis://nextasking.invalid:6379", giveUpAfter: "5s" };
 
 export const nextasking = createNextasking({
   connection,
@@ -281,6 +282,7 @@ export const errorClasses: (new (...args: never[]) => Error)[] = [
   FanOutNotReplayableError,
   InvalidPayloadError,
   NonRetriableError,
+  RedisUnavailableError,
   RunNotReplayableError,
   StepMisuseError,
   UnknownEventError,

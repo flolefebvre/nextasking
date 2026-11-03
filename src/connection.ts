@@ -1,8 +1,22 @@
 import { Redis } from "ioredis";
 
+import { parseDuration } from "./durations.js";
+import type { Duration, DurationInMilliseconds } from "./durations.js";
+
 export type ConnectionConfig = {
   url: string;
+  giveUpAfter?: Duration;
 };
+
+const DEFAULT_GIVE_UP_AFTER: Duration = "5s";
+
+export function giveUpAfterInMillisecondsOf(connection: ConnectionConfig): DurationInMilliseconds {
+  try {
+    return parseDuration(connection.giveUpAfter ?? DEFAULT_GIVE_UP_AFTER);
+  } catch (error) {
+    throw new Error(`Invalid connection.giveUpAfter: ${(error as Error).message}`, { cause: error });
+  }
+}
 
 export type RedisClientRole = "instance" | "worker";
 

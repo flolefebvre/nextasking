@@ -163,6 +163,25 @@ describe("createNextasking", () => {
     );
   });
 
+  test("rejects an invalid connection.giveUpAfter", () => {
+    const creating = () =>
+      createNextasking({
+        connection: { url: UNREACHABLE_URL, giveUpAfter: "half a second" as Duration },
+        tasks: [sendWelcomeEmail],
+      });
+
+    expect(creating).toThrow(
+      'Invalid connection.giveUpAfter: "half a second" is not a duration: a whole number followed by s, m, h or d, such as "30s"',
+    );
+    expect(creating).toThrow(expect.objectContaining({ cause: expect.any(Error) }));
+  });
+
+  test("accepts a valid connection.giveUpAfter", () => {
+    expect(() =>
+      createNextasking({ connection: { url: UNREACHABLE_URL, giveUpAfter: "2s" }, tasks: [sendWelcomeEmail] }),
+    ).not.toThrow();
+  });
+
   test("accepts retries of 0, for a task that runs once", () => {
     const tasks = [defineTask("rebuild-index", { schema: z.object({}), retries: 0, handler: async () => undefined })];
 

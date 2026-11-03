@@ -1,5 +1,6 @@
 import { BUILT_IN_EVENTS, isBuiltInEventName } from "./built-in-events.js";
 import type { BuiltInEvent, BuiltInEventName } from "./built-in-events.js";
+import { giveUpAfterInMillisecondsOf } from "./connection.js";
 import type { ConnectionConfig } from "./connection.js";
 import { concurrencyKeyOf, retriesOf, validatePayload } from "./definitions.js";
 import type { AnyTaskDefinition, EventDefinition, PayloadInput, PayloadSchema } from "./definitions.js";
@@ -187,6 +188,7 @@ export function createNextasking<
 >(config: NextaskingConfig<Tasks, Events>): Nextasking<Tasks[number], Events[number] | BuiltInEvent> {
   const appEvents: readonly EventDefinition[] = config.events ?? [];
   rejectInvalidConfig(config.tasks, appEvents);
+  giveUpAfterInMillisecondsOf(config.connection);
   const events: readonly EventDefinition[] = [...appEvents, ...BUILT_IN_EVENTS];
   const prefix = config.prefix ?? DEFAULT_PREFIX;
   const logger = config.logger ?? silentLogger;

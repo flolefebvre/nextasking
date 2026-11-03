@@ -10,6 +10,7 @@ import type { WorkerProcessConfig } from "./worker-process-config.js";
 export type WorkerProcessExit = { code: number | null; signal: NodeJS.Signals | null };
 
 export type WorkerProcess = {
+  pid: number | undefined;
   logLines: RecordedLogLine[];
   output: () => string;
   kill: (signal: NodeJS.Signals) => void;
@@ -82,6 +83,7 @@ export async function startWorkerProcess({ env = {}, ...config }: WorkerProcessO
     return exited;
   };
   const workerProcess: WorkerProcess = {
+    pid: child.pid,
     logLines,
     output,
     kill: (signal) => {

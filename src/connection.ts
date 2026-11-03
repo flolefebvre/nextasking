@@ -83,10 +83,12 @@ export type ConnectionOutageTracker = {
   reportClientError: (client: object, error: unknown) => void;
   reportClientReady: (client: object) => void;
   forgetClient: (client: object) => void;
+  onConnectionRestored: (listener: () => void) => () => void;
 };
 
 export function createConnectionOutageTracker(logger: Logger): ConnectionOutageTracker {
   const clientsDown = new Set<object>();
+  const connectionRestoredListeners = new Set<() => void>();
   return {
     reportClientError: (client, error) => {
       if (clientsDown.size === 0) {
@@ -97,10 +99,22 @@ export function createConnectionOutageTracker(logger: Logger): ConnectionOutageT
     reportClientReady: (client) => {
       if (clientsDown.delete(client) && clientsDown.size === 0) {
         logger.info({}, "connection restored");
+        for (const listener of connectionRestoredListeners) {
+          listener();
+        }
       }
     },
     forgetClient: (client) => {
       clientsDown.delete(client);
+    },
+    onConnectionRestored: (listener) => {
+      const subscribedListener = () => {
+        listener();
+      };
+      connectionRestoredListeners.add(subscribedListener);
+      return () => {
+        connectionRestoredListeners.delete(subscribedListener);
+      };
     },
   };
 }
@@ -128,6 +142,7 @@ export type RedisConnections = {
   createClient: (role: RedisClientRole) => Redis;
   waitUntilReadyWithinGiveUpAfter: (client: Redis) => Promise<void>;
   callOnRedis: <Result>(callIds: RedisCallIds, call: () => Promise<Result>) => Promise<Result>;
+  onConnectionRestored: (listener: () => void) => () => void;
 };
 
 export function createRedisConnections(connection: ConnectionConfig, logger: Logger): RedisConnections {
@@ -192,6 +207,7 @@ export function createRedisConnections(connection: ConnectionConfig, logger: Log
         adopt,
       ),
     waitUntilReadyWithinGiveUpAfter,
+    onConnectionRestored: outageTracker.onConnectionRestored,
     callOnRedis: async (callIds, call) => {
       try {
         return await call();

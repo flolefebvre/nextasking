@@ -93,6 +93,7 @@ export type WorkerConfig = {
   dispatch: DispatchByName;
   emit: EmitByName;
   sendBuiltInEvent: SendBuiltInEvent;
+  onConnectionRestored: (listener: () => void) => () => void;
 };
 
 const STALL_LIMIT_FAILED_REASON = "job stalled more than allowable limit";

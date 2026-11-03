@@ -284,6 +284,7 @@ export function createNextasking<
           dispatch: workerEnqueuer.dispatch,
           emit: workerEnqueuer.emit,
           sendBuiltInEvent: workerEnqueuer.sendBuiltInEvent,
+          onConnectionRestored: connections.onConnectionRestored,
         });
       };
       const { isFirstRoundTripAnswered, completion } = await bootWorker({

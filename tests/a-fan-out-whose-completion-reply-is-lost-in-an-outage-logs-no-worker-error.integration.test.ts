@@ -2,7 +2,7 @@ import { expect, vi } from "vitest";
 import { z } from "zod";
 
 import { deriveJobId } from "../src/ids.js";
-import { createNextasking, defineEvent, defineListener, defineTask } from "../src/index.js";
+import { createNextasking, defineEvent, defineListener } from "../src/index.js";
 import { closeNextasking } from "../src/registry.js";
 import { integrationTest } from "./integration-test.js";
 import {
@@ -12,12 +12,17 @@ import {
 } from "./recording-logger.js";
 import { runQueueKeyPrefix } from "./run-job-key.js";
 import { startTcpProxy } from "./tcp-proxy.js";
+import { withRunQueue } from "./with-run-queue.js";
 
 const MOVE_TO_COMPLETED_ARGUMENT = "returnvalue";
 
+const LISTENER_NAMES = ["record-payment", "send-receipt"];
+
+const WAIT_WELL_UNDER_THE_LOCK_DURATION_IN_MILLISECONDS = 10_000;
+
 integrationTest(
-  "a connection cut after the completion of a fan-out is stored, before its reply arrives, logs no worker error and starts no listener run twice",
-  { timeout: 20_000 },
+  "a connection cut after the completion of a fan-out is stored, before its reply arrives, logs no worker error and hands back the listener run that reply carried to a worker of concurrency 1, so each listener runs once, at once after the reconnect, with no stall",
+  { timeout: 30_000 },
   async ({ redisUrl, keyPrefix }) => {
     const proxy = await startTcpProxy(redisUrl);
     const { logger, lines } = createRecordingLogger();
@@ -28,27 +33,20 @@ integrationTest(
       prefix: keyPrefix,
       logger,
       events: [invoicePaid],
-      tasks: [
-        defineListener("record-payment", {
+      tasks: LISTENER_NAMES.map((listenerName) =>
+        defineListener(listenerName, {
           on: invoicePaid,
           handler: async ({ runId }) => {
             listenerRunIds.push(runId);
           },
         }),
-        defineListener("send-receipt", {
-          on: invoicePaid,
-          handler: async ({ runId }) => {
-            listenerRunIds.push(runId);
-          },
-        }),
-        defineTask("ping-after-outage", { schema: z.object({}), handler: async () => undefined }),
-      ],
+      ),
     });
     const eventId = "stripe-evt-7";
     const fanOutJobKey = `${runQueueKeyPrefix(keyPrefix)}${deriveJobId("invoice.paid", eventId)}`;
 
     try {
-      await nextasking.startWorker();
+      await nextasking.startWorker({ concurrency: 1 });
       const completionReplyCut = proxy.cutBeforeReplyTo(
         (request) => request.includes(fanOutJobKey) && request.includes(MOVE_TO_COMPLETED_ARGUMENT),
       );
@@ -57,20 +55,32 @@ integrationTest(
       await completionReplyCut;
       await proxy.restore();
       await waitForLogMessage(lines, "connection restored", { timeout: 15_000 });
-      await nextasking.dispatch("ping-after-outage", {});
       await vi.waitFor(
         () => {
           expect(
-            lines.filter((line) => line.message === "run completed" && line.fields.task === "ping-after-outage"),
-          ).toHaveLength(1);
+            lines
+              .filter((line) => line.message === "run completed")
+              .map((line) => line.fields.task)
+              .sort(),
+          ).toEqual(LISTENER_NAMES);
         },
-        { timeout: 15_000 },
+        { timeout: WAIT_WELL_UNDER_THE_LOCK_DURATION_IN_MILLISECONDS },
+      );
+      const stalledCountersOfListenerRuns = await withRunQueue(redisUrl, keyPrefix, async (runQueue) =>
+        (await runQueue.getCompleted(0, -1))
+          .filter((completedJob) => LISTENER_NAMES.includes(completedJob.name))
+          .map((completedJob) => completedJob.stalledCounter),
       );
 
-      expect(new Set(listenerRunIds).size).toBe(listenerRunIds.length);
+      expect(listenerRunIds).toHaveLength(LISTENER_NAMES.length);
+      expect(stalledCountersOfListenerRuns).toEqual([0, 0]);
       expectOneConnectionErrorAndOneConnectionRestored(lines);
       expect(
-        lines.filter((line) => line.message === "worker error" || line.message === "fan-out completion unconfirmed"),
+        lines.filter((line) =>
+          ["worker error", "fan-out completion unconfirmed", "attempt stalled", "next job hand-back failed"].includes(
+            line.message,
+          ),
+        ),
       ).toEqual([]);
     } finally {
       await closeNextasking(nextasking);

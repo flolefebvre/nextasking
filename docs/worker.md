@@ -198,7 +198,7 @@ maxmemory-policy is "allkeys-lru": the Valkey or Redis holding the queues must u
 - An evicting policy found in the background writes `worker not started` at error, `err` naming the policy, and the worker stays off until the process restarts.
 - A SIGTERM while the worker waits for Redis stops it at once: nothing to drain.
 
-Once started, the worker waits out an outage: its commands, and a handler's `emit` and `dispatch`, wait for Redis to come back instead of failing the attempt. A run whose completion was stored just before the cut, its reply lost, is read back after the reconnect: it writes `run completed`, or `run completion unconfirmed` when Redis can't tell; see [Logging](logging.md#lifecycle-lines). A lock that expires during a long outage aborts the attempt like any lost lock; see [Stalls](#stalls).
+Once started, the worker waits out an outage: its commands, and a handler's `emit` and `dispatch`, wait for Redis to come back instead of failing the attempt. A run whose completion was stored just before the cut, its reply lost, is read back after the reconnect: it writes `run completed`, or `run completion unconfirmed` when Redis can't tell; see [Logging](logging.md#lifecycle-lines). The next job that lost reply carried is handed back to pending at once, with no stall counted. A lock that expires during a long outage aborts the attempt like any lost lock; see [Stalls](#stalls).
 
 ## Bundling
 

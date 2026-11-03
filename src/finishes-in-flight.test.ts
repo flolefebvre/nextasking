@@ -16,6 +16,10 @@ import { createRecordingLogger } from "../tests/recording-logger.js";
 
 const JOB_ID = "job-7";
 
+const TOKEN = "worker-1:3";
+
+const NEXT_JOB_ID = "job-8";
+
 const PROCESSED_ON = 1_700_000_000_000;
 
 const RUN_FIELDS = { task: "send-welcome-email", runId: "run-7", attempt: 1 };
@@ -36,16 +40,38 @@ async function settlePendingConfirmations(): Promise<void> {
   await new Promise((resolve) => setImmediate(resolve));
 }
 
-function finishesInFlightReading(readJobOnServer: (jobId: string) => Promise<JobOnServer | undefined>) {
+type NextJobHandBack = {
+  findActiveJobIdLockedBy?: (token: string) => Promise<string | undefined>;
+  moveActiveJobToWait?: (jobId: string, token: string) => Promise<void>;
+};
+
+function finishesInFlightReading(
+  readJobOnServer: (jobId: string) => Promise<JobOnServer | undefined>,
+  {
+    findActiveJobIdLockedBy = async () => undefined,
+    moveActiveJobToWait = async () => undefined,
+  }: NextJobHandBack = {},
+) {
   const { logger, lines } = createRecordingLogger();
   const readJobIds: string[] = [];
   const savedStepsRemovals: string[] = [];
   const failureNoticeSends: string[] = [];
+  const scannedTokens: string[] = [];
+  const movesToWait: { jobId: string; token: string }[] = [];
   const finishesInFlight = createFinishesInFlight({
     readJobOnServer: async (jobId) => {
       readJobIds.push(jobId);
       return readJobOnServer(jobId);
     },
+    findActiveJobIdLockedBy: async (token) => {
+      scannedTokens.push(token);
+      return findActiveJobIdLockedBy(token);
+    },
+    moveActiveJobToWait: async (jobId, token) => {
+      movesToWait.push({ jobId, token });
+      await moveActiveJobToWait(jobId, token);
+    },
+    logger,
     logWorkerError: listenerLoggingAnsweredErrors(logger, "worker error"),
   });
   const trackCompletionOfJob = (jobId: string, processedOn: number | undefined = PROCESSED_ON) => {
@@ -53,6 +79,7 @@ function finishesInFlightReading(readJobOnServer: (jobId: string) => Promise<Job
       jobId,
       runCompletionInFlight({
         processedOn,
+        token: TOKEN,
         runLogger: loggerWithFields(logger, RUN_FIELDS),
         durationFields: DURATION_FIELDS,
         removeSavedSteps: async () => {
@@ -67,6 +94,7 @@ function finishesInFlightReading(readJobOnServer: (jobId: string) => Promise<Job
       runFailureInFlight({
         processedOn: PROCESSED_ON,
         attemptsMade: ATTEMPTS_MADE_AT_ACTIVATION,
+        token: TOKEN,
         runLogger: loggerWithFields(logger, RUN_FIELDS),
         sendFailureNotice: async () => {
           failureNoticeSends.push(jobId);
@@ -86,6 +114,8 @@ function finishesInFlightReading(readJobOnServer: (jobId: string) => Promise<Job
     readJobIds,
     savedStepsRemovals,
     failureNoticeSends,
+    scannedTokens,
+    movesToWait,
   };
 }
 
@@ -364,6 +394,7 @@ describe.each([
     finishLoggingTo: (logger: Logger) =>
       runCompletionInFlight({
         processedOn: PROCESSED_ON,
+        token: TOKEN,
         runLogger: loggerWithFields(logger, RUN_FIELDS),
         durationFields: DURATION_FIELDS,
         removeSavedSteps: async () => undefined,
@@ -375,7 +406,13 @@ describe.each([
   {
     finish: "a fan-out completion in flight",
     finishLoggingTo: (logger: Logger) =>
-      fanOutCompletionInFlight({ processedOn: PROCESSED_ON, logger, eventName: "invoice.paid", eventId: "event-7" }),
+      fanOutCompletionInFlight({
+        processedOn: PROCESSED_ON,
+        token: TOKEN,
+        logger,
+        eventName: "invoice.paid",
+        eventId: "event-7",
+      }),
     confirmedLines: [],
     unconfirmedMessage: "fan-out completion unconfirmed",
     unconfirmedFields: { eventName: "invoice.paid", eventId: "event-7" },
@@ -385,6 +422,7 @@ describe.each([
     finishLoggingTo: (logger: Logger) =>
       firingCompletionInFlight({
         processedOn: PROCESSED_ON,
+        token: TOKEN,
         logger,
         taskName: "send-digest",
         scheduledAt: SCHEDULED_AT,
@@ -489,5 +527,140 @@ describe.each([
 
     expect(lines).toEqual(confirmedLines);
     expect(readJobIds).toEqual([]);
+  });
+});
+
+const COMPLETED_BY_THIS_ACTIVATION: JobOnServer = { state: "completed", processedOn: PROCESSED_ON, attemptsMade: 1 };
+
+describe("the next job a lost reply carried", () => {
+  test.each([
+    {
+      outcome: "is moved back to wait through the lock of the finish's token, once,",
+      activeJobIdLockedByToken: NEXT_JOB_ID,
+      expectedMovesToWait: [{ jobId: NEXT_JOB_ID, token: TOKEN }],
+    },
+    {
+      outcome: "moves nothing and logs nothing, when no active job holds the finish's token,",
+      activeJobIdLockedByToken: undefined,
+      expectedMovesToWait: [],
+    },
+  ])("$outcome after a run completion is confirmed", async ({ activeJobIdLockedByToken, expectedMovesToWait }) => {
+    const { finishesInFlight, trackCompletionOfJob, lines, scannedTokens, movesToWait } = finishesInFlightReading(
+      async () => COMPLETED_BY_THIS_ACTIVATION,
+      { findActiveJobIdLockedBy: async (token) => (token === TOKEN ? activeJobIdLockedByToken : undefined) },
+    );
+    trackCompletionOfJob(JOB_ID);
+
+    finishesInFlight.routeWorkerError(missingLockError(JOB_ID));
+    finishesInFlight.routeWorkerError(missingLockError(JOB_ID));
+    await settlePendingConfirmations();
+
+    expect(lines).toEqual([runCompletedLine]);
+    expect(scannedTokens).toEqual([TOKEN]);
+    expect(movesToWait).toEqual(expectedMovesToWait);
+  });
+
+  test("is moved back to wait after a run failure is confirmed", async () => {
+    const { finishesInFlight, trackFailureOfJob, lines, movesToWait } = finishesInFlightReading(
+      async () => ({ state: "failed", processedOn: PROCESSED_ON, attemptsMade: ATTEMPTS_MADE_AT_ACTIVATION + 1 }),
+      { findActiveJobIdLockedBy: async () => NEXT_JOB_ID },
+    );
+    trackFailureOfJob(JOB_ID);
+
+    finishesInFlight.routeWorkerError(failureLockError(JOB_ID));
+    await settlePendingConfirmations();
+
+    expect(lines).toEqual([]);
+    expect(movesToWait).toEqual([{ jobId: NEXT_JOB_ID, token: TOKEN }]);
+  });
+
+  test.each([
+    { outcome: "a lost lock", jobOnServer: { state: "active", processedOn: PROCESSED_ON, attemptsMade: 0 } },
+    { outcome: "a job gone from the server", jobOnServer: undefined },
+  ])("is not looked for after $outcome", async ({ jobOnServer }) => {
+    const { finishesInFlight, trackCompletionOfJob, scannedTokens, movesToWait } = finishesInFlightReading(
+      async () => jobOnServer,
+      { findActiveJobIdLockedBy: async () => NEXT_JOB_ID },
+    );
+    trackCompletionOfJob(JOB_ID);
+
+    finishesInFlight.routeWorkerError(missingLockError(JOB_ID));
+    finishesInFlight.routeWorkerError(missingLockError(JOB_ID));
+    await settlePendingConfirmations();
+
+    expect(scannedTokens).toEqual([]);
+    expect(movesToWait).toEqual([]);
+  });
+
+  test("is not looked for when the worker reports the finish, or when the finish has no token", async () => {
+    const { finishesInFlight, trackCompletionOfJob, trackFinishOfJob, scannedTokens } = finishesInFlightReading(
+      async () => COMPLETED_BY_THIS_ACTIVATION,
+      { findActiveJobIdLockedBy: async () => NEXT_JOB_ID },
+    );
+    trackCompletionOfJob(JOB_ID);
+    trackFinishOfJob("job-9", (logger) =>
+      fanOutCompletionInFlight({
+        processedOn: PROCESSED_ON,
+        token: undefined,
+        logger,
+        eventName: "invoice.paid",
+        eventId: "event-9",
+      }),
+    );
+
+    finishesInFlight.recordFinishReported(JOB_ID, "completed");
+    finishesInFlight.routeWorkerError(missingLockError("job-9"));
+    finishesInFlight.routeWorkerError(missingLockError("job-9"));
+    await settlePendingConfirmations();
+
+    expect(scannedTokens).toEqual([]);
+  });
+
+  test("writes one next job hand-back failed warning, moves nothing twice and still drops the lock errors, when the move finds the lock taken", async () => {
+    const lockTakenError = lockMismatchError(NEXT_JOB_ID);
+    const { finishesInFlight, trackCompletionOfJob, lines, movesToWait } = finishesInFlightReading(
+      async () => COMPLETED_BY_THIS_ACTIVATION,
+      {
+        findActiveJobIdLockedBy: async () => NEXT_JOB_ID,
+        moveActiveJobToWait: async () => {
+          throw lockTakenError;
+        },
+      },
+    );
+    trackCompletionOfJob(JOB_ID);
+
+    finishesInFlight.routeWorkerError(missingLockError(JOB_ID));
+    await settlePendingConfirmations();
+    finishesInFlight.routeWorkerError(missingLockError(JOB_ID));
+    await settlePendingConfirmations();
+
+    expect(lines).toEqual([
+      runCompletedLine,
+      { level: "warn", fields: { jobId: NEXT_JOB_ID, err: lockTakenError }, message: "next job hand-back failed" },
+    ]);
+    expect(movesToWait).toHaveLength(1);
+  });
+
+  test("writes one next job hand-back failed warning when the active jobs can't be read", async () => {
+    const scanError = new Error("Connection is closed.");
+    const { finishesInFlight, trackCompletionOfJob, lines, movesToWait } = finishesInFlightReading(
+      async () => COMPLETED_BY_THIS_ACTIVATION,
+      {
+        findActiveJobIdLockedBy: async () => {
+          throw scanError;
+        },
+      },
+    );
+    trackCompletionOfJob(JOB_ID);
+
+    finishesInFlight.routeWorkerError(missingLockError(JOB_ID));
+    finishesInFlight.routeWorkerError(missingLockError(JOB_ID));
+    await settlePendingConfirmations();
+
+    expect(lines).toEqual([
+      runCompletedLine,
+      { level: "warn", fields: { err: scanError }, message: "next job hand-back failed" },
+    ]);
+    expect(movesToWait).toEqual([]);
   });
 });

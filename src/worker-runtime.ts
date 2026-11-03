@@ -148,6 +148,29 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
         attemptsMade: jobOnServer.attemptsMade,
       };
     },
+    findActiveJobIdLockedBy: async (token) => {
+      const activeJobIds = await client.lrange(worker.toKey("active"), 0, -1);
+      if (activeJobIds.length === 0) {
+        return undefined;
+      }
+      const lockReads = client.pipeline();
+      for (const activeJobId of activeJobIds) {
+        lockReads.get(`${worker.toKey(activeJobId)}:lock`);
+      }
+      const lockReadReplies = (await lockReads.exec()) ?? [];
+      return activeJobIds.find((_activeJobId, index) => {
+        const [readError, lockToken] = lockReadReplies[index] ?? [];
+        if (readError) {
+          throw readError;
+        }
+        return lockToken === token;
+      });
+    },
+    moveActiveJobToWait: async (jobId, token) => {
+      const activeJob = await Job.fromId(worker, jobId);
+      await activeJob?.moveToWait(token);
+    },
+    logger: config.logger,
     logWorkerError: listenerLoggingAnsweredErrors(config.logger, "worker error"),
   });
 
@@ -346,6 +369,7 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
         runFailureInFlight({
           processedOn: job.processedOn,
           attemptsMade: job.attemptsMade,
+          token,
           runLogger,
           sendFailureNotice: () => sendFailureNotice(client, job, config.sendBuiltInEvent),
         }),
@@ -364,6 +388,7 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
       job.id ?? "",
       runCompletionInFlight({
         processedOn: job.processedOn,
+        token,
         runLogger,
         durationFields: durationFieldsAt(Date.now()),
         removeSavedSteps: () => removeSavedSteps(client, job),
@@ -430,6 +455,7 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
         job.id ?? "",
         firingCompletionInFlight({
           processedOn: job.processedOn,
+          token,
           logger: config.logger,
           taskName: firingJob.data.taskName,
           scheduledAt: new Date(plannedInstantOf(firingJob)),
@@ -455,6 +481,7 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
         job.id ?? "",
         fanOutCompletionInFlight({
           processedOn: job.processedOn,
+          token,
           logger: config.logger,
           eventName: job.name,
           eventId: fanOut.eventId,

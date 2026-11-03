@@ -8,7 +8,12 @@ import { settleWithinTimeout } from "./attempt-timeout.js";
 import { setTimeout as sleep } from "node:timers/promises";
 
 import { UnknownTaskRunError } from "./attempt-errors.js";
-import { LOCK_ERROR_CODES, createFinishesInFlight, runCompletionInFlight } from "./finishes-in-flight.js";
+import {
+  LOCK_ERROR_CODES,
+  createFinishesInFlight,
+  runCompletionInFlight,
+  runFailureInFlight,
+} from "./finishes-in-flight.js";
 import { createConcurrencySlots } from "./concurrency-slots.js";
 import type { ConcurrencySlot } from "./concurrency-slots.js";
 import { listenerLoggingAnsweredErrors } from "./connection.js";
@@ -334,6 +339,15 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
         throw writeError;
       });
       backoffInMillisecondsByFailedJob.set(job, backoffInMilliseconds);
+      finishesInFlight.trackFinish(
+        job.id ?? "",
+        runFailureInFlight({
+          processedOn: job.processedOn,
+          attemptsMade: job.attemptsMade,
+          runLogger,
+          sendFailureNotice: () => sendFailureNotice(client, job, config.sendBuiltInEvent),
+        }),
+      );
       throw error;
     }
     if (outcome.kind === "suspended") {
@@ -515,6 +529,9 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
     await sendFailureNotice(client, job, config.sendBuiltInEvent);
   };
   worker.on("failed", (job, error) => {
+    if (job?.id !== undefined) {
+      finishesInFlight.recordFinishReported(job.id, "failed");
+    }
     if (job !== undefined && typeof job.finishedOn === "number") {
       recordFinalFailureOfJob(job, error).catch(() => undefined);
     }

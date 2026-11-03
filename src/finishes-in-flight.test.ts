@@ -1,7 +1,7 @@
 import { ErrorCode } from "bullmq";
 import { describe, expect, test } from "vitest";
 
-import { createFinishesInFlight, runCompletionInFlight } from "./finishes-in-flight.js";
+import { createFinishesInFlight, runCompletionInFlight, runFailureInFlight } from "./finishes-in-flight.js";
 import type { JobOnServer } from "./finishes-in-flight.js";
 import { listenerLoggingAnsweredErrors } from "./connection.js";
 import { loggerWithFields } from "./logger.js";
@@ -33,6 +33,7 @@ function finishesInFlightReading(readJobOnServer: (jobId: string) => Promise<Job
   const { logger, lines } = createRecordingLogger();
   const readJobIds: string[] = [];
   const savedStepsRemovals: string[] = [];
+  const failureNoticeSends: string[] = [];
   const finishesInFlight = createFinishesInFlight({
     readJobOnServer: async (jobId) => {
       readJobIds.push(jobId);
@@ -53,7 +54,34 @@ function finishesInFlightReading(readJobOnServer: (jobId: string) => Promise<Job
       }),
     );
   };
-  return { finishesInFlight, trackCompletionOfJob, logger, lines, readJobIds, savedStepsRemovals };
+  const trackFailureOfJob = (jobId: string) => {
+    finishesInFlight.trackFinish(
+      jobId,
+      runFailureInFlight({
+        processedOn: PROCESSED_ON,
+        attemptsMade: ATTEMPTS_MADE_AT_ACTIVATION,
+        runLogger: loggerWithFields(logger, RUN_FIELDS),
+        sendFailureNotice: async () => {
+          failureNoticeSends.push(jobId);
+        },
+      }),
+    );
+  };
+  return {
+    finishesInFlight,
+    trackCompletionOfJob,
+    trackFailureOfJob,
+    lines,
+    readJobIds,
+    savedStepsRemovals,
+    failureNoticeSends,
+  };
+}
+
+const ATTEMPTS_MADE_AT_ACTIVATION = 0;
+
+function failureLockError(jobId: string): Error {
+  return Object.assign(new Error(`Missing lock for job ${jobId}. moveToDelayed`), { code: ErrorCode.JobLockNotExist });
 }
 
 const runCompletedLine = {
@@ -116,33 +144,17 @@ describe("the finishes in flight", () => {
     ]);
   });
 
-  test("log run completed and forget the job when the worker reports it completed", async () => {
-    const { finishesInFlight, trackCompletionOfJob, lines, readJobIds, savedStepsRemovals } = finishesInFlightReading(
-      async () => ({ state: "completed", processedOn: PROCESSED_ON, attemptsMade: 1 }),
-    );
-    trackCompletionOfJob(JOB_ID);
-    const laterLockError = missingLockError(JOB_ID);
+  test.each(["completed", "failed"] as const)(
+    "log nothing for a job the worker reports %s without a finish in flight",
+    (workerEvent) => {
+      const { finishesInFlight, lines, savedStepsRemovals } = finishesInFlightReading(async () => undefined);
 
-    finishesInFlight.recordFinishReported(JOB_ID, "completed");
-    finishesInFlight.routeWorkerError(laterLockError);
-    await settlePendingConfirmations();
+      finishesInFlight.recordFinishReported(JOB_ID, workerEvent);
 
-    expect(lines).toEqual([
-      runCompletedLine,
-      { level: "error", fields: { err: laterLockError }, message: "worker error" },
-    ]);
-    expect(readJobIds).toEqual([]);
-    expect(savedStepsRemovals).toEqual([JOB_ID]);
-  });
-
-  test("log nothing for a job the worker reports completed without a completion in flight", () => {
-    const { finishesInFlight, lines, savedStepsRemovals } = finishesInFlightReading(async () => undefined);
-
-    finishesInFlight.recordFinishReported(JOB_ID, "completed");
-
-    expect(lines).toEqual([]);
-    expect(savedStepsRemovals).toEqual([]);
-  });
+      expect(lines).toEqual([]);
+      expect(savedStepsRemovals).toEqual([]);
+    },
+  );
 
   test.each([
     {
@@ -274,5 +286,166 @@ describe("the finishes in flight", () => {
     finishesInFlight.routeWorkerError(Object.assign(new Error("read ECONNRESET"), { code: "ECONNRESET" }));
 
     expect(lines).toEqual([]);
+  });
+
+  test.each([
+    {
+      trackedFinish: "completion",
+      workerEvent: "completed",
+      expectedLinesBeforeTheLaterLockError: [runCompletedLine],
+      expectedSavedStepsRemovals: [JOB_ID],
+    },
+    {
+      trackedFinish: "completion",
+      workerEvent: "failed",
+      expectedLinesBeforeTheLaterLockError: [],
+      expectedSavedStepsRemovals: [],
+    },
+    {
+      trackedFinish: "failure",
+      workerEvent: "failed",
+      expectedLinesBeforeTheLaterLockError: [],
+      expectedSavedStepsRemovals: [],
+    },
+  ] as const)(
+    "release a $trackedFinish without reading the server when the worker reports the job $workerEvent, so a later lock error is a worker error",
+    async ({ trackedFinish, workerEvent, expectedLinesBeforeTheLaterLockError, expectedSavedStepsRemovals }) => {
+      const {
+        finishesInFlight,
+        trackCompletionOfJob,
+        trackFailureOfJob,
+        lines,
+        readJobIds,
+        savedStepsRemovals,
+        failureNoticeSends,
+      } = finishesInFlightReading(async () => undefined);
+      if (trackedFinish === "completion") {
+        trackCompletionOfJob(JOB_ID);
+      } else {
+        trackFailureOfJob(JOB_ID);
+      }
+      const laterLockError = missingLockError(JOB_ID);
+
+      finishesInFlight.recordFinishReported(JOB_ID, workerEvent);
+      finishesInFlight.routeWorkerError(laterLockError);
+      await settlePendingConfirmations();
+
+      expect(lines).toEqual([
+        ...expectedLinesBeforeTheLaterLockError,
+        { level: "error", fields: { err: laterLockError }, message: "worker error" },
+      ]);
+      expect(readJobIds).toEqual([]);
+      expect(savedStepsRemovals).toEqual(expectedSavedStepsRemovals);
+      expect(failureNoticeSends).toEqual([]);
+    },
+  );
+});
+
+describe("a run failure in flight", () => {
+  test.each([
+    { state: "failed", expectedFailureNoticeSends: [JOB_ID] },
+    { state: "delayed", expectedFailureNoticeSends: [] },
+    { state: "waiting", expectedFailureNoticeSends: [] },
+  ])(
+    "drops its lock error silently when the server holds the job $state by this activation's stored failure, and sends the failure notice only for a final failure",
+    async ({ state, expectedFailureNoticeSends }) => {
+      const { finishesInFlight, trackFailureOfJob, lines, readJobIds, failureNoticeSends } = finishesInFlightReading(
+        async () => ({ state, processedOn: PROCESSED_ON, attemptsMade: ATTEMPTS_MADE_AT_ACTIVATION + 1 }),
+      );
+      trackFailureOfJob(JOB_ID);
+
+      finishesInFlight.routeWorkerError(failureLockError(JOB_ID));
+      await settlePendingConfirmations();
+
+      expect(lines).toEqual([]);
+      expect(readJobIds).toEqual([JOB_ID]);
+      expect(failureNoticeSends).toEqual(expectedFailureNoticeSends);
+    },
+  );
+
+  test("is forgotten after its one lock error, so a later lock error is a worker error", async () => {
+    const { finishesInFlight, trackFailureOfJob, lines } = finishesInFlightReading(async () => ({
+      state: "delayed",
+      processedOn: PROCESSED_ON,
+      attemptsMade: ATTEMPTS_MADE_AT_ACTIVATION + 1,
+    }));
+    trackFailureOfJob(JOB_ID);
+    const laterLockError = failureLockError(JOB_ID);
+
+    finishesInFlight.routeWorkerError(failureLockError(JOB_ID));
+    finishesInFlight.routeWorkerError(laterLockError);
+    await settlePendingConfirmations();
+
+    expect(lines).toEqual([{ level: "error", fields: { err: laterLockError }, message: "worker error" }]);
+  });
+
+  test.each([
+    {
+      heldJob: "waiting after a stall, its attempts unchanged",
+      jobOnServer: { state: "waiting", processedOn: PROCESSED_ON, attemptsMade: ATTEMPTS_MADE_AT_ACTIVATION },
+    },
+    {
+      heldJob: "still active",
+      jobOnServer: { state: "active", processedOn: PROCESSED_ON, attemptsMade: ATTEMPTS_MADE_AT_ACTIVATION },
+    },
+    {
+      heldJob: "failed by a later activation",
+      jobOnServer: {
+        state: "failed",
+        processedOn: PROCESSED_ON + 5_000,
+        attemptsMade: ATTEMPTS_MADE_AT_ACTIVATION + 1,
+      },
+    },
+    {
+      heldJob: "completed",
+      jobOnServer: { state: "completed", processedOn: PROCESSED_ON, attemptsMade: ATTEMPTS_MADE_AT_ACTIVATION + 1 },
+    },
+  ])("logs its lock error as a worker error when the server holds the job $heldJob", async ({ jobOnServer }) => {
+    const { finishesInFlight, trackFailureOfJob, lines } = finishesInFlightReading(async () => jobOnServer);
+    trackFailureOfJob(JOB_ID);
+    const lockError = failureLockError(JOB_ID);
+
+    finishesInFlight.routeWorkerError(lockError);
+    await settlePendingConfirmations();
+
+    expect(lines).toEqual([{ level: "error", fields: { err: lockError }, message: "worker error" }]);
+  });
+
+  test("writes one run failure unconfirmed warning, with the lock error, when the job is gone from the server", async () => {
+    const { finishesInFlight, trackFailureOfJob, lines } = finishesInFlightReading(async () => undefined);
+    trackFailureOfJob(JOB_ID);
+    const lockError = failureLockError(JOB_ID);
+
+    finishesInFlight.routeWorkerError(lockError);
+    await settlePendingConfirmations();
+
+    expect(lines).toEqual([
+      { level: "warn", fields: { err: lockError, ...RUN_FIELDS }, message: "run failure unconfirmed" },
+    ]);
+  });
+
+  test("writes one run failure unconfirmed warning, with the read error, when the server can't be read", async () => {
+    const readError = new Error("Connection is closed.");
+    const { finishesInFlight, trackFailureOfJob, lines } = finishesInFlightReading(async () => {
+      throw readError;
+    });
+    trackFailureOfJob(JOB_ID);
+
+    finishesInFlight.routeWorkerError(failureLockError(JOB_ID));
+    await settlePendingConfirmations();
+
+    expect(lines).toEqual([
+      { level: "warn", fields: { err: readError, ...RUN_FIELDS }, message: "run failure unconfirmed" },
+    ]);
+  });
+
+  test("sends no failure notice when the server can't tell", async () => {
+    const { finishesInFlight, trackFailureOfJob, failureNoticeSends } = finishesInFlightReading(async () => undefined);
+    trackFailureOfJob(JOB_ID);
+
+    finishesInFlight.routeWorkerError(failureLockError(JOB_ID));
+    await settlePendingConfirmations();
+
+    expect(failureNoticeSends).toEqual([]);
   });
 });

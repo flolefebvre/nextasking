@@ -17,7 +17,7 @@ export type FinishReportingWorkerEvent = "completed" | "failed";
 export type FinishInFlight = {
   reportedBy: FinishReportingWorkerEvent;
   isConfirmedBy: (jobOnServer: JobOnServer) => boolean;
-  onConfirmed: () => void;
+  onConfirmed: (jobOnServer?: JobOnServer) => void;
   onUnconfirmed: (error: unknown) => void;
 };
 
@@ -80,6 +80,37 @@ export function runCompletionInFlight({
   };
 }
 
+const STATES_AFTER_A_STORED_FAILURE = new Set(["failed", "delayed", "waiting"]);
+
+export function runFailureInFlight({
+  processedOn,
+  attemptsMade,
+  runLogger,
+  sendFailureNotice,
+}: {
+  processedOn: EpochMilliseconds | undefined;
+  attemptsMade: number;
+  runLogger: Logger;
+  sendFailureNotice: () => Promise<void>;
+}): FinishInFlight {
+  return {
+    reportedBy: "failed",
+    isConfirmedBy: (jobOnServer) =>
+      STATES_AFTER_A_STORED_FAILURE.has(jobOnServer.state) &&
+      processedOn !== undefined &&
+      jobOnServer.processedOn === processedOn &&
+      jobOnServer.attemptsMade === attemptsMade + 1,
+    onConfirmed: (jobOnServer) => {
+      if (jobOnServer?.state === "failed") {
+        sendFailureNotice().catch(() => undefined);
+      }
+    },
+    onUnconfirmed: (error) => {
+      runLogger.warn({ err: error }, "run failure unconfirmed");
+    },
+  };
+}
+
 export function createFinishesInFlight({
   readJobOnServer,
   logWorkerError,
@@ -106,7 +137,7 @@ export function createFinishesInFlight({
       return "unconfirmed";
     }
     if (finish.isConfirmedBy(jobOnServer)) {
-      finish.onConfirmed();
+      finish.onConfirmed(jobOnServer);
       return "confirmed";
     }
     return "lock lost";

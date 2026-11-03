@@ -37,6 +37,34 @@ function echoCommandOf(text: string): string {
   return `*2\r\n$4\r\nECHO\r\n$${Buffer.byteLength(text)}\r\n${text}\r\n`;
 }
 
+const CRLF = "\r\n";
+
+const RESP_ARRAY_PREFIX = "*".charCodeAt(0);
+
+function byteLengthOfFirstCompleteCommand(requestBytes: Buffer): number | undefined {
+  const headerEnd = requestBytes.indexOf(CRLF);
+  if (headerEnd < 0) {
+    return undefined;
+  }
+  if (requestBytes[0] !== RESP_ARRAY_PREFIX) {
+    return headerEnd + CRLF.length;
+  }
+  const argumentCount = Number(requestBytes.toString("latin1", 1, headerEnd));
+  let commandEnd = headerEnd + CRLF.length;
+  for (let argumentIndex = 0; argumentIndex < argumentCount; argumentIndex += 1) {
+    const lengthEnd = requestBytes.indexOf(CRLF, commandEnd);
+    if (lengthEnd < 0) {
+      return undefined;
+    }
+    const argumentByteLength = Number(requestBytes.toString("latin1", commandEnd + 1, lengthEnd));
+    commandEnd = lengthEnd + CRLF.length + argumentByteLength + CRLF.length;
+    if (commandEnd > requestBytes.length) {
+      return undefined;
+    }
+  }
+  return commandEnd;
+}
+
 type ArmedReplyCut = {
   isRequestToCut: (request: string) => boolean;
   markCut: () => void;
@@ -79,15 +107,24 @@ export async function startTcpProxy(targetUrl: string): Promise<TcpProxy> {
     targetSocket.on("error", () => reset(clientSocket));
     clientSocket.on("close", () => reset(targetSocket));
     targetSocket.on("close", () => reset(clientSocket));
-    clientSocket.pipe(targetSocket);
     targetSocket.pipe(clientSocket);
-    clientSocket.on("data", (request: Buffer) => {
-      const replyCut = armedReplyCut;
-      if (replyCut?.isRequestToCut(request.toString()) === true) {
-        armedReplyCut = undefined;
-        clientSocket.unpipe(targetSocket);
-        targetSocket.unpipe(clientSocket);
-        cutOnceRepliesArrive(targetSocket, replyCut);
+    let unforwardedRequestBytes = Buffer.alloc(0);
+    let isForwardingRequests = true;
+    clientSocket.on("data", (requestChunk: Buffer) => {
+      unforwardedRequestBytes = Buffer.concat([unforwardedRequestBytes, requestChunk]);
+      let commandByteLength = byteLengthOfFirstCompleteCommand(unforwardedRequestBytes);
+      while (isForwardingRequests && commandByteLength !== undefined) {
+        const command = unforwardedRequestBytes.subarray(0, commandByteLength);
+        unforwardedRequestBytes = unforwardedRequestBytes.subarray(commandByteLength);
+        targetSocket.write(command);
+        const replyCut = armedReplyCut;
+        if (replyCut?.isRequestToCut(command.toString()) === true) {
+          armedReplyCut = undefined;
+          isForwardingRequests = false;
+          targetSocket.unpipe(clientSocket);
+          cutOnceRepliesArrive(targetSocket, replyCut);
+        }
+        commandByteLength = byteLengthOfFirstCompleteCommand(unforwardedRequestBytes);
       }
     });
   });

@@ -167,6 +167,7 @@ export type RunQueue = {
   syncSchedules: (declaredSchedules: readonly DeclaredSchedule[]) => Promise<ScheduleChange[]>;
   readonly bullmqQueue: Queue;
   readonly client: Redis;
+  readonly hasFailedToOpen: boolean;
   close: () => Promise<void>;
 };
 
@@ -195,6 +196,10 @@ export function createRunQueue(connections: RedisConnections, role: RedisClientR
   const client = connections.createClient(role);
   const queue = new Queue(RUN_QUEUE_NAME, { connection: client, prefix });
   queue.on("error", () => undefined);
+  let hasFailedToOpen = false;
+  queue.waitUntilReady().catch(() => {
+    hasFailedToOpen = true;
+  });
 
   const addUnlessDuplicate = async (
     name: string,
@@ -231,6 +236,9 @@ export function createRunQueue(connections: RedisConnections, role: RedisClientR
   return {
     bullmqQueue: queue,
     client,
+    get hasFailedToOpen() {
+      return hasFailedToOpen;
+    },
     replayRun: (taskName, runId) => replayFailedJob(deriveJobId(taskName, runId), storedRunAfterReplay),
     replayFanOut: (eventName, eventId) => replayFailedJob(deriveJobId(eventName, eventId), storedFanOutAfterReplay),
     enqueueRun: async (taskName, run) => {

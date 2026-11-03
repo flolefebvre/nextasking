@@ -20,7 +20,11 @@ const KEEP_ALIVE_INITIAL_DELAY_IN_MILLISECONDS = 30_000;
 
 const RECONNECT_AND_RESEND = 2;
 
-const UNANSWERED_ERROR_MESSAGES = new Set(["Command timed out", "Connection is closed."]);
+const UNANSWERED_ERROR_MESSAGES = new Set([
+  "Command timed out",
+  "Connection is closed.",
+  "Command aborted due to connection close",
+]);
 
 const UNANSWERED_ERROR_MESSAGE_PREFIXES = ["Socket timeout"];
 

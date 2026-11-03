@@ -33,7 +33,7 @@ import { LostRunLockError, runDataDescriptionOf, saveRunDataIfLockIsHeld } from 
 import { loggerWithFields } from "./logger.js";
 import type { Logger } from "./logger.js";
 import { createRedisStepStore, removeSavedSteps } from "./redis-step-store.js";
-import type { DispatchByName, EmitByName } from "./registry.js";
+import type { DispatchByName, EmitByName } from "./enqueuer.js";
 import { FIRING_JOB_NAME, RUN_QUEUE_NAME, plannedInstantOfFiring, scheduledAtOf } from "./run-queue.js";
 import type { RunQueue, StoredDelayedRunState, StoredFanOut, StoredFiring, StoredRun } from "./run-queue.js";
 import { attemptOf } from "./run-states.js";
@@ -83,7 +83,7 @@ export type WorkerConfig = {
   logger: Logger;
   tasksByName: ReadonlyMap<string, AnyTaskDefinition>;
   eventsByName: ReadonlyMap<string, EventDefinition>;
-  openRunQueue: () => RunQueue;
+  openRunQueue: () => Promise<RunQueue>;
   dispatch: DispatchByName;
   emit: EmitByName;
   sendBuiltInEvent: SendBuiltInEvent;
@@ -390,7 +390,9 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
       );
       return;
     }
-    await config.openRunQueue().enqueueRun(taskName, {
+    await (
+      await config.openRunQueue()
+    ).enqueueRun(taskName, {
       runId: deriveFiringRunId(taskName, plannedInstant),
       payload: undefined,
       retries: retriesOf(task),
@@ -404,7 +406,9 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
     }
     if (config.eventsByName.has(job.name)) {
       const fanOut = job.data as StoredFanOut;
-      await config.openRunQueue().enqueueListenerRuns(
+      await (
+        await config.openRunQueue()
+      ).enqueueListenerRuns(
         job.name,
         fanOut,
         fanOut.listenerNames.map((listenerName) => {

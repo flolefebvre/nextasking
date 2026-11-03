@@ -84,6 +84,7 @@ describe("isUnansweredError", () => {
   test.each([
     ["a command timeout", new Error("Command timed out")],
     ["a closed connection", new Error("Connection is closed.")],
+    ["a pipeline command aborted by a closed connection", new Error("Command aborted due to connection close")],
     ["a socket timeout", new Error("Socket timeout. Expecting data, but didn't receive any in 5000ms.")],
     ["a refused connection", networkError("ECONNREFUSED")],
     ["a reset connection", networkError("ECONNRESET")],

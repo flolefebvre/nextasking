@@ -33,6 +33,10 @@ Events and background tasks for a Next.js app, on BullMQ with Redis or Valkey. D
 | Know what a stall is and when a run fails stalled | [Worker](worker.md)                             |
 | Pick the Valkey or Redis for the queues           | [Worker](worker.md)                             |
 | Configure webpack with `serverExternalPackages`   | [Worker](worker.md)                             |
+| Limit a task's attempts across every instance     | [Concurrency](concurrency.md)                   |
+| Limit a task's attempts per account or other key  | [Concurrency](concurrency.md)                   |
+| Keep a scheduled task's firings from overlapping  | [Concurrency](concurrency.md)                   |
+| Know what a run waiting for a slot costs          | [Concurrency](concurrency.md)                   |
 | Run a task on a cron, in a time zone              | [Scheduled tasks](scheduled-tasks.md)           |
 | Know what `scheduledAt` holds                     | [Scheduled tasks](scheduled-tasks.md)           |
 | Run a scheduled task now                          | [Scheduled tasks](scheduled-tasks.md)           |

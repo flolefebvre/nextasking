@@ -31,6 +31,7 @@ await nextasking.startWorker({ concurrency: 10 });
 ```
 
 - It counts this process only: two instances with `concurrency: 10` run up to 20 attempts.
+- It caps every task together, in this process. To cap one task across every instance, or per account, use the task's own `concurrency: { limit }` or `{ key, limit }`; see [Concurrency](concurrency.md).
 - A sleeping run holds no slot: it frees it until it resumes.
 
 ## Let a deploy finish the running attempts

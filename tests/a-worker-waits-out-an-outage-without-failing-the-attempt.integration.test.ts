@@ -73,8 +73,13 @@ integrationTest(
         },
         { timeout: 15_000 },
       );
-      const runs = await nextasking.listRuns({ state: "completed", task: "send-welcome-email" });
-      expect(runs.runs).toHaveLength(1);
+      await vi.waitFor(
+        async () => {
+          const runs = await nextasking.listRuns({ state: "completed", task: "send-welcome-email" });
+          expect(runs.runs).toHaveLength(1);
+        },
+        { timeout: 15_000 },
+      );
     } finally {
       await closeNextasking(nextasking);
       await proxy.stop();

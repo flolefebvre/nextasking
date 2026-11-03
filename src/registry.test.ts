@@ -111,6 +111,14 @@ describe("createNextasking", () => {
     );
   });
 
+  test("rejects a task name starting with nextasking/", () => {
+    const reservedTask = defineTask("nextasking/firing", { schema: z.object({}), handler: async () => undefined });
+
+    expect(() => createNextasking({ connection: { url: UNREACHABLE_URL }, tasks: [reservedTask] })).toThrow(
+      'Task "nextasking/firing" has a reserved name: names starting with "nextasking/" are reserved for the library',
+    );
+  });
+
   test("accepts events and their listeners, and no events at all", () => {
     expect(() => createTestNextasking()).not.toThrow();
     expect(() => createNextasking({ connection: { url: UNREACHABLE_URL }, tasks: [sendWelcomeEmail] })).not.toThrow();

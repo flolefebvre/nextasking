@@ -123,7 +123,7 @@ declare module "@flefebvre/nextasking" {
 
 - two definitions with the same name: tasks and events share one namespace
 - a listener whose `on` event isn't listed in `events`
-- an event name starting with `nextasking/`, which is reserved for the library's built-in events
+- a task or event name starting with `nextasking/`, which is reserved for the library and its built-in events
 - a `concurrency.limit` that isn't a positive integer
 - `retries` that isn't a whole number, 0 or more
 - a duration option that isn't a valid duration, such as `"-5s"` or `"0.5h"` passed through a cast or plain JavaScript
@@ -133,6 +133,7 @@ declare module "@flefebvre/nextasking" {
 Duplicate name "invoice.paid": every task and event needs its own name
 Listener "record-invoice-payment" listens to event "invoice.paid", which is not listed in events
 Event "nextasking/run.failed" has a reserved name: names starting with "nextasking/" belong to the built-in events
+Task "nextasking/sync" has a reserved name: names starting with "nextasking/" are reserved for the library
 Task "rebuild-index" has an invalid timeout: "0.5h" is not a duration: a whole number followed by s, m, h or d, such as "30s"
 Task "sync-account" has an invalid retries: -1 is not a non-negative integer
 ```

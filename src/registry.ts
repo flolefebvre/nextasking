@@ -161,7 +161,7 @@ export type NextaskingConfig<
 
 const DEFAULT_PREFIX = "nextasking";
 
-const BUILT_IN_EVENT_PREFIX = "nextasking/";
+const RESERVED_NAME_PREFIX = "nextasking/";
 
 const closeByNextasking = new WeakMap<object, () => Promise<void>>();
 
@@ -328,14 +328,19 @@ function delayInMillisecondsOf(taskName: string, delay: Duration | undefined): D
 function rejectInvalidConfig(tasks: readonly AnyTaskDefinition[], events: readonly EventDefinition[]): void {
   rejectDuplicateNames([...tasks.map((task) => task.name), ...events.map((event) => event.name)]);
   for (const event of events) {
-    if (event.name.startsWith(BUILT_IN_EVENT_PREFIX)) {
+    if (event.name.startsWith(RESERVED_NAME_PREFIX)) {
       throw new Error(
-        `Event "${event.name}" has a reserved name: names starting with "${BUILT_IN_EVENT_PREFIX}" belong to the built-in events`,
+        `Event "${event.name}" has a reserved name: names starting with "${RESERVED_NAME_PREFIX}" belong to the built-in events`,
       );
     }
   }
   const eventNames = new Set(events.map((event) => event.name));
   for (const task of tasks) {
+    if (task.name.startsWith(RESERVED_NAME_PREFIX)) {
+      throw new Error(
+        `Task "${task.name}" has a reserved name: names starting with "${RESERVED_NAME_PREFIX}" are reserved for the library`,
+      );
+    }
     if (task.on !== undefined && !eventNames.has(task.on.name)) {
       throw new Error(`Listener "${task.name}" listens to event "${task.on.name}", which is not listed in events`);
     }

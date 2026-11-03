@@ -206,7 +206,7 @@ export function createNextasking<
       runQueue = undefined;
       await failedRunQueue.close();
     }
-    runQueue ??= createRunQueue(connections, "instance", prefix);
+    runQueue ??= createRunQueue(connections, "instance", prefix, logger);
     await connections.waitUntilReadyWithinGiveUpAfter(runQueue.client);
     return runQueue;
   };
@@ -259,7 +259,7 @@ export function createNextasking<
         throw new Error("The nextasking worker is already started in this process");
       }
       isWorkerStartedInThisProcess = true;
-      const workerRunQueue = createRunQueue(connections, "worker", prefix);
+      const workerRunQueue = createRunQueue(connections, "worker", prefix, logger);
       runQueueOfWorker = workerRunQueue;
       const workerEnqueuer = createEnqueuer({
         ...enqueuerConfig,

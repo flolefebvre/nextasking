@@ -157,5 +157,7 @@ export default nextConfig;
 | `warn`  | `maxmemory-policy unreadable`           | `err`                      |
 | `error` | `worker shutdown failed`                | `err`                      |
 | `error` | `worker not started`                    | `err`                      |
+| `error` | `worker error`                          | `err`                      |
+| `error` | `queue error`                           | `err`                      |
 
 See [Logging](logging.md) for the other lines.

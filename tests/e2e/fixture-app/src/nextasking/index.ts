@@ -7,7 +7,7 @@ import { sendWelcomeEmail } from "@/nextasking/tasks/send-welcome-email";
 export const nextasking = createNextasking({
   connection: { url: process.env.REDIS_URL ?? "redis://localhost:6379" },
   prefix: process.env.NEXTASKING_PREFIX ?? "nextasking",
-  events: [invoicePaid],
+  events: process.env.NEXTASKING_E2E_CONFIG_ERROR === "unlisted-event" ? [] : [invoicePaid],
   tasks: [sendWelcomeEmail, recordInvoicePayment, sendReceipt],
 });
 

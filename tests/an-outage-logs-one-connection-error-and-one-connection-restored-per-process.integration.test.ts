@@ -22,7 +22,7 @@ integrationTest(
     try {
       await nextasking.startWorker();
       await nextasking.dispatch("send-welcome-email", { email: "ada@example.com" });
-      await vi.waitFor(() => expect(completedEmails).toEqual(["ada@example.com"]), { timeout: 10_000 });
+      await waitForLogMessage(lines, "run completed");
 
       const outage = proxy.cutFor(OUTAGE_DURATION_IN_MILLISECONDS);
       await waitForLogMessage(lines, "connection error");
@@ -36,6 +36,7 @@ integrationTest(
         { level: "error", fields: { err: expect.any(Error) }, message: "connection error" },
         { level: "info", fields: {}, message: "connection restored" },
       ]);
+      expect(lines.filter((line) => line.message === "queue error" || line.message === "worker error")).toEqual([]);
     } finally {
       await closeNextasking(nextasking);
       await proxy.stop();

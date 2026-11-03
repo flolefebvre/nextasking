@@ -67,6 +67,14 @@ export function isUnansweredError(error: unknown): boolean {
   );
 }
 
+export function listenerLoggingAnsweredErrors(logger: Logger, message: string): (error: unknown) => void {
+  return (error) => {
+    if (!isUnansweredError(error)) {
+      logger.error({ err: error }, message);
+    }
+  };
+}
+
 class ConnectionNotReadyError extends Error {
   override readonly name = "ConnectionNotReadyError";
 }

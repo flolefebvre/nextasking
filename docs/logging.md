@@ -59,6 +59,8 @@ Each message is fixed: filter and alert on it.
 | `error` | `worker shutdown failed`                                                                                        | `err`                                                                                                       |
 | `error` | `connection error`                                                                                              | `err`                                                                                                       |
 | `error` | `worker not started`                                                                                            | `err`                                                                                                       |
+| `error` | `queue error`                                                                                                   | `err`                                                                                                       |
+| `error` | `worker error`                                                                                                  | `err`                                                                                                       |
 
 - `run dispatched` comes before any attempt, so it has no `attempt`. Every line about an attempt has `task`, `runId` and `attempt`.
 - A listener's run adds `eventName` and `eventId` to each of its lines, the handler's own included.
@@ -77,6 +79,7 @@ Each message is fixed: filter and alert on it.
 - `schedule added`, `schedule changed` and `schedule removed` are written by `startWorker()`, one per schedule it reconciles, before `worker started`. `cron` and `timezone` are the new values, or for `schedule removed` the stored ones. `firing dropped: task not scheduled` is written when a firing reaches a release that no longer schedules its task, with `scheduledAt` as an ISO string. See [Scheduled tasks](scheduled-tasks.md#what-a-deploy-does-to-schedules).
 - `worker started` is written when `startWorker()` has checked the `maxmemory-policy`, reconciled the schedules, re-sent the failure notices a crash lost, and started the worker. With Redis down at boot, that happens once Redis is back, after `startWorker()` has resolved. The `NEXT_MANUAL_SIG_HANDLE` warning, when it applies, comes right after it, or before it when the boot waits for Redis.
 - `connection error` is written when a client of the instance loses Redis and no outage is already logged, `err` being the first error; `connection restored` when every client of the instance is connected again. One pair per outage and per process, however many clients and calls it affects.
+- `queue error` and `worker error` are written when the BullMQ queue or worker under the instance reports an error that isn't a lost connection: a Lua script error, a lock it could not renew, a corrupted job. `err` is that error. A lost connection writes `connection error` instead, never these.
 - `maxmemory-policy unreadable` and `worker not started` are written by `startWorker()` at boot. `worker not started` is written only when the boot ran in the background because Redis was down, and failed, such as on an evicting `maxmemory-policy`; `err` says why. See [Worker](worker.md#when-redis-is-down-at-boot).
 - Payloads are never logged, at any level.
 

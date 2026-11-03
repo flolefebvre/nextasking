@@ -12,6 +12,7 @@ import type {
   EmittedEvent,
   ReplayedEvent,
   ReplayedRun,
+  RunWriter,
 } from "./enqueuer.js";
 import type { EventId, RunId } from "./ids.js";
 import { silentLogger } from "./logger.js";
@@ -155,7 +156,23 @@ const DEFAULT_PREFIX = "nextasking";
 
 let isWorkerStartedInThisProcess = false;
 
-const closeByNextasking = new WeakMap<object, () => Promise<void>>();
+export type NextaskingControls = {
+  close: () => Promise<void>;
+  startRecordingWrites: (recordingRunWriter: RunWriter) => void;
+  stopRecordingWrites: () => void;
+};
+
+const controlsByNextasking = new WeakMap<object, NextaskingControls>();
+
+export function controlsOf(nextasking: object): NextaskingControls | undefined {
+  return controlsByNextasking.get(nextasking);
+}
+
+function fakedInstanceError(callName: string): Error {
+  return new Error(
+    `This nextasking instance is faked: ${callName} needs Redis, which a faked instance never touches. Call restore() on the fake first`,
+  );
+}
 
 export function createNextasking<
   const Tasks extends readonly AnyTaskDefinition[],
@@ -189,17 +206,28 @@ export function createNextasking<
       runQueue = undefined;
       await failedRunQueue.close();
     }
-    runQueue ??= createRunQueue(connections, "instance", prefix);
+    runQueue ??= createRunQueue(connections, "instance", prefix, logger);
     await connections.waitUntilReadyWithinGiveUpAfter(runQueue.client);
     return runQueue;
   };
-  const { callOnRedis } = connections;
+  let recordingRunWriter: RunWriter | undefined;
+  const openRunWriter = async (): Promise<RunWriter> => recordingRunWriter ?? openRunQueue();
+  const callOnRedisUnlessRecording: typeof connections.callOnRedis = (callIds, call) =>
+    recordingRunWriter === undefined ? connections.callOnRedis(callIds, call) : call();
+  const readOnRedis = <Result>(
+    callName: string,
+    callIds: Parameters<typeof connections.callOnRedis>[0],
+    read: () => Promise<Result>,
+  ): Promise<Result> =>
+    recordingRunWriter === undefined
+      ? connections.callOnRedis(callIds, read)
+      : Promise.reject(fakedInstanceError(callName));
 
   const queueReader = createQueueReader({ openRunQueue, tasksByName, listenerNamesByEventName, declaredSchedules });
   const enqueuerConfig = { tasksByName, eventsByName, listenerNamesByEventName, logger };
   const { dispatch, emit, replay, replayEvent } = createEnqueuer({
     ...enqueuerConfig,
-    runQueueAccess: { openRunQueue, callOnRedis },
+    runWriterAccess: { openRunWriter, callOnRedis: callOnRedisUnlessRecording },
   });
 
   type Instance = Nextasking<Tasks[number], Events[number] | BuiltInEvent>;
@@ -212,26 +240,30 @@ export function createNextasking<
     isEventName: (name): name is EmittableEventNameOf<Events[number] | BuiltInEvent> =>
       eventsByName.has(name) && !isBuiltInEventName(name),
     getRun: ((taskName: string, runId: RunId) =>
-      callOnRedis({ runId }, () => queueReader.getRun(taskName, runId))) as Instance["getRun"],
+      readOnRedis("getRun", { runId }, () => queueReader.getRun(taskName, runId))) as Instance["getRun"],
     listRuns: ((options: Parameters<QueueReader["listRuns"]>[0]) =>
-      callOnRedis({}, () => queueReader.listRuns(options))) as Instance["listRuns"],
-    countRuns: (() => callOnRedis({}, () => queueReader.countRuns())) as Instance["countRuns"],
+      readOnRedis("listRuns", {}, () => queueReader.listRuns(options))) as Instance["listRuns"],
+    countRuns: (() => readOnRedis("countRuns", {}, () => queueReader.countRuns())) as Instance["countRuns"],
     getEvent: ((eventName: string, eventId: EventId) =>
-      callOnRedis({ eventId }, () => queueReader.getEvent(eventName, eventId))) as Instance["getEvent"],
-    listSchedules: (() => callOnRedis({}, () => queueReader.listSchedules())) as Instance["listSchedules"],
+      readOnRedis("getEvent", { eventId }, () => queueReader.getEvent(eventName, eventId))) as Instance["getEvent"],
+    listSchedules: (() =>
+      readOnRedis("listSchedules", {}, () => queueReader.listSchedules())) as Instance["listSchedules"],
     taskDefinitions: taskDefinitionSummariesOf(config.tasks) as Instance["taskDefinitions"],
     eventDefinitions: eventDefinitionSummariesOf(events, listenerNamesByEventName) as Instance["eventDefinitions"],
     startWorker: async (options = {}) => {
+      if (recordingRunWriter !== undefined) {
+        throw fakedInstanceError("startWorker");
+      }
       const workerOptions = workerOptionsFrom(options);
       if (isWorkerStartedInThisProcess) {
         throw new Error("The nextasking worker is already started in this process");
       }
       isWorkerStartedInThisProcess = true;
-      const workerRunQueue = createRunQueue(connections, "worker", prefix);
+      const workerRunQueue = createRunQueue(connections, "worker", prefix, logger);
       runQueueOfWorker = workerRunQueue;
       const workerEnqueuer = createEnqueuer({
         ...enqueuerConfig,
-        runQueueAccess: { openRunQueue: async () => workerRunQueue, callOnRedis: (_callIds, call) => call() },
+        runWriterAccess: { openRunWriter: async () => workerRunQueue, callOnRedis: (_callIds, call) => call() },
       });
       const isWorkerRunQueueOpen = () => runQueueOfWorker === workerRunQueue;
       const startTheWorker = () => {
@@ -307,7 +339,23 @@ export function createNextasking<
     runQueue = undefined;
   };
 
-  closeByNextasking.set(nextasking, () => closeInstance({ isDraining: false }));
+  controlsByNextasking.set(nextasking, {
+    close: () => closeInstance({ isDraining: false }),
+    startRecordingWrites: (runWriter) => {
+      if (recordingRunWriter !== undefined) {
+        throw new Error("This nextasking instance is already faked: restore() its fake before faking it again");
+      }
+      if (runQueueOfWorker !== undefined) {
+        throw new Error(
+          "This nextasking instance has started its worker, which would keep writing to Redis: fake an instance whose worker is not started",
+        );
+      }
+      recordingRunWriter = runWriter;
+    },
+    stopRecordingWrites: () => {
+      recordingRunWriter = undefined;
+    },
+  });
 
   return nextasking;
 }
@@ -390,5 +438,5 @@ function shownOptionValue(optionValue: unknown): string {
 }
 
 export async function closeNextasking(nextasking: object): Promise<void> {
-  await closeByNextasking.get(nextasking)?.();
+  await controlsByNextasking.get(nextasking)?.close();
 }

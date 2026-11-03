@@ -2,16 +2,17 @@ import { Queue } from "bullmq";
 import type { Job, JobsOptions } from "bullmq";
 import type { Redis } from "ioredis";
 
-import { closeRedisClient } from "./connection.js";
+import { closeRedisClient, listenerLoggingAnsweredErrors } from "./connection.js";
 import type { RedisClientRole, RedisConnections } from "./connection.js";
 import type { ConcurrencyKey } from "./definitions.js";
-import type { DurationInMilliseconds, EpochMilliseconds } from "./durations.js";
+import type { Duration, DurationInMilliseconds, EpochMilliseconds } from "./durations.js";
 import type { ReplayRefusal } from "./errors.js";
 import { saveFailedJobDataIfUnchanged } from "./failed-job-data.js";
 import { createRandomId, deriveJobId, deriveListenerRunId } from "./ids.js";
 import type { EventId, JobId, RunId } from "./ids.js";
 import { jobKeyOf } from "./job-lock.js";
 import { COMPLETED_JOB_RETENTION, FAILED_JOB_RETENTION } from "./job-retention.js";
+import type { Logger } from "./logger.js";
 import { keepSavedStepsForFailedRunRetention } from "./redis-step-store.js";
 import { scheduleChangesBetween } from "./schedules.js";
 import type { DeclaredSchedule, ScheduleChange } from "./schedules.js";
@@ -118,6 +119,7 @@ export type RunToEnqueue = {
   runId: RunId;
   payload: unknown;
   retries: number;
+  delay?: Duration;
   delayInMilliseconds?: DurationInMilliseconds;
   scheduledAt?: Date;
   concurrencyKey?: ConcurrencyKey;
@@ -192,10 +194,15 @@ function jobForRun(taskName: string, storedRun: StoredRun, retries: number) {
   };
 }
 
-export function createRunQueue(connections: RedisConnections, role: RedisClientRole, prefix: string): RunQueue {
+export function createRunQueue(
+  connections: RedisConnections,
+  role: RedisClientRole,
+  prefix: string,
+  logger: Logger,
+): RunQueue {
   const client = connections.createClient(role);
   const queue = new Queue(RUN_QUEUE_NAME, { connection: client, prefix });
-  queue.on("error", () => undefined);
+  queue.on("error", listenerLoggingAnsweredErrors(logger, "queue error"));
   let hasFailedToOpen = false;
   queue.waitUntilReady().catch(() => {
     hasFailedToOpen = true;

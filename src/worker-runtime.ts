@@ -10,6 +10,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { UnknownTaskRunError } from "./attempt-errors.js";
 import { createConcurrencySlots } from "./concurrency-slots.js";
 import type { ConcurrencySlot } from "./concurrency-slots.js";
+import { listenerLoggingAnsweredErrors } from "./connection.js";
 import { concurrencyKeyOf, retriesOf } from "./definitions.js";
 import type { AnyTaskDefinition, EventDefinition, ScheduledTaskContext, TaskContext } from "./definitions.js";
 import { parseDuration, shownDurationOf } from "./durations.js";
@@ -476,7 +477,7 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
   };
   const failRunForStalling = (job: Job<StoredRun>) =>
     recordRunFailedForStalling(client, job, timing.stallCountThatFailsARun, runLoggerOf(job, job.attemptsMade));
-  worker.on("error", () => undefined);
+  worker.on("error", listenerLoggingAnsweredErrors(config.logger, "worker error"));
   worker.on("lockRenewalFailed", (jobIds) => {
     for (const jobId of jobIds) {
       abortAttemptByJobId.get(jobId)?.("lock lost");

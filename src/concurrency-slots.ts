@@ -5,7 +5,7 @@ import type { Redis } from "ioredis";
 import type { ConcurrencyKey } from "./definitions.js";
 import type { DurationInMilliseconds } from "./durations.js";
 import type { JobId } from "./ids.js";
-import { jobKeyOf } from "./redis-step-store.js";
+import { RETURN_0_UNLESS_LOCK_IS_HELD, lockKeyOf } from "./job-lock.js";
 
 const CURRENT_TIME_IN_MILLISECONDS = `
 local serverTime = redis.call("TIME")
@@ -51,11 +51,7 @@ const RELEASE_SLOT_AND_PEEK_OLDEST_WAITING_JOB_ID = `${CURRENT_TIME_IN_MILLISECO
 redis.call("ZREM", KEYS[1], ARGV[2])
 ${OLDEST_WAITING_JOB_ID_IF_A_SLOT_IS_FREE}`;
 
-const RENEW_SLOT_IF_LOCK_IS_HELD = `
-if redis.call("GET", KEYS[1]) ~= ARGV[1] then
-  return 0
-end
-${CURRENT_TIME_IN_MILLISECONDS}
+const RENEW_SLOT_IF_LOCK_IS_HELD = `${RETURN_0_UNLESS_LOCK_IS_HELD}${CURRENT_TIME_IN_MILLISECONDS}
 redis.call("ZREMRANGEBYSCORE", KEYS[2], "-inf", now)
 if not redis.call("ZSCORE", KEYS[2], ARGV[1]) then
   return 0
@@ -149,14 +145,7 @@ export function createConcurrencySlots(
       };
       const renew = async (keys: ConcurrencySlotKeys) => {
         const renewal = await client
-          .eval(
-            RENEW_SLOT_IF_LOCK_IS_HELD,
-            2,
-            `${jobKeyOf(job)}:lock`,
-            keys.holders,
-            token,
-            slotTimeToLiveInMilliseconds,
-          )
+          .eval(RENEW_SLOT_IF_LOCK_IS_HELD, 2, lockKeyOf(job), keys.holders, token, slotTimeToLiveInMilliseconds)
           .catch(() => SLOT_RENEWED);
         if (renewalTimer === undefined) {
           return;

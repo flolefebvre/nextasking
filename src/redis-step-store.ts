@@ -2,25 +2,13 @@ import type { Job, MinimalJob } from "bullmq";
 import type { Redis } from "ioredis";
 
 import type { RunId, StepId } from "./ids.js";
+import { LostRunLockError, RETURN_0_UNLESS_LOCK_IS_HELD, jobKeyOf, lockKeyOf } from "./job-lock.js";
 import { FAILED_JOB_RETENTION } from "./run-queue.js";
 import type { SerializedSavedStep, StepStore } from "./step-engine.js";
 
-class LostRunLockError extends Error {
-  override readonly name = "LostRunLockError";
-
-  constructor(stepId: StepId, runId: RunId) {
-    super(
-      `Step "${stepId}" was not saved: this attempt no longer holds the lock of run "${runId}", so another attempt owns the run now.`,
-    );
-  }
-}
-
 const SAVED_STEPS_TIME_TO_LIVE_IN_MILLISECONDS = FAILED_JOB_RETENTION.age * 1000;
 
-const SAVE_STEP_IF_LOCK_IS_HELD = `
-if redis.call("GET", KEYS[1]) ~= ARGV[1] then
-  return 0
-end
+const SAVE_STEP_IF_LOCK_IS_HELD = `${RETURN_0_UNLESS_LOCK_IS_HELD}
 redis.call("HSET", KEYS[3], "stc", 0)
 redis.call("HSET", KEYS[2], ARGV[3], ARGV[4])
 redis.call("PEXPIRE", KEYS[2], ARGV[2])
@@ -28,10 +16,6 @@ return 1
 `;
 
 const STEP_SAVED = 1;
-
-export function jobKeyOf(job: MinimalJob): string {
-  return `${job.queueQualifiedName}:${job.id}`;
-}
 
 function savedStepsKeyOfJobKey(jobKey: string): string {
   return `${jobKey}:steps`;
@@ -53,7 +37,7 @@ export function createRedisStepStore(client: Redis, job: Job<{ runId: RunId }>, 
       const outcome = await client.eval(
         SAVE_STEP_IF_LOCK_IS_HELD,
         3,
-        `${jobKeyOf(job)}:lock`,
+        lockKeyOf(job),
         savedStepsKey,
         jobKeyOf(job),
         job.token ?? "",
@@ -63,7 +47,7 @@ export function createRedisStepStore(client: Redis, job: Job<{ runId: RunId }>, 
       );
       if (outcome !== STEP_SAVED) {
         markLockLost();
-        throw new LostRunLockError(stepId, job.data.runId);
+        throw new LostRunLockError(`Step "${stepId}" of run "${job.data.runId}"`);
       }
     },
   };

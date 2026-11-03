@@ -46,7 +46,7 @@ integrationTest(
 
       expect(stepErrors[0]).toMatchObject({
         name: "LostRunLockError",
-        message: expect.stringContaining('Step "send" was not saved'),
+        message: `Step "send" of run "${runId}" was not saved: this attempt no longer holds its lock, so another attempt owns it now.`,
       });
       expect(steps.serializedResultsByStepId).toEqual({ "pick-recipients": '[["ada@example.com"]]' });
     } finally {

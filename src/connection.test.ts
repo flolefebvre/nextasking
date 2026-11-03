@@ -56,6 +56,28 @@ describe("the connection outage tracker", () => {
     expect(lines).toEqual([]);
   });
 
+  test("calls each connection-restored listener once per outage, when it logs connection restored, until it unsubscribes", () => {
+    const { logger, lines } = createRecordingLogger();
+    const outageTracker = createConnectionOutageTracker(logger);
+    const instanceClient = {};
+    const workerClient = {};
+    const messagesLoggedWhenRestored: string[][] = [];
+    const stopListening = outageTracker.onConnectionRestored(() => {
+      messagesLoggedWhenRestored.push(lines.map((line) => line.message));
+    });
+
+    outageTracker.reportClientReady(instanceClient);
+    outageTracker.reportClientError(instanceClient, networkError("ECONNRESET"));
+    outageTracker.reportClientError(workerClient, networkError("ECONNRESET"));
+    outageTracker.reportClientReady(instanceClient);
+    outageTracker.reportClientReady(workerClient);
+    stopListening();
+    outageTracker.reportClientError(workerClient, networkError("ECONNRESET"));
+    outageTracker.reportClientReady(workerClient);
+
+    expect(messagesLoggedWhenRestored).toEqual([["connection error", "connection restored"]]);
+  });
+
   test("ends an outage silently when the last client still down is closed, and logs the next one", () => {
     const { logger, lines } = createRecordingLogger();
     const outageTracker = createConnectionOutageTracker(logger);

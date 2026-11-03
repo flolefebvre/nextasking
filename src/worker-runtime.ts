@@ -1,5 +1,5 @@
 import { DelayedError, Job, UnrecoverableError, WaitingError, Worker } from "bullmq";
-import type { MinimalJob } from "bullmq";
+import type { JobJson, MinimalJob } from "bullmq";
 import type { Redis } from "ioredis";
 
 import { AttemptAbortedError, abortCauseOf } from "./attempt-abort.js";
@@ -46,6 +46,9 @@ import type { RunQueue, StoredDelayedRunState, StoredFanOut, StoredFiring, Store
 import { attemptOf } from "./run-states.js";
 import { executeTaskHandler, openStepEngine } from "./step-engine.js";
 import type { HandlerOutcome } from "./step-engine.js";
+import { handBackStrandedJobs } from "./stranded-jobs.js";
+import type { ActiveJob } from "./stranded-jobs.js";
+import { createJobsInHand } from "./jobs-in-hand.js";
 import { handBackUnlessGivenUp } from "./unknown-name-hand-back.js";
 import { bullmqMaxStalledCountOf, workerTiming } from "./worker-timing.js";
 
@@ -93,6 +96,7 @@ export type WorkerConfig = {
   dispatch: DispatchByName;
   emit: EmitByName;
   sendBuiltInEvent: SendBuiltInEvent;
+  onConnectionRestored: (listener: () => void) => () => void;
 };
 
 const STALL_LIMIT_FAILED_REASON = "job stalled more than allowable limit";
@@ -149,29 +153,6 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
         attemptsMade: jobOnServer.attemptsMade,
       };
     },
-    findActiveJobIdLockedBy: async (token) => {
-      const activeJobIds = await client.lrange(worker.toKey("active"), 0, -1);
-      if (activeJobIds.length === 0) {
-        return undefined;
-      }
-      const lockReads = client.pipeline();
-      for (const activeJobId of activeJobIds) {
-        lockReads.get(`${worker.toKey(activeJobId)}:lock`);
-      }
-      const lockReadReplies = (await lockReads.exec()) ?? [];
-      return activeJobIds.find((_activeJobId, index) => {
-        const [readError, lockToken] = lockReadReplies[index] ?? [];
-        if (readError) {
-          throw readError;
-        }
-        return lockToken === token;
-      });
-    },
-    moveActiveJobToWait: async (jobId, token) => {
-      const activeJob = await Job.fromId(worker, jobId);
-      await activeJob?.moveToWait(token);
-    },
-    logger: config.logger,
     logWorkerError: listenerLoggingAnsweredErrors(config.logger, "worker error"),
   });
 
@@ -200,13 +181,12 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
 
   type TrackedAttempt = ReturnType<typeof trackAttemptInFlight>;
 
-  const trackRunFailure = (job: Job<StoredRun>, token: string | undefined, runLogger: Logger) => {
+  const trackRunFailure = (job: Job<StoredRun>, runLogger: Logger) => {
     finishesInFlight.trackFinish(
       job.id ?? "",
       runFailureInFlight({
         processedOn: job.processedOn,
         attemptsMade: job.attemptsMade,
-        token,
         runLogger,
         sendFailureNotice: () => sendFailureNotice(client, job, config.sendBuiltInEvent),
       }),
@@ -378,7 +358,7 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
         throw writeError;
       });
       backoffInMillisecondsByFailedJob.set(job, backoffInMilliseconds);
-      trackRunFailure(job, token, runLogger);
+      trackRunFailure(job, runLogger);
       throw error;
     }
     if (outcome.kind === "suspended") {
@@ -393,7 +373,6 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
       job.id ?? "",
       runCompletionInFlight({
         processedOn: job.processedOn,
-        token,
         runLogger,
         durationFields: durationFieldsAt(Date.now()),
         removeSavedSteps: () => removeSavedSteps(client, job),
@@ -418,7 +397,17 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
       await Promise.all(attemptSettlements);
     }
   };
-  const worker = new Worker(RUN_QUEUE_NAME, (job, token) => trackSettlement(processJob(job, token)), {
+  const jobsInHand = createJobsInHand();
+  class RunWorker extends Worker {
+    protected override nextJobFromJobData(jobData?: JobJson, jobId?: string, token?: string): Promise<Job> {
+      return jobsInHand.holdWhileDelivering(jobId, () => super.nextJobFromJobData(jobData, jobId, token));
+    }
+
+    override processJob(job: Job, token: string, fetchNextCallback?: () => boolean): Promise<void | Job> {
+      return jobsInHand.releaseWhenProcessed(job.id, () => super.processJob(job, token, fetchNextCallback));
+    }
+  }
+  const worker = new RunWorker(RUN_QUEUE_NAME, (job, token) => trackSettlement(processJob(job, token)), {
     connection: client,
     prefix: config.prefix,
     concurrency: config.options.concurrency,
@@ -460,7 +449,6 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
         job.id ?? "",
         firingCompletionInFlight({
           processedOn: job.processedOn,
-          token,
           logger: config.logger,
           taskName: firingJob.data.taskName,
           scheduledAt: new Date(plannedInstantOf(firingJob)),
@@ -486,7 +474,6 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
         job.id ?? "",
         fanOutCompletionInFlight({
           processedOn: job.processedOn,
-          token,
           logger: config.logger,
           eventName: job.name,
           eventId: fanOut.eventId,
@@ -535,7 +522,7 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
       },
       (data) => saveRunDataIfLockIsHeld(client, job, token, data),
     );
-    trackRunFailure(job, token, runLogger);
+    trackRunFailure(job, runLogger);
     throw error;
   }
   async function handBackFanOutOfUnknownEvent(job: Job<StoredFanOut>, token: string | undefined): Promise<void> {
@@ -560,7 +547,6 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
       fanOutFailureInFlight({
         processedOn: job.processedOn,
         attemptsMade: job.attemptsMade,
-        token,
         logger: config.logger,
         eventName: job.name,
         eventId: job.data.eventId,
@@ -611,9 +597,52 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
       recordFinalFailureOfJob(job, error).catch(() => undefined);
     }
   });
+  const readActiveJobs = async (): Promise<ActiveJob[]> => {
+    const activeJobIds = await client.lrange(worker.toKey("active"), 0, -1);
+    if (activeJobIds.length === 0) {
+      return [];
+    }
+    const activeJobReads = client.pipeline();
+    for (const activeJobId of activeJobIds) {
+      const jobKey = worker.toKey(activeJobId);
+      activeJobReads.get(`${jobKey}:lock`);
+      activeJobReads.hget(jobKey, "processedOn");
+    }
+    const activeJobReadReplies = (await activeJobReads.exec()) ?? [];
+    return activeJobIds.map((jobId, index) => {
+      const [lockReadError, lockToken] = activeJobReadReplies[2 * index] ?? [];
+      const [processedOnReadError, processedOn] = activeJobReadReplies[2 * index + 1] ?? [];
+      if (lockReadError || processedOnReadError) {
+        throw lockReadError ?? processedOnReadError;
+      }
+      return {
+        jobId,
+        lockToken: typeof lockToken === "string" ? lockToken : undefined,
+        processedOn: typeof processedOn === "string" ? Number(processedOn) : undefined,
+      };
+    });
+  };
+  const stopHandingBackStrandedJobs = config.onConnectionRestored(() => {
+    const restoredAt = Date.now();
+    void handBackStrandedJobs({
+      workerId: worker.id,
+      restoredAt,
+      isJobInHand: jobsInHand.isJobInHand,
+      readActiveJobs: async () => {
+        await client.ping();
+        return readActiveJobs();
+      },
+      moveActiveJobToWait: async (jobId, lockToken) => {
+        const activeJob = await Job.fromId(worker, jobId);
+        await activeJob?.moveToWait(lockToken);
+      },
+      logger: config.logger,
+    });
+  });
   config.logger.info({}, "worker started");
 
   const closeWorker = async (shouldForce: boolean) => {
+    stopHandingBackStrandedJobs();
     await worker.close(shouldForce);
     config.logger.info({}, "worker stopped");
   };

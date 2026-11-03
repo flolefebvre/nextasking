@@ -20,6 +20,7 @@ export type { Duration } from "./durations.js";
 export {
   InvalidPayloadError,
   NonRetriableError,
+  RunNotReplayableError,
   StepMisuseError,
   UnknownEventError,
   UnknownTaskError,
@@ -42,6 +43,7 @@ export type {
   Nextasking,
   NextaskingConfig,
   Register,
+  ReplayedRun,
   Run,
   RunCounts,
   RunPage,

@@ -3,7 +3,7 @@ import type { Redis } from "ioredis";
 
 import type { RunId, StepId } from "./ids.js";
 import { LostRunLockError, RETURN_0_UNLESS_LOCK_IS_HELD, jobKeyOf, lockKeyOf } from "./job-lock.js";
-import { FAILED_JOB_RETENTION } from "./run-queue.js";
+import { FAILED_JOB_RETENTION } from "./job-retention.js";
 import type { SerializedSavedStep, StepStore } from "./step-engine.js";
 
 const SAVED_STEPS_TIME_TO_LIVE_IN_MILLISECONDS = FAILED_JOB_RETENTION.age * 1000;

@@ -18,6 +18,21 @@ export class UnknownEventError extends Error {
   }
 }
 
+export type ReplayRefusal = "not found" | "not failed";
+
+const SHOWN_REPLAY_REFUSAL_BY_REFUSAL: Readonly<Record<ReplayRefusal, string>> = {
+  "not found": "no such run is kept, its id is unknown or the run was removed",
+  "not failed": "it is not failed",
+};
+
+export class RunNotReplayableError extends Error {
+  override readonly name = "RunNotReplayableError";
+
+  constructor(taskName: string, runId: string, replayRefusal: ReplayRefusal) {
+    super(`Run "${runId}" of task "${taskName}" can't be replayed: ${SHOWN_REPLAY_REFUSAL_BY_REFUSAL[replayRefusal]}.`);
+  }
+}
+
 export class NonRetriableError extends Error {
   override readonly name = "NonRetriableError";
 }

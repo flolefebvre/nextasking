@@ -63,6 +63,7 @@ describe("the root export", () => {
     expect(exportedNames).toEqual([
       "InvalidPayloadError",
       "NonRetriableError",
+      "RunNotReplayableError",
       "StepMisuseError",
       "UnknownEventError",
       "UnknownTaskError",

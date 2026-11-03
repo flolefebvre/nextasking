@@ -611,3 +611,29 @@ describe("startWorker", () => {
     expectTypeOf(nextasking.startWorker).toBeCallableWith({ shutdownTimeout: 25_000 });
   });
 });
+
+describe("replay", () => {
+  test("rejects an unknown task name, listing the valid names, before opening any connection", async () => {
+    const nextasking = createTestNextasking();
+    const networkResourcesBefore = networkResources();
+
+    // @ts-expect-error an unknown task name doesn't compile
+    const replaying = nextasking.replay("send-welcom-email", "run-7");
+
+    await expect(replaying).rejects.toThrow(UnknownTaskError);
+    await expect(replaying).rejects.toThrow(
+      'Unknown task "send-welcom-email". Valid task names: "send-welcome-email", "generate-invoice-pdf", "count-page-views", "record-invoice-payment".',
+    );
+    await setImmediate();
+    expect(networkResources()).toEqual(networkResourcesBefore);
+  });
+
+  test("takes a task name and a run id and resolves with the run id", () => {
+    const nextasking = createTestNextasking();
+
+    expectTypeOf(nextasking.replay<"record-invoice-payment">).parameters.toEqualTypeOf<
+      ["record-invoice-payment", string]
+    >();
+    expectTypeOf(nextasking.replay).returns.resolves.toEqualTypeOf<{ runId: string }>();
+  });
+});

@@ -3,7 +3,7 @@ import { concurrencyKeyOf, retriesOf, validatePayload } from "./definitions.js";
 import type { AnyTaskDefinition, EventDefinition, PayloadInput, PayloadSchema } from "./definitions.js";
 import { parseDuration } from "./durations.js";
 import type { Duration, DurationInMilliseconds } from "./durations.js";
-import { UnknownEventError, UnknownTaskError } from "./errors.js";
+import { RunNotReplayableError, UnknownEventError, UnknownTaskError } from "./errors.js";
 import type { DefinitionKind } from "./errors.js";
 import { createRandomId } from "./ids.js";
 import type { EventId, RunId } from "./ids.js";
@@ -59,6 +59,10 @@ export type DispatchedRun = {
 
 export type EmittedEvent = {
   eventId: EventId;
+};
+
+export type ReplayedRun = {
+  runId: RunId;
 };
 
 export type DispatchByName = (name: string, payload?: unknown, options?: DispatchOptions) => Promise<DispatchedRun>;
@@ -128,6 +132,7 @@ export type Nextasking<Task extends AnyTaskDefinition, Event extends EventDefini
     payload: PayloadInput<Extract<Event, { name: Name }>["schema"]>,
     options?: EmitOptions,
   ) => Promise<EmittedEvent>;
+  readonly replay: <Name extends Task["name"]>(name: Name, runId: RunId) => Promise<ReplayedRun>;
   readonly isTaskName: (name: string) => name is Task["name"];
   readonly isEventName: (name: string) => name is Event["name"];
   readonly startWorker: (options?: StartWorkerOptions) => Promise<void>;
@@ -241,10 +246,23 @@ export function createNextasking<
     return { eventId };
   };
 
+  const replay = async (name: string, runId: RunId): Promise<ReplayedRun> => {
+    if (!tasksByName.has(name)) {
+      throw new UnknownTaskError(name, [...tasksByName.keys()]);
+    }
+    const replayOutcome = await openRunQueue().replayRun(name, runId);
+    if (replayOutcome !== "replayed") {
+      throw new RunNotReplayableError(name, runId, replayOutcome);
+    }
+    logger.info({ task: name, runId }, "run replayed");
+    return { runId };
+  };
+
   type Instance = Nextasking<Tasks[number], Events[number]>;
   const nextasking: Instance = {
     dispatch: dispatchByName,
     emit: emitByName,
+    replay,
     isTaskName: (name): name is Tasks[number]["name"] => tasksByName.has(name),
     isEventName: (name): name is Events[number]["name"] => eventsByName.has(name),
     getRun: queueReader.getRun as Instance["getRun"],

@@ -30,7 +30,13 @@ import { loggerWithFields } from "./logger.js";
 import type { Logger } from "./logger.js";
 import { createRedisStepStore, keepSavedStepsForFailedRunRetention, removeSavedSteps } from "./redis-step-store.js";
 import type { DispatchByName, EmitByName } from "./registry.js";
-import { FIRING_JOB_NAME, RUN_QUEUE_NAME, plannedInstantOfFiring, scheduledAtOf } from "./run-queue.js";
+import {
+  FIRING_JOB_NAME,
+  RUN_QUEUE_NAME,
+  plannedInstantOfFiring,
+  scheduledAtOf,
+  storedRunAfterFinalFailure,
+} from "./run-queue.js";
 import type {
   FailureReason,
   RunQueue,
@@ -365,18 +371,22 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
         reason === undefined
           ? backoffInMillisecondsFor(parseDuration(backoffOf(task)), attempt, Math.random())
           : NO_RETRY;
-      await saveRunDataIfLockIsHeld(client, job, token, {
-        ...job.data,
-        errors: [...job.data.errors, errorRecordFor(error, attempt, failedAt)],
-        ...(reason === undefined
+      const errorRecord = errorRecordFor(error, attempt, failedAt);
+      await saveRunDataIfLockIsHeld(
+        client,
+        job,
+        token,
+        reason === undefined
           ? {
+              ...job.data,
+              errors: [...job.data.errors, errorRecord],
               delayedRunState: {
                 state: "backingOff",
                 nextAttemptAt: new Date(failedAt.getTime() + backoffInMilliseconds).toISOString(),
               },
             }
-          : { reason }),
-      }).catch((writeError: unknown) => {
+          : storedRunAfterFinalFailure(job.data, errorRecord, reason),
+      ).catch((writeError: unknown) => {
         abortAttemptIfLockIsLost(writeError);
         if (abortCauseOf(abortSignal) === "lock lost") {
           logLockLostAbort();
@@ -537,11 +547,7 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
     saveRunData: (data: StoredRun) => Promise<void>,
   ): Promise<void> {
     const failedAt = new Date();
-    await saveRunData({
-      ...job.data,
-      errors: [...job.data.errors, errorRecordFor(error, attempt, failedAt)],
-      reason,
-    });
+    await saveRunData(storedRunAfterFinalFailure(job.data, errorRecordFor(error, attempt, failedAt), reason));
     await keepSavedStepsForFailedRunRetention(client, job).catch(() => undefined);
     runLoggerOf(job, attempt).error(
       { err: error, reason, ...runDurationFieldsOf(job, executionStartedAt, failedAt.getTime()) },

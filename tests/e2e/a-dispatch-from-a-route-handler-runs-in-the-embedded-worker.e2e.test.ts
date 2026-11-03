@@ -6,11 +6,8 @@ import { startNext } from "./next-process.js";
 
 e2eTest(
   "a dispatch from a route handler runs in the worker embedded in next start",
-  async ({ redisUrl, keyPrefix, fixtureAppDir }) => {
-    const nextProcess = await startNext(fixtureAppDir, {
-      command: "start",
-      env: { REDIS_URL: redisUrl, NEXTASKING_PREFIX: keyPrefix, NEXTASKING_WORKER: "embedded" },
-    });
+  async ({ redisUrl, keyPrefix, fixtureAppDir, fixtureAppEnv }) => {
+    const nextProcess = await startNext(fixtureAppDir, { command: "start", env: fixtureAppEnv });
 
     try {
       const response = await fetch(`${nextProcess.url}/api/welcome-emails`, {

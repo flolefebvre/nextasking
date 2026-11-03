@@ -1,5 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 
+import type { EpochMilliseconds } from "./durations.js";
+
 export type RunId = string;
 
 export type EventId = string;
@@ -33,6 +35,10 @@ function uuidFromNameParts(nameParts: readonly string[]): Uuid {
 
 export function deriveListenerRunId(eventId: EventId, listenerName: string): RunId {
   return uuidFromNameParts(["listener-run", eventId, listenerName]);
+}
+
+export function deriveFiringRunId(taskName: string, plannedInstant: EpochMilliseconds): RunId {
+  return uuidFromNameParts(["firing-run", taskName, String(plannedInstant)]);
 }
 
 export function deriveStepIdempotencyKey(taskName: string, runId: RunId, stepId: StepId): IdempotencyKey {

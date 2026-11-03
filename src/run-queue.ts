@@ -3,9 +3,9 @@ import type { JobsOptions } from "bullmq";
 
 import { closeRedisClient, createRedisClient } from "./connection.js";
 import type { ConnectionConfig } from "./connection.js";
-import type { DurationInMilliseconds } from "./durations.js";
+import type { DurationInMilliseconds, EpochMilliseconds } from "./durations.js";
 import { createRandomId, deriveJobId, deriveListenerRunId } from "./ids.js";
-import type { EventId, RunId } from "./ids.js";
+import type { EventId, JobId, RunId } from "./ids.js";
 import { scheduleChangesBetween } from "./schedules.js";
 import type { DeclaredSchedule, ScheduleChange } from "./schedules.js";
 
@@ -46,6 +46,7 @@ export type StoredRun = {
   runId: RunId;
   payload: unknown;
   sourceEvent?: SourceEvent;
+  scheduledAt?: IsoTimestamp;
   errors: ErrorRecord[];
   reason?: FailureReason;
   writeToken: WriteToken;
@@ -62,12 +63,28 @@ export type StoredFiring = {
   taskName: string;
 };
 
+type IsoTimestamp = string;
+
 export type RunToEnqueue = {
   runId: RunId;
   payload: unknown;
   retries: number;
   delayInMilliseconds?: DurationInMilliseconds;
+  scheduledAt?: Date;
 };
+
+export function scheduledAtOf(storedRun: StoredRun): Date | undefined {
+  return storedRun.scheduledAt === undefined ? undefined : new Date(storedRun.scheduledAt);
+}
+
+export function plannedInstantOfFiring(firingJobId: JobId | undefined, taskName: string): EpochMilliseconds {
+  const firingJobIdPrefix = `repeat:${taskName}:`;
+  const plannedInstant = Number(firingJobId?.slice(firingJobIdPrefix.length));
+  if (firingJobId?.startsWith(firingJobIdPrefix) !== true || !Number.isSafeInteger(plannedInstant)) {
+    throw new Error(`Firing job "${String(firingJobId)}" of task "${taskName}" has no planned instant in its id`);
+  }
+  return plannedInstant;
+}
 
 export type FanOutToEnqueue = {
   eventId: EventId;
@@ -137,7 +154,13 @@ export function createRunQueue(connection: ConnectionConfig, prefix: string): Ru
     enqueueRun: async (taskName, run) => {
       const job = jobForRun(
         taskName,
-        { runId: run.runId, payload: run.payload, errors: [], writeToken: createRandomId() },
+        {
+          runId: run.runId,
+          payload: run.payload,
+          ...(run.scheduledAt === undefined ? {} : { scheduledAt: run.scheduledAt.toISOString() }),
+          errors: [],
+          writeToken: createRandomId(),
+        },
         run.retries,
       );
       return addUnlessDuplicate(job.name, job.data, {

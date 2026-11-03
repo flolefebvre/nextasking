@@ -2,6 +2,8 @@ export type Duration = `${bigint}${"s" | "m" | "h" | "d"}`;
 
 export type DurationInMilliseconds = number;
 
+export type EpochMilliseconds = number;
+
 type DurationUnit = "s" | "m" | "h" | "d";
 
 const MILLISECONDS_BY_UNIT: Record<DurationUnit, DurationInMilliseconds> = {

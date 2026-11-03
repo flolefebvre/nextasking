@@ -6,8 +6,12 @@ import { createNextasking, defineEvent, defineListener, defineScheduledTask, def
 import type {
   EventName,
   FailureReason,
+  ListedRun,
+  ListRunsOptions,
   Register,
   Run,
+  RunCounts,
+  RunPage,
   RunState,
   ScheduledTaskContext,
   TaskContext,
@@ -154,6 +158,23 @@ describe("the root export", () => {
       nextasking.getRun("send-goodbye-email", "run-1");
 
     expectTypeOf(readRunOfUnknownTask).toBeFunction();
+  });
+
+  test("types listRuns' runs by the state and the task asked for, and countRuns by task and state", () => {
+    type FailedWelcomeEmailRun = Awaited<
+      ReturnType<typeof nextasking.listRuns<"failed", "send-welcome-email">>
+    >["runs"][number];
+
+    expectTypeOf<FailedWelcomeEmailRun["state"]>().toEqualTypeOf<"failed">();
+    expectTypeOf<FailedWelcomeEmailRun["task"]>().toEqualTypeOf<"send-welcome-email">();
+    expectTypeOf<FailedWelcomeEmailRun["reason"]>().toEqualTypeOf<FailureReason>();
+    expectTypeOf<FailedWelcomeEmailRun["lastErrorMessage"]>().toEqualTypeOf<string | undefined>();
+    expectTypeOf<ListRunsOptions["task"]>().toEqualTypeOf<RegisteredTaskName | undefined>();
+    expectTypeOf<RunPage["runs"][number]>().toEqualTypeOf<ListedRun>();
+    expectTypeOf<RunCounts["purge-expired-sessions"]["waitingForConcurrencySlot"]>().toEqualTypeOf<number>();
+    expectTypeOf(nextasking.countRuns).returns.resolves.toEqualTypeOf<RunCounts>();
+    // @ts-expect-error a listed run carries no payload
+    expectTypeOf<ListedRun["payload"]>().toBeUnknown();
   });
 
   test("falls back to no name at all when Register is not augmented", () => {

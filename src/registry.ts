@@ -10,8 +10,9 @@ import type { EventId, RunId } from "./ids.js";
 import { silentLogger } from "./logger.js";
 import type { Logger } from "./logger.js";
 import { createQueueReader } from "./queue-reader.js";
-import type { RunOfTask } from "./queue-reader.js";
+import type { ListRunsOptionsOf, ListedRunOfTask, RunCountsOf, RunOfTask, RunPageOf } from "./queue-reader.js";
 import { createRunQueue } from "./run-queue.js";
+import type { RunState } from "./run-states.js";
 import type { RunQueue } from "./run-queue.js";
 import { rejectInvalidSchedule, timezoneOf } from "./schedules.js";
 import {
@@ -64,6 +65,14 @@ type RegisteredEvent = RegisteredDefinitions["event"];
 
 export type Run = RunOfTask<RegisteredTask>;
 
+export type ListedRun = ListedRunOfTask<RegisteredTask>;
+
+export type ListRunsOptions = ListRunsOptionsOf<TaskName>;
+
+export type RunPage = RunPageOf<ListedRun>;
+
+export type RunCounts = RunCountsOf<TaskName>;
+
 export type DispatchArguments<Task> = Task extends { schema: infer Schema extends PayloadSchema }
   ? [payload: PayloadInput<Schema>, options?: DispatchOptions]
   : [payload?: undefined, options?: DispatchOptions];
@@ -109,6 +118,10 @@ export type Nextasking<Task extends AnyTaskDefinition, Event extends EventDefini
     name: Name,
     runId: RunId,
   ) => Promise<RunOfTask<Extract<Task, { name: Name }>> | undefined>;
+  readonly listRuns: <State extends RunState, Name extends Task["name"] = Task["name"]>(
+    options: ListRunsOptionsOf<Name, State>,
+  ) => Promise<RunPageOf<Extract<ListedRunOfTask<Extract<Task, { name: Name }>>, { state: State }>>>;
+  readonly countRuns: () => Promise<RunCountsOf<Task["name"]>>;
 };
 
 export type NextaskingConfig<
@@ -210,6 +223,8 @@ export function createNextasking<
     isTaskName: (name): name is Tasks[number]["name"] => tasksByName.has(name),
     isEventName: (name): name is Events[number]["name"] => eventsByName.has(name),
     getRun: queueReader.getRun as Nextasking<Tasks[number], Events[number]>["getRun"],
+    listRuns: queueReader.listRuns as Nextasking<Tasks[number], Events[number]>["listRuns"],
+    countRuns: queueReader.countRuns as Nextasking<Tasks[number], Events[number]>["countRuns"],
     startWorker: async (options = {}) => {
       const workerOptions = workerOptionsFrom(options);
       const scheduleChanges = await openRunQueue().syncSchedules(declaredSchedules);

@@ -34,10 +34,14 @@ export type {
   EmitOptions,
   EmittedEvent,
   EventName,
+  ListedRun,
+  ListRunsOptions,
   Nextasking,
   NextaskingConfig,
   Register,
   Run,
+  RunCounts,
+  RunPage,
   TaskName,
 } from "./registry.js";
 export type { FailureReason } from "./run-queue.js";

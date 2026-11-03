@@ -1,13 +1,21 @@
-import { Job } from "bullmq";
-
 import type { AnyTaskDefinition, Payload, PayloadSchema } from "./definitions.js";
+import type { DurationInMilliseconds, EpochMilliseconds } from "./durations.js";
 import { UnknownTaskError } from "./errors.js";
 import { deriveJobId } from "./ids.js";
-import type { RunId } from "./ids.js";
+import type { JobId, RunId } from "./ids.js";
 import { loadSavedSteps } from "./redis-step-store.js";
+import { decodeRunListCursor, encodeRunListCursor } from "./run-list-cursor.js";
+import type { RunListCursor, RunListPosition } from "./run-list-cursor.js";
 import type { ErrorRecord, RunQueue, StoredRun } from "./run-queue.js";
-import { attemptOf, runStateFieldsOf } from "./run-states.js";
-import type { BullmqJobState, RunStateFields } from "./run-states.js";
+import {
+  BULLMQ_JOB_STATE_BY_SET,
+  BULLMQ_SETS_BY_RUN_STATE,
+  RUN_STATES,
+  attemptOf,
+  runStateFieldsOf,
+  runStateOf,
+} from "./run-states.js";
+import type { BullmqJobSet, BullmqJobState, RunState, RunStateFields } from "./run-states.js";
 import { savedStepResultsOf } from "./step-engine.js";
 import type { SavedStepResult } from "./step-engine.js";
 
@@ -37,6 +45,26 @@ export type RunOfTask<Task extends AnyTaskDefinition> = Task extends AnyTaskDefi
       }
   : never;
 
+export type ListedRunOfTask<Task extends AnyTaskDefinition> = Task extends AnyTaskDefinition
+  ? { task: Task["name"] } & RunSummaryFields & RunStateFields & { lastErrorMessage?: string }
+  : never;
+
+export type ListRunsOptionsOf<TaskName extends string, State extends RunState = RunState> = {
+  state: State;
+  task?: TaskName;
+  limit?: number;
+  cursor?: RunListCursor;
+};
+
+export type RunPageOf<ListedRunOfAnyTask> = {
+  runs: ListedRunOfAnyTask[];
+  nextCursor?: RunListCursor;
+};
+
+export type RunCountsOf<TaskName extends string> = { [Name in TaskName]: Record<RunState, number> };
+
+type AnyListedRun = ListedRunOfTask<AnyTaskDefinition>;
+
 export type QueueReaderConfig = {
   openRunQueue: () => RunQueue;
   tasksByName: ReadonlyMap<string, AnyTaskDefinition>;
@@ -44,62 +72,232 @@ export type QueueReaderConfig = {
 
 export type QueueReader = {
   getRun: (taskName: string, runId: RunId) => Promise<RunOfTask<AnyTaskDefinition> | undefined>;
+  listRuns: (options: ListRunsOptionsOf<string>) => Promise<RunPageOf<AnyListedRun>>;
+  countRuns: () => Promise<RunCountsOf<string>>;
 };
+
+const DEFAULT_LIST_LIMIT = 50;
+
+const JOBS_READ_PER_BATCH = 200;
+
+const RUN_JOB_FIELD_NAMES = ["name", "data", "timestamp", "delay", "atm", "finishedOn"];
+
+type JobFieldValues = (string | null)[];
+
+type RunJobRecord = {
+  jobKey: string;
+  name: string;
+  data: StoredRun;
+  timestamp: EpochMilliseconds;
+  delay: DurationInMilliseconds;
+  attemptsMade: number;
+  finishedOn: EpochMilliseconds | undefined;
+};
+
+function runJobRecordOf(jobKey: string, [name, data, timestamp, delay, attemptsMade, finishedOn]: JobFieldValues) {
+  if (name === null || name === undefined || data === null || data === undefined) {
+    return undefined;
+  }
+  return {
+    jobKey,
+    name,
+    data: JSON.parse(data) as StoredRun,
+    timestamp: Number(timestamp ?? 0),
+    delay: Number(delay ?? 0),
+    attemptsMade: Number(attemptsMade ?? 0),
+    finishedOn: finishedOn === null || finishedOn === undefined ? undefined : Number(finishedOn),
+  } satisfies RunJobRecord;
+}
 
 function runErrorOf(errorRecord: ErrorRecord): RunError {
   return { ...errorRecord, failedAt: new Date(errorRecord.failedAt) };
 }
 
-type RunJob = Job<StoredRun>;
+type AnyRunSummary = Omit<AnyListedRun, "lastErrorMessage">;
 
-function runSummaryOf(job: RunJob, bullmqState: BullmqJobState) {
+function runSummaryOf(record: RunJobRecord, bullmqState: BullmqJobState): AnyRunSummary | undefined {
   const stateFields = runStateFieldsOf({
     bullmqState,
-    storedRun: job.data,
-    dispatchedAt: job.timestamp,
-    delayInMilliseconds: job.delay,
+    storedRun: record.data,
+    dispatchedAt: record.timestamp,
+    delayInMilliseconds: record.delay,
   });
   if (stateFields === undefined) {
     return undefined;
   }
   return {
-    task: job.name,
-    runId: job.data.runId,
+    task: record.name,
+    runId: record.data.runId,
     ...stateFields,
-    attempt: attemptOf(job, stateFields.state),
-    dispatchedAt: new Date(job.timestamp),
-    ...(job.finishedOn === undefined ? {} : { finishedAt: new Date(job.finishedOn) }),
-  };
+    attempt: attemptOf(record, stateFields.state),
+    dispatchedAt: new Date(record.timestamp),
+    ...(record.finishedOn === undefined ? {} : { finishedAt: new Date(record.finishedOn) }),
+  } as AnyRunSummary;
+}
+
+function listedRunOf(record: RunJobRecord, bullmqState: BullmqJobState): AnyListedRun | undefined {
+  const runSummary = runSummaryOf(record, bullmqState);
+  const lastErrorMessage = record.data.errors.at(-1)?.message;
+  if (runSummary === undefined) {
+    return undefined;
+  }
+  return (lastErrorMessage === undefined ? runSummary : { ...runSummary, lastErrorMessage }) as AnyListedRun;
+}
+
+function rejectInvalidState(state: unknown): asserts state is RunState {
+  if (!RUN_STATES.includes(state as RunState)) {
+    const shownState = typeof state === "string" ? JSON.stringify(state) : String(state);
+    const shownStates = RUN_STATES.map((runState) => `"${runState}"`).join(", ");
+    throw new Error(`Invalid listRuns state: ${shownState} is not one of ${shownStates}`);
+  }
+}
+
+function listLimitOf(limit: unknown): number {
+  if (limit === undefined) {
+    return DEFAULT_LIST_LIMIT;
+  }
+  if (typeof limit !== "number" || !Number.isInteger(limit) || limit <= 0) {
+    const shownLimit = typeof limit === "string" ? JSON.stringify(limit) : String(limit);
+    throw new Error(`Invalid listRuns limit: ${shownLimit} is not a positive integer`);
+  }
+  return limit;
+}
+
+function zeroRunCountsOf(taskNames: Iterable<string>): RunCountsOf<string> {
+  return Object.fromEntries(
+    [...taskNames].map((taskName) => [
+      taskName,
+      Object.fromEntries(RUN_STATES.map((runState) => [runState, 0])) as Record<RunState, number>,
+    ]),
+  );
 }
 
 export function createQueueReader(config: QueueReaderConfig): QueueReader {
-  const knownTaskNamed = (taskName: string): AnyTaskDefinition => {
-    const task = config.tasksByName.get(taskName);
-    if (task === undefined) {
+  const rejectUnknownTask = (taskName: string): void => {
+    if (!config.tasksByName.has(taskName)) {
       throw new UnknownTaskError(taskName, [...config.tasksByName.keys()]);
     }
-    return task;
+  };
+
+  const readJobFields = async (
+    jobIds: readonly JobId[],
+    fieldNames: readonly string[],
+  ): Promise<{ jobKey: string; fieldValues: JobFieldValues }[]> => {
+    const { bullmqQueue, client } = config.openRunQueue();
+    const jobKeys = jobIds.map((jobId) => bullmqQueue.toKey(jobId));
+    const pipeline = client.pipeline();
+    for (const jobKey of jobKeys) {
+      pipeline.hmget(jobKey, ...fieldNames);
+    }
+    const replies = (await pipeline.exec()) ?? [];
+    return replies.map(([error, fieldValues], index) => {
+      if (error !== null) {
+        throw error;
+      }
+      return { jobKey: jobKeys[index] ?? "", fieldValues: fieldValues as JobFieldValues };
+    });
+  };
+
+  const readRunJobRecords = async (jobIds: readonly JobId[]): Promise<RunJobRecord[]> =>
+    (await readJobFields(jobIds, RUN_JOB_FIELD_NAMES)).flatMap(({ jobKey, fieldValues }) => {
+      const record = runJobRecordOf(jobKey, fieldValues);
+      return record !== undefined && config.tasksByName.has(record.name) ? [record] : [];
+    });
+
+  const jobIdsIn = async (set: BullmqJobSet, offset: number): Promise<JobId[]> =>
+    config.openRunQueue().bullmqQueue.getRanges([set], offset, offset + JOBS_READ_PER_BATCH - 1, false);
+
+  const forEachBatchOfJobIds = async (
+    set: BullmqJobSet,
+    firstOffset: number,
+    useBatch: (jobIds: JobId[], offset: number) => Promise<"next batch" | "stop">,
+  ): Promise<"set walked" | "stopped"> => {
+    for (let offset = firstOffset; ; offset += JOBS_READ_PER_BATCH) {
+      const jobIds = await jobIdsIn(set, offset);
+      if ((await useBatch(jobIds, offset)) === "stop") {
+        return "stopped";
+      }
+      if (jobIds.length < JOBS_READ_PER_BATCH) {
+        return "set walked";
+      }
+    }
   };
 
   return {
     getRun: async (taskName, runId) => {
-      knownTaskNamed(taskName);
+      rejectUnknownTask(taskName);
       const { bullmqQueue, client } = config.openRunQueue();
-      const job = (await Job.fromId(bullmqQueue, deriveJobId(taskName, runId))) as RunJob | undefined;
-      if (job === undefined) {
-        return undefined;
-      }
-      const [bullmqState, serializedSavedStepsById] = await Promise.all([job.getState(), loadSavedSteps(client, job)]);
-      const runSummary = runSummaryOf(job, bullmqState);
-      if (runSummary === undefined) {
+      const jobId = deriveJobId(taskName, runId);
+      const [[record], bullmqState] = await Promise.all([readRunJobRecords([jobId]), bullmqQueue.getJobState(jobId)]);
+      const runSummary = record === undefined ? undefined : runSummaryOf(record, bullmqState);
+      if (record === undefined || runSummary === undefined) {
         return undefined;
       }
       return {
         ...runSummary,
-        payload: job.data.payload,
-        errors: job.data.errors.map(runErrorOf),
-        steps: savedStepResultsOf(serializedSavedStepsById),
+        payload: record.data.payload,
+        errors: record.data.errors.map(runErrorOf),
+        steps: savedStepResultsOf(await loadSavedSteps(client, record.jobKey)),
       } as RunOfTask<AnyTaskDefinition>;
+    },
+
+    listRuns: async (options) => {
+      const { state, task } = options;
+      rejectInvalidState(state);
+      if (task !== undefined) {
+        rejectUnknownTask(task);
+      }
+      const limit = listLimitOf(options.limit);
+      const sets = BULLMQ_SETS_BY_RUN_STATE[state];
+      const startPosition: RunListPosition =
+        options.cursor === undefined ? { state, setIndex: 0, offset: 0 } : decodeRunListCursor(options.cursor, state);
+      const runs: AnyListedRun[] = [];
+      let nextCursor: RunListCursor | undefined;
+      for (let setIndex = startPosition.setIndex; setIndex < sets.length && nextCursor === undefined; setIndex += 1) {
+        const set = sets[setIndex] ?? "wait";
+        const firstOffset = setIndex === startPosition.setIndex ? startPosition.offset : 0;
+        await forEachBatchOfJobIds(set, firstOffset, async (jobIds, offset) => {
+          const fieldsByJob = await readJobFields(jobIds, RUN_JOB_FIELD_NAMES);
+          for (const [index, { jobKey, fieldValues }] of fieldsByJob.entries()) {
+            const record = runJobRecordOf(jobKey, fieldValues);
+            const listedRun =
+              record === undefined || !config.tasksByName.has(record.name)
+                ? undefined
+                : listedRunOf(record, BULLMQ_JOB_STATE_BY_SET[set]);
+            if (listedRun?.state === state && (task === undefined || listedRun.task === task)) {
+              runs.push(listedRun);
+            }
+            if (runs.length === limit) {
+              nextCursor = encodeRunListCursor({ state, setIndex, offset: offset + index + 1 });
+              return "stop";
+            }
+          }
+          return "next batch";
+        });
+      }
+      return nextCursor === undefined ? { runs } : { runs, nextCursor };
+    },
+
+    countRuns: async () => {
+      const runCounts = zeroRunCountsOf(config.tasksByName.keys());
+      for (const set of Object.keys(BULLMQ_JOB_STATE_BY_SET) as BullmqJobSet[]) {
+        const fieldNames = set === "delayed" ? ["name", "data"] : ["name"];
+        await forEachBatchOfJobIds(set, 0, async (jobIds) => {
+          for (const { fieldValues } of await readJobFields(jobIds, fieldNames)) {
+            const [name, data] = fieldValues;
+            const taskRunCounts =
+              name === null || name === undefined || !config.tasksByName.has(name) ? undefined : runCounts[name];
+            const delayedRunState =
+              data === null || data === undefined ? undefined : (JSON.parse(data) as StoredRun).delayedRunState;
+            const state = runStateOf(BULLMQ_JOB_STATE_BY_SET[set], delayedRunState);
+            if (taskRunCounts !== undefined && state !== undefined) {
+              taskRunCounts[state] += 1;
+            }
+          }
+          return "next batch";
+        });
+      }
+      return runCounts;
     },
   };
 }

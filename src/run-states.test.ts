@@ -1,7 +1,7 @@
 import { describe, expect, test } from "vitest";
 
 import type { StoredDelayedRunState, StoredRun } from "./run-queue.js";
-import { attemptOf, runStateFieldsOf } from "./run-states.js";
+import { attemptOf, runStateFieldsOf, runStateOf } from "./run-states.js";
 import type { RunJobSnapshot } from "./run-states.js";
 
 const DISPATCHED_AT = Date.parse("2026-11-03T10:00:00.000Z");
@@ -77,6 +77,27 @@ describe("runStateFieldsOf", () => {
 
   test("an unknown job has no state", () => {
     expect(runStateFieldsOf(snapshotOf("unknown"))).toBeUndefined();
+  });
+});
+
+describe("runStateOf", () => {
+  test.each<[RunJobSnapshot["bullmqState"], StoredDelayedRunState | undefined]>([
+    ["waiting", undefined],
+    ["prioritized", undefined],
+    ["waiting-children", undefined],
+    ["active", undefined],
+    ["completed", undefined],
+    ["failed", undefined],
+    ["delayed", undefined],
+    ["delayed", { state: "waitingForConcurrencySlot" }],
+    ["delayed", { state: "suspended", resumesAt: "2026-11-04T08:00:00.000Z" }],
+    ["delayed", { state: "backingOff", nextAttemptAt: "2026-11-03T10:00:30.000Z" }],
+    ["delayed", { state: "pending" }],
+    ["unknown", undefined],
+  ])("names the state runStateFieldsOf derives from a %s job marked %o", (bullmqState, delayedRunState) => {
+    const snapshot = snapshotOf(bullmqState, delayedRunState === undefined ? {} : { delayedRunState });
+
+    expect(runStateOf(bullmqState, delayedRunState)).toBe(runStateFieldsOf(snapshot)?.state);
   });
 });
 

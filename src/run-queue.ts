@@ -5,7 +5,7 @@ import type { Redis } from "ioredis";
 import { closeRedisClient } from "./connection.js";
 import type { RedisClientRole, RedisConnections } from "./connection.js";
 import type { ConcurrencyKey } from "./definitions.js";
-import type { DurationInMilliseconds, EpochMilliseconds } from "./durations.js";
+import type { Duration, DurationInMilliseconds, EpochMilliseconds } from "./durations.js";
 import type { ReplayRefusal } from "./errors.js";
 import { saveFailedJobDataIfUnchanged } from "./failed-job-data.js";
 import { createRandomId, deriveJobId, deriveListenerRunId } from "./ids.js";
@@ -118,6 +118,7 @@ export type RunToEnqueue = {
   runId: RunId;
   payload: unknown;
   retries: number;
+  delay?: Duration;
   delayInMilliseconds?: DurationInMilliseconds;
   scheduledAt?: Date;
   concurrencyKey?: ConcurrencyKey;

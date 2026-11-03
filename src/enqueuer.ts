@@ -11,6 +11,8 @@ import type { EventId, RunId } from "./ids.js";
 import type { Logger } from "./logger.js";
 import type { EnqueueOutcome, RunQueue } from "./run-queue.js";
 
+export type RunWriter = Pick<RunQueue, "enqueueRun" | "enqueueFanOut" | "replayRun" | "replayFanOut">;
+
 export type DispatchOptions = {
   runId?: RunId;
   delay?: Duration;
@@ -40,8 +42,8 @@ export type DispatchByName = (name: string, payload?: unknown, options?: Dispatc
 
 export type EmitByName = (name: string, payload: unknown, options?: EmitOptions) => Promise<EmittedEvent>;
 
-export type RunQueueAccess = {
-  openRunQueue: () => Promise<RunQueue>;
+export type RunWriterAccess = {
+  openRunWriter: () => Promise<RunWriter>;
   callOnRedis: <Result>(callIds: RedisCallIds, call: () => Promise<Result>) => Promise<Result>;
 };
 
@@ -50,7 +52,7 @@ export type EnqueuerConfig = {
   eventsByName: ReadonlyMap<string, EventDefinition>;
   listenerNamesByEventName: ReadonlyMap<string, readonly string[]>;
   logger: Logger;
-  runQueueAccess: RunQueueAccess;
+  runWriterAccess: RunWriterAccess;
 };
 
 export type Enqueuer = {
@@ -68,7 +70,7 @@ export function createEnqueuer({
   eventsByName,
   listenerNamesByEventName,
   logger,
-  runQueueAccess: { openRunQueue, callOnRedis },
+  runWriterAccess: { openRunWriter, callOnRedis },
 }: EnqueuerConfig): Enqueuer {
   const appEventNames = [...eventsByName.keys()].filter((eventName) => !isBuiltInEventName(eventName));
 
@@ -82,7 +84,7 @@ export function createEnqueuer({
       return "no listeners";
     }
     return callOnRedis({ eventId }, async () =>
-      (await openRunQueue()).enqueueFanOut(eventName, { eventId, payload: validatedPayload, listenerNames }),
+      (await openRunWriter()).enqueueFanOut(eventName, { eventId, payload: validatedPayload, listenerNames }),
     );
   };
 
@@ -100,12 +102,12 @@ export function createEnqueuer({
       const validatedPayload = task.schedule === undefined ? await validatePayload("task", task, payload) : undefined;
       const concurrencyKey = concurrencyKeyOf(task, validatedPayload);
       const { isDuplicate } = await callOnRedis({ runId }, async () =>
-        (await openRunQueue()).enqueueRun(task.name, {
+        (await openRunWriter()).enqueueRun(task.name, {
           runId,
           payload: validatedPayload,
           retries: retriesOf(task),
           ...(concurrencyKey === undefined ? {} : { concurrencyKey }),
-          ...(delayInMilliseconds === undefined ? {} : { delayInMilliseconds }),
+          ...(delayInMilliseconds === undefined ? {} : { delay: options.delay, delayInMilliseconds }),
         }),
       );
       logger.debug({ task: task.name, runId }, isDuplicate ? "duplicate dispatch dropped" : "run dispatched");
@@ -137,7 +139,7 @@ export function createEnqueuer({
       if (!tasksByName.has(name)) {
         throw new UnknownTaskError(name, [...tasksByName.keys()]);
       }
-      const replayOutcome = await callOnRedis({ runId }, async () => (await openRunQueue()).replayRun(name, runId));
+      const replayOutcome = await callOnRedis({ runId }, async () => (await openRunWriter()).replayRun(name, runId));
       if (replayOutcome !== "replayed") {
         throw new RunNotReplayableError(name, runId, replayOutcome);
       }
@@ -150,7 +152,7 @@ export function createEnqueuer({
         throw new UnknownEventError(name, [...eventsByName.keys()]);
       }
       const replayOutcome = await callOnRedis({ eventId }, async () =>
-        (await openRunQueue()).replayFanOut(name, eventId),
+        (await openRunWriter()).replayFanOut(name, eventId),
       );
       if (replayOutcome !== "replayed") {
         throw new FanOutNotReplayableError(name, eventId, replayOutcome);

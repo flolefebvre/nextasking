@@ -51,7 +51,10 @@ export type StepEngineConfig = {
   emit: EmitByName;
   abortSignal: AbortSignal;
   isWorkerDraining: () => boolean;
+  futureWakeTime: FutureWakeTimeHandling;
 };
+
+export type FutureWakeTimeHandling = "suspend the run" | "continue at once";
 
 type SavedSleep = {
   kind: "sleep";
@@ -228,7 +231,7 @@ export async function openStepEngine(config: StepEngineConfig): Promise<StepEngi
       const savedSleep: SavedSleep = { kind: "sleep", wakeAt, attempt: config.attempt };
       await saveStep(stepId, JSON.stringify(savedSleep));
     }
-    if (wakeAt <= Date.now()) {
+    if (wakeAt <= Date.now() || config.futureWakeTime === "continue at once") {
       return;
     }
     recordedWakeAt = Math.min(recordedWakeAt ?? wakeAt, wakeAt);

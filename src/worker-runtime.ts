@@ -266,6 +266,7 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
         emit: config.emit,
         abortSignal,
         isWorkerDraining: () => isDraining,
+        futureWakeTime: "suspend the run",
       });
       runLogger.debug({}, stepEngine.isResumingAfterSleep ? "run resumed" : "attempt started");
       const { step, dispatch, emit } = stepEngine;

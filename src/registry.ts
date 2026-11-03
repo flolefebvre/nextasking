@@ -10,6 +10,7 @@ import type {
   DispatchOptions,
   EmitOptions,
   EmittedEvent,
+  Enqueuer,
   ReplayedEvent,
   ReplayedRun,
   RunWriter,
@@ -161,6 +162,8 @@ export type NextaskingControls = {
   close: () => Promise<void>;
   startRecordingWrites: (recordingRunWriter: RunWriter) => void;
   stopRecordingWrites: () => void;
+  tasksByName: ReadonlyMap<string, AnyTaskDefinition>;
+  createEnqueuerWritingTo: (runWriter: RunWriter) => Enqueuer;
 };
 
 const controlsByNextasking = new WeakMap<object, NextaskingControls>();
@@ -226,6 +229,11 @@ export function createNextasking<
 
   const queueReader = createQueueReader({ openRunQueue, tasksByName, listenerNamesByEventName, declaredSchedules });
   const enqueuerConfig = { tasksByName, eventsByName, listenerNamesByEventName, logger };
+  const createEnqueuerWritingTo = (runWriter: RunWriter): Enqueuer =>
+    createEnqueuer({
+      ...enqueuerConfig,
+      runWriterAccess: { openRunWriter: async () => runWriter, callOnRedis: (_callIds, call) => call() },
+    });
   const { dispatch, emit, replay, replayEvent } = createEnqueuer({
     ...enqueuerConfig,
     runWriterAccess: { openRunWriter, callOnRedis: callOnRedisUnlessRecording },
@@ -263,10 +271,7 @@ export function createNextasking<
       isWorkerStartedInThisProcess = true;
       const workerRunQueue = createRunQueue(connections, "worker", prefix, logger);
       runQueueOfWorker = workerRunQueue;
-      const workerEnqueuer = createEnqueuer({
-        ...enqueuerConfig,
-        runWriterAccess: { openRunWriter: async () => workerRunQueue, callOnRedis: (_callIds, call) => call() },
-      });
+      const workerEnqueuer = createEnqueuerWritingTo(workerRunQueue);
       const isWorkerRunQueueOpen = () => runQueueOfWorker === workerRunQueue;
       const startTheWorker = () => {
         runningWorker = startRunWorker({
@@ -357,6 +362,8 @@ export function createNextasking<
     stopRecordingWrites: () => {
       recordingRunWriter = undefined;
     },
+    tasksByName,
+    createEnqueuerWritingTo,
   });
 
   return nextasking;

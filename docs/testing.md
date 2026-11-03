@@ -1,8 +1,11 @@
 # Testing
 
-Test app code that dispatches or emits without mocking the library and without Redis. `fakeNextasking(nextasking)` switches your own instance to recording mode in place: code that imports `nextasking` is faked with no module mocking. Every check still runs for real; only the Redis write is replaced, by a record of what would have been written.
+Test app code and handlers without mocking the library:
 
-Import it from `@flefebvre/nextasking/testing`, in test files only. It has no test-runner dependency: assert with your runner's own `expect`.
+- `fakeNextasking(nextasking)` tests code that dispatches or emits, without Redis. It switches your own instance to recording mode in place: code that imports `nextasking` is faked with no module mocking. Every check still runs for real; only the Redis write is replaced, by a record of what would have been written.
+- `executeAttempt(nextasking, taskName, payload)` tests a whole handler in one call, without Redis, on the production step code.
+
+Import them from `@flefebvre/nextasking/testing`, in test files only. They have no test-runner dependency: assert with your runner's own `expect`.
 
 ## Fake the instance in a test
 
@@ -82,12 +85,111 @@ An `emit` of an event no task listens to writes nothing in production, so the fa
 
 `isTaskName`, `isEventName`, `taskDefinitions` and `eventDefinitions` keep working.
 
+## Test a whole handler in one call
+
+`executeAttempt` runs one attempt of a task's handler in your test process, with the production step code, and resolves with what the attempt did. Sleeps are recorded and never waited: the handler goes on at once, so one call runs it to the end. Nothing reaches Redis.
+
+```ts
+// src/tasks/onboard-user.test.ts
+import { executeAttempt } from "@flefebvre/nextasking/testing";
+import { expect, test } from "vitest";
+
+import { nextasking } from "@/nextasking";
+
+test("onboarding creates the account, waits a day, then sends the tips email", async () => {
+  const attempt = await executeAttempt(nextasking, "onboard-user", { userId: "user-1" });
+
+  expect(attempt.steps).toEqual([{ id: "create-account", result: { accountId: "account-1" } }]);
+  expect(attempt.sleeps).toEqual([{ id: "wait-a-day", wakeAt: expect.any(Date) }]);
+  expect(attempt.dispatches).toEqual([
+    { task: "send-tips-email", payload: { userId: "user-1" }, runId: expect.any(String) },
+  ]);
+  expect(attempt.emits).toEqual([
+    { event: "user.onboarded", payload: { userId: "user-1" }, eventId: expect.any(String) },
+  ]);
+});
+```
+
+It resolves with:
+
+| Field        | What it holds                                                                                              |
+| ------------ | ---------------------------------------------------------------------------------------------------------- |
+| `steps`      | `{ id, result }` per saved step result: the `savedSteps` you passed, then the ones this attempt saved      |
+| `sleeps`     | `{ id, wakeAt }` per `step.sleep` or `step.sleepUntil` the handler reached, in call order; `wakeAt` a Date |
+| `dispatches` | The handler's `dispatch` calls, as a fake's `dispatches` records them                                      |
+| `emits`      | The handler's `emit` calls, as a fake's `emits` records them                                               |
+
+- The payload goes through the task's schema first, as `dispatch` does: a refused payload rejects with `InvalidPayloadError` before the handler runs, and the handler gets what the schema returned.
+- The step rules are the production ones: the 1 MiB and 10 MiB ceilings, unique step ids, the JSON round trip of each result, and the idempotency key derived from the task, the `runId` and the step id. A misuse rejects with `StepMisuseError`, even when the handler catches it.
+- The handler's `dispatch` and `emit` run every check for real (an unknown name or a refused payload throws inside the handler) and are recorded, never written. They never go through the instance's own `dispatch` and `emit`, so an active fake records none of them. Their `runId` and `eventId` are derived from the run as in production: two attempts with the same `runId` record the same ids.
+- Every type comes from the instance you pass, not from `Register`: `taskName` is one of its task names, `payload` that task's schema input, and a scheduled task takes no payload.
+- The task's `timeout` and `retries` are not enforced: they belong to the worker, not to the attempt.
+
+### Options
+
+Pass them as the fourth argument; a scheduled task takes `undefined` as its payload.
+
+| Option        | Default                  | What it does                                                                                 |
+| ------------- | ------------------------ | -------------------------------------------------------------------------------------------- |
+| `savedSteps`  | none                     | The step results an earlier attempt saved, as `{ id, result }[]`: their `fn` doesn't run     |
+| `attempt`     | `1`                      | The handler's `attempt`                                                                      |
+| `runId`       | a random id              | The handler's `runId`, which the idempotency keys and the send ids derive from               |
+| `abortSignal` | a signal never aborted   | The handler's `abortSignal`: abort it to make the next step throw                            |
+| `scheduledAt` | the time of the call     | A scheduled task's `scheduledAt`                                                             |
+| `logger`      | a logger writing nothing | The handler's `logger`, with `task`, `runId` and `attempt` added to each line, as production |
+
+### Assert on a failure
+
+A throw rejects with the handler's own error, unwrapped:
+
+```ts
+await expect(executeAttempt(nextasking, "charge-card", { cardId: "card-expired" })).rejects.toThrow(NonRetriableError);
+```
+
+### Simulate a retry or a resume
+
+Pass the steps of one attempt as the `savedSteps` of the next. A retry raises `attempt`; a resume after a sleep keeps it.
+
+```ts
+const firstAttempt = await executeAttempt(nextasking, "send-invoice", { invoiceId: "invoice-1" }, { runId: "run-1" });
+
+const retry = await executeAttempt(
+  nextasking,
+  "send-invoice",
+  { invoiceId: "invoice-1" },
+  { runId: "run-1", attempt: 2, savedSteps: firstAttempt.steps },
+);
+```
+
+When the first attempt rejects, build `savedSteps` yourself from the steps you expect it saved: `[{ id: "create-pdf", result: { pdfId: "pdf-1" } }]`. Only step results are carried: sleeps and sends are recorded again by the next attempt.
+
+### Simulate a shutdown
+
+Once the signal is aborted, the next step, `dispatch` or `emit` throws the abort reason, and the attempt rejects with it unless the handler handles it. Abort it from a mocked dependency the handler calls inside a step, to stop the handler at the step after it:
+
+```ts
+const shutdown = new AbortController();
+vi.mocked(fetchContacts).mockImplementation(async () => {
+  shutdown.abort(new Error("shutting down"));
+  return [];
+});
+
+await expect(
+  executeAttempt(nextasking, "import-contacts", { fileId: "file-1" }, { abortSignal: shutdown.signal }),
+).rejects.toThrow("shutting down");
+expect(saveContacts).not.toHaveBeenCalled();
+```
+
 ## Exports
 
-| Export             | What it is                                                                                            |
-| ------------------ | ----------------------------------------------------------------------------------------------------- |
-| `fakeNextasking`   | Switches an instance to recording mode and returns its `NextaskingFake`                               |
-| `NextaskingFake`   | The type `fakeNextasking` returns: `dispatches`, `emits`, `replays`, `restore` and `[Symbol.dispose]` |
-| `RecordedDispatch` | The type of one entry of `dispatches`                                                                 |
-| `RecordedEmit`     | The type of one entry of `emits`                                                                      |
-| `RecordedReplay`   | The type of one entry of `replays`                                                                    |
+| Export                  | What it is                                                                                                       |
+| ----------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `executeAttempt`        | Runs one attempt of a handler in the test process and resolves with its `ExecutedAttempt`                        |
+| `ExecutedAttempt`       | The type `executeAttempt` resolves with: `steps`, `sleeps`, `dispatches` and `emits`                             |
+| `ExecuteAttemptOptions` | The type of `executeAttempt`'s options: `savedSteps`, `attempt`, `runId`, `abortSignal`, `scheduledAt`, `logger` |
+| `RecordedSleep`         | The type of one entry of `sleeps`: `id` and `wakeAt`                                                             |
+| `fakeNextasking`        | Switches an instance to recording mode and returns its `NextaskingFake`                                          |
+| `NextaskingFake`        | The type `fakeNextasking` returns: `dispatches`, `emits`, `replays`, `restore` and `[Symbol.dispose]`            |
+| `RecordedDispatch`      | The type of one entry of `dispatches`                                                                            |
+| `RecordedEmit`          | The type of one entry of `emits`                                                                                 |
+| `RecordedReplay`        | The type of one entry of `replays`                                                                               |

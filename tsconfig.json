@@ -15,5 +15,5 @@
     "noEmit": true
   },
   "include": ["src", "scripts", "tests", "*.config.ts"],
-  "exclude": ["dist", "node_modules", "tests/dist-consumer"]
+  "exclude": ["dist", "node_modules", "tests/dist-consumer", "tests/e2e/fixture-app"]
 }

@@ -45,10 +45,11 @@
     "lint": "eslint --cache --cache-location node_modules/.cache/eslint/ --cache-strategy content --max-warnings=0 .",
     "duplication": "jscpd",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run",
+    "test": "vitest run --project unit --project integration",
     "test:unit": "vitest run --project unit",
     "test:integration": "vitest run --project integration",
-    "test:changed": "vitest run --changed ${CHECK_BASE:-origin/main}",
+    "test:changed": "vitest run --project unit --project integration --changed ${CHECK_BASE:-origin/main}",
+    "test:e2e": "vitest run --project e2e",
     "test:watch": "vitest"
   },
   "devDependencies": {

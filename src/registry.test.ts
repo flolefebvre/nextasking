@@ -451,3 +451,39 @@ describe("isTaskName and isEventName", () => {
     }
   });
 });
+
+describe("startWorker", () => {
+  test.each([
+    [0, "0"],
+    [-2, "-2"],
+    [1.5, "1.5"],
+    [Number.POSITIVE_INFINITY, "Infinity"],
+    ["4", '"4"'],
+  ])("rejects concurrency %s before opening any connection", async (concurrency, shownConcurrency) => {
+    const nextasking = createTestNextasking();
+    const networkResourcesBefore = networkResources();
+
+    await expect(nextasking.startWorker({ concurrency: concurrency as number })).rejects.toThrow(
+      `Invalid startWorker concurrency: ${shownConcurrency} is not a positive integer`,
+    );
+    await setImmediate();
+    expect(networkResources()).toEqual(networkResourcesBefore);
+  });
+
+  test("rejects a shutdownTimeout that is not a duration", async () => {
+    const nextasking = createTestNextasking();
+
+    await expect(nextasking.startWorker({ shutdownTimeout: "soon" as Duration })).rejects.toThrow(
+      'Invalid startWorker shutdownTimeout: "soon" is not a duration',
+    );
+  });
+
+  test("takes concurrency and a shutdownTimeout duration, and rejects other options at compile time", () => {
+    const nextasking = createTestNextasking();
+
+    expectTypeOf(nextasking.startWorker).toBeCallableWith();
+    expectTypeOf(nextasking.startWorker).toBeCallableWith({ concurrency: 4, shutdownTimeout: "25s" });
+    // @ts-expect-error a shutdownTimeout is a Duration
+    expectTypeOf(nextasking.startWorker).toBeCallableWith({ shutdownTimeout: 25_000 });
+  });
+});

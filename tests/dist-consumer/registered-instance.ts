@@ -30,6 +30,7 @@ import type {
   Register,
   RunId,
   StandardSchemaV1,
+  StartWorkerOptions,
   StepContext,
   StepTools,
   TaskContext,
@@ -159,6 +160,14 @@ export type HandlerEmitTakesARegisteredEventName = Expect<
 export type DispatchOptionsHoldRunIdAndDelay = Expect<IsEqual<DispatchOptions, { runId?: RunId; delay?: Duration }>>;
 
 export type EmitOptionsHoldEventId = Expect<IsEqual<EmitOptions, { eventId?: EventId }>>;
+
+export type StartWorkerOptionsHoldConcurrencyAndShutdownTimeout = Expect<
+  IsEqual<StartWorkerOptions, { concurrency?: number; shutdownTimeout?: Duration }>
+>;
+
+export type StartWorkerTakesItsOptions = Expect<
+  IsEqual<Parameters<typeof nextasking.startWorker>, [options?: StartWorkerOptions]>
+>;
 
 export type InstanceIsANextasking = Expect<
   IsEqual<typeof nextasking, Nextasking<typeof sendWelcomeEmail | typeof createDefaultWorkspace, typeof userSignedUp>>

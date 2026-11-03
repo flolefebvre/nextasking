@@ -8,7 +8,7 @@ import type { ConnectionConfig } from "./connection.js";
 import { backoffOf, retriesOf } from "./definitions.js";
 import type { AnyTaskDefinition, EventDefinition, TaskHandler } from "./definitions.js";
 import { parseDuration } from "./durations.js";
-import type { DurationInMilliseconds } from "./durations.js";
+import type { Duration, DurationInMilliseconds } from "./durations.js";
 import { errorFromThrownValue, errorRecordFor, failureReasonFor } from "./failed-attempts.js";
 import { loggerWithFields } from "./logger.js";
 import type { Logger } from "./logger.js";
@@ -18,12 +18,43 @@ import { RUN_QUEUE_NAME } from "./run-queue.js";
 import type { RunQueue, StoredFanOut, StoredRun } from "./run-queue.js";
 import { openStepEngine } from "./step-engine.js";
 import type { WakeTimeInEpochMilliseconds } from "./step-engine.js";
+import { bullmqMaxStalledCountOf, workerTiming } from "./worker-timing.js";
 
 export type RunningWorker = {
   close: () => Promise<void>;
 };
 
+export type StartWorkerOptions = {
+  concurrency?: number;
+  shutdownTimeout?: Duration;
+};
+
+export type WorkerOptions = {
+  concurrency: number;
+  shutdownTimeoutInMilliseconds: DurationInMilliseconds;
+};
+
+const UNLIMITED_CONCURRENCY = Number.MAX_SAFE_INTEGER;
+
+const DEFAULT_SHUTDOWN_TIMEOUT: Duration = "25s";
+
+export function workerOptionsFrom(options: StartWorkerOptions): WorkerOptions {
+  const concurrency: unknown = options.concurrency ?? UNLIMITED_CONCURRENCY;
+  if (typeof concurrency !== "number" || !Number.isInteger(concurrency) || concurrency <= 0) {
+    const shownConcurrency = typeof concurrency === "string" ? JSON.stringify(concurrency) : String(concurrency);
+    throw new Error(`Invalid startWorker concurrency: ${shownConcurrency} is not a positive integer`);
+  }
+  let shutdownTimeoutInMilliseconds: DurationInMilliseconds;
+  try {
+    shutdownTimeoutInMilliseconds = parseDuration(options.shutdownTimeout ?? DEFAULT_SHUTDOWN_TIMEOUT);
+  } catch (error) {
+    throw new Error(`Invalid startWorker shutdownTimeout: ${(error as Error).message}`, { cause: error });
+  }
+  return { concurrency, shutdownTimeoutInMilliseconds };
+}
+
 export type WorkerConfig = {
+  options: WorkerOptions;
   connection: ConnectionConfig;
   prefix: string;
   logger: Logger;
@@ -110,6 +141,7 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
     runLogger.info(durationFieldsAt(Date.now()), "run completed");
   };
 
+  const timing = workerTiming();
   const client = createRedisClient(config.connection, "worker");
   const worker = new Worker(
     RUN_QUEUE_NAME,
@@ -135,6 +167,10 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
     {
       connection: client,
       prefix: config.prefix,
+      concurrency: config.options.concurrency,
+      lockDuration: timing.lockDurationInMilliseconds,
+      stalledInterval: timing.stallIntervalInMilliseconds,
+      maxStalledCount: bullmqMaxStalledCountOf(timing),
       settings: {
         backoffStrategy: (_attemptsMade, _backoffType, _error, job) =>
           (job === undefined ? undefined : backoffInMillisecondsByFailedJob.get(job)) ?? NO_RETRY,

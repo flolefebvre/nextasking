@@ -11,5 +11,5 @@ export const e2eTest = test
   .extend("fixtureAppEnv", ({ redisUrl, keyPrefix }): Record<string, string> => ({
     REDIS_URL: redisUrl,
     NEXTASKING_PREFIX: keyPrefix,
-    NEXTASKING_WORKER: "embedded",
+    NEXTASKING_WORKER: "on",
   }));

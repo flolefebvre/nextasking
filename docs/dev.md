@@ -10,7 +10,7 @@ Turn the worker on in the dev script with the variable `instrumentation.ts` chec
 // package.json
 {
   "scripts": {
-    "dev": "NEXTASKING_WORKER=embedded next dev"
+    "dev": "NEXTASKING_WORKER=on next dev"
   }
 }
 ```

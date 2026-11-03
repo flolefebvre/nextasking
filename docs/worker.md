@@ -7,7 +7,7 @@
 ```ts
 // src/instrumentation.ts
 export async function register() {
-  if (process.env.NEXT_RUNTIME !== "nodejs" || process.env.NEXTASKING_WORKER !== "embedded") return;
+  if (process.env.NEXT_RUNTIME !== "nodejs" || process.env.NEXTASKING_WORKER !== "on") return;
   const { nextasking } = await import("@/nextasking");
   await nextasking.startWorker({ concurrency: 20, shutdownTimeout: "25s" });
 }
@@ -45,7 +45,7 @@ A deploy sends SIGTERM. Set `NEXT_MANUAL_SIG_HANDLE` in the environment of `next
 // package.json
 {
   "scripts": {
-    "start": "NEXT_MANUAL_SIG_HANDLE=1 NEXTASKING_WORKER=embedded next start"
+    "start": "NEXT_MANUAL_SIG_HANDLE=1 NEXTASKING_WORKER=on next start"
   }
 }
 ```

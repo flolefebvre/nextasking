@@ -29,7 +29,7 @@ return 1
 
 const STEP_SAVED = 1;
 
-function jobKeyOf(job: MinimalJob): string {
+export function jobKeyOf(job: MinimalJob): string {
   return `${job.queueQualifiedName}:${job.id}`;
 }
 

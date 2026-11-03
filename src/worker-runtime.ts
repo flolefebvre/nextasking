@@ -5,6 +5,10 @@ import { AttemptAbortedError, abortCauseOf } from "./attempt-abort.js";
 import type { AttemptAbortCause } from "./attempt-abort.js";
 import { settleWithinTimeout } from "./attempt-timeout.js";
 import { backoffInMillisecondsFor } from "./backoff.js";
+import { setTimeout as sleep } from "node:timers/promises";
+
+import { createConcurrencySlots } from "./concurrency-slots.js";
+import type { ConcurrencySlot } from "./concurrency-slots.js";
 import { closeRedisClient, createRedisClient } from "./connection.js";
 import type { ConnectionConfig } from "./connection.js";
 import { backoffOf, concurrencyKeyOf, retriesOf } from "./definitions.js";
@@ -160,11 +164,42 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
       return handBackAtShutdown(job, token, runLoggerOf(job, job.attemptsMade + 1));
     }
     const trackedAttempt = trackAttemptInFlight(job, job.data.runId);
+    const concurrencySlot = concurrencySlots.slotFor(job, token ?? "", () => {
+      trackedAttempt.abortAttempt("lock lost");
+    });
     try {
-      await executeTrackedRunAttempt(task, job, token, trackedAttempt);
+      await executeTrackedRunAttempt(task, job, token, trackedAttempt, concurrencySlot);
     } finally {
       trackedAttempt.untrack();
+      await concurrencySlot.release();
     }
+  };
+
+  const takeConcurrencySlotOrPark = async (
+    task: AnyTaskDefinition,
+    job: Job<StoredRun>,
+    concurrencySlot: ConcurrencySlot,
+    park: () => Promise<void>,
+    runLogger: Logger,
+  ): Promise<"taken" | "parked"> => {
+    if (task.concurrency === undefined) {
+      return "taken";
+    }
+    const concurrencyKey = job.data.concurrencyKey ?? concurrencyKeyOf(task, job.data.payload);
+    const slotTaking = await concurrencySlot.take(task.concurrency.limit, concurrencyKey);
+    if (slotTaking === "taken after waiting") {
+      runLogger.debug({}, "run got a concurrency slot");
+    }
+    if (slotTaking !== "waiting") {
+      return "taken";
+    }
+    if (timing.testOnlyPauseBeforeParkingInMilliseconds > 0) {
+      await sleep(timing.testOnlyPauseBeforeParkingInMilliseconds);
+    }
+    await park();
+    runLogger.debug({}, "run waiting for a concurrency slot");
+    await concurrencySlot.wakeOldestWaitingRunIfASlotIsFree();
+    return "parked";
   };
 
   const executeTrackedRunAttempt = async (
@@ -172,14 +207,16 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
     job: Job<StoredRun>,
     token: string | undefined,
     { abortSignal, abortAttempt }: TrackedAttempt,
+    concurrencySlot: ConcurrencySlot,
   ) => {
-    const stretchStartedAt = Date.now();
+    let stretchStartedAt = Date.now();
     const { runId, payload } = job.data;
     const attempt = job.attemptsMade + 1;
     const runLogger = runLoggerOf(job, attempt);
     const durationFieldsAt = (runEndedAt: number) => runDurationFieldsOf(job, stretchStartedAt, runEndedAt);
     const handler = task.handler as AnyTaskHandler;
     const handOff = async (moveJob: () => Promise<unknown>) => {
+      concurrencySlot.stopRenewing();
       try {
         await moveJob();
       } catch (error) {
@@ -191,6 +228,17 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
     };
     let outcome: HandlerOutcome;
     try {
+      const slotTaking = await takeConcurrencySlotOrPark(
+        task,
+        job,
+        concurrencySlot,
+        () => handOff(() => job.moveToDelayed(Date.now() + timing.concurrencySlotSafetyDelayInMilliseconds, token)),
+        runLogger,
+      );
+      if (slotTaking === "parked") {
+        throw new DelayedError();
+      }
+      stretchStartedAt = Date.now();
       const stepEngine = await openStepEngine({
         taskName: task.name,
         runId,
@@ -232,6 +280,9 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
         await handOff(() => job.moveToWait(token));
       }
     } catch (thrownValue) {
+      if (thrownValue instanceof DelayedError) {
+        throw thrownValue;
+      }
       const abortCause = abortCauseOf(abortSignal);
       if (abortCause === "lock lost") {
         runLogger.debug({}, "attempt aborted: lock lost");
@@ -300,6 +351,7 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
         (job === undefined ? undefined : backoffInMillisecondsByFailedJob.get(job)) ?? NO_RETRY,
     },
   });
+  const concurrencySlots = createConcurrencySlots(client, worker, timing.lockDurationInMilliseconds);
   async function enqueueFiringRun(firingJob: Job<StoredFiring>): Promise<void> {
     const { taskName } = firingJob.data;
     const plannedInstant: EpochMilliseconds = plannedInstantOfFiring(firingJob.id, taskName);

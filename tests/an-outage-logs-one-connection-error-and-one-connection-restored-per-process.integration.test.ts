@@ -1,4 +1,3 @@
-import { setTimeout as sleep } from "node:timers/promises";
 import { expect, vi } from "vitest";
 import { z } from "zod";
 
@@ -35,10 +34,9 @@ integrationTest(
       await nextasking.dispatch("send-welcome-email", { email: "ada@example.com" });
       await vi.waitFor(() => expect(completedEmails).toEqual(["ada@example.com"]), { timeout: 10_000 });
 
-      proxy.cut();
+      const outage = proxy.cutFor(OUTAGE_DURATION_IN_MILLISECONDS);
       await waitForLogMessage(lines, "connection error");
-      await sleep(OUTAGE_DURATION_IN_MILLISECONDS);
-      proxy.restore();
+      await outage;
       await waitForLogMessage(lines, "connection restored", { timeout: 15_000 });
       await nextasking.dispatch("send-welcome-email", { email: "grace@example.com" });
       await vi.waitFor(() => expect(completedEmails).toContain("grace@example.com"), { timeout: 10_000 });

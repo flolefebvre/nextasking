@@ -10,8 +10,6 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { UnknownTaskRunError } from "./attempt-errors.js";
 import { createConcurrencySlots } from "./concurrency-slots.js";
 import type { ConcurrencySlot } from "./concurrency-slots.js";
-import { closeRedisClient } from "./connection.js";
-import type { RedisConnections } from "./connection.js";
 import { concurrencyKeyOf, retriesOf } from "./definitions.js";
 import type { AnyTaskDefinition, EventDefinition, ScheduledTaskContext, TaskContext } from "./definitions.js";
 import { parseDuration, shownDurationOf } from "./durations.js";
@@ -78,12 +76,11 @@ export function workerOptionsFrom(options: StartWorkerOptions): WorkerOptions {
 
 export type WorkerConfig = {
   options: WorkerOptions;
-  connections: RedisConnections;
+  runQueue: RunQueue;
   prefix: string;
   logger: Logger;
   tasksByName: ReadonlyMap<string, AnyTaskDefinition>;
   eventsByName: ReadonlyMap<string, EventDefinition>;
-  openRunQueue: () => Promise<RunQueue>;
   dispatch: DispatchByName;
   emit: EmitByName;
   sendBuiltInEvent: SendBuiltInEvent;
@@ -349,7 +346,7 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
   };
 
   const timing = workerTiming();
-  const client = config.connections.createClient("worker");
+  const { client } = config.runQueue;
   const attemptSettlements = new Set<Promise<void>>();
   const trackSettlement = (execution: Promise<void>): Promise<void> => {
     const settlement = execution.then(
@@ -390,9 +387,7 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
       );
       return;
     }
-    await (
-      await config.openRunQueue()
-    ).enqueueRun(taskName, {
+    await config.runQueue.enqueueRun(taskName, {
       runId: deriveFiringRunId(taskName, plannedInstant),
       payload: undefined,
       retries: retriesOf(task),
@@ -406,9 +401,7 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
     }
     if (config.eventsByName.has(job.name)) {
       const fanOut = job.data as StoredFanOut;
-      await (
-        await config.openRunQueue()
-      ).enqueueListenerRuns(
+      await config.runQueue.enqueueListenerRuns(
         job.name,
         fanOut,
         fanOut.listenerNames.map((listenerName) => {
@@ -526,7 +519,6 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
 
   const closeWorker = async (shouldForce: boolean) => {
     await worker.close(shouldForce);
-    await closeRedisClient(client);
     isWorkerRunningInThisProcess = false;
     config.logger.info({}, "worker stopped");
   };

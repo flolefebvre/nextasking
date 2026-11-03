@@ -24,13 +24,13 @@ function createInvoicingNextasking(url: string, keyPrefix: string) {
 }
 
 async function rejectionOf(call: Promise<unknown>): Promise<unknown> {
-  const startedAt = Date.now();
+  const startedAt = performance.now();
   const rejection = await call.then(
     () => new Error("the call resolved"),
     (error: unknown) => error,
   );
-  expect(Date.now() - startedAt).toBeGreaterThanOrEqual(GIVE_UP_AFTER_IN_MILLISECONDS - 50);
-  expect(Date.now() - startedAt).toBeLessThan(SLOWEST_GIVE_UP_IN_MILLISECONDS);
+  expect(performance.now() - startedAt).toBeGreaterThanOrEqual(GIVE_UP_AFTER_IN_MILLISECONDS - 50);
+  expect(performance.now() - startedAt).toBeLessThan(SLOWEST_GIVE_UP_IN_MILLISECONDS);
   return rejection;
 }
 
@@ -38,7 +38,7 @@ integrationTest(
   "with Redis unreachable from the start, each call throws RedisUnavailableError after giveUpAfter, then works once Redis is back",
   async ({ redisUrl, keyPrefix }) => {
     const proxy = await startTcpProxy(redisUrl);
-    proxy.cut();
+    await proxy.cut();
     const nextasking = createInvoicingNextasking(proxy.url, keyPrefix);
 
     try {
@@ -61,7 +61,7 @@ integrationTest(
       expect(getRunRejection).toMatchObject({ name: "RedisUnavailableError", runId: "welcome-ada" });
       expect(countRunsRejection).toBeInstanceOf(RedisUnavailableError);
 
-      proxy.restore();
+      await proxy.restore();
       await vi.waitFor(
         async () => {
           await nextasking.dispatch("send-welcome-email", { email: "ada@example.com" }, { runId: "welcome-ada" });
@@ -85,7 +85,7 @@ integrationTest(
 
     try {
       await nextasking.dispatch("send-welcome-email", { email: "ada@example.com" });
-      proxy.cut();
+      await proxy.cut();
 
       const dispatchRejection = await rejectionOf(
         nextasking.dispatch("send-welcome-email", { email: "grace@example.com" }, { runId: "welcome-grace" }),
@@ -99,7 +99,7 @@ integrationTest(
       });
       expect(replayEventRejection).toMatchObject({ name: "RedisUnavailableError", eventId: "invoice-7-paid" });
 
-      proxy.restore();
+      await proxy.restore();
       await vi.waitFor(
         async () => {
           await nextasking.dispatch("send-welcome-email", { email: "grace@example.com" }, { runId: "welcome-grace" });

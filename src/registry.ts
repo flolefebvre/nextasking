@@ -180,6 +180,7 @@ export function createNextasking<
   );
   let runQueue: RunQueue | undefined;
   let runningWorker: RunningWorker | undefined;
+  let runQueueOfWorker: RunQueue | undefined;
   const openRunQueue = async (): Promise<RunQueue> => {
     if (runQueue?.hasFailedToOpen === true) {
       const failedRunQueue = runQueue;
@@ -194,7 +195,7 @@ export function createNextasking<
 
   const queueReader = createQueueReader({ openRunQueue, tasksByName, listenerNamesByEventName, declaredSchedules });
   const enqueuerConfig = { tasksByName, eventsByName, listenerNamesByEventName, logger };
-  const { dispatch, emit, replay, replayEvent, sendBuiltInEvent } = createEnqueuer({
+  const { dispatch, emit, replay, replayEvent } = createEnqueuer({
     ...enqueuerConfig,
     runQueueAccess: { openRunQueue, callOnRedis },
   });
@@ -220,22 +221,27 @@ export function createNextasking<
     eventDefinitions: eventDefinitionSummariesOf(events, listenerNamesByEventName) as Instance["eventDefinitions"],
     startWorker: async (options = {}) => {
       const workerOptions = workerOptionsFrom(options);
-      const scheduleChanges = await (await openRunQueue()).syncSchedules(declaredSchedules);
+      const workerRunQueue = createRunQueue(connections, "worker", prefix);
+      runQueueOfWorker = workerRunQueue;
+      const workerEnqueuer = createEnqueuer({
+        ...enqueuerConfig,
+        runQueueAccess: { openRunQueue: async () => workerRunQueue, callOnRedis: (_callIds, call) => call() },
+      });
+      const scheduleChanges = await workerRunQueue.syncSchedules(declaredSchedules);
       for (const { kind, taskName, cron, timezone } of scheduleChanges) {
         logger.info({ task: taskName, cron, timezone }, `schedule ${kind}`);
       }
-      await sendUnsentFailureNotices(await openRunQueue(), sendBuiltInEvent);
+      await sendUnsentFailureNotices(workerRunQueue, workerEnqueuer.sendBuiltInEvent);
       runningWorker = startRunWorker({
         options: workerOptions,
-        connections,
+        runQueue: workerRunQueue,
         prefix,
         logger,
         tasksByName,
         eventsByName,
-        openRunQueue,
-        dispatch,
-        emit,
-        sendBuiltInEvent,
+        dispatch: workerEnqueuer.dispatch,
+        emit: workerEnqueuer.emit,
+        sendBuiltInEvent: workerEnqueuer.sendBuiltInEvent,
       });
       if (isSignalHandlingLeftToTheApp()) {
         stopExitingOnShutdownSignals = exitOnShutdownSignals(() => closeInstance({ isDraining: true }), logger);
@@ -253,6 +259,8 @@ export function createNextasking<
     }
     await (isDraining ? runningWorker?.shutDown() : runningWorker?.close());
     runningWorker = undefined;
+    await runQueueOfWorker?.close();
+    runQueueOfWorker = undefined;
     await runQueue?.close();
     runQueue = undefined;
   };

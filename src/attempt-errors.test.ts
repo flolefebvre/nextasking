@@ -1,7 +1,7 @@
 import { describe, expect, test } from "vitest";
 
 import { StepMisuseError } from "./errors.js";
-import { failureReasonFor } from "./failed-attempts.js";
+import { failureReasonFor } from "./attempt-errors.js";
 
 class StepMisuseErrorFromAnotherCopy extends Error {
   override readonly name = "StepMisuseError";

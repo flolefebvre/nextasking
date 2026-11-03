@@ -1,5 +1,6 @@
 import { DelayedError, ErrorCode, Job, UnrecoverableError, WaitingError, Worker } from "bullmq";
 import type { MinimalJob } from "bullmq";
+import type { Redis } from "ioredis";
 
 import { AttemptAbortedError, abortCauseOf } from "./attempt-abort.js";
 import type { AttemptAbortCause } from "./attempt-abort.js";
@@ -24,6 +25,7 @@ import {
 } from "./failed-attempts.js";
 import { deriveFiringRunId } from "./ids.js";
 import type { RunId } from "./ids.js";
+import { LostRunLockError, saveJobDataIfLockIsHeld } from "./job-lock.js";
 import { loggerWithFields } from "./logger.js";
 import type { Logger } from "./logger.js";
 import { createRedisStepStore, keepSavedStepsForFailedRunRetention, removeSavedSteps } from "./redis-step-store.js";
@@ -115,14 +117,28 @@ const LOCK_ERROR_CODES = new Set<unknown>([ErrorCode.JobLockNotExist, ErrorCode.
 
 let isWorkerRunningInThisProcess = false;
 
+function runDataDescriptionOf(job: Job<StoredRun>): string {
+  return `The data of run "${job.data.runId}"`;
+}
+
+async function saveRunDataIfLockIsHeld(
+  client: Redis,
+  job: Job<StoredRun>,
+  token: string | undefined,
+  data: StoredRun,
+): Promise<void> {
+  await saveJobDataIfLockIsHeld(client, job, token, data, runDataDescriptionOf(job));
+}
+
 async function moveRunToDelayed(
+  client: Redis,
   job: Job<StoredRun>,
   delayedUntil: EpochMilliseconds,
   delayedRunState: StoredDelayedRunState,
   token: string | undefined,
 ): Promise<void> {
   if (JSON.stringify(job.data.delayedRunState) !== JSON.stringify(delayedRunState)) {
-    await job.updateData({ ...job.data, delayedRunState });
+    await saveRunDataIfLockIsHeld(client, job, token, { ...job.data, delayedRunState });
   }
   await job.moveToDelayed(delayedUntil, token);
 }
@@ -242,14 +258,20 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
     const runLogger = runLoggerOf(job, attempt);
     const durationFieldsAt = (runEndedAt: number) => runDurationFieldsOf(job, stretchStartedAt, runEndedAt);
     const handler = task.handler as AnyTaskHandler;
+    const abortAttemptIfLockIsLost = (error: unknown) => {
+      if (error instanceof LostRunLockError || LOCK_ERROR_CODES.has((error as { code?: unknown }).code)) {
+        abortAttempt("lock lost");
+      }
+    };
+    const logLockLostAbort = () => {
+      runLogger.debug({}, "attempt aborted: lock lost");
+    };
     const handOff = async (moveJob: () => Promise<unknown>) => {
       concurrencySlot.stopRenewing();
       try {
         await moveJob();
       } catch (error) {
-        if (LOCK_ERROR_CODES.has((error as { code?: unknown }).code)) {
-          abortAttempt("lock lost");
-        }
+        abortAttemptIfLockIsLost(error);
         throw error;
       }
     };
@@ -262,6 +284,7 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
         () =>
           handOff(() =>
             moveRunToDelayed(
+              client,
               job,
               Date.now() + timing.concurrencySlotSafetyDelayInMilliseconds,
               { state: "waitingForConcurrencySlot" },
@@ -310,7 +333,13 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
       if (outcome.kind === "suspended") {
         const { wakeAt } = outcome;
         await handOff(() =>
-          moveRunToDelayed(job, wakeAt, { state: "suspended", resumesAt: new Date(wakeAt).toISOString() }, token),
+          moveRunToDelayed(
+            client,
+            job,
+            wakeAt,
+            { state: "suspended", resumesAt: new Date(wakeAt).toISOString() },
+            token,
+          ),
         );
       }
       if (outcome.kind === "yielded") {
@@ -322,7 +351,7 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
       }
       const abortCause = abortCauseOf(abortSignal);
       if (abortCause === "lock lost") {
-        runLogger.debug({}, "attempt aborted: lock lost");
+        logLockLostAbort();
         throw thrownValue;
       }
       if (abortCause === "shutdown deadline") {
@@ -336,7 +365,7 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
         reason === undefined
           ? backoffInMillisecondsFor(parseDuration(backoffOf(task)), attempt, Math.random())
           : NO_RETRY;
-      await job.updateData({
+      await saveRunDataIfLockIsHeld(client, job, token, {
         ...job.data,
         errors: [...job.data.errors, errorRecordFor(error, attempt, failedAt)],
         ...(reason === undefined
@@ -347,6 +376,12 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
               },
             }
           : { reason }),
+      }).catch((writeError: unknown) => {
+        abortAttemptIfLockIsLost(writeError);
+        if (abortCauseOf(abortSignal) === "lock lost") {
+          logLockLostAbort();
+        }
+        throw writeError;
       });
       if (reason === undefined) {
         backoffInMillisecondsByFailedJob.set(job, backoffInMilliseconds);
@@ -453,7 +488,9 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
   async function handBackRunOfUnknownTask(job: Job<StoredRun>, token: string | undefined): Promise<void> {
     const runLogger = runLoggerOf(job, attemptOf(job, "executing"));
     if (
-      (await handBackUnlessGivenUp(job, token, timing, { delayedRunState: { state: "pending" } })) === "handed back"
+      (await handBackUnlessGivenUp(client, job, token, timing, runDataDescriptionOf(job), {
+        delayedRunState: { state: "pending" },
+      })) === "handed back"
     ) {
       runLogger.debug({}, "run handed back: unknown task");
       throw new DelayedError();
@@ -463,11 +500,21 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
       job.data.runId,
       shownDurationOf(timing.unknownNameGiveUpDelayInMilliseconds),
     );
-    await recordFinalFailure(job, error, "unknown task", attemptOf(job, "executing"), Date.now());
+    await recordFinalFailure(job, error, "unknown task", attemptOf(job, "executing"), Date.now(), (data) =>
+      saveRunDataIfLockIsHeld(client, job, token, data),
+    );
     throw error;
   }
   async function handBackFanOutOfUnknownEvent(job: Job<StoredFanOut>, token: string | undefined): Promise<void> {
-    if ((await handBackUnlessGivenUp(job, token, timing)) === "handed back") {
+    if (
+      (await handBackUnlessGivenUp(
+        client,
+        job,
+        token,
+        timing,
+        `The data of the fan-out of event "${job.data.eventId}"`,
+      )) === "handed back"
+    ) {
       config.logger.debug({ eventName: job.name, eventId: job.data.eventId }, "fan-out handed back: unknown event");
       throw new DelayedError();
     }
@@ -487,9 +534,10 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
     reason: FailureReason,
     attempt: number,
     executionStartedAt: EpochMilliseconds,
+    saveRunData: (data: StoredRun) => Promise<void>,
   ): Promise<void> {
     const failedAt = new Date();
-    await job.updateData({
+    await saveRunData({
       ...job.data,
       errors: [...job.data.errors, errorRecordFor(error, attempt, failedAt)],
       reason,
@@ -507,6 +555,7 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
       "stalled",
       job.attemptsMade,
       job.processedOn ?? Date.now(),
+      (data) => job.updateData(data),
     );
   worker.on("error", () => undefined);
   worker.on("lockRenewalFailed", (jobIds) => {

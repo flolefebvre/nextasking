@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 
-import { scheduleChangesBetween } from "./schedules.js";
+import { previousFiringInstantBefore, scheduleChangesBetween } from "./schedules.js";
 
 describe("scheduleChangesBetween", () => {
   test("adds a declared schedule nothing stores, and leaves one stored with the same cron and timezone", () => {
@@ -49,5 +49,23 @@ describe("scheduleChangesBetween", () => {
       { kind: "removed", taskName: "archive-invoices", cron: "0 1 * * *", timezone: "Europe/Paris" },
       { kind: "removed", taskName: "ping", cron: undefined, timezone: undefined },
     ]);
+  });
+});
+
+describe("previousFiringInstantBefore", () => {
+  test("is the cron's last instant before the given one, in the schedule's timezone", () => {
+    const schedule = { taskName: "purge-expired-sessions", cron: "0 3 * * *", timezone: "Europe/Paris" };
+
+    expect(previousFiringInstantBefore(schedule, Date.parse("2026-11-04T02:00:00.000Z"))).toBe(
+      Date.parse("2026-11-03T02:00:00.000Z"),
+    );
+  });
+
+  test("skips back over a daylight saving change", () => {
+    const schedule = { taskName: "purge-expired-sessions", cron: "0 3 * * *", timezone: "Europe/Paris" };
+
+    expect(previousFiringInstantBefore(schedule, Date.parse("2026-10-26T02:00:00.000Z"))).toBe(
+      Date.parse("2026-10-25T02:00:00.000Z"),
+    );
   });
 });

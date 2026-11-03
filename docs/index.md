@@ -59,6 +59,15 @@ Events and background tasks for a Next.js app, on BullMQ with Redis or Valkey. D
 | Bound an attempt with `timeout`                   | [Retries and failures](retries-and-failures.md) |
 | Know what a failed run keeps, and for how long    | [Retries and failures](retries-and-failures.md) |
 | Pass a logger and read the lifecycle lines        | [Logging](logging.md)                           |
+| Protect a dashboard route                         | [Dashboard](dashboard.md)                       |
+| Read one run: state, payload, errors, steps       | [Dashboard](dashboard.md)                       |
+| Know what each of the eight run states means      | [Dashboard](dashboard.md)                       |
+| Page through failed runs                          | [Dashboard](dashboard.md)                       |
+| Count the backlog per task and state              | [Dashboard](dashboard.md)                       |
+| Follow an event from its fan-out to each listener | [Dashboard](dashboard.md)                       |
+| Check that last night's scheduled run happened    | [Dashboard](dashboard.md)                       |
+| Build a typed "run now" picker                    | [Dashboard](dashboard.md)                       |
+| Know what a read costs and what it can miss       | [Dashboard](dashboard.md)                       |
 | Log from a handler                                | [Logging](logging.md)                           |
 | Run the worker under `next dev`                   | [Dev](dev.md)                                   |
 | Pick up a task edit                               | [Dev](dev.md)                                   |
@@ -85,12 +94,26 @@ import type {
   Duration,
   EmitOptions,
   EventDefinition,
+  EventDefinitionSummary,
   EventId,
   EventName,
+  EventWithRuns,
+  FailureReason,
+  FanOutState,
+  ListedRun,
+  ListedSchedule,
   ListenerDefinition,
+  ListRunsOptions,
   Logger,
+  PreviousFiring,
   Register,
+  Run,
+  RunCounts,
+  RunError,
   RunId,
+  RunPage,
+  RunState,
+  SavedStepResult,
   Schedule,
   ScheduledTaskContext,
   ScheduledTaskDefinition,
@@ -99,6 +122,7 @@ import type {
   StepTools,
   TaskContext,
   TaskDefinition,
+  TaskDefinitionSummary,
   TaskName,
 } from "@flefebvre/nextasking";
 ```
@@ -110,8 +134,8 @@ import type {
 | `defineListener`          | Defines a listener: a task subscribed to one event, taking that event's payload                                       |
 | `defineScheduledTask`     | Defines a scheduled task: a name, a cron with its time zone and a handler, and no payload                             |
 | `createNextasking`        | Builds the instance from the connection, the prefix, the logger, the events and the tasks                             |
-| `UnknownTaskError`        | Thrown by `dispatch` for a name the instance doesn't list                                                             |
-| `UnknownEventError`       | Thrown by `emit` for a name the instance doesn't list                                                                 |
+| `UnknownTaskError`        | Thrown by `dispatch`, `getRun` and `listRuns` for a task name the instance doesn't list                               |
+| `UnknownEventError`       | Thrown by `emit` and `getEvent` for an event name the instance doesn't list                                           |
 | `InvalidPayloadError`     | Thrown by `dispatch` and `emit` for a payload the schema refuses                                                      |
 | `NonRetriableError`       | Thrown by a handler to fail its run at once, skipping the retries left                                                |
 | `StepMisuseError`         | Thrown by a step on a bug: a repeated id, a nested step, a bad result, duration or wake time                          |
@@ -119,12 +143,26 @@ import type {
 | `Duration`                | The type of a duration option: a whole number and `s`, `m`, `h` or `d`                                                |
 | `EmitOptions`             | The type of `emit`'s third argument: `eventId`                                                                        |
 | `EventDefinition`         | The type `defineEvent` returns                                                                                        |
+| `EventDefinitionSummary`  | The type of one entry of `eventDefinitions`: `name` and `listenerNames`                                               |
 | `EventId`                 | The type of an event id: a string                                                                                     |
 | `EventName`               | The union of the registered instance's event names; `never` without the `Register` augmentation                       |
+| `EventWithRuns`           | The type `getEvent` returns: `event`, `eventId`, `fanOut` and `runsByListener`                                        |
+| `FailureReason`           | The type of a failed run's `reason`: `"retries exhausted"`, `"non-retriable"`, `"stalled"` or `"unknown task"`        |
+| `FanOutState`             | The type of `getEvent`'s `fanOut`: `"pending"`, `"completed"` or `"failed"`                                           |
+| `ListedRun`               | The type of a run in `listRuns`' page: a `Run` without `payload`, `errors` and `steps`, with `lastErrorMessage`       |
+| `ListedSchedule`          | The type of one entry `listSchedules` returns: `task`, `cron`, `timezone`, `nextFiringAt` and `previousFiring`        |
 | `ListenerDefinition`      | The type `defineListener` returns                                                                                     |
+| `ListRunsOptions`         | The type of `listRuns`' argument: `state`, `task`, `limit` and `cursor`                                               |
 | `Logger`                  | The type of the `logger` option and of the handler's `logger`                                                         |
+| `PreviousFiring`          | The type of a listed schedule's `previousFiring`: `scheduledAt` and `runId`                                           |
 | `Register`                | The interface you augment with your instance's type; it types names and a handler's calls                             |
+| `Run`                     | The type `getRun` returns: a run of a registered task, narrowed by `task` and by `state`                              |
+| `RunCounts`               | The type `countRuns` returns: a count per registered task and per state                                               |
+| `RunError`                | The type of one entry of a run's `errors`: `attempt`, `name`, `message`, `stack` and `failedAt`                       |
 | `RunId`                   | The type of a run id: a string                                                                                        |
+| `RunPage`                 | The type `listRuns` returns: `runs` and `nextCursor`                                                                  |
+| `RunState`                | The type of a run's `state`: one of the eight run states                                                              |
+| `SavedStepResult`         | The type of one entry of a run's `steps`: `id` and `result`                                                           |
 | `Schedule`                | The type of a scheduled task's `schedule` option: `cron` and `timezone`                                               |
 | `ScheduledTaskContext`    | The type of the object a scheduled task's handler receives: no `payload`, and `scheduledAt`                           |
 | `ScheduledTaskDefinition` | The type `defineScheduledTask` returns                                                                                |
@@ -133,4 +171,5 @@ import type {
 | `StepTools`               | The type of the handler's `step`: `step.run`, `step.sleep` and `step.sleepUntil`                                      |
 | `TaskContext`             | The type of the object a handler receives                                                                             |
 | `TaskDefinition`          | The type `defineTask` returns                                                                                         |
+| `TaskDefinitionSummary`   | The type of one entry of `taskDefinitions`: `name`, `event` and `schedule`                                            |
 | `TaskName`                | The union of the registered instance's task names, listeners and scheduled tasks included; `never` without `Register` |

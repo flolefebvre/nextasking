@@ -18,18 +18,32 @@ import type {
   EmitOptions,
   EmittedEvent,
   EventDefinition,
+  EventDefinitionSummary,
   EventId,
   EventName,
   EventOptions,
+  EventWithRuns,
+  FailureReason,
+  FanOutState,
+  ListedRun,
+  ListedSchedule,
   ListenerDefinition,
   ListenerOptions,
+  ListRunsOptions,
   Logger,
   Nextasking,
   NextaskingConfig,
   PayloadIssue,
   PayloadSchema,
+  PreviousFiring,
   Register,
+  Run,
+  RunCounts,
+  RunError,
   RunId,
+  RunPage,
+  RunState,
+  SavedStepResult,
   Schedule,
   ScheduledTaskContext,
   ScheduledTaskDefinition,
@@ -41,6 +55,7 @@ import type {
   StepTools,
   TaskContext,
   TaskDefinition,
+  TaskDefinitionSummary,
   TaskHandler,
   TaskName,
   TaskOptions,
@@ -291,3 +306,73 @@ export const scheduledTaskRunNowWithItsOwnId = nextasking.dispatch("purge-expire
 export const scheduledTaskGivenAPayload = nextasking.dispatch("purge-expired-sessions", { olderThanDays: 30 });
 
 export const workerStarted: Promise<void> = nextasking.startWorker();
+
+export const runReadBack = nextasking.getRun("send-welcome-email", "welcome-ada");
+
+export type GetRunNarrowsThePayloadByTask = Expect<
+  IsEqual<NonNullable<Awaited<typeof runReadBack>>["payload"], WelcomeEmailPayload>
+>;
+
+export function dueTimeOf(run: Run): Date | FailureReason | undefined {
+  switch (run.state) {
+    case "delayed":
+      return run.startsAt;
+    case "suspended":
+      return run.resumesAt;
+    case "backingOff":
+      return run.nextAttemptAt;
+    case "failed":
+      return run.reason;
+    default:
+      // @ts-expect-error only a delayed run has a startsAt
+      return run.startsAt;
+  }
+}
+
+export type RunStateIsTheEightStates = Expect<
+  IsEqual<
+    RunState,
+    | "delayed"
+    | "pending"
+    | "waitingForConcurrencySlot"
+    | "executing"
+    | "suspended"
+    | "backingOff"
+    | "completed"
+    | "failed"
+  >
+>;
+
+export type RunErrorsAreRunErrors = Expect<IsEqual<Run["errors"], RunError[]>>;
+
+export type RunStepsAreSavedStepResults = Expect<IsEqual<Run["steps"], SavedStepResult[]>>;
+
+export const failedRunsPage: Promise<RunPage> = nextasking.listRuns({ state: "failed", limit: 20 });
+
+export const listRunsOptions: ListRunsOptions = { state: "pending", task: "send-welcome-email" };
+
+export type ListedRunHasNoPayload = Expect<IsEqual<"payload" extends keyof ListedRun ? true : false, false>>;
+
+export const runCounts: Promise<RunCounts> = nextasking.countRuns();
+
+export const followedEvent: Promise<EventWithRuns> = nextasking.getEvent("user.signed-up", "event-1");
+
+export type FanOutIsAFanOutState = Expect<IsEqual<EventWithRuns["fanOut"], FanOutState | undefined>>;
+
+export type RunsByListenerHoldEachListener = Expect<
+  IsEqual<keyof EventWithRuns["runsByListener"], "create-default-workspace">
+>;
+
+export const listedSchedules: Promise<ListedSchedule[]> = nextasking.listSchedules();
+
+export type ListedScheduleIsAScheduledTask = Expect<IsEqual<ListedSchedule["task"], "purge-expired-sessions">>;
+
+export type PreviousFiringHoldsItsRunId = Expect<IsEqual<PreviousFiring, { scheduledAt: Date; runId: RunId }>>;
+
+export const taskDefinitions: readonly TaskDefinitionSummary<TaskName, EventName>[] = nextasking.taskDefinitions;
+
+export const eventDefinitions: readonly EventDefinitionSummary<EventName, TaskName>[] = nextasking.eventDefinitions;
+
+export type TaskDefinitionsAreNamedByTaskName = Expect<
+  IsEqual<(typeof nextasking.taskDefinitions)[number]["name"], TaskName>
+>;

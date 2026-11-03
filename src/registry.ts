@@ -9,7 +9,20 @@ import { createRandomId } from "./ids.js";
 import type { EventId, RunId } from "./ids.js";
 import { silentLogger } from "./logger.js";
 import type { Logger } from "./logger.js";
+import { createQueueReader } from "./queue-reader.js";
+import type {
+  EventWithRunsOf,
+  ListRunsOptionsOf,
+  ListedRunOfTask,
+  ListedScheduleOf,
+  RunCountsOf,
+  RunOfTask,
+  RunPageOf,
+} from "./queue-reader.js";
+import { eventDefinitionSummariesOf, taskDefinitionSummariesOf } from "./definition-summaries.js";
+import type { EventDefinitionSummary, TaskDefinitionSummary } from "./definition-summaries.js";
 import { createRunQueue } from "./run-queue.js";
+import type { RunState } from "./run-states.js";
 import type { RunQueue } from "./run-queue.js";
 import { rejectInvalidSchedule, timezoneOf } from "./schedules.js";
 import {
@@ -60,6 +73,23 @@ type RegisteredTask = RegisteredDefinitions["task"];
 
 type RegisteredEvent = RegisteredDefinitions["event"];
 
+export type Run = RunOfTask<RegisteredTask>;
+
+export type ListedRun = ListedRunOfTask<RegisteredTask>;
+
+export type ListRunsOptions = ListRunsOptionsOf<TaskName>;
+
+export type RunPage = RunPageOf<ListedRun>;
+
+export type RunCounts = RunCountsOf<TaskName>;
+
+export type EventWithRuns = EventWithRunsOf<RegisteredTask, RegisteredEvent>;
+
+export type ListedSchedule = ListedScheduleOf<ScheduledTaskNameOf<RegisteredTask>>;
+
+type ScheduledTaskNameOf<Task> =
+  Extract<Task, { schedule: object }> extends { name: infer Name extends string } ? Name : never;
+
 export type DispatchArguments<Task> = Task extends { schema: infer Schema extends PayloadSchema }
   ? [payload: PayloadInput<Schema>, options?: DispatchOptions]
   : [payload?: undefined, options?: DispatchOptions];
@@ -101,6 +131,21 @@ export type Nextasking<Task extends AnyTaskDefinition, Event extends EventDefini
   readonly isTaskName: (name: string) => name is Task["name"];
   readonly isEventName: (name: string) => name is Event["name"];
   readonly startWorker: (options?: StartWorkerOptions) => Promise<void>;
+  readonly getRun: <Name extends Task["name"]>(
+    name: Name,
+    runId: RunId,
+  ) => Promise<RunOfTask<Extract<Task, { name: Name }>> | undefined>;
+  readonly listRuns: <State extends RunState, Name extends Task["name"] = Task["name"]>(
+    options: ListRunsOptionsOf<Name, State>,
+  ) => Promise<RunPageOf<Extract<ListedRunOfTask<Extract<Task, { name: Name }>>, { state: State }>>>;
+  readonly countRuns: () => Promise<RunCountsOf<Task["name"]>>;
+  readonly getEvent: <Name extends Event["name"]>(
+    name: Name,
+    eventId: EventId,
+  ) => Promise<EventWithRunsOf<Task, Extract<Event, { name: Name }>>>;
+  readonly listSchedules: () => Promise<ListedScheduleOf<ScheduledTaskNameOf<Task>>[]>;
+  readonly taskDefinitions: readonly TaskDefinitionSummary<Task["name"], Event["name"]>[];
+  readonly eventDefinitions: readonly EventDefinitionSummary<Event["name"], Task["name"]>[];
 };
 
 export type NextaskingConfig<
@@ -148,6 +193,8 @@ export function createNextasking<
     return runQueue;
   };
 
+  const queueReader = createQueueReader({ openRunQueue, tasksByName, listenerNamesByEventName, declaredSchedules });
+
   const dispatchByName: DispatchByName = async (name, payload, options = {}) => {
     const task = tasksByName.get(name);
     if (task === undefined) {
@@ -194,11 +241,19 @@ export function createNextasking<
     return { eventId };
   };
 
-  const nextasking: Nextasking<Tasks[number], Events[number]> = {
+  type Instance = Nextasking<Tasks[number], Events[number]>;
+  const nextasking: Instance = {
     dispatch: dispatchByName,
     emit: emitByName,
     isTaskName: (name): name is Tasks[number]["name"] => tasksByName.has(name),
     isEventName: (name): name is Events[number]["name"] => eventsByName.has(name),
+    getRun: queueReader.getRun as Instance["getRun"],
+    listRuns: queueReader.listRuns as Instance["listRuns"],
+    countRuns: queueReader.countRuns as Instance["countRuns"],
+    getEvent: queueReader.getEvent as Instance["getEvent"],
+    listSchedules: queueReader.listSchedules as Instance["listSchedules"],
+    taskDefinitions: taskDefinitionSummariesOf(config.tasks) as Instance["taskDefinitions"],
+    eventDefinitions: eventDefinitionSummariesOf(events, listenerNamesByEventName) as Instance["eventDefinitions"],
     startWorker: async (options = {}) => {
       const workerOptions = workerOptionsFrom(options);
       const scheduleChanges = await openRunQueue().syncSchedules(declaredSchedules);

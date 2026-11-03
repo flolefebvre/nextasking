@@ -90,15 +90,15 @@ _Avoid_: Retry, rerun, redrive
 
 **Suspend**:
 To pause a run's attempt at a step until a set time, so it holds no worker and no concurrency slot while it waits.
-_Avoid_: Pause, park; not yield, which is the hand-back at shutdown (see **Yield**)
+_Avoid_: Pause; not park, which waits for a concurrency slot (see **Park**); not yield, which is the shutdown hand-off (see **Yield**)
 
 **Resume**:
 To continue a suspended attempt once its time comes, reusing the steps it has already saved.
-_Avoid_: Wake, restart, retry
+_Avoid_: Restart, retry; not wake, which ends a park (see **Wake**)
 
 **Yield**:
 To send a running attempt's run back to pending at a step boundary because its worker is shutting down, once its steps in flight are saved, using no retry and counting no stall.
-_Avoid_: Suspend, requeue, hand back
+_Avoid_: Suspend, requeue; not hand back, which returns a run whose task the worker doesn't define (see **Hand back**)
 
 **Drain**:
 The state of a worker between the shutdown signal and its exit, in which it takes no new attempt and lets the running ones yield or finish until its shutdown timeout.
@@ -123,6 +123,26 @@ _Avoid_: Throttle, rate limit
 **Concurrency key**:
 A value derived from a run's payload when it is dispatched, grouping the runs of one task that share a concurrency limit.
 _Avoid_: Group, partition, lock key
+
+**Concurrency slot**:
+One of the places a concurrency limit allows, held by an attempt only while it executes and lost when its worker stops renewing it.
+_Avoid_: Permit, token, seat; not lock, which is the attempt's hold on its run (see **Lock**)
+
+**Waiting list**:
+The ordered runs of one task or concurrency key that wait for a concurrency slot, oldest first.
+_Avoid_: Queue, backlog, line
+
+**Park**:
+To set a run aside on its waiting list when no concurrency slot is free, holding no worker until it is woken or a safety delay passes, using no retry and counting no stall.
+_Avoid_: Block, throttle; not suspend, which waits for a set time (see **Suspend**)
+
+**Wake**:
+To make the oldest parked run of a waiting list pending again, when a concurrency slot frees or right after a park finds one free.
+_Avoid_: Promote, notify; not resume, which continues a suspended attempt (see **Resume**)
+
+**Hand back**:
+To return a run or a fan-out to the queue without executing it because the worker doesn't define its task or event, so that a worker of another release picks it up; a run no worker takes for long enough fails.
+_Avoid_: Requeue, reject, release; not yield, the shutdown hand-off at a step boundary (see **Yield**)
 
 **Worker**:
 The role of a process that executes attempts, whether embedded in the Next.js server or standalone.

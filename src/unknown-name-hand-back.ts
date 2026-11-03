@@ -10,17 +10,24 @@ export type UnknownNameTiming = {
   unknownNameGiveUpDelayInMilliseconds: DurationInMilliseconds;
 };
 
-export async function handBackUnlessGivenUp(
-  job: Job<{ firstFoundUnknownAt?: IsoTimestamp }>,
+export async function handBackUnlessGivenUp<Data extends { firstFoundUnknownAt?: IsoTimestamp }>(
+  job: Job<Data>,
   token: string | undefined,
   timing: UnknownNameTiming,
+  dataOnHandBack: Partial<Data> = {},
 ): Promise<UnknownNameHandBack> {
   const now = Date.now();
-  const { firstFoundUnknownAt } = job.data;
-  if (firstFoundUnknownAt === undefined) {
-    await job.updateData({ ...job.data, firstFoundUnknownAt: new Date(now).toISOString() });
-  } else if (now - Date.parse(firstFoundUnknownAt) >= timing.unknownNameGiveUpDelayInMilliseconds) {
+  const storedFirstFoundUnknownAt = job.data.firstFoundUnknownAt;
+  if (
+    storedFirstFoundUnknownAt !== undefined &&
+    now - Date.parse(storedFirstFoundUnknownAt) >= timing.unknownNameGiveUpDelayInMilliseconds
+  ) {
     return "given up";
+  }
+  const firstFoundUnknownAt = storedFirstFoundUnknownAt ?? new Date(now).toISOString();
+  const dataToHandBack = { ...job.data, ...dataOnHandBack, firstFoundUnknownAt };
+  if (JSON.stringify(dataToHandBack) !== JSON.stringify(job.data)) {
+    await job.updateData(dataToHandBack);
   }
   await job.moveToDelayed(now + timing.unknownNameHandBackDelayInMilliseconds, token);
   return "handed back";

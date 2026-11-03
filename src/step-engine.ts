@@ -360,6 +360,18 @@ function deserializeStepResult(serializedResult: SerializedSavedStep): unknown {
   return wrappedResult[0];
 }
 
+export type SavedStepResult = {
+  id: StepId;
+  result: unknown;
+};
+
+export function savedStepResultsOf(serializedSavedStepsById: Record<StepId, SerializedSavedStep>): SavedStepResult[] {
+  return Object.entries(serializedSavedStepsById).flatMap(([id, serializedSavedStep]) => {
+    const savedStep = deserializeSavedStep(serializedSavedStep);
+    return savedStep.kind === "result" ? [{ id, result: savedStep.result }] : [];
+  });
+}
+
 function deserializeSavedStep(serializedSavedStep: SerializedSavedStep): SavedStep {
   const savedValue = JSON.parse(serializedSavedStep) as unknown;
   if (Array.isArray(savedValue)) {

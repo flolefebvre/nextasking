@@ -1,5 +1,6 @@
 import { Queue } from "bullmq";
 import type { JobsOptions } from "bullmq";
+import type { Redis } from "ioredis";
 
 import { closeRedisClient, createRedisClient } from "./connection.js";
 import type { ConnectionConfig } from "./connection.js";
@@ -43,6 +44,12 @@ export type ErrorRecord = {
 
 export type FailureReason = "retries exhausted" | "non-retriable" | "stalled" | "unknown task";
 
+export type StoredDelayedRunState =
+  | { state: "waitingForConcurrencySlot" }
+  | { state: "suspended"; resumesAt: IsoTimestamp }
+  | { state: "backingOff"; nextAttemptAt: IsoTimestamp }
+  | { state: "pending" };
+
 export type StoredRun = {
   runId: RunId;
   payload: unknown;
@@ -52,6 +59,7 @@ export type StoredRun = {
   firstFoundUnknownAt?: IsoTimestamp;
   errors: ErrorRecord[];
   reason?: FailureReason;
+  delayedRunState?: StoredDelayedRunState;
   writeToken: WriteToken;
 };
 
@@ -116,6 +124,8 @@ export type RunQueue = {
     listenerRuns: readonly ListenerRunToEnqueue[],
   ) => Promise<void>;
   syncSchedules: (declaredSchedules: readonly DeclaredSchedule[]) => Promise<ScheduleChange[]>;
+  readonly bullmqQueue: Queue;
+  readonly client: Redis;
   close: () => Promise<void>;
 };
 
@@ -157,6 +167,8 @@ export function createRunQueue(connection: ConnectionConfig, prefix: string): Ru
   };
 
   return {
+    bullmqQueue: queue,
+    client,
     enqueueRun: async (taskName, run) => {
       const job = jobForRun(
         taskName,

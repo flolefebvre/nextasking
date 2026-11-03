@@ -1,9 +1,11 @@
+import { BUILT_IN_EVENTS, isBuiltInEventName } from "./built-in-events.js";
+import type { BuiltInEvent, BuiltInEventName } from "./built-in-events.js";
 import type { ConnectionConfig } from "./connection.js";
 import { concurrencyKeyOf, retriesOf, validatePayload } from "./definitions.js";
 import type { AnyTaskDefinition, EventDefinition, PayloadInput, PayloadSchema } from "./definitions.js";
 import { parseDuration } from "./durations.js";
 import type { Duration, DurationInMilliseconds } from "./durations.js";
-import { UnknownEventError, UnknownTaskError } from "./errors.js";
+import { FanOutNotReplayableError, RunNotReplayableError, UnknownEventError, UnknownTaskError } from "./errors.js";
 import type { DefinitionKind } from "./errors.js";
 import { createRandomId } from "./ids.js";
 import type { EventId, RunId } from "./ids.js";
@@ -23,7 +25,9 @@ import { eventDefinitionSummariesOf, taskDefinitionSummariesOf } from "./definit
 import type { EventDefinitionSummary, TaskDefinitionSummary } from "./definition-summaries.js";
 import { createRunQueue } from "./run-queue.js";
 import type { RunState } from "./run-states.js";
-import type { RunQueue } from "./run-queue.js";
+import type { EnqueueOutcome, RunQueue } from "./run-queue.js";
+import { sendUnsentFailureNotices } from "./failure-notices.js";
+import type { SendBuiltInEvent } from "./failure-notices.js";
 import { rejectInvalidSchedule, timezoneOf } from "./schedules.js";
 import {
   MISSING_MANUAL_SIGNAL_HANDLING_WARNING,
@@ -44,7 +48,7 @@ export type TaskNameIn<Registration> = Registration extends {
   : never;
 
 export type EventNameIn<Registration> = Registration extends {
-  nextasking: { isEventName: (name: string) => name is infer Name extends string };
+  nextasking: { eventDefinitions: readonly { readonly name: infer Name extends string }[] };
 }
   ? Name
   : never;
@@ -58,6 +62,14 @@ export type DispatchedRun = {
 };
 
 export type EmittedEvent = {
+  eventId: EventId;
+};
+
+export type ReplayedRun = {
+  runId: RunId;
+};
+
+export type ReplayedEvent = {
   eventId: EventId;
 };
 
@@ -101,8 +113,10 @@ export interface RegisteredDispatch {
   ): Promise<DispatchedRun>;
 }
 
+export type EmittableEventNameOf<Event extends EventDefinition> = Exclude<Event["name"], BuiltInEventName>;
+
 export interface RegisteredEmit {
-  <Name extends EventName>(
+  <Name extends Exclude<EventName, BuiltInEventName>>(
     name: Name,
     payload: PayloadInput<Extract<RegisteredEvent, { name: Name }>["schema"]>,
     options?: EmitOptions,
@@ -123,13 +137,15 @@ export type Nextasking<Task extends AnyTaskDefinition, Event extends EventDefini
     name: Name,
     ...dispatchArguments: DispatchArguments<Extract<Task, { name: Name }>>
   ) => Promise<DispatchedRun>;
-  readonly emit: <Name extends Event["name"]>(
+  readonly emit: <Name extends EmittableEventNameOf<Event>>(
     name: Name,
     payload: PayloadInput<Extract<Event, { name: Name }>["schema"]>,
     options?: EmitOptions,
   ) => Promise<EmittedEvent>;
+  readonly replay: <Name extends Task["name"]>(name: Name, runId: RunId) => Promise<ReplayedRun>;
+  readonly replayEvent: <Name extends Event["name"]>(name: Name, eventId: EventId) => Promise<ReplayedEvent>;
   readonly isTaskName: (name: string) => name is Task["name"];
-  readonly isEventName: (name: string) => name is Event["name"];
+  readonly isEventName: (name: string) => name is EmittableEventNameOf<Event>;
   readonly startWorker: (options?: StartWorkerOptions) => Promise<void>;
   readonly getRun: <Name extends Task["name"]>(
     name: Name,
@@ -168,9 +184,10 @@ const closeByNextasking = new WeakMap<object, () => Promise<void>>();
 export function createNextasking<
   const Tasks extends readonly AnyTaskDefinition[],
   const Events extends readonly EventDefinition[] = readonly [],
->(config: NextaskingConfig<Tasks, Events>): Nextasking<Tasks[number], Events[number]> {
-  const events: readonly EventDefinition[] = config.events ?? [];
-  rejectInvalidConfig(config.tasks, events);
+>(config: NextaskingConfig<Tasks, Events>): Nextasking<Tasks[number], Events[number] | BuiltInEvent> {
+  const appEvents: readonly EventDefinition[] = config.events ?? [];
+  rejectInvalidConfig(config.tasks, appEvents);
+  const events: readonly EventDefinition[] = [...appEvents, ...BUILT_IN_EVENTS];
   const prefix = config.prefix ?? DEFAULT_PREFIX;
   const logger = config.logger ?? silentLogger;
   const tasksByName = new Map<string, AnyTaskDefinition>(config.tasks.map((task) => [task.name, task]));
@@ -219,34 +236,77 @@ export function createNextasking<
   };
 
   const emitByName: EmitByName = async (name, payload, options = {}) => {
+    if (isBuiltInEventName(name)) {
+      throw new Error(
+        `Event "${name}" is built in: names starting with "${RESERVED_NAME_PREFIX}" belong to the built-in events, which only the library emits`,
+      );
+    }
     const event = eventsByName.get(name);
     if (event === undefined) {
-      throw new UnknownEventError(name, [...eventsByName.keys()]);
+      throw new UnknownEventError(
+        name,
+        appEvents.map((appEvent) => appEvent.name),
+      );
     }
     const eventId = consumerFacingIdOrRandomId("event", event.name, "eventId", options.eventId);
     const validatedPayload = await validatePayload("event", event, payload);
-    const listenerNames = listenerNamesByEventName.get(event.name) ?? [];
-    if (listenerNames.length === 0) {
+    const fanOutEnqueueing = await enqueueFanOutToListeners(event.name, eventId, validatedPayload);
+    if (fanOutEnqueueing === "no listeners") {
       logger.warn({ eventName: event.name, eventId }, "no listeners for event");
-      return { eventId };
-    }
-    const { isDuplicate } = await openRunQueue().enqueueFanOut(event.name, {
-      eventId,
-      payload: validatedPayload,
-      listenerNames,
-    });
-    if (isDuplicate) {
+    } else if (fanOutEnqueueing.isDuplicate) {
       logger.debug({ eventName: event.name, eventId }, "duplicate dispatch dropped");
     }
     return { eventId };
   };
 
-  type Instance = Nextasking<Tasks[number], Events[number]>;
+  const enqueueFanOutToListeners = async (
+    eventName: string,
+    eventId: EventId,
+    validatedPayload: unknown,
+  ): Promise<EnqueueOutcome | "no listeners"> => {
+    const listenerNames = listenerNamesByEventName.get(eventName) ?? [];
+    if (listenerNames.length === 0) {
+      return "no listeners";
+    }
+    return openRunQueue().enqueueFanOut(eventName, { eventId, payload: validatedPayload, listenerNames });
+  };
+
+  const sendBuiltInEvent: SendBuiltInEvent = async (eventName, eventId, payload) => {
+    await enqueueFanOutToListeners(eventName, eventId, payload);
+  };
+
+  const replay = async (name: string, runId: RunId): Promise<ReplayedRun> => {
+    if (!tasksByName.has(name)) {
+      throw new UnknownTaskError(name, [...tasksByName.keys()]);
+    }
+    const replayOutcome = await openRunQueue().replayRun(name, runId);
+    if (replayOutcome !== "replayed") {
+      throw new RunNotReplayableError(name, runId, replayOutcome);
+    }
+    logger.info({ task: name, runId }, "run replayed");
+    return { runId };
+  };
+
+  const replayEvent = async (name: string, eventId: EventId): Promise<ReplayedEvent> => {
+    if (!eventsByName.has(name)) {
+      throw new UnknownEventError(name, [...eventsByName.keys()]);
+    }
+    const replayOutcome = await openRunQueue().replayFanOut(name, eventId);
+    if (replayOutcome !== "replayed") {
+      throw new FanOutNotReplayableError(name, eventId, replayOutcome);
+    }
+    return { eventId };
+  };
+
+  type Instance = Nextasking<Tasks[number], Events[number] | BuiltInEvent>;
   const nextasking: Instance = {
     dispatch: dispatchByName,
     emit: emitByName,
+    replay,
+    replayEvent,
     isTaskName: (name): name is Tasks[number]["name"] => tasksByName.has(name),
-    isEventName: (name): name is Events[number]["name"] => eventsByName.has(name),
+    isEventName: (name): name is EmittableEventNameOf<Events[number] | BuiltInEvent> =>
+      eventsByName.has(name) && !isBuiltInEventName(name),
     getRun: queueReader.getRun as Instance["getRun"],
     listRuns: queueReader.listRuns as Instance["listRuns"],
     countRuns: queueReader.countRuns as Instance["countRuns"],
@@ -260,6 +320,7 @@ export function createNextasking<
       for (const { kind, taskName, cron, timezone } of scheduleChanges) {
         logger.info({ task: taskName, cron, timezone }, `schedule ${kind}`);
       }
+      await sendUnsentFailureNotices(openRunQueue(), sendBuiltInEvent);
       runningWorker = startRunWorker({
         options: workerOptions,
         connection: config.connection,
@@ -270,6 +331,7 @@ export function createNextasking<
         openRunQueue,
         dispatch: dispatchByName,
         emit: emitByName,
+        sendBuiltInEvent,
       });
       if (isSignalHandlingLeftToTheApp()) {
         stopExitingOnShutdownSignals = exitOnShutdownSignals(() => closeInstance({ isDraining: true }), logger);
@@ -328,13 +390,18 @@ function delayInMillisecondsOf(taskName: string, delay: Duration | undefined): D
 function rejectInvalidConfig(tasks: readonly AnyTaskDefinition[], events: readonly EventDefinition[]): void {
   rejectDuplicateNames([...tasks.map((task) => task.name), ...events.map((event) => event.name)]);
   for (const event of events) {
+    if (isBuiltInEventName(event.name)) {
+      throw new Error(
+        `Event "${event.name}" is built in and added automatically: remove it from events, and listen to it as it is`,
+      );
+    }
     if (event.name.startsWith(RESERVED_NAME_PREFIX)) {
       throw new Error(
         `Event "${event.name}" has a reserved name: names starting with "${RESERVED_NAME_PREFIX}" belong to the built-in events`,
       );
     }
   }
-  const eventNames = new Set(events.map((event) => event.name));
+  const eventNames = new Set([...events, ...BUILT_IN_EVENTS].map((event) => event.name));
   for (const task of tasks) {
     if (task.name.startsWith(RESERVED_NAME_PREFIX)) {
       throw new Error(

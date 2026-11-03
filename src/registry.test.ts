@@ -3,6 +3,8 @@ import * as v from "valibot";
 import { describe, expect, expectTypeOf, test, vi } from "vitest";
 import { z } from "zod";
 
+import { fanOutFailed, runFailed } from "./built-in-events.js";
+import type { FanOutFailedPayload, RunFailedPayload } from "./built-in-events.js";
 import { defineEvent, defineListener, defineScheduledTask, defineTask } from "./definitions.js";
 import { InvalidPayloadError, UnknownEventError, UnknownTaskError } from "./errors.js";
 import type { Duration } from "./durations.js";
@@ -102,12 +104,18 @@ describe("createNextasking", () => {
   });
 
   test("rejects an event name starting with nextasking/", () => {
-    const reservedEvent = defineEvent("nextasking/run.failed", { schema: z.object({}) });
+    const reservedEvent = defineEvent("nextasking/user.signed-up", { schema: z.object({}) });
 
     expect(() =>
       createNextasking({ connection: { url: UNREACHABLE_URL }, events: [reservedEvent], tasks: [] }),
     ).toThrow(
-      'Event "nextasking/run.failed" has a reserved name: names starting with "nextasking/" belong to the built-in events',
+      'Event "nextasking/user.signed-up" has a reserved name: names starting with "nextasking/" belong to the built-in events',
+    );
+  });
+
+  test.each([runFailed, fanOutFailed])("rejects the built-in event $name listed in events", (builtInEvent) => {
+    expect(() => createNextasking({ connection: { url: UNREACHABLE_URL }, events: [builtInEvent], tasks: [] })).toThrow(
+      `Event "${builtInEvent.name}" is built in and added automatically: remove it from events, and listen to it as it is`,
     );
   });
 
@@ -567,6 +575,7 @@ describe("isTaskName and isEventName", () => {
 
     if (nextasking.isEventName(name)) {
       expectTypeOf(name).toEqualTypeOf<"invoice.paid" | "user.signed-up">();
+      expectTypeOf(nextasking.emit).toBeCallableWith(name, { invoiceId: "inv-7", amountInCents: 100 });
     }
     if (nextasking.isTaskName(name)) {
       expectTypeOf(name).toEqualTypeOf<
@@ -609,5 +618,119 @@ describe("startWorker", () => {
     expectTypeOf(nextasking.startWorker).toBeCallableWith({ concurrency: 4, shutdownTimeout: "25s" });
     // @ts-expect-error a shutdownTimeout is a Duration
     expectTypeOf(nextasking.startWorker).toBeCallableWith({ shutdownTimeout: 25_000 });
+  });
+});
+
+describe("replay", () => {
+  test("rejects an unknown task name, listing the valid names, before opening any connection", async () => {
+    const nextasking = createTestNextasking();
+    const networkResourcesBefore = networkResources();
+
+    // @ts-expect-error an unknown task name doesn't compile
+    const replaying = nextasking.replay("send-welcom-email", "run-7");
+
+    await expect(replaying).rejects.toThrow(UnknownTaskError);
+    await expect(replaying).rejects.toThrow(
+      'Unknown task "send-welcom-email". Valid task names: "send-welcome-email", "generate-invoice-pdf", "count-page-views", "record-invoice-payment".',
+    );
+    await setImmediate();
+    expect(networkResources()).toEqual(networkResourcesBefore);
+  });
+
+  test("takes a task name and a run id and resolves with the run id", () => {
+    const nextasking = createTestNextasking();
+
+    expectTypeOf(nextasking.replay<"record-invoice-payment">).parameters.toEqualTypeOf<
+      ["record-invoice-payment", string]
+    >();
+    expectTypeOf(nextasking.replay).returns.resolves.toEqualTypeOf<{ runId: string }>();
+  });
+});
+
+describe("replayEvent", () => {
+  test("rejects an unknown event name, listing the valid names, before opening any connection", async () => {
+    const nextasking = createTestNextasking();
+    const networkResourcesBefore = networkResources();
+
+    // @ts-expect-error an unknown event name doesn't compile
+    const replaying = nextasking.replayEvent("invoice.payed", "event-7");
+
+    await expect(replaying).rejects.toThrow(UnknownEventError);
+    await expect(replaying).rejects.toThrow(
+      'Unknown event "invoice.payed". Valid event names: "invoice.paid", "user.signed-up", "nextasking/run.failed", "nextasking/fan-out.failed".',
+    );
+    await setImmediate();
+    expect(networkResources()).toEqual(networkResourcesBefore);
+  });
+
+  test("takes an event name and an event id and resolves with the event id", () => {
+    const nextasking = createTestNextasking();
+
+    expectTypeOf(nextasking.replayEvent<"invoice.paid">).parameters.toEqualTypeOf<["invoice.paid", string]>();
+    expectTypeOf(nextasking.replayEvent).returns.resolves.toEqualTypeOf<{ eventId: string }>();
+  });
+});
+
+describe("built-in events", () => {
+  const alertOnRunFailed = defineListener("alert-on-run-failed", {
+    on: runFailed,
+    handler: async ({ payload }) => {
+      expectTypeOf(payload).toEqualTypeOf<RunFailedPayload>();
+    },
+  });
+
+  const alertOnFanOutFailed = defineListener("alert-on-fan-out-failed", {
+    on: fanOutFailed,
+    handler: async ({ payload }) => {
+      expectTypeOf(payload).toEqualTypeOf<FanOutFailedPayload>();
+    },
+  });
+
+  function createAlertingNextasking() {
+    return createNextasking({
+      connection: { url: UNREACHABLE_URL },
+      events: [invoicePaid],
+      tasks: [recordInvoicePayment, alertOnRunFailed, alertOnFanOutFailed],
+    });
+  }
+
+  test("are added to the registry automatically, with their listeners, and left out of isEventName", () => {
+    const nextasking = createAlertingNextasking();
+
+    expect(nextasking.eventDefinitions).toEqual([
+      { name: "invoice.paid", listenerNames: ["record-invoice-payment"] },
+      { name: "nextasking/run.failed", listenerNames: ["alert-on-run-failed"] },
+      { name: "nextasking/fan-out.failed", listenerNames: ["alert-on-fan-out-failed"] },
+    ]);
+    expect(nextasking.isEventName("nextasking/run.failed")).toBe(false);
+    expect(nextasking.isEventName("nextasking/fan-out.failed")).toBe(false);
+  });
+
+  test.each(["nextasking/run.failed", "nextasking/fan-out.failed"])(
+    "can't be emitted: emit rejects %s before opening any connection",
+    async (builtInEventName) => {
+      const nextasking = createAlertingNextasking();
+      const networkResourcesBefore = networkResources();
+      const emitByName = nextasking.emit as (name: string, payload: unknown) => Promise<unknown>;
+
+      await expect(emitByName(builtInEventName, {})).rejects.toThrow(
+        `Event "${builtInEventName}" is built in: names starting with "nextasking/" belong to the built-in events, which only the library emits`,
+      );
+      await setImmediate();
+      expect(networkResources()).toEqual(networkResourcesBefore);
+    },
+  );
+
+  test("can't be emitted in the types, and an unknown event lists only the app's events", async () => {
+    const nextasking = createAlertingNextasking();
+
+    expectTypeOf(nextasking.emit).parameter(0).toEqualTypeOf<"invoice.paid">();
+    // @ts-expect-error a built-in event can't be emitted
+    const emitting = nextasking.emit("nextasking/run.failed", {});
+
+    await expect(emitting).rejects.toThrow("is built in");
+    await expect(
+      nextasking.emit("invoice.payed" as "invoice.paid", { invoiceId: "inv-7", amountInCents: 100 }),
+    ).rejects.toThrow('Unknown event "invoice.payed". Valid event names: "invoice.paid".');
   });
 });

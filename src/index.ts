@@ -1,3 +1,5 @@
+export { fanOutFailed, runFailed } from "./built-in-events.js";
+export type { FailureNoticeError, FanOutFailedPayload, RunFailedPayload } from "./built-in-events.js";
 export type { ConnectionConfig } from "./connection.js";
 export { defineEvent, defineListener, defineScheduledTask, defineTask } from "./definitions.js";
 export type {
@@ -18,8 +20,10 @@ export type {
 export type { EventDefinitionSummary, TaskDefinitionSummary } from "./definition-summaries.js";
 export type { Duration } from "./durations.js";
 export {
+  FanOutNotReplayableError,
   InvalidPayloadError,
   NonRetriableError,
+  RunNotReplayableError,
   StepMisuseError,
   UnknownEventError,
   UnknownTaskError,
@@ -42,6 +46,8 @@ export type {
   Nextasking,
   NextaskingConfig,
   Register,
+  ReplayedEvent,
+  ReplayedRun,
   Run,
   RunCounts,
   RunPage,

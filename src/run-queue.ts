@@ -1,13 +1,18 @@
 import { Queue } from "bullmq";
-import type { JobsOptions } from "bullmq";
+import type { Job, JobsOptions } from "bullmq";
 import type { Redis } from "ioredis";
 
 import { closeRedisClient, createRedisClient } from "./connection.js";
 import type { ConnectionConfig } from "./connection.js";
 import type { ConcurrencyKey } from "./definitions.js";
 import type { DurationInMilliseconds, EpochMilliseconds } from "./durations.js";
+import type { ReplayRefusal } from "./errors.js";
+import { saveFailedJobDataIfUnchanged } from "./failed-job-data.js";
 import { createRandomId, deriveJobId, deriveListenerRunId } from "./ids.js";
 import type { EventId, JobId, RunId } from "./ids.js";
+import { jobKeyOf } from "./job-lock.js";
+import { COMPLETED_JOB_RETENTION, FAILED_JOB_RETENTION } from "./job-retention.js";
+import { keepSavedStepsForFailedRunRetention } from "./redis-step-store.js";
 import { scheduleChangesBetween } from "./schedules.js";
 import type { DeclaredSchedule, ScheduleChange } from "./schedules.js";
 
@@ -15,13 +20,9 @@ export const RUN_QUEUE_NAME = "runs";
 
 export const FIRING_JOB_NAME = "nextasking/firing";
 
-const SECONDS_IN_A_DAY = 24 * 60 * 60;
-
-const COMPLETED_JOB_RETENTION = { age: SECONDS_IN_A_DAY, count: 1000 };
-
-export const FAILED_JOB_RETENTION = { age: 14 * SECONDS_IN_A_DAY, count: 10_000 };
-
 const FAN_OUT_RETRIES = 5;
+
+const BULLMQ_STALL_COUNT_FIELD = "stc";
 
 const FAN_OUT_FIRST_BACKOFF_IN_MILLISECONDS = 30_000;
 
@@ -59,17 +60,53 @@ export type StoredRun = {
   firstFoundUnknownAt?: IsoTimestamp;
   errors: ErrorRecord[];
   reason?: FailureReason;
+  failureCount?: number;
+  notifiedFailureCount?: number;
   delayedRunState?: StoredDelayedRunState;
   writeToken: WriteToken;
 };
+
+export function storedRunAfterFinalFailure(storedRun: StoredRun, errorRecord: ErrorRecord, reason: FailureReason) {
+  return {
+    ...storedRun,
+    errors: [...storedRun.errors, errorRecord],
+    reason,
+    failureCount: (storedRun.failureCount ?? 0) + 1,
+  } satisfies StoredRun;
+}
+
+function storedRunAfterReplay(storedRun: StoredRun): StoredRun {
+  return {
+    ...storedRun,
+    errors: [],
+    reason: undefined,
+    delayedRunState: undefined,
+    firstFoundUnknownAt: undefined,
+  };
+}
 
 export type StoredFanOut = {
   eventId: EventId;
   payload: unknown;
   listenerNames: readonly string[];
   firstFoundUnknownAt?: IsoTimestamp;
+  finalError?: ErrorRecord;
+  failureCount?: number;
+  notifiedFailureCount?: number;
   writeToken: WriteToken;
 };
+
+export function storedFanOutAfterFinalFailure(storedFanOut: StoredFanOut, finalError: ErrorRecord) {
+  return {
+    ...storedFanOut,
+    finalError,
+    failureCount: (storedFanOut.failureCount ?? 0) + 1,
+  } satisfies StoredFanOut;
+}
+
+function storedFanOutAfterReplay(storedFanOut: StoredFanOut): StoredFanOut {
+  return { ...storedFanOut, firstFoundUnknownAt: undefined, finalError: undefined };
+}
 
 export type StoredFiring = {
   taskName: string;
@@ -115,9 +152,13 @@ export type EnqueueOutcome = {
   isDuplicate: boolean;
 };
 
+export type ReplayOutcome = "replayed" | ReplayRefusal;
+
 export type RunQueue = {
   enqueueRun: (taskName: string, run: RunToEnqueue) => Promise<EnqueueOutcome>;
+  replayRun: (taskName: string, runId: RunId) => Promise<ReplayOutcome>;
   enqueueFanOut: (eventName: string, fanOut: FanOutToEnqueue) => Promise<EnqueueOutcome>;
+  replayFanOut: (eventName: string, eventId: EventId) => Promise<ReplayOutcome>;
   enqueueListenerRuns: (
     eventName: string,
     fanOut: StoredFanOut,
@@ -166,9 +207,32 @@ export function createRunQueue(connection: ConnectionConfig, prefix: string): Ru
     return { isDuplicate: storedJob !== undefined && storedWriteToken !== data.writeToken };
   };
 
+  const replayFailedJob = async <Data>(jobId: JobId, dataAfterReplay: (data: Data) => Data): Promise<ReplayOutcome> => {
+    const job = (await queue.getJob(jobId)) as Job<Data> | undefined;
+    if (job === undefined) {
+      return "not found";
+    }
+    if ((await saveFailedJobDataIfUnchanged(client, job, dataAfterReplay(job.data))) !== "saved") {
+      return "not failed";
+    }
+    await client.hset(jobKeyOf(job), BULLMQ_STALL_COUNT_FIELD, 0);
+    await keepSavedStepsForFailedRunRetention(client, job);
+    try {
+      await job.retry("failed", { resetAttemptsMade: true, resetAttemptsStarted: true });
+    } catch (error) {
+      if (await job.isFailed()) {
+        throw error;
+      }
+      return "not failed";
+    }
+    return "replayed";
+  };
+
   return {
     bullmqQueue: queue,
     client,
+    replayRun: (taskName, runId) => replayFailedJob(deriveJobId(taskName, runId), storedRunAfterReplay),
+    replayFanOut: (eventName, eventId) => replayFailedJob(deriveJobId(eventName, eventId), storedFanOutAfterReplay),
     enqueueRun: async (taskName, run) => {
       const job = jobForRun(
         taskName,

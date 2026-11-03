@@ -44,6 +44,7 @@ Each message is fixed: filter and alert on it.
 | `info`  | `schedule changed`                                                                                              | `task`, `cron`, `timezone`                                                                                  |
 | `info`  | `schedule removed`                                                                                              | `task`, `cron`, `timezone`                                                                                  |
 | `info`  | `run completed`                                                                                                 | `task`, `runId`, `attempt`, `runDurationInMilliseconds`, `executionDurationInMilliseconds`                  |
+| `info`  | `run replayed`                                                                                                  | `task`, `runId`                                                                                             |
 | `info`  | `worker started`                                                                                                | none                                                                                                        |
 | `info`  | `worker stopped`                                                                                                | none                                                                                                        |
 | `warn`  | `no listeners for event`                                                                                        | `eventName`, `eventId`                                                                                      |
@@ -52,6 +53,7 @@ Each message is fixed: filter and alert on it.
 | `warn`  | `attempts aborted at shutdown deadline`                                                                         | none                                                                                                        |
 | `warn`  | `NEXT_MANUAL_SIG_HANDLE is not set: on SIGTERM Next exits at once and cuts the attempts running in this worker` | none                                                                                                        |
 | `error` | `run failed`                                                                                                    | `task`, `runId`, `attempt`, `err`, `reason`, `runDurationInMilliseconds`, `executionDurationInMilliseconds` |
+| `error` | `fan-out failed`                                                                                                | `eventName`, `eventId`, `err`                                                                               |
 | `error` | `worker shutdown failed`                                                                                        | `err`                                                                                                       |
 
 - `run dispatched` comes before any attempt, so it has no `attempt`. Every line about an attempt has `task`, `runId` and `attempt`.
@@ -62,12 +64,14 @@ Each message is fixed: filter and alert on it.
 - `run suspended` is written when a sleep suspends the run, with `wakeAt` as an ISO string. `run resumed` replaces `attempt started` when the run is picked up again after it: the attempt is the same. See [Steps](steps.md#sleep-for-minutes-or-days).
 - `runDurationInMilliseconds`: from the dispatch to the completion or the final failure. `executionDurationInMilliseconds`: from the start, or the resume, of the last attempt to its end.
 - `attempt failed` is written only when a retry follows, and `run failed` when the run fails for good: `err` is the attempt's `Error`, `reason` is `"retries exhausted"`, `"non-retriable"`, `"stalled"` or `"unknown task"`. See [Retries and failures](retries-and-failures.md).
+- `fan-out failed` is written when a fan-out fails for good, stalls and an event no worker defines included: `err` is the `Error` it failed with. No `no listeners for event` line is written for a built-in event. See [Retries and failures](retries-and-failures.md#react-to-a-failure).
 - `run completed` is written once the completion is stored: an attempt that lost its lock never writes it.
+- `run replayed` is written by `replay`, in the process that calls it, before the run's next attempt; it has no `attempt`. See [Retries and failures](retries-and-failures.md#replay-a-failed-run).
 - `run yielded at shutdown`, `attempt aborted: lock lost`, `attempt stalled`, `attempts aborted at shutdown deadline`, `worker shutdown failed` and the `NEXT_MANUAL_SIG_HANDLE` warning come from the worker's shutdown and lock handling. See [Worker](worker.md).
 - `attempt stalled` is written by the worker that found the stall, which may be another instance than the one that ran the attempt.
 - `run handed back: unknown task` and `fan-out handed back: unknown event` are written by a worker that doesn't define the run's task or the fan-out's event, each time it hands it back during a deploy overlap. See [Worker](worker.md#overlapping-releases).
 - `schedule added`, `schedule changed` and `schedule removed` are written by `startWorker()`, one per schedule it reconciles, before `worker started`. `cron` and `timezone` are the new values, or for `schedule removed` the stored ones. `firing dropped: task not scheduled` is written when a firing reaches a release that no longer schedules its task, with `scheduledAt` as an ISO string. See [Scheduled tasks](scheduled-tasks.md#what-a-deploy-does-to-schedules).
-- `worker started` is written when `startWorker()` has reconciled the schedules and started the worker. The `NEXT_MANUAL_SIG_HANDLE` warning, when it applies, comes right after it.
+- `worker started` is written when `startWorker()` has reconciled the schedules, re-sent the failure notices a crash lost, and started the worker. The `NEXT_MANUAL_SIG_HANDLE` warning, when it applies, comes right after it.
 - Payloads are never logged, at any level.
 
 ## Log from a handler

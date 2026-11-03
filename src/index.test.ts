@@ -57,12 +57,14 @@ declare module "./index.js" {
 type RegisteredTaskName = "send-welcome-email" | "create-default-workspace" | "purge-expired-sessions";
 
 describe("the root export", () => {
-  test("exports the definers, createNextasking and the errors, and nothing else at runtime", () => {
+  test("exports the definers, createNextasking, the errors and the built-in events, and nothing else at runtime", () => {
     const exportedNames = Object.keys(root).sort();
 
     expect(exportedNames).toEqual([
+      "FanOutNotReplayableError",
       "InvalidPayloadError",
       "NonRetriableError",
+      "RunNotReplayableError",
       "StepMisuseError",
       "UnknownEventError",
       "UnknownTaskError",
@@ -71,6 +73,8 @@ describe("the root export", () => {
       "defineListener",
       "defineScheduledTask",
       "defineTask",
+      "fanOutFailed",
+      "runFailed",
     ]);
   });
 
@@ -108,7 +112,7 @@ describe("the root export", () => {
 
   test("exports the registered task and event names", () => {
     expectTypeOf<TaskName>().toEqualTypeOf<RegisteredTaskName>();
-    expectTypeOf<EventName>().toEqualTypeOf<"user.signed-up">();
+    expectTypeOf<EventName>().toEqualTypeOf<"user.signed-up" | "nextasking/run.failed" | "nextasking/fan-out.failed">();
   });
 
   test("types a run by its task, then by its state", () => {
@@ -193,6 +197,8 @@ describe("the root export", () => {
     ]);
     expect(nextasking.eventDefinitions).toEqual([
       { name: "user.signed-up", listenerNames: ["create-default-workspace"] },
+      { name: "nextasking/run.failed", listenerNames: [] },
+      { name: "nextasking/fan-out.failed", listenerNames: [] },
     ]);
     expect(Object.isFrozen(nextasking.taskDefinitions[2]?.schedule)).toBe(true);
     expectTypeOf(runNow).parameter(0).toEqualTypeOf<TaskName>();
@@ -209,7 +215,7 @@ describe("the root export", () => {
       userId: string;
     }>();
     expectTypeOf<SignedUpEvent["fanOut"]>().toEqualTypeOf<"pending" | "completed" | "failed" | undefined>();
-    expectTypeOf<SignedUpEvent>().toEqualTypeOf<EventWithRuns>();
+    expectTypeOf<SignedUpEvent>().toEqualTypeOf<Extract<EventWithRuns, { event: "user.signed-up" }>>();
     expectTypeOf<ListedSchedule["task"]>().toEqualTypeOf<"purge-expired-sessions">();
     expectTypeOf(nextasking.listSchedules).returns.resolves.toEqualTypeOf<ListedSchedule[]>();
     const readUnknownEvent = () =>

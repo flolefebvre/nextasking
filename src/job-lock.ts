@@ -1,6 +1,8 @@
 import type { MinimalJob } from "bullmq";
 import type { Redis } from "ioredis";
 
+import type { StoredRun } from "./run-queue.js";
+
 export class LostRunLockError extends Error {
   override readonly name = "LostRunLockError";
 
@@ -49,4 +51,17 @@ export async function saveJobDataIfLockIsHeld<Data>(
     throw new LostRunLockError(dataDescription);
   }
   job.data = data;
+}
+
+export function runDataDescriptionOf(job: MinimalJob<StoredRun>): string {
+  return `The data of run "${job.data.runId}"`;
+}
+
+export async function saveRunDataIfLockIsHeld(
+  client: Redis,
+  job: MinimalJob<StoredRun>,
+  token: string | undefined,
+  data: StoredRun,
+): Promise<void> {
+  await saveJobDataIfLockIsHeld(client, job, token, data, runDataDescriptionOf(job));
 }

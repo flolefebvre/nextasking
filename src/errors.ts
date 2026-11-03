@@ -18,6 +18,34 @@ export class UnknownEventError extends Error {
   }
 }
 
+export type ReplayRefusal = "not found" | "not failed";
+
+function shownReplayRefusalOf(replayRefusal: ReplayRefusal, replayedKind: "run" | "fan-out", idName: string): string {
+  return replayRefusal === "not found"
+    ? `no such ${replayedKind} is kept, its ${idName} is unknown or the ${replayedKind} was removed`
+    : "it is not failed";
+}
+
+export class RunNotReplayableError extends Error {
+  override readonly name = "RunNotReplayableError";
+
+  constructor(taskName: string, runId: string, replayRefusal: ReplayRefusal) {
+    super(
+      `Run "${runId}" of task "${taskName}" can't be replayed: ${shownReplayRefusalOf(replayRefusal, "run", "id")}.`,
+    );
+  }
+}
+
+export class FanOutNotReplayableError extends Error {
+  override readonly name = "FanOutNotReplayableError";
+
+  constructor(eventName: string, eventId: string, replayRefusal: ReplayRefusal) {
+    super(
+      `Fan-out "${eventId}" of event "${eventName}" can't be replayed: ${shownReplayRefusalOf(replayRefusal, "fan-out", "event id")}.`,
+    );
+  }
+}
+
 export class NonRetriableError extends Error {
   override readonly name = "NonRetriableError";
 }

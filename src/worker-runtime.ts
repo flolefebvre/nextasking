@@ -5,40 +5,37 @@ import type { Redis } from "ioredis";
 import { AttemptAbortedError, abortCauseOf } from "./attempt-abort.js";
 import type { AttemptAbortCause } from "./attempt-abort.js";
 import { settleWithinTimeout } from "./attempt-timeout.js";
-import { backoffInMillisecondsFor } from "./backoff.js";
 import { setTimeout as sleep } from "node:timers/promises";
 
+import { UnknownTaskRunError } from "./attempt-errors.js";
 import { createConcurrencySlots } from "./concurrency-slots.js";
 import type { ConcurrencySlot } from "./concurrency-slots.js";
 import { closeRedisClient, createRedisClient } from "./connection.js";
 import type { ConnectionConfig } from "./connection.js";
-import { backoffOf, concurrencyKeyOf, retriesOf } from "./definitions.js";
+import { concurrencyKeyOf, retriesOf } from "./definitions.js";
 import type { AnyTaskDefinition, EventDefinition, ScheduledTaskContext, TaskContext } from "./definitions.js";
 import { parseDuration, shownDurationOf } from "./durations.js";
 import type { Duration, DurationInMilliseconds, EpochMilliseconds } from "./durations.js";
 import {
-  StalledRunError,
-  UnknownTaskRunError,
-  errorFromThrownValue,
-  errorRecordFor,
-  failureReasonFor,
-} from "./failed-attempts.js";
+  NO_RETRY,
+  recordFailedAttempt,
+  recordFanOutFailure,
+  recordFinalFailure,
+  recordRunFailedForStalling,
+  runDurationFieldsOf,
+} from "./failure-recording.js";
+import type { RunDurationFields } from "./failure-recording.js";
+import { sendFailureNotice } from "./failure-notices.js";
+import type { SendBuiltInEvent } from "./failure-notices.js";
 import { deriveFiringRunId } from "./ids.js";
 import type { RunId } from "./ids.js";
-import { LostRunLockError, saveJobDataIfLockIsHeld } from "./job-lock.js";
+import { LostRunLockError, runDataDescriptionOf, saveRunDataIfLockIsHeld } from "./job-lock.js";
 import { loggerWithFields } from "./logger.js";
 import type { Logger } from "./logger.js";
-import { createRedisStepStore, keepSavedStepsForFailedRunRetention, removeSavedSteps } from "./redis-step-store.js";
+import { createRedisStepStore, removeSavedSteps } from "./redis-step-store.js";
 import type { DispatchByName, EmitByName } from "./registry.js";
 import { FIRING_JOB_NAME, RUN_QUEUE_NAME, plannedInstantOfFiring, scheduledAtOf } from "./run-queue.js";
-import type {
-  FailureReason,
-  RunQueue,
-  StoredDelayedRunState,
-  StoredFanOut,
-  StoredFiring,
-  StoredRun,
-} from "./run-queue.js";
+import type { RunQueue, StoredDelayedRunState, StoredFanOut, StoredFiring, StoredRun } from "./run-queue.js";
 import { attemptOf } from "./run-states.js";
 import { openStepEngine } from "./step-engine.js";
 import type { HandlerOutcome } from "./step-engine.js";
@@ -89,46 +86,16 @@ export type WorkerConfig = {
   openRunQueue: () => RunQueue;
   dispatch: DispatchByName;
   emit: EmitByName;
-};
-
-const NO_RETRY = -1;
-
-type RunDurationFields = {
-  runDurationInMilliseconds: DurationInMilliseconds;
-  executionDurationInMilliseconds: DurationInMilliseconds;
+  sendBuiltInEvent: SendBuiltInEvent;
 };
 
 type AnyTaskHandler = (context: TaskContext<unknown> | ScheduledTaskContext) => Promise<void>;
-
-function runDurationFieldsOf(
-  job: MinimalJob,
-  executionStartedAt: EpochMilliseconds,
-  runEndedAt: EpochMilliseconds,
-): RunDurationFields {
-  return {
-    runDurationInMilliseconds: runEndedAt - job.timestamp,
-    executionDurationInMilliseconds: runEndedAt - executionStartedAt,
-  };
-}
 
 const STALL_LIMIT_FAILED_REASON = "job stalled more than allowable limit";
 
 const LOCK_ERROR_CODES = new Set<unknown>([ErrorCode.JobLockNotExist, ErrorCode.JobLockMismatch]);
 
 let isWorkerRunningInThisProcess = false;
-
-function runDataDescriptionOf(job: Job<StoredRun>): string {
-  return `The data of run "${job.data.runId}"`;
-}
-
-async function saveRunDataIfLockIsHeld(
-  client: Redis,
-  job: Job<StoredRun>,
-  token: string | undefined,
-  data: StoredRun,
-): Promise<void> {
-  await saveJobDataIfLockIsHeld(client, job, token, data, runDataDescriptionOf(job));
-}
 
 async function moveRunToDelayed(
   client: Redis,
@@ -357,40 +324,17 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
       if (abortCause === "shutdown deadline") {
         return yieldAtShutdown(job, token, runLogger);
       }
-      const error = errorFromThrownValue(thrownValue);
-      const failedAt = new Date();
-      const retriesLeft = (job.opts.attempts ?? 1) - attempt;
-      const reason = failureReasonFor(error, retriesLeft);
-      const backoffInMilliseconds =
-        reason === undefined
-          ? backoffInMillisecondsFor(parseDuration(backoffOf(task)), attempt, Math.random())
-          : NO_RETRY;
-      await saveRunDataIfLockIsHeld(client, job, token, {
-        ...job.data,
-        errors: [...job.data.errors, errorRecordFor(error, attempt, failedAt)],
-        ...(reason === undefined
-          ? {
-              delayedRunState: {
-                state: "backingOff",
-                nextAttemptAt: new Date(failedAt.getTime() + backoffInMilliseconds).toISOString(),
-              },
-            }
-          : { reason }),
-      }).catch((writeError: unknown) => {
+      const { error, backoffInMilliseconds } = await recordFailedAttempt(
+        { client, job, token, task, attempt, executionStartedAt: stretchStartedAt, runLogger },
+        thrownValue,
+      ).catch((writeError: unknown) => {
         abortAttemptIfLockIsLost(writeError);
         if (abortCauseOf(abortSignal) === "lock lost") {
           logLockLostAbort();
         }
         throw writeError;
       });
-      if (reason === undefined) {
-        backoffInMillisecondsByFailedJob.set(job, backoffInMilliseconds);
-        runLogger.warn({ err: error, retriesLeft, backoffInMilliseconds }, "attempt failed");
-      } else {
-        await keepSavedStepsForFailedRunRetention(client, job).catch(() => undefined);
-        backoffInMillisecondsByFailedJob.set(job, NO_RETRY);
-        runLogger.error({ err: error, reason, ...durationFieldsAt(failedAt.getTime()) }, "run failed");
-      }
+      backoffInMillisecondsByFailedJob.set(job, backoffInMilliseconds);
       throw error;
     }
     if (outcome.kind === "suspended") {
@@ -500,8 +444,20 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
       job.data.runId,
       shownDurationOf(timing.unknownNameGiveUpDelayInMilliseconds),
     );
-    await recordFinalFailure(job, error, "unknown task", attemptOf(job, "executing"), Date.now(), (data) =>
-      saveRunDataIfLockIsHeld(client, job, token, data),
+    const attempt = attemptOf(job, "executing");
+    const now = new Date();
+    await recordFinalFailure(
+      client,
+      job,
+      {
+        error,
+        reason: "unknown task",
+        attempt,
+        executionStartedAt: now.getTime(),
+        failedAt: now,
+        runLogger: runLoggerOf(job, attempt),
+      },
+      (data) => saveRunDataIfLockIsHeld(client, job, token, data),
     );
     throw error;
   }
@@ -528,35 +484,8 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
       runLoggerOf(job, attemptOf(job, "executing")).warn({}, "attempt stalled");
     }
   };
-  async function recordFinalFailure(
-    job: Job<StoredRun>,
-    error: Error,
-    reason: FailureReason,
-    attempt: number,
-    executionStartedAt: EpochMilliseconds,
-    saveRunData: (data: StoredRun) => Promise<void>,
-  ): Promise<void> {
-    const failedAt = new Date();
-    await saveRunData({
-      ...job.data,
-      errors: [...job.data.errors, errorRecordFor(error, attempt, failedAt)],
-      reason,
-    });
-    await keepSavedStepsForFailedRunRetention(client, job).catch(() => undefined);
-    runLoggerOf(job, attempt).error(
-      { err: error, reason, ...runDurationFieldsOf(job, executionStartedAt, failedAt.getTime()) },
-      "run failed",
-    );
-  }
   const failRunForStalling = (job: Job<StoredRun>) =>
-    recordFinalFailure(
-      job,
-      new StalledRunError(job.data.runId, timing.stallCountThatFailsARun),
-      "stalled",
-      job.attemptsMade,
-      job.processedOn ?? Date.now(),
-      (data) => job.updateData(data),
-    );
+    recordRunFailedForStalling(client, job, timing.stallCountThatFailsARun, runLoggerOf(job, job.attemptsMade));
   worker.on("error", () => undefined);
   worker.on("lockRenewalFailed", (jobIds) => {
     for (const jobId of jobIds) {
@@ -576,9 +505,17 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
   worker.on("stalled", (jobId) => {
     logAttemptStalled(jobId).catch(() => undefined);
   });
+  const recordFinalFailureOfJob = async (job: Job, error: Error) => {
+    if ("listenerNames" in (job.data as object)) {
+      await recordFanOutFailure(job as Job<StoredFanOut>, error, config.logger);
+    } else if (error.message === STALL_LIMIT_FAILED_REASON && config.tasksByName.has(job.name)) {
+      await failRunForStalling(job as Job<StoredRun>);
+    }
+    await sendFailureNotice(client, job, config.sendBuiltInEvent);
+  };
   worker.on("failed", (job, error) => {
-    if (job !== undefined && error.message === STALL_LIMIT_FAILED_REASON && config.tasksByName.has(job.name)) {
-      failRunForStalling(job as Job<StoredRun>).catch(() => undefined);
+    if (job !== undefined && typeof job.finishedOn === "number") {
+      recordFinalFailureOfJob(job, error).catch(() => undefined);
     }
   });
   config.logger.info({}, "worker started");

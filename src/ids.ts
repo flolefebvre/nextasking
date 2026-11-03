@@ -41,6 +41,14 @@ export function deriveFiringRunId(taskName: string, plannedInstant: EpochMillise
   return uuidFromNameParts(["firing-run", taskName, String(plannedInstant)]);
 }
 
+export function deriveFailureNoticeEventId(
+  definitionName: string,
+  consumerFacingId: RunId | EventId,
+  failureNumber: number,
+): EventId {
+  return uuidFromNameParts(["failure-notice", definitionName, consumerFacingId, String(failureNumber)]);
+}
+
 export function deriveStepIdempotencyKey(taskName: string, runId: RunId, stepId: StepId): IdempotencyKey {
   return uuidFromNameParts(["step", taskName, runId, stepId]);
 }

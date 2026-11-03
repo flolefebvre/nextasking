@@ -21,15 +21,24 @@ import type {
   EventId,
   EventName,
   EventOptions,
+  FailureReason,
+  ListedRun,
   ListenerDefinition,
   ListenerOptions,
+  ListRunsOptions,
   Logger,
   Nextasking,
   NextaskingConfig,
   PayloadIssue,
   PayloadSchema,
   Register,
+  Run,
+  RunCounts,
+  RunError,
   RunId,
+  RunPage,
+  RunState,
+  SavedStepResult,
   Schedule,
   ScheduledTaskContext,
   ScheduledTaskDefinition,
@@ -291,3 +300,51 @@ export const scheduledTaskRunNowWithItsOwnId = nextasking.dispatch("purge-expire
 export const scheduledTaskGivenAPayload = nextasking.dispatch("purge-expired-sessions", { olderThanDays: 30 });
 
 export const workerStarted: Promise<void> = nextasking.startWorker();
+
+export const runReadBack = nextasking.getRun("send-welcome-email", "welcome-ada");
+
+export type GetRunNarrowsThePayloadByTask = Expect<
+  IsEqual<NonNullable<Awaited<typeof runReadBack>>["payload"], WelcomeEmailPayload>
+>;
+
+export function dueTimeOf(run: Run): Date | FailureReason | undefined {
+  switch (run.state) {
+    case "delayed":
+      return run.startsAt;
+    case "suspended":
+      return run.resumesAt;
+    case "backingOff":
+      return run.nextAttemptAt;
+    case "failed":
+      return run.reason;
+    default:
+      // @ts-expect-error only a delayed run has a startsAt
+      return run.startsAt;
+  }
+}
+
+export type RunStateIsTheEightStates = Expect<
+  IsEqual<
+    RunState,
+    | "delayed"
+    | "pending"
+    | "waitingForConcurrencySlot"
+    | "executing"
+    | "suspended"
+    | "backingOff"
+    | "completed"
+    | "failed"
+  >
+>;
+
+export type RunErrorsAreRunErrors = Expect<IsEqual<Run["errors"], RunError[]>>;
+
+export type RunStepsAreSavedStepResults = Expect<IsEqual<Run["steps"], SavedStepResult[]>>;
+
+export const failedRunsPage: Promise<RunPage> = nextasking.listRuns({ state: "failed", limit: 20 });
+
+export const listRunsOptions: ListRunsOptions = { state: "pending", task: "send-welcome-email" };
+
+export type ListedRunHasNoPayload = Expect<IsEqual<"payload" extends keyof ListedRun ? true : false, false>>;
+
+export const runCounts: Promise<RunCounts> = nextasking.countRuns();

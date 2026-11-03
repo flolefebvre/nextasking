@@ -5,7 +5,7 @@ import type { RunWriter } from "./enqueuer.js";
 import { deriveJobId } from "./ids.js";
 import type { EventId, JobId, RunId } from "./ids.js";
 import { controlsOf } from "./registry.js";
-import type { Nextasking } from "./registry.js";
+import type { Nextasking, NextaskingControls } from "./registry.js";
 
 type PayloadOfTask<Task> = Task extends { schema: infer Schema extends PayloadSchema } ? Payload<Schema> : undefined;
 
@@ -28,13 +28,23 @@ export type NextaskingFake<Task extends AnyTaskDefinition, Event extends EventDe
   readonly [Symbol.dispose]: () => void;
 };
 
-export function fakeNextasking<Task extends AnyTaskDefinition, Event extends EventDefinition>(
-  nextasking: Nextasking<Task, Event>,
-): NextaskingFake<Task, Event> {
+export type RecordingRunWriter<Task extends AnyTaskDefinition, Event extends EventDefinition> = Pick<
+  NextaskingFake<Task, Event>,
+  "dispatches" | "emits" | "replays"
+> & { runWriter: RunWriter };
+
+export function controlsOfInstance(nextasking: object, callName: string): NextaskingControls {
   const controls = controlsOf(nextasking);
   if (controls === undefined) {
-    throw new Error("fakeNextasking takes the instance createNextasking returns");
+    throw new Error(`${callName} takes the instance createNextasking returns`);
   }
+  return controls;
+}
+
+export function createRecordingRunWriter<
+  Task extends AnyTaskDefinition,
+  Event extends EventDefinition,
+>(): RecordingRunWriter<Task, Event> {
   type Fake = NextaskingFake<Task, Event>;
   const dispatches: Fake["dispatches"][number][] = [];
   const emits: Fake["emits"][number][] = [];
@@ -77,7 +87,15 @@ export function fakeNextasking<Task extends AnyTaskDefinition, Event extends Eve
       return Promise.resolve("replayed");
     },
   };
-  controls.startRecordingWrites(recordingRunWriter);
+  return { runWriter: recordingRunWriter, dispatches, emits, replays };
+}
+
+export function fakeNextasking<Task extends AnyTaskDefinition, Event extends EventDefinition>(
+  nextasking: Nextasking<Task, Event>,
+): NextaskingFake<Task, Event> {
+  const controls = controlsOfInstance(nextasking, "fakeNextasking");
+  const { runWriter, dispatches, emits, replays } = createRecordingRunWriter<Task, Event>();
+  controls.startRecordingWrites(runWriter);
   let isRestored = false;
   const restore = () => {
     if (!isRestored) {

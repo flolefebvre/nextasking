@@ -1,11 +1,13 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 
+import type { AnyTaskDefinition, ScheduledTaskContext, TaskContext } from "./definitions.js";
 import { parseDuration } from "./durations.js";
 import type { Duration } from "./durations.js";
 import { StepMisuseError } from "./errors.js";
 import { deriveHandlerSendId, deriveStepIdempotencyKey } from "./ids.js";
 import type { HandlerSendId, IdempotencyKey, RunId, StepId } from "./ids.js";
 import type { JsonValue } from "./json.js";
+import type { Logger } from "./logger.js";
 import type { DispatchByName, DispatchedRun, EmitByName, EmittedEvent } from "./enqueuer.js";
 
 export type SerializedSavedStep = string;
@@ -51,7 +53,10 @@ export type StepEngineConfig = {
   emit: EmitByName;
   abortSignal: AbortSignal;
   isWorkerDraining: () => boolean;
+  futureWakeTime: FutureWakeTimeHandling;
 };
+
+export type FutureWakeTimeHandling = "suspend the run" | "continue at once";
 
 type SavedSleep = {
   kind: "sleep";
@@ -228,7 +233,7 @@ export async function openStepEngine(config: StepEngineConfig): Promise<StepEngi
       const savedSleep: SavedSleep = { kind: "sleep", wakeAt, attempt: config.attempt };
       await saveStep(stepId, JSON.stringify(savedSleep));
     }
-    if (wakeAt <= Date.now()) {
+    if (wakeAt <= Date.now() || config.futureWakeTime === "continue at once") {
       return;
     }
     recordedWakeAt = Math.min(recordedWakeAt ?? wakeAt, wakeAt);
@@ -330,6 +335,55 @@ export async function openStepEngine(config: StepEngineConfig): Promise<StepEngi
     },
     throwRecordedMisuse,
   };
+}
+
+type AnyTaskHandler = (context: TaskContext<unknown> | ScheduledTaskContext) => Promise<void>;
+
+export type HandlerRunFields = {
+  runId: RunId;
+  attempt: number;
+  logger: Logger;
+  abortSignal: AbortSignal;
+  payload: unknown;
+  scheduledAt: Date | undefined;
+};
+
+export function executeTaskHandler(
+  stepEngine: StepEngine,
+  task: AnyTaskDefinition,
+  { payload, scheduledAt, ...runFields }: HandlerRunFields,
+): Promise<HandlerOutcome> {
+  const { step, emit, dispatch } = stepEngine;
+  const runContext = { step, emit, dispatch, ...runFields };
+  const handler = task.handler as AnyTaskHandler;
+  return stepEngine.executeHandler(() =>
+    handler(task.schedule === undefined ? { ...runContext, payload } : { ...runContext, scheduledAt }),
+  );
+}
+
+export function serializedStepResultOf(stepId: StepId, result: unknown): SerializedSavedStep {
+  const serializedResult = serializeStepResult(result);
+  if (serializedResult === undefined) {
+    throw new Error(`The saved result of step "${stepId}" is not JSON`);
+  }
+  return serializedResult;
+}
+
+export function savedSleepWokenAt(
+  serializedSavedStep: SerializedSavedStep,
+  wakeAt: WakeTimeInEpochMilliseconds,
+): SerializedSavedStep | undefined {
+  const savedStep = deserializeSavedStep(serializedSavedStep);
+  if (savedStep.kind !== "sleep" || savedStep.wakeAt <= wakeAt) {
+    return undefined;
+  }
+  const wokenSleep: SavedSleep = { ...savedStep, wakeAt };
+  return JSON.stringify(wokenSleep);
+}
+
+export function wakeAtOfSavedSleep(serializedSavedStep: SerializedSavedStep): WakeTimeInEpochMilliseconds | undefined {
+  const savedStep = deserializeSavedStep(serializedSavedStep);
+  return savedStep.kind === "sleep" ? savedStep.wakeAt : undefined;
 }
 
 function wakeTimeOf(time: unknown): WakeTimeInEpochMilliseconds | undefined {

@@ -71,9 +71,9 @@ export type RecordTypesAreExported = Expect<
 type InstanceDefinitions =
   typeof nextasking extends Nextasking<infer Task, infer Event> ? { task: Task; event: Event } : never;
 
-type InstanceTaskDefinition = InstanceDefinitions["task"];
+export type InstanceTaskDefinition = InstanceDefinitions["task"];
 
-type InstanceEventDefinition = InstanceDefinitions["event"];
+export type InstanceEventDefinition = InstanceDefinitions["event"];
 
 type InstanceEmittableEventDefinition = Extract<InstanceEventDefinition, { name: "user.signed-up" }>;
 

@@ -6,7 +6,7 @@ import { deriveHandlerSendId } from "./ids.js";
 import type { JsonValue } from "./json.js";
 import type { DispatchByName, DispatchOptions, EmitByName, EmitOptions } from "./enqueuer.js";
 import { openStepEngine } from "./step-engine.js";
-import type { HandlerOutcome, StepStore } from "./step-engine.js";
+import type { FutureWakeTimeHandling, HandlerOutcome, StepStore } from "./step-engine.js";
 
 const ONE_MEBIBYTE = 1024 * 1024;
 
@@ -51,13 +51,18 @@ function createRecordingSends(): RecordingSends {
 type AttemptControls = {
   abortSignal?: AbortSignal;
   isWorkerDraining?: () => boolean;
+  futureWakeTime?: FutureWakeTimeHandling;
 };
 
 function openAttempt(
   store: StepStore,
   attempt = 1,
   recordingSends: RecordingSends = createRecordingSends(),
-  { abortSignal = new AbortController().signal, isWorkerDraining = () => false }: AttemptControls = {},
+  {
+    abortSignal = new AbortController().signal,
+    isWorkerDraining = () => false,
+    futureWakeTime = "suspend the run",
+  }: AttemptControls = {},
 ) {
   return openStepEngine({
     taskName: "send-invoice",
@@ -68,6 +73,7 @@ function openAttempt(
     emit: recordingSends.emit,
     abortSignal,
     isWorkerDraining,
+    futureWakeTime,
   });
 }
 
@@ -346,6 +352,26 @@ describe("step.sleep and step.sleepUntil", () => {
 
     expect(outcome).toEqual({ kind: "suspended", wakeAt: wakeAt });
     expect(await store.load()).toStrictEqual({ "wait-for-trial-end": savedSleep(wakeAt, 2) });
+  });
+
+  test("save the wake time and let the handler go on when a future wake time continues at once", async () => {
+    const store = createInMemoryStepStore();
+    const { step, executeHandler } = await openAttempt(store, 1, createRecordingSends(), {
+      futureWakeTime: "continue at once",
+    });
+    const wakeAt = Date.now() + ONE_HOUR_IN_MILLISECONDS;
+    const stepsReached: string[] = [];
+
+    const outcome = await executeHandler(async () => {
+      await step.sleepUntil("wait-for-trial-end", new Date(wakeAt));
+      await step.run("send-reminder", () => {
+        stepsReached.push("send-reminder");
+      });
+    });
+
+    expect(outcome).toEqual({ kind: "completed" });
+    expect(stepsReached).toEqual(["send-reminder"]);
+    expect(await store.load()).toStrictEqual({ "wait-for-trial-end": savedSleep(wakeAt, 1), "send-reminder": "[]" });
   });
 
   test("sleep saves a wake time its duration away from now", async () => {

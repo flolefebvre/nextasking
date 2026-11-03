@@ -26,6 +26,7 @@ import type { EventDefinitionSummary, TaskDefinitionSummary } from "./definition
 import { createRunQueue } from "./run-queue.js";
 import type { RunState } from "./run-states.js";
 import type { EnqueueOutcome, RunQueue } from "./run-queue.js";
+import { sendUnsentFailureNotices } from "./failure-notices.js";
 import type { SendBuiltInEvent } from "./failure-notices.js";
 import { rejectInvalidSchedule, timezoneOf } from "./schedules.js";
 import {
@@ -319,6 +320,7 @@ export function createNextasking<
       for (const { kind, taskName, cron, timezone } of scheduleChanges) {
         logger.info({ task: taskName, cron, timezone }, `schedule ${kind}`);
       }
+      await sendUnsentFailureNotices(openRunQueue(), sendBuiltInEvent);
       runningWorker = startRunWorker({
         options: workerOptions,
         connection: config.connection,

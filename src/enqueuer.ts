@@ -96,10 +96,7 @@ export function createEnqueuer({
       }
       const runId = consumerFacingIdOrRandomId("task", task.name, "runId", options.runId);
       const delayInMilliseconds = delayInMillisecondsOf(task.name, options.delay);
-      if (task.schedule !== undefined && payload !== undefined) {
-        throw new Error(`Scheduled task "${task.name}" takes no payload: dispatch it by its name alone to run it now`);
-      }
-      const validatedPayload = task.schedule === undefined ? await validatePayload("task", task, payload) : undefined;
+      const validatedPayload = await validatedTaskPayloadOf(task, payload);
       const concurrencyKey = concurrencyKeyOf(task, validatedPayload);
       const { isDuplicate } = await callOnRedis({ runId }, async () =>
         (await openRunWriter()).enqueueRun(task.name, {
@@ -164,6 +161,16 @@ export function createEnqueuer({
       await enqueueFanOutToListeners(eventName, eventId, payload);
     },
   };
+}
+
+export async function validatedTaskPayloadOf(task: AnyTaskDefinition, payload: unknown): Promise<unknown> {
+  if (task.schedule === undefined) {
+    return validatePayload("task", task, payload);
+  }
+  if (payload !== undefined) {
+    throw new Error(`Scheduled task "${task.name}" takes no payload: dispatch it by its name alone to run it now`);
+  }
+  return undefined;
 }
 
 function consumerFacingIdOrRandomId(

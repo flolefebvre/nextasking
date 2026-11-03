@@ -12,7 +12,7 @@ import { createConcurrencySlots } from "./concurrency-slots.js";
 import type { ConcurrencySlot } from "./concurrency-slots.js";
 import { listenerLoggingAnsweredErrors } from "./connection.js";
 import { concurrencyKeyOf, retriesOf } from "./definitions.js";
-import type { AnyTaskDefinition, EventDefinition, ScheduledTaskContext, TaskContext } from "./definitions.js";
+import type { AnyTaskDefinition, EventDefinition } from "./definitions.js";
 import { parseDuration, shownDurationOf } from "./durations.js";
 import type { Duration, DurationInMilliseconds, EpochMilliseconds } from "./durations.js";
 import {
@@ -36,7 +36,7 @@ import type { DispatchByName, EmitByName } from "./enqueuer.js";
 import { FIRING_JOB_NAME, RUN_QUEUE_NAME, plannedInstantOfFiring, scheduledAtOf } from "./run-queue.js";
 import type { RunQueue, StoredDelayedRunState, StoredFanOut, StoredFiring, StoredRun } from "./run-queue.js";
 import { attemptOf } from "./run-states.js";
-import { openStepEngine } from "./step-engine.js";
+import { executeTaskHandler, openStepEngine } from "./step-engine.js";
 import type { HandlerOutcome } from "./step-engine.js";
 import { handBackUnlessGivenUp } from "./unknown-name-hand-back.js";
 import { bullmqMaxStalledCountOf, workerTiming } from "./worker-timing.js";
@@ -86,8 +86,6 @@ export type WorkerConfig = {
   emit: EmitByName;
   sendBuiltInEvent: SendBuiltInEvent;
 };
-
-type AnyTaskHandler = (context: TaskContext<unknown> | ScheduledTaskContext) => Promise<void>;
 
 const STALL_LIMIT_FAILED_REASON = "job stalled more than allowable limit";
 
@@ -215,7 +213,6 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
     const attempt = attemptOf(job, "executing");
     const runLogger = runLoggerOf(job, attempt);
     const durationFieldsAt = (runEndedAt: number) => runDurationFieldsOf(job, stretchStartedAt, runEndedAt);
-    const handler = task.handler as AnyTaskHandler;
     const abortAttemptIfLockIsLost = (error: unknown) => {
       if (error instanceof LostRunLockError || LOCK_ERROR_CODES.has((error as { code?: unknown }).code)) {
         abortAttempt("lock lost");
@@ -269,18 +266,17 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
         futureWakeTime: "suspend the run",
       });
       runLogger.debug({}, stepEngine.isResumingAfterSleep ? "run resumed" : "attempt started");
-      const { step, dispatch, emit } = stepEngine;
       try {
         outcome = await settleWithinTimeout(
           task.name,
           task.timeout,
-          stepEngine.executeHandler(() => {
-            const runContext = { step, emit, dispatch, runId, attempt, logger: runLogger, abortSignal };
-            return handler(
-              task.schedule === undefined
-                ? { ...runContext, payload }
-                : { ...runContext, scheduledAt: scheduledAtOf(job.data) },
-            );
+          executeTaskHandler(stepEngine, task, {
+            runId,
+            attempt,
+            logger: runLogger,
+            abortSignal,
+            payload,
+            scheduledAt: scheduledAtOf(job.data),
           }),
         );
       } finally {

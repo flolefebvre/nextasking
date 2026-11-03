@@ -10,7 +10,7 @@ export default defineConfig([
   includeIgnoreFile(gitignorePath, "Ignore what git ignores"),
   globalIgnores([".agents/skills/**"], "Ignore the agent skills"),
   {
-    files: ["**/*.{ts,mts,mjs}"],
+    files: ["**/*.{ts,tsx,mts,mjs}"],
     extends: [tseslint.configs.recommended],
     plugins: { "no-comments": noComments },
     rules: {

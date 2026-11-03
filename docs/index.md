@@ -13,6 +13,10 @@ Events and background tasks for a Next.js app, on BullMQ with Redis or Valkey. D
 | Job                                                | Page                                            |
 | -------------------------------------------------- | ----------------------------------------------- |
 | Learn the words this manual uses                   | [Core concepts](core-concepts.md)               |
+| Add nextasking to an app, step by step             | [Setup](setup.md)                               |
+| Lay out the definition files and name them         | [Setup](setup.md)                               |
+| Set the environment variables a worker needs       | [Setup](setup.md)                               |
+| Point the app's agents at this manual              | [Setup](setup.md)                               |
 | Define a task and its payload schema               | [Tasks and events](tasks-and-events.md)         |
 | Define an event                                    | [Tasks and events](tasks-and-events.md)         |
 | Define a listener that reacts to an event          | [Tasks and events](tasks-and-events.md)         |

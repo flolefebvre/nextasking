@@ -31,6 +31,7 @@ Events and background tasks for a Next.js app, on BullMQ with Redis or Valkey. D
 | Let a deploy finish running attempts              | [Worker](worker.md)                             |
 | Stop a handler cleanly with `abortSignal`         | [Worker](worker.md)                             |
 | Know what a stall is and when a run fails stalled | [Worker](worker.md)                             |
+| Know what happens to runs during a deploy overlap | [Worker](worker.md)                             |
 | Pick the Valkey or Redis for the queues           | [Worker](worker.md)                             |
 | Configure webpack with `serverExternalPackages`   | [Worker](worker.md)                             |
 | Limit a task's attempts across every instance     | [Concurrency](concurrency.md)                   |

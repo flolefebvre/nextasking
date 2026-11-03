@@ -93,6 +93,15 @@ An attempt holds a lock on its run for 2 minutes, renewed while it runs. A stall
 - These timings are fixed, the same in dev and in production.
 - Keep CPU-heavy work off the event loop (a worker thread, a separate service), so a long computation doesn't stall its own attempt.
 
+## Overlapping releases
+
+During a deploy, an old and a new release run side by side. A worker that picks up a run of a task it doesn't define, or a fan-out of an event it doesn't define, hands it back for another worker instead of failing it:
+
+- It hands it back 10 seconds later, using no retry, no stall and no concurrency slot. A worker of the release that defines the name runs it as usual, with `attempt` unchanged.
+- The first time a worker finds the name unknown is saved with the run. If no worker has taken it 30 minutes later, the run fails with `reason: "unknown task"` and an error record named `UnknownTaskRunError`, kept like any failed run; see [Retries and failures](retries-and-failures.md#what-a-failed-run-keeps). A fan-out fails the same way, and starts no listener run.
+- Each hand-back writes `run handed back: unknown task`, or `fan-out handed back: unknown event`, at debug.
+- These timings are fixed.
+
 ## Give queues their own Valkey or Redis
 
 Point `connection` at a Valkey or Redis that holds only queues, not your cache or sessions. A cache evicts keys when memory runs short; a queue loses runs that way. A dedicated server also keeps a cache flush or a busy cache from stalling attempts.
@@ -117,6 +126,8 @@ export default nextConfig;
 | Level   | Message                                 | Fields                     |
 | ------- | --------------------------------------- | -------------------------- |
 | `debug` | `run yielded at shutdown`               | `task`, `runId`, `attempt` |
+| `debug` | `run handed back: unknown task`         | `task`, `runId`, `attempt` |
+| `debug` | `fan-out handed back: unknown event`    | `eventName`, `eventId`     |
 | `debug` | `attempt aborted: lock lost`            | `task`, `runId`, `attempt` |
 | `warn`  | `attempt stalled`                       | `task`, `runId`, `attempt` |
 | `warn`  | `attempts aborted at shutdown deadline` | none                       |

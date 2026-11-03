@@ -1,6 +1,6 @@
 # Dashboard
 
-The instance reads its runs back, so you can build your own dashboard: one run with its state, payload, errors and saved steps; a page of runs in one state; the backlog per task. Every read works from any process with a connection, with or without a worker.
+The instance reads its runs back, so you can build your own dashboard: one run with its state, payload, errors and saved steps; a page of runs in one state; the backlog per task; one event from its fan-out to each listener's run; each schedule's firings; a "run now" picker. Every read works from any process with a connection, with or without a worker.
 
 ## Protect the dashboard
 
@@ -116,6 +116,64 @@ runCounts["send-welcome-email"].pending;
 
 `countRuns()` returns `{ [task]: { [state]: number } }`: every task the instance lists, with all eight states, zero included.
 
+## Follow an event
+
+```ts
+const { fanOut, runsByListener } = await nextasking.getEvent("invoice.paid", eventId);
+runsByListener["record-invoice-payment"]?.state;
+```
+
+`getEvent(event, eventId)` returns `{ event, eventId, fanOut, runsByListener }`. An unknown event name throws `UnknownEventError`.
+
+- `fanOut` is `"pending"` until a worker has turned the event into listener runs, then `"completed"`, or `"failed"` when the fan-out failed for good. It is `undefined` when the queue holds no fan-out for that id: never emitted, emitted with no listener, or removed by retention.
+- `runsByListener` has one key per listener the code defines for the event, each holding that listener's `Run`, typed by its listener, or `undefined` while it has none.
+- A listener the code no longer defines is left out, even when the emitting release fanned out to it. A listener added after the emit shows `undefined`.
+
+## Check that a schedule fired
+
+```ts
+for (const schedule of await nextasking.listSchedules()) {
+  const previousRun =
+    schedule.previousFiring && (await nextasking.getRun(schedule.task, schedule.previousFiring.runId));
+}
+```
+
+`listSchedules()` returns one entry per scheduled task the code defines, in the order of `tasks`: `{ task, cron, timezone, nextFiringAt?, previousFiring? }`.
+
+- `cron` and `timezone` come from the code; `timezone` is `"UTC"` when the task sets none.
+- `nextFiringAt` is the next planned firing. It is absent until a worker has booted with the schedule; see [Scheduled tasks](scheduled-tasks.md).
+- `previousFiring` is `{ scheduledAt, runId }`: the cron's last planned instant before `nextFiringAt`, and the run id derived from it. It is absent until the schedule has fired once.
+- `previousFiring` says when the schedule was due, not that it ran. Call `getRun(task, previousFiring.runId)`: `undefined` means no run was started for that firing, or retention removed it.
+- After a change of `cron`, `previousFiring` follows the new cron.
+
+## Build a "run now" picker
+
+```ts
+// src/app/admin/run-now/page.tsx
+export default async function RunNowPage() {
+  await requireAdmin();
+  const scheduledTaskNames = nextasking.taskDefinitions
+    .filter((task) => task.schedule !== undefined)
+    .map((task) => task.name);
+  return <RunNowForm taskNames={scheduledTaskNames} />;
+}
+
+// src/app/admin/run-now/actions.ts
+"use server";
+
+export async function runNow(taskName: TaskName) {
+  await requireAdmin();
+  if (taskName === "purge-expired-sessions") {
+    await nextasking.dispatch(taskName);
+  }
+}
+```
+
+- `taskDefinitions` lists every task as `{ name, event?, schedule? }`: `event` is a listener's event name, `schedule` a scheduled task's `{ cron, timezone }`.
+- `eventDefinitions` lists every event as `{ name, listenerNames }`.
+- Both are plain, frozen arrays, read with no connection, typed with `TaskName` and `EventName`. They carry no schema and no handler, so they pass to a client component.
+- A scheduled task takes no payload; pass a task with a schema its payload, checked by `dispatch`, which throws `InvalidPayloadError` on a payload the schema refuses.
+
 ## What reads see, and what they cost
 
 - A read sees only the runs of tasks the instance lists. Runs of a task the running release doesn't define, removed from the code or known only to a newer release, never appear in `listRuns` or `countRuns`. Point a BullMQ tool at the queue to see those.
@@ -123,10 +181,13 @@ runCounts["send-welcome-email"].pending;
 - Retention is shared: completed runs are kept 24 hours and at most 1,000, failed runs 14 days and at most 10,000, per queue, across every task, fan-out and firing. A busy task can push another task's completed runs out within minutes.
 - No read is a snapshot. `countRuns` and `listRuns` walk the queue in batches while runs keep moving, so totals can be off by the runs that moved during the walk.
 
-| Read        | Cost                                                                                                            |
-| ----------- | --------------------------------------------------------------------------------------------------------------- |
-| `getRun`    | Three round trips, whatever the queue's size                                                                    |
-| `listRuns`  | Reads 200 runs per round trip, payloads included, until the page is full; a `task` or a delayed kind reads more |
-| `countRuns` | Reads every run's task name, and the stored data of every delayed run, in batches of 200: one walk of the queue |
+| Read                                  | Cost                                                                                                            |
+| ------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `getRun`                              | Three round trips, whatever the queue's size                                                                    |
+| `listRuns`                            | Reads 200 runs per round trip, payloads included, until the page is full; a `task` or a delayed kind reads more |
+| `countRuns`                           | Reads every run's task name, and the stored data of every delayed run, in batches of 200: one walk of the queue |
+| `getEvent`                            | Two round trips per listener, run in parallel                                                                   |
+| `listSchedules`                       | One read of every stored schedule                                                                               |
+| `taskDefinitions`, `eventDefinitions` | Nothing: no connection                                                                                          |
 
 Call `countRuns` on page load, not in a tight poll: with 10,000 failed runs kept, one call reads more than 50 batches.

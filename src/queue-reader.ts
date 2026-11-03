@@ -1,8 +1,8 @@
-import type { AnyTaskDefinition, Payload, PayloadSchema } from "./definitions.js";
+import type { AnyTaskDefinition, EventDefinition, Payload, PayloadSchema } from "./definitions.js";
 import type { DurationInMilliseconds, EpochMilliseconds } from "./durations.js";
-import { UnknownTaskError } from "./errors.js";
-import { deriveJobId } from "./ids.js";
-import type { JobId, RunId } from "./ids.js";
+import { UnknownEventError, UnknownTaskError } from "./errors.js";
+import { deriveFiringRunId, deriveJobId, deriveListenerRunId } from "./ids.js";
+import type { EventId, JobId, RunId } from "./ids.js";
 import { loadSavedSteps } from "./redis-step-store.js";
 import { decodeRunListCursor, encodeRunListCursor } from "./run-list-cursor.js";
 import type { RunListCursor, RunListPosition } from "./run-list-cursor.js";
@@ -16,6 +16,8 @@ import {
   runStateOf,
 } from "./run-states.js";
 import type { BullmqJobSet, BullmqJobState, RunState, RunStateFields } from "./run-states.js";
+import { previousFiringInstantBefore } from "./schedules.js";
+import type { CronExpression, DeclaredSchedule, IanaTimeZone } from "./schedules.js";
 import { savedStepResultsOf } from "./step-engine.js";
 import type { SavedStepResult } from "./step-engine.js";
 
@@ -65,16 +67,64 @@ export type RunCountsOf<TaskName extends string> = { [Name in TaskName]: Record<
 
 type AnyListedRun = ListedRunOfTask<AnyTaskDefinition>;
 
+export type FanOutState = "pending" | "completed" | "failed";
+
+type ListenerOf<Task, EventName extends string> = Extract<Task, { on: { name: EventName } }>;
+
+export type EventWithRunsOf<
+  Task extends AnyTaskDefinition,
+  Event extends EventDefinition,
+> = Event extends EventDefinition
+  ? {
+      event: Event["name"];
+      eventId: EventId;
+      fanOut: FanOutState | undefined;
+      runsByListener: {
+        [ListenerName in ListenerOf<Task, Event["name"]>["name"]]:
+          RunOfTask<Extract<Task, { name: ListenerName }>> | undefined;
+      };
+    }
+  : never;
+
+export type PreviousFiring = {
+  scheduledAt: Date;
+  runId: RunId;
+};
+
+export type ListedScheduleOf<TaskName extends string> = {
+  task: TaskName;
+  cron: CronExpression;
+  timezone: IanaTimeZone;
+  nextFiringAt?: Date;
+  previousFiring?: PreviousFiring;
+};
+
 export type QueueReaderConfig = {
   openRunQueue: () => RunQueue;
   tasksByName: ReadonlyMap<string, AnyTaskDefinition>;
+  listenerNamesByEventName: ReadonlyMap<string, readonly string[]>;
+  declaredSchedules: readonly DeclaredSchedule[];
 };
 
 export type QueueReader = {
   getRun: (taskName: string, runId: RunId) => Promise<RunOfTask<AnyTaskDefinition> | undefined>;
   listRuns: (options: ListRunsOptionsOf<string>) => Promise<RunPageOf<AnyListedRun>>;
   countRuns: () => Promise<RunCountsOf<string>>;
+  getEvent: (eventName: string, eventId: EventId) => Promise<EventWithRunsOf<AnyTaskDefinition, EventDefinition>>;
+  listSchedules: () => Promise<ListedScheduleOf<string>[]>;
 };
+
+const FAN_OUT_STATE_BY_BULLMQ_STATE: Partial<Record<BullmqJobState, FanOutState>> = {
+  waiting: "pending",
+  prioritized: "pending",
+  "waiting-children": "pending",
+  delayed: "pending",
+  active: "pending",
+  completed: "completed",
+  failed: "failed",
+};
+
+const FIRST_ITERATION = 1;
 
 const DEFAULT_LIST_LIMIT = 50;
 
@@ -223,23 +273,25 @@ export function createQueueReader(config: QueueReaderConfig): QueueReader {
     }
   };
 
+  const getRun: QueueReader["getRun"] = async (taskName, runId) => {
+    rejectUnknownTask(taskName);
+    const { bullmqQueue, client } = config.openRunQueue();
+    const jobId = deriveJobId(taskName, runId);
+    const [[record], bullmqState] = await Promise.all([readRunJobRecords([jobId]), bullmqQueue.getJobState(jobId)]);
+    const runSummary = record === undefined ? undefined : runSummaryOf(record, bullmqState);
+    if (record === undefined || runSummary === undefined) {
+      return undefined;
+    }
+    return {
+      ...runSummary,
+      payload: record.data.payload,
+      errors: record.data.errors.map(runErrorOf),
+      steps: savedStepResultsOf(await loadSavedSteps(client, record.jobKey)),
+    } as RunOfTask<AnyTaskDefinition>;
+  };
+
   return {
-    getRun: async (taskName, runId) => {
-      rejectUnknownTask(taskName);
-      const { bullmqQueue, client } = config.openRunQueue();
-      const jobId = deriveJobId(taskName, runId);
-      const [[record], bullmqState] = await Promise.all([readRunJobRecords([jobId]), bullmqQueue.getJobState(jobId)]);
-      const runSummary = record === undefined ? undefined : runSummaryOf(record, bullmqState);
-      if (record === undefined || runSummary === undefined) {
-        return undefined;
-      }
-      return {
-        ...runSummary,
-        payload: record.data.payload,
-        errors: record.data.errors.map(runErrorOf),
-        steps: savedStepResultsOf(await loadSavedSteps(client, record.jobKey)),
-      } as RunOfTask<AnyTaskDefinition>;
-    },
+    getRun,
 
     listRuns: async (options) => {
       const { state, task } = options;
@@ -298,6 +350,54 @@ export function createQueueReader(config: QueueReaderConfig): QueueReader {
         });
       }
       return runCounts;
+    },
+
+    getEvent: async (eventName, eventId) => {
+      const listenerNames = config.listenerNamesByEventName.get(eventName);
+      if (listenerNames === undefined) {
+        throw new UnknownEventError(eventName, [...config.listenerNamesByEventName.keys()]);
+      }
+      const [fanOutBullmqState, ...listenerRuns] = await Promise.all([
+        config.openRunQueue().bullmqQueue.getJobState(deriveJobId(eventName, eventId)),
+        ...listenerNames.map((listenerName) => getRun(listenerName, deriveListenerRunId(eventId, listenerName))),
+      ]);
+      return {
+        event: eventName,
+        eventId,
+        fanOut: FAN_OUT_STATE_BY_BULLMQ_STATE[fanOutBullmqState],
+        runsByListener: Object.fromEntries(
+          listenerNames.map((listenerName, index) => [listenerName, listenerRuns[index]]),
+        ),
+      };
+    },
+
+    listSchedules: async () => {
+      const storedSchedulers = await config.openRunQueue().bullmqQueue.getJobSchedulers(0, -1);
+      const storedSchedulersByTaskName = new Map(storedSchedulers.map((scheduler) => [scheduler.key, scheduler]));
+      return config.declaredSchedules.map((declaredSchedule) => {
+        const { taskName, cron, timezone } = declaredSchedule;
+        const storedScheduler = storedSchedulersByTaskName.get(taskName);
+        const nextFiringInstant = storedScheduler?.next ?? undefined;
+        if (nextFiringInstant === undefined) {
+          return { task: taskName, cron, timezone };
+        }
+        const hasFired = (storedScheduler?.iterationCount ?? FIRST_ITERATION) > FIRST_ITERATION;
+        const previousFiringInstant = previousFiringInstantBefore(declaredSchedule, nextFiringInstant);
+        return {
+          task: taskName,
+          cron,
+          timezone,
+          nextFiringAt: new Date(nextFiringInstant),
+          ...(hasFired
+            ? {
+                previousFiring: {
+                  scheduledAt: new Date(previousFiringInstant),
+                  runId: deriveFiringRunId(taskName, previousFiringInstant),
+                },
+              }
+            : {}),
+        };
+      });
     },
   };
 }

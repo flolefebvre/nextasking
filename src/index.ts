@@ -15,6 +15,7 @@ export type {
   TaskHandler,
   TaskOptions,
 } from "./definitions.js";
+export type { EventDefinitionSummary, TaskDefinitionSummary } from "./definition-summaries.js";
 export type { Duration } from "./durations.js";
 export {
   InvalidPayloadError,
@@ -26,7 +27,7 @@ export {
 export type { PayloadIssue } from "./errors.js";
 export type { EventId, RunId } from "./ids.js";
 export type { Logger } from "./logger.js";
-export type { RunError } from "./queue-reader.js";
+export type { FanOutState, PreviousFiring, RunError } from "./queue-reader.js";
 export { createNextasking } from "./registry.js";
 export type {
   DispatchedRun,
@@ -34,7 +35,9 @@ export type {
   EmitOptions,
   EmittedEvent,
   EventName,
+  EventWithRuns,
   ListedRun,
+  ListedSchedule,
   ListRunsOptions,
   Nextasking,
   NextaskingConfig,

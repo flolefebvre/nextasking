@@ -18,11 +18,15 @@ import type {
   EmitOptions,
   EmittedEvent,
   EventDefinition,
+  EventDefinitionSummary,
   EventId,
   EventName,
   EventOptions,
+  EventWithRuns,
   FailureReason,
+  FanOutState,
   ListedRun,
+  ListedSchedule,
   ListenerDefinition,
   ListenerOptions,
   ListRunsOptions,
@@ -31,6 +35,7 @@ import type {
   NextaskingConfig,
   PayloadIssue,
   PayloadSchema,
+  PreviousFiring,
   Register,
   Run,
   RunCounts,
@@ -50,6 +55,7 @@ import type {
   StepTools,
   TaskContext,
   TaskDefinition,
+  TaskDefinitionSummary,
   TaskHandler,
   TaskName,
   TaskOptions,
@@ -348,3 +354,25 @@ export const listRunsOptions: ListRunsOptions = { state: "pending", task: "send-
 export type ListedRunHasNoPayload = Expect<IsEqual<"payload" extends keyof ListedRun ? true : false, false>>;
 
 export const runCounts: Promise<RunCounts> = nextasking.countRuns();
+
+export const followedEvent: Promise<EventWithRuns> = nextasking.getEvent("user.signed-up", "event-1");
+
+export type FanOutIsAFanOutState = Expect<IsEqual<EventWithRuns["fanOut"], FanOutState | undefined>>;
+
+export type RunsByListenerHoldEachListener = Expect<
+  IsEqual<keyof EventWithRuns["runsByListener"], "create-default-workspace">
+>;
+
+export const listedSchedules: Promise<ListedSchedule[]> = nextasking.listSchedules();
+
+export type ListedScheduleIsAScheduledTask = Expect<IsEqual<ListedSchedule["task"], "purge-expired-sessions">>;
+
+export type PreviousFiringHoldsItsRunId = Expect<IsEqual<PreviousFiring, { scheduledAt: Date; runId: RunId }>>;
+
+export const taskDefinitions: readonly TaskDefinitionSummary<TaskName, EventName>[] = nextasking.taskDefinitions;
+
+export const eventDefinitions: readonly EventDefinitionSummary<EventName, TaskName>[] = nextasking.eventDefinitions;
+
+export type TaskDefinitionsAreNamedByTaskName = Expect<
+  IsEqual<(typeof nextasking.taskDefinitions)[number]["name"], TaskName>
+>;

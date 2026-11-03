@@ -1,5 +1,7 @@
 import { CronExpressionParser } from "cron-parser";
 
+import type { EpochMilliseconds } from "./durations.js";
+
 export type CronExpression = string;
 
 export type IanaTimeZone = string;
@@ -20,6 +22,12 @@ export type DeclaredSchedule = {
   cron: CronExpression;
   timezone: IanaTimeZone;
 };
+
+export function previousFiringInstantBefore(schedule: DeclaredSchedule, instant: EpochMilliseconds): EpochMilliseconds {
+  return CronExpressionParser.parse(schedule.cron, { tz: schedule.timezone, currentDate: new Date(instant) })
+    .prev()
+    .getTime();
+}
 
 export type StoredSchedule = {
   taskName: string;

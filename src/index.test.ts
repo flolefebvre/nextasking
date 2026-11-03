@@ -5,8 +5,10 @@ import * as root from "./index.js";
 import { createNextasking, defineEvent, defineListener, defineScheduledTask, defineTask } from "./index.js";
 import type {
   EventName,
+  EventWithRuns,
   FailureReason,
   ListedRun,
+  ListedSchedule,
   ListRunsOptions,
   Register,
   Run,
@@ -175,6 +177,46 @@ describe("the root export", () => {
     expectTypeOf(nextasking.countRuns).returns.resolves.toEqualTypeOf<RunCounts>();
     // @ts-expect-error a listed run carries no payload
     expectTypeOf<ListedRun["payload"]>().toBeUnknown();
+  });
+
+  test("describes the tasks and events, with no schema and no handler, for a run-now picker", () => {
+    const runNow = async (taskName: (typeof nextasking.taskDefinitions)[number]["name"]) => {
+      if (taskName === "purge-expired-sessions") {
+        await nextasking.dispatch(taskName);
+      }
+    };
+
+    expect(nextasking.taskDefinitions).toEqual([
+      { name: "send-welcome-email" },
+      { name: "create-default-workspace", event: "user.signed-up" },
+      { name: "purge-expired-sessions", schedule: { cron: "0 3 * * *", timezone: "UTC" } },
+    ]);
+    expect(nextasking.eventDefinitions).toEqual([
+      { name: "user.signed-up", listenerNames: ["create-default-workspace"] },
+    ]);
+    expect(Object.isFrozen(nextasking.taskDefinitions[2]?.schedule)).toBe(true);
+    expectTypeOf(runNow).parameter(0).toEqualTypeOf<TaskName>();
+    expectTypeOf(nextasking.taskDefinitions[0]!.event).toEqualTypeOf<EventName | undefined>();
+    expectTypeOf(nextasking.eventDefinitions[0]!.name).toEqualTypeOf<EventName>();
+    expectTypeOf(nextasking.eventDefinitions[0]!.listenerNames).toEqualTypeOf<readonly TaskName[]>();
+  });
+
+  test("types getEvent's listener runs by listener, and listSchedules by scheduled task", () => {
+    type SignedUpEvent = Awaited<ReturnType<typeof nextasking.getEvent<"user.signed-up">>>;
+
+    expectTypeOf<keyof SignedUpEvent["runsByListener"]>().toEqualTypeOf<"create-default-workspace">();
+    expectTypeOf<NonNullable<SignedUpEvent["runsByListener"]["create-default-workspace"]>["payload"]>().toEqualTypeOf<{
+      userId: string;
+    }>();
+    expectTypeOf<SignedUpEvent["fanOut"]>().toEqualTypeOf<"pending" | "completed" | "failed" | undefined>();
+    expectTypeOf<SignedUpEvent>().toEqualTypeOf<EventWithRuns>();
+    expectTypeOf<ListedSchedule["task"]>().toEqualTypeOf<"purge-expired-sessions">();
+    expectTypeOf(nextasking.listSchedules).returns.resolves.toEqualTypeOf<ListedSchedule[]>();
+    const readUnknownEvent = () =>
+      // @ts-expect-error the instance lists no such event
+      nextasking.getEvent("user.deleted", "event-1");
+
+    expectTypeOf(readUnknownEvent).toBeFunction();
   });
 
   test("falls back to no name at all when Register is not augmented", () => {

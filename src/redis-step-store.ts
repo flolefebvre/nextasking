@@ -37,10 +37,14 @@ function savedStepsKeyOf(job: MinimalJob): string {
   return `${jobKeyOf(job)}:steps`;
 }
 
+export async function loadSavedSteps(client: Redis, job: MinimalJob): Promise<Record<StepId, SerializedSavedStep>> {
+  return client.hgetall(savedStepsKeyOf(job));
+}
+
 export function createRedisStepStore(client: Redis, job: Job<{ runId: RunId }>, markLockLost: () => void): StepStore {
   const savedStepsKey = savedStepsKeyOf(job);
   return {
-    load: () => client.hgetall(savedStepsKey),
+    load: () => loadSavedSteps(client, job),
     save: async (stepId: StepId, serializedSavedStep: SerializedSavedStep) => {
       const outcome = await client.eval(
         SAVE_STEP_IF_LOCK_IS_HELD,

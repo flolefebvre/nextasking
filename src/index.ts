@@ -26,6 +26,7 @@ export {
 export type { PayloadIssue } from "./errors.js";
 export type { EventId, RunId } from "./ids.js";
 export type { Logger } from "./logger.js";
+export type { RunError } from "./queue-reader.js";
 export { createNextasking } from "./registry.js";
 export type {
   DispatchedRun,
@@ -36,9 +37,12 @@ export type {
   Nextasking,
   NextaskingConfig,
   Register,
+  Run,
   TaskName,
 } from "./registry.js";
+export type { FailureReason } from "./run-queue.js";
+export type { RunState } from "./run-states.js";
 export type { CronExpression, IanaTimeZone, Schedule } from "./schedules.js";
 export type { StandardSchemaV1 } from "./standard-schema.js";
-export type { StepContext, StepTools } from "./step-engine.js";
+export type { SavedStepResult, StepContext, StepTools } from "./step-engine.js";
 export type { StartWorkerOptions } from "./worker-runtime.js";

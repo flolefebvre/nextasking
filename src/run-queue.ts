@@ -1,5 +1,6 @@
 import { Queue } from "bullmq";
 import type { JobsOptions } from "bullmq";
+import type { Redis } from "ioredis";
 
 import { closeRedisClient, createRedisClient } from "./connection.js";
 import type { ConnectionConfig } from "./connection.js";
@@ -123,6 +124,8 @@ export type RunQueue = {
     listenerRuns: readonly ListenerRunToEnqueue[],
   ) => Promise<void>;
   syncSchedules: (declaredSchedules: readonly DeclaredSchedule[]) => Promise<ScheduleChange[]>;
+  readonly bullmqQueue: Queue;
+  readonly client: Redis;
   close: () => Promise<void>;
 };
 
@@ -164,6 +167,8 @@ export function createRunQueue(connection: ConnectionConfig, prefix: string): Ru
   };
 
   return {
+    bullmqQueue: queue,
+    client,
     enqueueRun: async (taskName, run) => {
       const job = jobForRun(
         taskName,

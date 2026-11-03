@@ -3,7 +3,16 @@ import { z } from "zod";
 
 import * as root from "./index.js";
 import { createNextasking, defineEvent, defineListener, defineScheduledTask, defineTask } from "./index.js";
-import type { EventName, Register, ScheduledTaskContext, TaskContext, TaskName } from "./index.js";
+import type {
+  EventName,
+  FailureReason,
+  Register,
+  Run,
+  RunState,
+  ScheduledTaskContext,
+  TaskContext,
+  TaskName,
+} from "./index.js";
 import type { EventNameIn, TaskNameIn } from "./registry.js";
 
 const sendWelcomeEmail = defineTask("send-welcome-email", {
@@ -94,6 +103,57 @@ describe("the root export", () => {
   test("exports the registered task and event names", () => {
     expectTypeOf<TaskName>().toEqualTypeOf<RegisteredTaskName>();
     expectTypeOf<EventName>().toEqualTypeOf<"user.signed-up">();
+  });
+
+  test("types a run by its task, then by its state", () => {
+    const describeRun = (run: Run) => {
+      if (run.task === "send-welcome-email") {
+        expectTypeOf(run.payload).toEqualTypeOf<{ email: string }>();
+      }
+      if (run.task === "purge-expired-sessions") {
+        expectTypeOf(run.payload).toBeUndefined();
+      }
+      switch (run.state) {
+        case "delayed":
+          return run.startsAt;
+        case "suspended":
+          return run.resumesAt;
+        case "backingOff":
+          return run.nextAttemptAt;
+        case "failed":
+          expectTypeOf(run.reason).toEqualTypeOf<FailureReason>();
+          return run.finishedAt;
+        default:
+          // @ts-expect-error only a delayed run has a startsAt
+          return run.startsAt;
+      }
+    };
+
+    expectTypeOf(describeRun).returns.toEqualTypeOf<Date | undefined>();
+    expectTypeOf<Run["task"]>().toEqualTypeOf<RegisteredTaskName>();
+    expectTypeOf<Run["state"]>().toEqualTypeOf<RunState>();
+    expectTypeOf<RunState>().toEqualTypeOf<
+      | "delayed"
+      | "pending"
+      | "waitingForConcurrencySlot"
+      | "executing"
+      | "suspended"
+      | "backingOff"
+      | "completed"
+      | "failed"
+    >();
+  });
+
+  test("types getRun's answer by the task named", () => {
+    expectTypeOf(nextasking.getRun<"send-welcome-email">)
+      .returns.resolves.exclude<undefined>()
+      .toHaveProperty("payload")
+      .toEqualTypeOf<{ email: string }>();
+    const readRunOfUnknownTask = () =>
+      // @ts-expect-error the instance lists no such task
+      nextasking.getRun("send-goodbye-email", "run-1");
+
+    expectTypeOf(readRunOfUnknownTask).toBeFunction();
   });
 
   test("falls back to no name at all when Register is not augmented", () => {

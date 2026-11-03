@@ -23,7 +23,7 @@ export const syncAccount = defineTask("sync-account", {
 - `backoff` (default `"30s"`) is the wait before the first retry. Each later wait doubles.
 - Each wait is jittered to between 80% and 100% of its value, so runs that failed together don't retry together.
 - The default schedule waits up to 30 s, 1 min, 2 min, 4 min, then 8 min: about 12 to 16 minutes in all, enough to outlast a dependency's deploy.
-- The retry count is fixed when the run is stored, from the `retries` of the release that dispatched or emitted. Each wait uses the `backoff` of the worker that ran the failed attempt.
+- The retry count is fixed when the run is stored: by the release that dispatched, for a listener run by the worker that ran the fan-out, for a firing's run by the worker that processed the firing. Each wait uses the `backoff` of the worker that ran the failed attempt. See [Deploys](deploys.md#which-release-decides-what).
 - A listener takes the same options, for its own runs.
 - Make the handler safe to run again: a retry starts it from the top. Wrap each side effect in `step.run` so a retry reuses its result instead of repeating it; see [Steps](steps.md).
 

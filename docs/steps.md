@@ -48,7 +48,7 @@ for (const followerId of payload.followerIds) {
 }
 ```
 
-- Keep an id stable once deployed: a saved result is found by its id. Renaming a step makes runs already in progress run it again.
+- Keep an id stable once deployed: a saved result is found by its id. Renaming a step makes runs already in progress run it again. See [Deploys](deploys.md#rename-or-rework-a-step).
 - A saved step whose id no longer appears in the code is ignored.
 
 ## Results are JSON
@@ -166,6 +166,8 @@ await step.run("create-charge", async ({ idempotencyKey }) => {
   return { paymentIntentId: paymentIntent.id };
 });
 ```
+
+- A provider remembers a key for a limited time, and some take none. See [Duplicate runs](duplicate-runs.md#provider-idempotency-windows) for each provider's window and what to do without keys.
 
 ## Limits
 

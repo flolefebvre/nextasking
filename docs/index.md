@@ -12,6 +12,11 @@ Events and background tasks for a Next.js app, on BullMQ with Redis or Valkey. D
 
 | Job                                                | Page                                            |
 | -------------------------------------------------- | ----------------------------------------------- |
+| Learn the words this manual uses                   | [Core concepts](core-concepts.md)               |
+| Add nextasking to an app, step by step             | [Setup](setup.md)                               |
+| Lay out the definition files and name them         | [Setup](setup.md)                               |
+| Set the environment variables a worker needs       | [Setup](setup.md)                               |
+| Point the app's agents at this manual              | [Setup](setup.md)                               |
 | Define a task and its payload schema               | [Tasks and events](tasks-and-events.md)         |
 | Define an event                                    | [Tasks and events](tasks-and-events.md)         |
 | Define a listener that reacts to an event          | [Tasks and events](tasks-and-events.md)         |
@@ -37,6 +42,11 @@ Events and background tasks for a Next.js app, on BullMQ with Redis or Valkey. D
 | Stop a handler cleanly with `abortSignal`          | [Worker](worker.md)                             |
 | Know what a stall is and when a run fails stalled  | [Worker](worker.md)                             |
 | Know what happens to runs during a deploy overlap  | [Worker](worker.md)                             |
+| Know which release decides each task option        | [Deploys](deploys.md)                           |
+| Change a payload schema without breaking runs      | [Deploys](deploys.md)                           |
+| Rename or rework a step that is already deployed   | [Deploys](deploys.md)                           |
+| Remove a task, a listener or an event              | [Deploys](deploys.md)                           |
+| Rename a task or an event                          | [Deploys](deploys.md)                           |
 | Pick the Valkey or Redis for the queues            | [Worker](worker.md)                             |
 | Set `maxmemory-policy` to `noeviction`             | [Worker](worker.md)                             |
 | Know what the worker does when Redis is down       | [Worker](worker.md)                             |
@@ -61,6 +71,10 @@ Events and background tasks for a Next.js app, on BullMQ with Redis or Valkey. D
 | Emit or dispatch from a handler, once per run      | [Steps](steps.md)                               |
 | Know the step size limits                          | [Steps](steps.md)                               |
 | Fix a `StepMisuseError`                            | [Steps](steps.md)                               |
+| Know what nextasking guarantees against duplicates | [Duplicate runs](duplicate-runs.md)             |
+| Close the duplicate windows that stay open         | [Duplicate runs](duplicate-runs.md)             |
+| Send an email or charge a card only once           | [Duplicate runs](duplicate-runs.md)             |
+| Know how long a provider keeps an idempotency key  | [Duplicate runs](duplicate-runs.md)             |
 | Set how often and how soon a failed run retries    | [Retries and failures](retries-and-failures.md) |
 | Fail a run at once with `NonRetriableError`        | [Retries and failures](retries-and-failures.md) |
 | Bound an attempt with `timeout`                    | [Retries and failures](retries-and-failures.md) |
@@ -118,23 +132,33 @@ import {
 } from "@flefebvre/nextasking";
 import type {
   ConnectionConfig,
+  CronExpression,
+  DispatchedRun,
   DispatchOptions,
   Duration,
   EmitOptions,
+  EmittedEvent,
   EventDefinition,
   EventDefinitionSummary,
   EventId,
   EventName,
+  EventOptions,
   EventWithRuns,
   FailureNoticeError,
   FailureReason,
   FanOutFailedPayload,
   FanOutState,
+  IanaTimeZone,
   ListedRun,
   ListedSchedule,
   ListenerDefinition,
+  ListenerOptions,
   ListRunsOptions,
   Logger,
+  Nextasking,
+  NextaskingConfig,
+  PayloadIssue,
+  PayloadSchema,
   PreviousFiring,
   Register,
   ReplayedEvent,
@@ -150,13 +174,18 @@ import type {
   Schedule,
   ScheduledTaskContext,
   ScheduledTaskDefinition,
+  ScheduledTaskHandler,
+  ScheduledTaskOptions,
+  StandardSchemaV1,
   StartWorkerOptions,
   StepContext,
   StepTools,
   TaskContext,
   TaskDefinition,
   TaskDefinitionSummary,
+  TaskHandler,
   TaskName,
+  TaskOptions,
 } from "@flefebvre/nextasking";
 import { createNextaskingControl, executeAttempt, fakeNextasking } from "@flefebvre/nextasking/testing";
 import type {
@@ -190,23 +219,33 @@ import type {
 | `RedisUnavailableError`    | Thrown by every call on the instance when Redis doesn't answer within `giveUpAfter`; carries `runId` or `eventId`                    |
 | `StepMisuseError`          | Thrown by a step on a bug: a repeated id, a nested step, a bad result, duration or wake time                                         |
 | `ConnectionConfig`         | The type of `createNextasking`'s `connection`: `url` and `giveUpAfter` (default `"5s"`)                                              |
+| `CronExpression`           | The type of a schedule's `cron`: a string                                                                                            |
+| `DispatchedRun`            | The type `dispatch` resolves with: `runId`                                                                                           |
 | `DispatchOptions`          | The type of `dispatch`'s third argument: `runId` and `delay`                                                                         |
 | `Duration`                 | The type of a duration option: a whole number and `s`, `m`, `h` or `d`                                                               |
 | `EmitOptions`              | The type of `emit`'s third argument: `eventId`                                                                                       |
+| `EmittedEvent`             | The type `emit` resolves with: `eventId`                                                                                             |
 | `EventDefinition`          | The type `defineEvent` returns                                                                                                       |
 | `EventDefinitionSummary`   | The type of one entry of `eventDefinitions`: `name` and `listenerNames`                                                              |
 | `EventId`                  | The type of an event id: a string                                                                                                    |
 | `EventName`                | The union of the registered instance's event names, the built-in events included; `never` without `Register`                         |
+| `EventOptions`             | The type of `defineEvent`'s options: `schema`                                                                                        |
 | `EventWithRuns`            | The type `getEvent` returns: `event`, `eventId`, `fanOut` and `runsByListener`                                                       |
 | `FailureReason`            | The type of a failed run's `reason`: `"retries exhausted"`, `"non-retriable"`, `"stalled"` or `"unknown task"`                       |
 | `FailureNoticeError`       | The type of a failure notice's `error`: `name`, `message` and `stack`                                                                |
 | `FanOutFailedPayload`      | The type of `fanOutFailed`'s payload: `eventName`, `eventId`, `error` and `failedAt`                                                 |
 | `FanOutState`              | The type of `getEvent`'s `fanOut`: `"pending"`, `"completed"` or `"failed"`                                                          |
+| `IanaTimeZone`             | The type of a schedule's `timezone`: an IANA time zone name, a string                                                                |
 | `ListedRun`                | The type of a run in `listRuns`' page: a `Run` without `payload`, `errors` and `steps`, with `lastErrorMessage`                      |
 | `ListedSchedule`           | The type of one entry `listSchedules` returns: `task`, `cron`, `timezone`, `nextFiringAt` and `previousFiring`                       |
 | `ListenerDefinition`       | The type `defineListener` returns                                                                                                    |
+| `ListenerOptions`          | The type of `defineListener`'s options: `on`, `retries`, `backoff`, `timeout`, `concurrency` and `handler`                           |
 | `ListRunsOptions`          | The type of `listRuns`' argument: `state`, `task`, `limit` and `cursor`                                                              |
 | `Logger`                   | The type of the `logger` option and of the handler's `logger`                                                                        |
+| `Nextasking`               | The type of the instance `createNextasking` returns                                                                                  |
+| `NextaskingConfig`         | The type of `createNextasking`'s argument: `connection`, `prefix`, `logger`, `events` and `tasks`                                    |
+| `PayloadIssue`             | The type of one entry of `InvalidPayloadError`'s `issues`: `path` and `message`                                                      |
+| `PayloadSchema`            | The type a `schema` option takes: a Standard Schema whose input and output are JSON                                                  |
 | `PreviousFiring`           | The type of a listed schedule's `previousFiring`: `scheduledAt` and `runId`                                                          |
 | `Register`                 | The interface you augment with your instance's type; it types names and a handler's calls                                            |
 | `ReplayedEvent`            | The type `replayEvent` returns: `eventId`                                                                                            |
@@ -222,13 +261,18 @@ import type {
 | `Schedule`                 | The type of a scheduled task's `schedule` option: `cron` and `timezone`                                                              |
 | `ScheduledTaskContext`     | The type of the object a scheduled task's handler receives: no `payload`, and `scheduledAt`                                          |
 | `ScheduledTaskDefinition`  | The type `defineScheduledTask` returns                                                                                               |
+| `ScheduledTaskHandler`     | The type of a scheduled task's `handler`                                                                                             |
+| `ScheduledTaskOptions`     | The type of `defineScheduledTask`'s options: `schedule`, `retries`, `backoff`, `timeout`, `concurrency: { limit }` and `handler`     |
+| `StandardSchemaV1`         | The Standard Schema interface every schema library implements, shipped as types                                                      |
 | `StartWorkerOptions`       | The type of `startWorker`'s argument: `concurrency` and `shutdownTimeout`                                                            |
 | `StepContext`              | The type of the object a step's `fn` receives: `idempotencyKey`                                                                      |
 | `StepTools`                | The type of the handler's `step`: `step.run`, `step.sleep` and `step.sleepUntil`                                                     |
 | `TaskContext`              | The type of the object a handler receives                                                                                            |
 | `TaskDefinition`           | The type `defineTask` returns                                                                                                        |
 | `TaskDefinitionSummary`    | The type of one entry of `taskDefinitions`: `name`, `event` and `schedule`                                                           |
+| `TaskHandler`              | The type of a task's or a listener's `handler`                                                                                       |
 | `TaskName`                 | The union of the registered instance's task names, listeners and scheduled tasks included; `never` without `Register`                |
+| `TaskOptions`              | The type of `defineTask`'s options: `schema`, `retries`, `backoff`, `timeout`, `concurrency` and `handler`                           |
 | `createNextaskingControl`  | From `./testing`: opens a control on a queue for e2e tests and offline dev: `waitForIdle`, `makeRunsDueNow`, `fireSchedule`, `reset` |
 | `NextaskingControl`        | From `./testing`: the type `createNextaskingControl` returns                                                                         |
 | `NextaskingControlOptions` | From `./testing`: the type of `createNextaskingControl`'s argument: `connection` and `prefix`                                        |

@@ -174,6 +174,7 @@ During a deploy, an old and a new release run side by side. A worker that picks 
 - The first time a worker finds the name unknown is saved with the run. If no worker has taken it 30 minutes later, the run fails with `reason: "unknown task"` and an error record named `UnknownTaskRunError`, kept like any failed run; see [Retries and failures](retries-and-failures.md#what-a-failed-run-keeps). A fan-out fails the same way, and starts no listener run.
 - Each hand-back writes `run handed back: unknown task`, or `fan-out handed back: unknown event`, at debug.
 - These timings are fixed.
+- See [Deploys](deploys.md) for which release decides each option, and how to remove a task, a listener or an event without stranding its runs.
 
 ## Give queues their own Valkey or Redis
 

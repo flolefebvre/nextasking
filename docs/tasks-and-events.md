@@ -191,7 +191,7 @@ export async function POST(request: Request) {
 - `emit(name, payload)` resolves with `{ eventId }`, a random UUID, once the event is stored.
 - Each listener of the event then gets exactly one run, started by a worker, not by `emit`. Its handler receives the event's schema output.
 - The name and the payload are checked at compile time, like `dispatch`'s; at runtime, `emit` validates the payload and stores the schema's output.
-- The listeners are those of the release that emitted: a worker running another release still starts exactly those.
+- The listeners are those of the release that emitted: a worker running another release still starts exactly those. See [Deploys](deploys.md#which-release-decides-what).
 - A listener's lines carry `eventName` and `eventId` on top of `task`, `runId` and `attempt`. See [Logging](logging.md).
 - `emit(name, payload, { eventId })` takes your own event id: see [Run once per business fact](#run-once-per-business-fact).
 

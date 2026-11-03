@@ -167,6 +167,8 @@ await step.run("create-charge", async ({ idempotencyKey }) => {
 });
 ```
 
+- A provider remembers a key for a limited time, and some take none. See [Duplicate runs](duplicate-runs.md#provider-idempotency-windows) for each provider's window and what to do without keys.
+
 ## Limits
 
 - A step result can be at most 1 MiB once serialized, and the saved steps of one run at most 10 MiB in all. Any number of steps is fine.

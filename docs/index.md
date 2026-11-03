@@ -66,6 +66,10 @@ Events and background tasks for a Next.js app, on BullMQ with Redis or Valkey. D
 | Emit or dispatch from a handler, once per run      | [Steps](steps.md)                               |
 | Know the step size limits                          | [Steps](steps.md)                               |
 | Fix a `StepMisuseError`                            | [Steps](steps.md)                               |
+| Know what nextasking guarantees against duplicates | [Duplicate runs](duplicate-runs.md)             |
+| Close the duplicate windows that stay open         | [Duplicate runs](duplicate-runs.md)             |
+| Send an email or charge a card only once           | [Duplicate runs](duplicate-runs.md)             |
+| Know how long a provider keeps an idempotency key  | [Duplicate runs](duplicate-runs.md)             |
 | Set how often and how soon a failed run retries    | [Retries and failures](retries-and-failures.md) |
 | Fail a run at once with `NonRetriableError`        | [Retries and failures](retries-and-failures.md) |
 | Bound an attempt with `timeout`                    | [Retries and failures](retries-and-failures.md) |

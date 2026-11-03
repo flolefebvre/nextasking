@@ -1,3 +1,5 @@
+export { fanOutFailed, runFailed } from "./built-in-events.js";
+export type { FailureNoticeError, FanOutFailedPayload, RunFailedPayload } from "./built-in-events.js";
 export type { ConnectionConfig } from "./connection.js";
 export { defineEvent, defineListener, defineScheduledTask, defineTask } from "./definitions.js";
 export type {

@@ -1,3 +1,5 @@
+import { BUILT_IN_EVENTS, isBuiltInEventName } from "./built-in-events.js";
+import type { BuiltInEvent, BuiltInEventName } from "./built-in-events.js";
 import type { ConnectionConfig } from "./connection.js";
 import { concurrencyKeyOf, retriesOf, validatePayload } from "./definitions.js";
 import type { AnyTaskDefinition, EventDefinition, PayloadInput, PayloadSchema } from "./definitions.js";
@@ -109,8 +111,10 @@ export interface RegisteredDispatch {
   ): Promise<DispatchedRun>;
 }
 
+export type EmittableEventNameOf<Event extends EventDefinition> = Exclude<Event["name"], BuiltInEventName>;
+
 export interface RegisteredEmit {
-  <Name extends EventName>(
+  <Name extends Exclude<EventName, BuiltInEventName>>(
     name: Name,
     payload: PayloadInput<Extract<RegisteredEvent, { name: Name }>["schema"]>,
     options?: EmitOptions,
@@ -131,7 +135,7 @@ export type Nextasking<Task extends AnyTaskDefinition, Event extends EventDefini
     name: Name,
     ...dispatchArguments: DispatchArguments<Extract<Task, { name: Name }>>
   ) => Promise<DispatchedRun>;
-  readonly emit: <Name extends Event["name"]>(
+  readonly emit: <Name extends EmittableEventNameOf<Event>>(
     name: Name,
     payload: PayloadInput<Extract<Event, { name: Name }>["schema"]>,
     options?: EmitOptions,
@@ -178,9 +182,10 @@ const closeByNextasking = new WeakMap<object, () => Promise<void>>();
 export function createNextasking<
   const Tasks extends readonly AnyTaskDefinition[],
   const Events extends readonly EventDefinition[] = readonly [],
->(config: NextaskingConfig<Tasks, Events>): Nextasking<Tasks[number], Events[number]> {
-  const events: readonly EventDefinition[] = config.events ?? [];
-  rejectInvalidConfig(config.tasks, events);
+>(config: NextaskingConfig<Tasks, Events>): Nextasking<Tasks[number], Events[number] | BuiltInEvent> {
+  const appEvents: readonly EventDefinition[] = config.events ?? [];
+  rejectInvalidConfig(config.tasks, appEvents);
+  const events: readonly EventDefinition[] = [...appEvents, ...BUILT_IN_EVENTS];
   const prefix = config.prefix ?? DEFAULT_PREFIX;
   const logger = config.logger ?? silentLogger;
   const tasksByName = new Map<string, AnyTaskDefinition>(config.tasks.map((task) => [task.name, task]));
@@ -229,9 +234,17 @@ export function createNextasking<
   };
 
   const emitByName: EmitByName = async (name, payload, options = {}) => {
+    if (isBuiltInEventName(name)) {
+      throw new Error(
+        `Event "${name}" is built in: names starting with "${RESERVED_NAME_PREFIX}" belong to the built-in events, which only the library emits`,
+      );
+    }
     const event = eventsByName.get(name);
     if (event === undefined) {
-      throw new UnknownEventError(name, [...eventsByName.keys()]);
+      throw new UnknownEventError(
+        name,
+        appEvents.map((appEvent) => appEvent.name),
+      );
     }
     const eventId = consumerFacingIdOrRandomId("event", event.name, "eventId", options.eventId);
     const validatedPayload = await validatePayload("event", event, payload);
@@ -274,14 +287,14 @@ export function createNextasking<
     return { eventId };
   };
 
-  type Instance = Nextasking<Tasks[number], Events[number]>;
+  type Instance = Nextasking<Tasks[number], Events[number] | BuiltInEvent>;
   const nextasking: Instance = {
     dispatch: dispatchByName,
     emit: emitByName,
     replay,
     replayEvent,
     isTaskName: (name): name is Tasks[number]["name"] => tasksByName.has(name),
-    isEventName: (name): name is Events[number]["name"] => eventsByName.has(name),
+    isEventName: (name): name is (Events[number] | BuiltInEvent)["name"] => eventsByName.has(name),
     getRun: queueReader.getRun as Instance["getRun"],
     listRuns: queueReader.listRuns as Instance["listRuns"],
     countRuns: queueReader.countRuns as Instance["countRuns"],
@@ -363,13 +376,18 @@ function delayInMillisecondsOf(taskName: string, delay: Duration | undefined): D
 function rejectInvalidConfig(tasks: readonly AnyTaskDefinition[], events: readonly EventDefinition[]): void {
   rejectDuplicateNames([...tasks.map((task) => task.name), ...events.map((event) => event.name)]);
   for (const event of events) {
+    if (isBuiltInEventName(event.name)) {
+      throw new Error(
+        `Event "${event.name}" is built in and added automatically: remove it from events, and listen to it as it is`,
+      );
+    }
     if (event.name.startsWith(RESERVED_NAME_PREFIX)) {
       throw new Error(
         `Event "${event.name}" has a reserved name: names starting with "${RESERVED_NAME_PREFIX}" belong to the built-in events`,
       );
     }
   }
-  const eventNames = new Set(events.map((event) => event.name));
+  const eventNames = new Set([...events, ...BUILT_IN_EVENTS].map((event) => event.name));
   for (const task of tasks) {
     if (task.name.startsWith(RESERVED_NAME_PREFIX)) {
       throw new Error(

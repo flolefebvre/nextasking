@@ -1,4 +1,4 @@
-import { DelayedError, ErrorCode, Job, UnrecoverableError, WaitingError, Worker } from "bullmq";
+import { DelayedError, Job, UnrecoverableError, WaitingError, Worker } from "bullmq";
 import type { MinimalJob } from "bullmq";
 import type { Redis } from "ioredis";
 
@@ -8,6 +8,7 @@ import { settleWithinTimeout } from "./attempt-timeout.js";
 import { setTimeout as sleep } from "node:timers/promises";
 
 import { UnknownTaskRunError } from "./attempt-errors.js";
+import { LOCK_ERROR_CODES, createCompletionsInFlight } from "./completions-in-flight.js";
 import { createConcurrencySlots } from "./concurrency-slots.js";
 import type { ConcurrencySlot } from "./concurrency-slots.js";
 import { listenerLoggingAnsweredErrors } from "./connection.js";
@@ -23,7 +24,6 @@ import {
   recordRunFailedForStalling,
   runDurationFieldsOf,
 } from "./failure-recording.js";
-import type { RunDurationFields } from "./failure-recording.js";
 import { sendFailureNotice } from "./failure-notices.js";
 import type { SendBuiltInEvent } from "./failure-notices.js";
 import { deriveFiringRunId } from "./ids.js";
@@ -89,8 +89,6 @@ export type WorkerConfig = {
 
 const STALL_LIMIT_FAILED_REASON = "job stalled more than allowable limit";
 
-const LOCK_ERROR_CODES = new Set<unknown>([ErrorCode.JobLockNotExist, ErrorCode.JobLockMismatch]);
-
 async function moveRunToDelayed(
   client: Redis,
   job: Job<StoredRun>,
@@ -131,7 +129,16 @@ export async function isSettledWithin(settlement: Promise<void>, timeoutInMillis
 
 export function startRunWorker(config: WorkerConfig): RunningWorker {
   const backoffInMillisecondsByFailedJob = new WeakMap<MinimalJob, DurationInMilliseconds>();
-  const durationFieldsByCompletedJob = new WeakMap<MinimalJob, RunDurationFields>();
+  const completionsInFlight = createCompletionsInFlight({
+    readJobOnServer: async (jobId) => {
+      const jobOnServer = await Job.fromId(worker, jobId);
+      if (jobOnServer === undefined) {
+        return undefined;
+      }
+      return { state: await jobOnServer.getState(), processedOn: jobOnServer.processedOn };
+    },
+    logWorkerError: listenerLoggingAnsweredErrors(config.logger, "worker error"),
+  });
 
   const runLoggerOf = (job: Job<StoredRun>, attempt: number) =>
     loggerWithFields(config.logger, { task: job.name, runId: job.data.runId, attempt, ...job.data.sourceEvent });
@@ -333,7 +340,12 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
       runLogger.debug({}, "run yielded at shutdown");
       throw new WaitingError();
     }
-    durationFieldsByCompletedJob.set(job, durationFieldsAt(Date.now()));
+    completionsInFlight.trackCompletion(job.id ?? "", {
+      processedOn: job.processedOn,
+      runLogger,
+      durationFields: durationFieldsAt(Date.now()),
+      removeSavedSteps: () => removeSavedSteps(client, job),
+    });
   };
 
   const timing = workerTiming();
@@ -475,21 +487,14 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
   };
   const failRunForStalling = (job: Job<StoredRun>) =>
     recordRunFailedForStalling(client, job, timing.stallCountThatFailsARun, runLoggerOf(job, job.attemptsMade));
-  worker.on("error", listenerLoggingAnsweredErrors(config.logger, "worker error"));
+  worker.on("error", completionsInFlight.routeWorkerError);
   worker.on("lockRenewalFailed", (jobIds) => {
     for (const jobId of jobIds) {
       abortAttemptByJobId.get(jobId)?.("lock lost");
     }
   });
   worker.on("completed", (job) => {
-    removeSavedSteps(client, job).catch(() => undefined);
-    const durationFields = durationFieldsByCompletedJob.get(job);
-    if (durationFields !== undefined) {
-      runLoggerOf(job as Job<StoredRun>, attemptOf(job as Job<StoredRun>, "completed")).info(
-        durationFields,
-        "run completed",
-      );
-    }
+    completionsInFlight.recordRunCompleted(job.id ?? "");
   });
   worker.on("stalled", (jobId) => {
     logAttemptStalled(jobId).catch(() => undefined);

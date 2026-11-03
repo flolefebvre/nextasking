@@ -121,7 +121,9 @@ async function moveRunToDelayed(
   delayedRunState: StoredDelayedRunState,
   token: string | undefined,
 ): Promise<void> {
-  await job.updateData({ ...job.data, delayedRunState });
+  if (JSON.stringify(job.data.delayedRunState) !== JSON.stringify(delayedRunState)) {
+    await job.updateData({ ...job.data, delayedRunState });
+  }
   await job.moveToDelayed(delayedUntil, token);
 }
 

@@ -11,7 +11,7 @@ import { silentLogger } from "./logger.js";
 import type { Logger } from "./logger.js";
 import { createRunQueue } from "./run-queue.js";
 import type { RunQueue } from "./run-queue.js";
-import { rejectInvalidSchedule } from "./schedules.js";
+import { rejectInvalidSchedule, timezoneOf } from "./schedules.js";
 import {
   MISSING_MANUAL_SIGNAL_HANDLING_WARNING,
   exitOnShutdownSignals,
@@ -136,6 +136,11 @@ export function createNextasking<
       listenerNamesByEventName.get(task.on.name)?.push(task.name);
     }
   }
+  const declaredSchedules = config.tasks.flatMap((task) =>
+    task.schedule === undefined
+      ? []
+      : [{ taskName: task.name, cron: task.schedule.cron, timezone: timezoneOf(task.schedule) }],
+  );
   let runQueue: RunQueue | undefined;
   let runningWorker: RunningWorker | undefined;
   const openRunQueue = (): RunQueue => {
@@ -193,8 +198,13 @@ export function createNextasking<
     isTaskName: (name): name is Tasks[number]["name"] => tasksByName.has(name),
     isEventName: (name): name is Events[number]["name"] => eventsByName.has(name),
     startWorker: async (options = {}) => {
+      const workerOptions = workerOptionsFrom(options);
+      const scheduleChanges = await openRunQueue().syncSchedules(declaredSchedules);
+      for (const { kind, taskName, cron, timezone } of scheduleChanges) {
+        logger.info({ task: taskName, cron, timezone }, `schedule ${kind}`);
+      }
       runningWorker = startRunWorker({
-        options: workerOptionsFrom(options),
+        options: workerOptions,
         connection: config.connection,
         prefix,
         logger,

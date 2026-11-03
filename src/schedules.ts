@@ -15,6 +15,41 @@ export function timezoneOf(schedule: Schedule): IanaTimeZone {
   return schedule.timezone ?? DEFAULT_TIMEZONE;
 }
 
+export type DeclaredSchedule = {
+  taskName: string;
+  cron: CronExpression;
+  timezone: IanaTimeZone;
+};
+
+export type StoredSchedule = {
+  taskName: string;
+  cron: CronExpression | undefined;
+  timezone: IanaTimeZone | undefined;
+};
+
+export type ScheduleChange =
+  ({ kind: "added" | "changed" } & DeclaredSchedule) | ({ kind: "removed" } & StoredSchedule);
+
+export function scheduleChangesBetween(
+  storedSchedules: readonly StoredSchedule[],
+  declaredSchedules: readonly DeclaredSchedule[],
+): ScheduleChange[] {
+  const storedSchedulesByTaskName = new Map(storedSchedules.map((stored) => [stored.taskName, stored]));
+  const declaredTaskNames = new Set(declaredSchedules.map((declared) => declared.taskName));
+  const addedOrChanged = declaredSchedules.flatMap((declared): ScheduleChange[] => {
+    const stored = storedSchedulesByTaskName.get(declared.taskName);
+    if (stored === undefined) {
+      return [{ kind: "added", ...declared }];
+    }
+    const isUnchanged = stored.cron === declared.cron && stored.timezone === declared.timezone;
+    return isUnchanged ? [] : [{ kind: "changed", ...declared }];
+  });
+  const removed = storedSchedules
+    .filter((stored) => !declaredTaskNames.has(stored.taskName))
+    .map((stored): ScheduleChange => ({ kind: "removed", ...stored }));
+  return [...addedOrChanged, ...removed];
+}
+
 type CronRejection = { reason: string; cause?: unknown };
 
 function cronRejectionOf(cron: unknown, timezone: IanaTimeZone): CronRejection | undefined {

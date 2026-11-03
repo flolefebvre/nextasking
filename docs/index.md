@@ -5,7 +5,7 @@ Events and background tasks for a Next.js app, on BullMQ with Redis or Valkey. D
 ## Rules that hold everywhere
 
 - If a snippet in this manual disagrees with the installed `.d.ts`, trust the `.d.ts`.
-- Import everything from the package root, `@flefebvre/nextasking`.
+- Import everything from the package root, `@flefebvre/nextasking`, except the test helpers: those come from `@flefebvre/nextasking/testing`, in test files only.
 - Call the instance from server code only: route handlers, server actions, `instrumentation.ts`.
 
 ## Where to go
@@ -76,6 +76,10 @@ Events and background tasks for a Next.js app, on BullMQ with Redis or Valkey. D
 | Build a typed "run now" picker                    | [Dashboard](dashboard.md)                       |
 | Know what a read costs and what it can miss       | [Dashboard](dashboard.md)                       |
 | Log from a handler                                | [Logging](logging.md)                           |
+| Test code that dispatches or emits, without Redis | [Testing](testing.md)                           |
+| Assert on the recorded dispatches and emits       | [Testing](testing.md)                           |
+| Know which checks a faked instance still runs     | [Testing](testing.md)                           |
+| Know what throws on a faked instance              | [Testing](testing.md)                           |
 | Run the worker under `next dev`                   | [Dev](dev.md)                                   |
 | Pick up a task edit                               | [Dev](dev.md)                                   |
 | Know what Ctrl-C does to the attempt in flight    | [Dev](dev.md)                                   |
@@ -143,6 +147,8 @@ import type {
   TaskDefinitionSummary,
   TaskName,
 } from "@flefebvre/nextasking";
+import { fakeNextasking } from "@flefebvre/nextasking/testing";
+import type { NextaskingFake, RecordedDispatch, RecordedEmit, RecordedReplay } from "@flefebvre/nextasking/testing";
 ```
 
 | Export                     | What it is                                                                                                              |
@@ -202,3 +208,8 @@ import type {
 | `TaskDefinition`           | The type `defineTask` returns                                                                                           |
 | `TaskDefinitionSummary`    | The type of one entry of `taskDefinitions`: `name`, `event` and `schedule`                                              |
 | `TaskName`                 | The union of the registered instance's task names, listeners and scheduled tasks included; `never` without `Register`   |
+| `fakeNextasking`           | From `./testing`: switches an instance to recording mode in a test and returns its `NextaskingFake`                     |
+| `NextaskingFake`           | From `./testing`: the type `fakeNextasking` returns: `dispatches`, `emits`, `replays` and `restore`                     |
+| `RecordedDispatch`         | From `./testing`: the type of one entry of a fake's `dispatches`: `task`, `payload`, `runId` and `delay`                |
+| `RecordedEmit`             | From `./testing`: the type of one entry of a fake's `emits`: `event`, `payload` and `eventId`                           |
+| `RecordedReplay`           | From `./testing`: the type of one entry of a fake's `replays`: `task` and `runId`, or `event` and `eventId`             |

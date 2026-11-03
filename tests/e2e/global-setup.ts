@@ -7,12 +7,14 @@ import { prepareFixtureApp } from "./fixture-app.js";
 declare module "vitest" {
   interface ProvidedContext {
     fixtureAppDir: string;
+    standaloneAppDir: string;
   }
 }
 
 export default async function setup(project: TestProject) {
-  const { fixtureAppDir, remove } = await prepareFixtureApp();
+  const { fixtureAppDir, standaloneAppDir, remove } = await prepareFixtureApp();
   project.provide("fixtureAppDir", fixtureAppDir);
+  project.provide("standaloneAppDir", standaloneAppDir);
   try {
     const stopRedis = await provideRedisUrl(project);
     return async () => {

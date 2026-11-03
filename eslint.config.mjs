@@ -17,4 +17,13 @@ export default defineConfig([
       "no-comments/disallowComments": ["error", { allow: ["eslint", "global", "@ts-", "prettier-ignore"] }],
     },
   },
+  {
+    files: ["src/bin.ts"],
+    rules: {
+      "no-comments/disallowComments": [
+        "error",
+        { allow: ["eslint", "global", "@ts-", "prettier-ignore", "/usr/bin/env node$"] },
+      ],
+    },
+  },
 ]);

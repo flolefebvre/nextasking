@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 type ExportTarget = string | null | ExportTarget[] | { [condition: string]: ExportTarget };
 
 type Manifest = {
+  name?: string;
   exports?: Record<string, ExportTarget>;
   bin?: string | Record<string, string>;
   scripts?: Record<string, string>;
@@ -13,6 +14,8 @@ type Manifest = {
 const PACKAGE_DIR = fileURLToPath(new URL("../", import.meta.url));
 
 const EXPECTED_SUBPATHS = [".", "./testing", "./package.json"];
+
+const EXPECTED_BIN_NAMES = ["nextasking"];
 
 const ALWAYS_SHIPPED_PATHS = ["README.md", "LICENSE"];
 
@@ -42,6 +45,12 @@ const binPathsOf = (bin: Manifest["bin"]): string[] => {
   return Object.values(bin).map(withoutLeadingDotSlash);
 };
 
+const binNamesOf = ({ name = "", bin }: Manifest): string[] => {
+  if (bin === undefined) return [];
+  if (typeof bin === "string") return [name.replace(/^@[^/]+\//, "")];
+  return Object.keys(bin);
+};
+
 if (!existsSync(new URL("../dist", import.meta.url))) {
   fail("dist/ is missing: run `pnpm build` first.");
 }
@@ -53,6 +62,14 @@ if (declaredSubpaths.join() !== EXPECTED_SUBPATHS.join()) {
   fail(
     `The exports map declares ${declaredSubpaths.join(", ")}, expected ${EXPECTED_SUBPATHS.join(", ")}. ` +
       "A new subpath is declared here on purpose.",
+  );
+}
+
+const declaredBinNames = binNamesOf(manifest);
+if (declaredBinNames.join() !== EXPECTED_BIN_NAMES.join()) {
+  fail(
+    `The manifest declares the bins ${declaredBinNames.join(", ") || "(none)"}, expected ${EXPECTED_BIN_NAMES.join(", ")}. ` +
+      "A bin is public surface: a new, renamed or dropped bin is declared here on purpose.",
   );
 }
 
@@ -93,6 +110,6 @@ if (missingPaths.length > 0) {
 
 console.log(
   `Tarball OK: ${String(packedPaths.length)} files, the exports ${EXPECTED_SUBPATHS.join(", ")}, ` +
-    `${String(binPathsOf(manifest.bin).length)} bin entries and ${String(manualPagePaths.length)} manual pages ship, ` +
+    `the bins ${EXPECTED_BIN_NAMES.join(", ")} and ${String(manualPagePaths.length)} manual pages ship, ` +
     "nothing outside dist, the manual, README.md, LICENSE and package.json does, and no script runs on install.",
 );

@@ -1,39 +1,16 @@
-import { spawn } from "node:child_process";
-import type { ChildProcess } from "node:child_process";
 import { setTimeout as sleep } from "node:timers/promises";
 
+import { spawnCapturedProcess } from "./captured-process.js";
+import type { CapturedProcess } from "./captured-process.js";
 import { freePort } from "./free-port.js";
-import { NEXT_TELEMETRY_ENV, nextBinOf } from "./fixture-app.js";
+import { nextBinOf } from "./fixture-app.js";
 
 export type NextCommand = "start" | "dev";
 
-export type NextExit = { code: number | null; signal: NodeJS.Signals | null; wasForced: boolean };
-
-export type NextProcess = {
-  url: string;
-  output: () => string;
-  stop: () => Promise<NextExit>;
-};
+export type NextProcess = CapturedProcess & { url: string };
 
 const RESPONDING_TIMEOUT_IN_MILLISECONDS = 60_000;
 const RESPONDING_POLL_IN_MILLISECONDS = 200;
-const STOP_TIMEOUT_IN_MILLISECONDS = 10_000;
-
-function hasExited(child: ChildProcess): boolean {
-  return child.exitCode !== null || child.signalCode !== null;
-}
-
-async function stopChild(child: ChildProcess): Promise<NextExit> {
-  if (hasExited(child)) {
-    return { code: child.exitCode, signal: child.signalCode, wasForced: child.signalCode === "SIGKILL" };
-  }
-  const exited = new Promise<void>((resolve) => child.once("exit", () => resolve()));
-  child.kill("SIGTERM");
-  const forceKill = setTimeout(() => child.kill("SIGKILL"), STOP_TIMEOUT_IN_MILLISECONDS);
-  await exited;
-  clearTimeout(forceKill);
-  return { code: child.exitCode, signal: child.signalCode, wasForced: child.signalCode === "SIGKILL" };
-}
 
 async function isResponding(url: string): Promise<boolean> {
   try {
@@ -44,18 +21,30 @@ async function isResponding(url: string): Promise<boolean> {
   }
 }
 
-async function waitUntilResponding(url: string, child: ChildProcess, output: () => string): Promise<void> {
+async function waitUntilResponding(nextProcess: NextProcess): Promise<void> {
   const deadline = Date.now() + RESPONDING_TIMEOUT_IN_MILLISECONDS;
   while (Date.now() < deadline) {
-    if (hasExited(child)) {
-      throw new Error(`next exited with code ${String(child.exitCode)} before responding:\n${output()}`);
+    if (nextProcess.hasExited()) {
+      const { code } = await nextProcess.exited;
+      throw new Error(`next exited with code ${String(code)} before responding:\n${nextProcess.output()}`);
     }
-    if (await isResponding(url)) return;
+    if (await isResponding(nextProcess.url)) return;
     await sleep(RESPONDING_POLL_IN_MILLISECONDS);
   }
   throw new Error(
-    `next did not respond on ${url} within ${String(RESPONDING_TIMEOUT_IN_MILLISECONDS)}ms:\n${output()}`,
+    `next did not respond on ${nextProcess.url} within ${String(RESPONDING_TIMEOUT_IN_MILLISECONDS)}ms:\n${nextProcess.output()}`,
   );
+}
+
+async function startRespondingProcess(port: number, spawnProcess: () => CapturedProcess): Promise<NextProcess> {
+  const nextProcess: NextProcess = { ...spawnProcess(), url: `http://127.0.0.1:${String(port)}` };
+  try {
+    await waitUntilResponding(nextProcess);
+  } catch (error) {
+    await nextProcess.stop();
+    throw error;
+  }
+  return nextProcess;
 }
 
 export async function startNext(
@@ -63,22 +52,20 @@ export async function startNext(
   { command, env }: { command: NextCommand; env: Record<string, string> },
 ): Promise<NextProcess> {
   const port = await freePort();
-  const child = spawn(nextBinOf(fixtureAppDir), [command, "--port", String(port)], {
-    cwd: fixtureAppDir,
-    env: { ...process.env, ...env, ...NEXT_TELEMETRY_ENV },
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  const outputChunks: Buffer[] = [];
-  child.stdout?.on("data", (chunk: Buffer) => outputChunks.push(chunk));
-  child.stderr?.on("data", (chunk: Buffer) => outputChunks.push(chunk));
-  const output = () => Buffer.concat(outputChunks).toString();
-  const url = `http://127.0.0.1:${String(port)}`;
-  const nextProcess: NextProcess = { url, output, stop: () => stopChild(child) };
-  try {
-    await waitUntilResponding(url, child, output);
-  } catch (error) {
-    await nextProcess.stop();
-    throw error;
-  }
-  return nextProcess;
+  return startRespondingProcess(port, () =>
+    spawnCapturedProcess(nextBinOf(fixtureAppDir), [command, "--port", String(port)], { cwd: fixtureAppDir, env }),
+  );
+}
+
+export async function startStandaloneServer(
+  standaloneAppDir: string,
+  { env }: { env: Record<string, string> },
+): Promise<NextProcess> {
+  const port = await freePort();
+  return startRespondingProcess(port, () =>
+    spawnCapturedProcess("node", ["server.js"], {
+      cwd: standaloneAppDir,
+      env: { ...env, PORT: String(port), HOSTNAME: "127.0.0.1" },
+    }),
+  );
 }

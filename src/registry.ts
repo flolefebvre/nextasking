@@ -35,6 +35,7 @@ import type { RunState } from "./run-states.js";
 import type { RunQueue } from "./run-queue.js";
 import { bootWorker } from "./worker-boot.js";
 import { rejectInvalidSchedule, timezoneOf } from "./schedules.js";
+import { markStartWorkerCalled } from "./start-worker-mark.js";
 import {
   MISSING_MANUAL_SIGNAL_HANDLING_WARNING,
   exitOnShutdownSignals,
@@ -251,6 +252,7 @@ export function createNextasking<
     taskDefinitions: taskDefinitionSummariesOf(config.tasks) as Instance["taskDefinitions"],
     eventDefinitions: eventDefinitionSummariesOf(events, listenerNamesByEventName) as Instance["eventDefinitions"],
     startWorker: async (options = {}) => {
+      markStartWorkerCalled();
       if (recordingRunWriter !== undefined) {
         throw fakedInstanceError("startWorker");
       }

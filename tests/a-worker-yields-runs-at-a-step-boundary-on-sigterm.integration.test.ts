@@ -33,7 +33,7 @@ integrationTest(
       expect(stepsAfterTheYield.serializedResultsByStepId).toEqual({ wait: '["waited"]' });
       expect(positionAfterTheYield).toEqual({ isWaiting: true, attemptsMade: 0, stallCount: 0 });
       expect(new Set(shuttingDownProcess.logLines.map((line) => line.message))).toEqual(
-        new Set(["worker started", "attempt started", "run yielded at shutdown", "worker stopped"]),
+        new Set(["schedule added", "worker started", "attempt started", "run yielded at shutdown", "worker stopped"]),
       );
       expect(shuttingDownProcess.logLines.filter((line) => line.message === "attempt started")).toHaveLength(1);
       expect(shuttingDownProcess.logLines.at(-1)?.message).toBe("worker stopped");

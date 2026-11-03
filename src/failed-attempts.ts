@@ -12,6 +12,16 @@ export class StalledRunError extends Error {
   }
 }
 
+export class UnknownTaskRunError extends Error {
+  override readonly name = "UnknownTaskRunError";
+
+  constructor(taskName: string, runId: RunId, giveUpDelay: string) {
+    super(
+      `No worker defined task "${taskName}" within ${giveUpDelay} after a worker first found run "${runId}" unknown.`,
+    );
+  }
+}
+
 const NON_RETRIABLE_ERROR_NAMES = new Set(["NonRetriableError", "StepMisuseError"]);
 
 export function failureReasonFor(error: Error, retriesLeft: number): FailureReason | undefined {

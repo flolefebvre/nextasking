@@ -1,17 +1,27 @@
-import { DelayedError, ErrorCode, Job, WaitingError, Worker } from "bullmq";
+import { DelayedError, ErrorCode, Job, UnrecoverableError, WaitingError, Worker } from "bullmq";
 import type { MinimalJob } from "bullmq";
 
 import { AttemptAbortedError, abortCauseOf } from "./attempt-abort.js";
 import type { AttemptAbortCause } from "./attempt-abort.js";
 import { settleWithinTimeout } from "./attempt-timeout.js";
 import { backoffInMillisecondsFor } from "./backoff.js";
+import { setTimeout as sleep } from "node:timers/promises";
+
+import { createConcurrencySlots } from "./concurrency-slots.js";
+import type { ConcurrencySlot } from "./concurrency-slots.js";
 import { closeRedisClient, createRedisClient } from "./connection.js";
 import type { ConnectionConfig } from "./connection.js";
-import { backoffOf, retriesOf } from "./definitions.js";
+import { backoffOf, concurrencyKeyOf, retriesOf } from "./definitions.js";
 import type { AnyTaskDefinition, EventDefinition, ScheduledTaskContext, TaskContext } from "./definitions.js";
-import { parseDuration } from "./durations.js";
+import { parseDuration, shownDurationOf } from "./durations.js";
 import type { Duration, DurationInMilliseconds, EpochMilliseconds } from "./durations.js";
-import { StalledRunError, errorFromThrownValue, errorRecordFor, failureReasonFor } from "./failed-attempts.js";
+import {
+  StalledRunError,
+  UnknownTaskRunError,
+  errorFromThrownValue,
+  errorRecordFor,
+  failureReasonFor,
+} from "./failed-attempts.js";
 import { deriveFiringRunId } from "./ids.js";
 import type { RunId } from "./ids.js";
 import { loggerWithFields } from "./logger.js";
@@ -22,6 +32,7 @@ import { FIRING_JOB_NAME, RUN_QUEUE_NAME, plannedInstantOfFiring, scheduledAtOf 
 import type { FailureReason, RunQueue, StoredFanOut, StoredFiring, StoredRun } from "./run-queue.js";
 import { openStepEngine } from "./step-engine.js";
 import type { HandlerOutcome } from "./step-engine.js";
+import { handBackUnlessGivenUp } from "./unknown-name-hand-back.js";
 import { bullmqMaxStalledCountOf, workerTiming } from "./worker-timing.js";
 
 export type RunningWorker = {
@@ -96,12 +107,12 @@ const LOCK_ERROR_CODES = new Set<unknown>([ErrorCode.JobLockNotExist, ErrorCode.
 
 let isWorkerRunningInThisProcess = false;
 
-async function handBackAtShutdown(job: Job, token: string | undefined, runLogger: Logger): Promise<never> {
-  const isHandedBack = await job.moveToWait(token).then(
+async function yieldAtShutdown(job: Job, token: string | undefined, runLogger: Logger): Promise<never> {
+  const isYielded = await job.moveToWait(token).then(
     () => true,
     () => false,
   );
-  if (isHandedBack) {
+  if (isYielded) {
     runLogger.debug({}, "run yielded at shutdown");
   }
   throw new WaitingError();
@@ -157,14 +168,45 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
 
   const executeRunAttempt = async (task: AnyTaskDefinition, job: Job<StoredRun>, token: string | undefined) => {
     if (isDraining) {
-      return handBackAtShutdown(job, token, runLoggerOf(job, job.attemptsMade + 1));
+      return yieldAtShutdown(job, token, runLoggerOf(job, job.attemptsMade + 1));
     }
     const trackedAttempt = trackAttemptInFlight(job, job.data.runId);
+    const concurrencySlot = concurrencySlots.slotFor(job, token ?? "", () => {
+      trackedAttempt.abortAttempt("lock lost");
+    });
     try {
-      await executeTrackedRunAttempt(task, job, token, trackedAttempt);
+      await executeTrackedRunAttempt(task, job, token, trackedAttempt, concurrencySlot);
     } finally {
       trackedAttempt.untrack();
+      await concurrencySlot.release();
     }
+  };
+
+  const takeConcurrencySlotOrPark = async (
+    task: AnyTaskDefinition,
+    job: Job<StoredRun>,
+    concurrencySlot: ConcurrencySlot,
+    park: () => Promise<void>,
+    runLogger: Logger,
+  ): Promise<"taken" | "parked"> => {
+    if (task.concurrency === undefined) {
+      return "taken";
+    }
+    const concurrencyKey = job.data.concurrencyKey ?? concurrencyKeyOf(task, job.data.payload);
+    const slotTaking = await concurrencySlot.take(task.concurrency.limit, concurrencyKey);
+    if (slotTaking === "taken after waiting") {
+      runLogger.debug({}, "run got a concurrency slot");
+    }
+    if (slotTaking !== "waiting") {
+      return "taken";
+    }
+    if (timing.testOnlyPauseBeforeParkingInMilliseconds > 0) {
+      await sleep(timing.testOnlyPauseBeforeParkingInMilliseconds);
+    }
+    await park();
+    runLogger.debug({}, "run waiting for a concurrency slot");
+    await concurrencySlot.wakeOldestWaitingRunIfASlotIsFree();
+    return "parked";
   };
 
   const executeTrackedRunAttempt = async (
@@ -172,14 +214,16 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
     job: Job<StoredRun>,
     token: string | undefined,
     { abortSignal, abortAttempt }: TrackedAttempt,
+    concurrencySlot: ConcurrencySlot,
   ) => {
-    const stretchStartedAt = Date.now();
+    let stretchStartedAt = Date.now();
     const { runId, payload } = job.data;
     const attempt = job.attemptsMade + 1;
     const runLogger = runLoggerOf(job, attempt);
     const durationFieldsAt = (runEndedAt: number) => runDurationFieldsOf(job, stretchStartedAt, runEndedAt);
     const handler = task.handler as AnyTaskHandler;
     const handOff = async (moveJob: () => Promise<unknown>) => {
+      concurrencySlot.stopRenewing();
       try {
         await moveJob();
       } catch (error) {
@@ -191,6 +235,17 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
     };
     let outcome: HandlerOutcome;
     try {
+      const slotTaking = await takeConcurrencySlotOrPark(
+        task,
+        job,
+        concurrencySlot,
+        () => handOff(() => job.moveToDelayed(Date.now() + timing.concurrencySlotSafetyDelayInMilliseconds, token)),
+        runLogger,
+      );
+      if (slotTaking === "parked") {
+        throw new DelayedError();
+      }
+      stretchStartedAt = Date.now();
       const stepEngine = await openStepEngine({
         taskName: task.name,
         runId,
@@ -232,13 +287,16 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
         await handOff(() => job.moveToWait(token));
       }
     } catch (thrownValue) {
+      if (thrownValue instanceof DelayedError) {
+        throw thrownValue;
+      }
       const abortCause = abortCauseOf(abortSignal);
       if (abortCause === "lock lost") {
         runLogger.debug({}, "attempt aborted: lock lost");
         throw thrownValue;
       }
       if (abortCause === "shutdown deadline") {
-        return handBackAtShutdown(job, token, runLogger);
+        return yieldAtShutdown(job, token, runLogger);
       }
       const error = errorFromThrownValue(thrownValue);
       const failedAt = new Date();
@@ -300,6 +358,7 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
         (job === undefined ? undefined : backoffInMillisecondsByFailedJob.get(job)) ?? NO_RETRY,
     },
   });
+  const concurrencySlots = createConcurrencySlots(client, worker, timing.lockDurationInMilliseconds);
   async function enqueueFiringRun(firingJob: Job<StoredFiring>): Promise<void> {
     const { taskName } = firingJob.data;
     const plannedInstant: EpochMilliseconds = plannedInstantOfFiring(firingJob.id, taskName);
@@ -329,18 +388,50 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
       await config.openRunQueue().enqueueListenerRuns(
         job.name,
         fanOut,
-        fanOut.listenerNames.map((listenerName) => ({
-          listenerName,
-          retries: retriesOf(config.tasksByName.get(listenerName)),
-        })),
+        fanOut.listenerNames.map((listenerName) => {
+          const listener = config.tasksByName.get(listenerName);
+          return {
+            listenerName,
+            retries: retriesOf(listener),
+            concurrencyKey: listener === undefined ? undefined : concurrencyKeyOf(listener, fanOut.payload),
+          };
+        }),
       );
       return;
     }
     const task = config.tasksByName.get(job.name);
-    if (task === undefined) {
-      throw new Error(`Unknown task "${job.name}"`);
+    if (task !== undefined) {
+      await executeRunAttempt(task, job as Job<StoredRun>, token);
+      return;
     }
-    await executeRunAttempt(task, job as Job<StoredRun>, token);
+    if ("listenerNames" in (job.data as object)) {
+      await handBackFanOutOfUnknownEvent(job as Job<StoredFanOut>, token);
+      return;
+    }
+    await handBackRunOfUnknownTask(job as Job<StoredRun>, token);
+  }
+  async function handBackRunOfUnknownTask(job: Job<StoredRun>, token: string | undefined): Promise<void> {
+    const runLogger = runLoggerOf(job, job.attemptsMade + 1);
+    if ((await handBackUnlessGivenUp(job, token, timing)) === "handed back") {
+      runLogger.debug({}, "run handed back: unknown task");
+      throw new DelayedError();
+    }
+    const error = new UnknownTaskRunError(
+      job.name,
+      job.data.runId,
+      shownDurationOf(timing.unknownNameGiveUpDelayInMilliseconds),
+    );
+    await recordFinalFailure(job, error, "unknown task", job.attemptsMade + 1, Date.now());
+    throw error;
+  }
+  async function handBackFanOutOfUnknownEvent(job: Job<StoredFanOut>, token: string | undefined): Promise<void> {
+    if ((await handBackUnlessGivenUp(job, token, timing)) === "handed back") {
+      config.logger.debug({ eventName: job.name, eventId: job.data.eventId }, "fan-out handed back: unknown event");
+      throw new DelayedError();
+    }
+    throw new UnrecoverableError(
+      `No worker defined event "${job.name}" within ${shownDurationOf(timing.unknownNameGiveUpDelayInMilliseconds)} after a worker first found event "${job.data.eventId}" unknown.`,
+    );
   }
   const logAttemptStalled = async (jobId: string) => {
     const job = (await Job.fromId(worker, jobId)) as Job<StoredRun> | undefined;
@@ -348,25 +439,33 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
       runLoggerOf(job, job.attemptsMade + 1).warn({}, "attempt stalled");
     }
   };
-  const failRunForStalling = async (job: Job<StoredRun>) => {
+  async function recordFinalFailure(
+    job: Job<StoredRun>,
+    error: Error,
+    reason: FailureReason,
+    attempt: number,
+    executionStartedAt: EpochMilliseconds,
+  ): Promise<void> {
     const failedAt = new Date();
-    const error = new StalledRunError(job.data.runId, timing.stallCountThatFailsARun);
-    const reason: FailureReason = "stalled";
     await job.updateData({
       ...job.data,
-      errors: [...job.data.errors, errorRecordFor(error, job.attemptsMade, failedAt)],
+      errors: [...job.data.errors, errorRecordFor(error, attempt, failedAt)],
       reason,
     });
     await keepSavedStepsForFailedRunRetention(client, job).catch(() => undefined);
-    runLoggerOf(job, job.attemptsMade).error(
-      {
-        err: error,
-        reason,
-        ...runDurationFieldsOf(job, job.processedOn ?? failedAt.getTime(), failedAt.getTime()),
-      },
+    runLoggerOf(job, attempt).error(
+      { err: error, reason, ...runDurationFieldsOf(job, executionStartedAt, failedAt.getTime()) },
       "run failed",
     );
-  };
+  }
+  const failRunForStalling = (job: Job<StoredRun>) =>
+    recordFinalFailure(
+      job,
+      new StalledRunError(job.data.runId, timing.stallCountThatFailsARun),
+      "stalled",
+      job.attemptsMade,
+      job.processedOn ?? Date.now(),
+    );
   worker.on("error", () => undefined);
   worker.on("lockRenewalFailed", (jobIds) => {
     for (const jobId of jobIds) {

@@ -3,6 +3,7 @@ import type { JobsOptions } from "bullmq";
 
 import { closeRedisClient, createRedisClient } from "./connection.js";
 import type { ConnectionConfig } from "./connection.js";
+import type { ConcurrencyKey } from "./definitions.js";
 import type { DurationInMilliseconds, EpochMilliseconds } from "./durations.js";
 import { createRandomId, deriveJobId, deriveListenerRunId } from "./ids.js";
 import type { EventId, JobId, RunId } from "./ids.js";
@@ -40,13 +41,15 @@ export type ErrorRecord = {
   failedAt: string;
 };
 
-export type FailureReason = "retries exhausted" | "non-retriable" | "stalled";
+export type FailureReason = "retries exhausted" | "non-retriable" | "stalled" | "unknown task";
 
 export type StoredRun = {
   runId: RunId;
   payload: unknown;
   sourceEvent?: SourceEvent;
   scheduledAt?: IsoTimestamp;
+  concurrencyKey?: ConcurrencyKey;
+  firstFoundUnknownAt?: IsoTimestamp;
   errors: ErrorRecord[];
   reason?: FailureReason;
   writeToken: WriteToken;
@@ -56,6 +59,7 @@ export type StoredFanOut = {
   eventId: EventId;
   payload: unknown;
   listenerNames: readonly string[];
+  firstFoundUnknownAt?: IsoTimestamp;
   writeToken: WriteToken;
 };
 
@@ -63,7 +67,7 @@ export type StoredFiring = {
   taskName: string;
 };
 
-type IsoTimestamp = string;
+export type IsoTimestamp = string;
 
 export type RunToEnqueue = {
   runId: RunId;
@@ -71,6 +75,7 @@ export type RunToEnqueue = {
   retries: number;
   delayInMilliseconds?: DurationInMilliseconds;
   scheduledAt?: Date;
+  concurrencyKey?: ConcurrencyKey;
 };
 
 export function scheduledAtOf(storedRun: StoredRun): Date | undefined {
@@ -95,6 +100,7 @@ export type FanOutToEnqueue = {
 export type ListenerRunToEnqueue = {
   listenerName: string;
   retries: number;
+  concurrencyKey: ConcurrencyKey | undefined;
 };
 
 export type EnqueueOutcome = {
@@ -158,6 +164,7 @@ export function createRunQueue(connection: ConnectionConfig, prefix: string): Ru
           runId: run.runId,
           payload: run.payload,
           ...(run.scheduledAt === undefined ? {} : { scheduledAt: run.scheduledAt.toISOString() }),
+          ...(run.concurrencyKey === undefined ? {} : { concurrencyKey: run.concurrencyKey }),
           errors: [],
           writeToken: createRandomId(),
         },
@@ -178,13 +185,14 @@ export function createRunQueue(connection: ConnectionConfig, prefix: string): Ru
     enqueueListenerRuns: async (eventName, fanOut, listenerRuns) => {
       const sourceEvent = { eventName, eventId: fanOut.eventId };
       await queue.addBulk(
-        listenerRuns.map(({ listenerName, retries }) =>
+        listenerRuns.map(({ listenerName, retries, concurrencyKey }) =>
           jobForRun(
             listenerName,
             {
               runId: deriveListenerRunId(fanOut.eventId, listenerName),
               payload: fanOut.payload,
               sourceEvent,
+              ...(concurrencyKey === undefined ? {} : { concurrencyKey }),
               errors: [],
               writeToken: createRandomId(),
             },

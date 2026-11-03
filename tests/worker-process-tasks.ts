@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import { z } from "zod";
 
@@ -36,6 +37,44 @@ async function waitForAbort(abortSignal: AbortSignal): Promise<void> {
 
 function messageOf(value: unknown): string {
   return value instanceof Error ? value.message : String(value);
+}
+
+export type LimitedExecutionRecord = {
+  runId: string;
+  executionId: string;
+  pid: number;
+  attempt: number;
+  concurrencyKey: string;
+  event: "started" | "ended";
+  at: number;
+};
+
+const limitedExecutionSchema = z.object({ concurrencyKey: z.string(), workInMilliseconds: z.int() });
+
+function limitedExecutionTask<const TaskName extends string>(
+  writeRecord: WriteRecord,
+  taskName: TaskName,
+  concurrency: { limit: number; isKeyed: boolean },
+) {
+  return defineTask(taskName, {
+    schema: limitedExecutionSchema,
+    concurrency: {
+      limit: concurrency.limit,
+      ...(concurrency.isKeyed ? { key: (payload: { concurrencyKey: string }) => payload.concurrencyKey } : {}),
+    },
+    handler: async ({ payload, runId, attempt }) => {
+      const executionRecord = {
+        runId,
+        executionId: randomUUID(),
+        pid: process.pid,
+        attempt,
+        concurrencyKey: concurrency.isKeyed ? payload.concurrencyKey : "",
+      };
+      await writeRecord(taskName, { ...executionRecord, event: "started", at: Date.now() });
+      await sleep(payload.workInMilliseconds);
+      await writeRecord(taskName, { ...executionRecord, event: "ended", at: Date.now() });
+    },
+  });
 }
 
 export function workerProcessTasks(writeRecord: WriteRecord) {
@@ -98,7 +137,21 @@ export function workerProcessTasks(writeRecord: WriteRecord) {
     },
   });
 
+  const holdConcurrencySlot = defineTask("hold-concurrency-slot", {
+    schema: z.object({}),
+    concurrency: { limit: 1 },
+    handler: async ({ abortSignal }) => {
+      await writeRecord("hold-concurrency-slot", { event: "started" });
+      await waitForAbort(abortSignal);
+      await writeRecord("hold-concurrency-slot", { event: "aborted", abortReason: messageOf(abortSignal.reason) });
+    },
+  });
+
   return [
+    limitedExecutionTask(writeRecord, "one-per-key", { limit: 1, isKeyed: true }),
+    limitedExecutionTask(writeRecord, "two-per-key", { limit: 2, isKeyed: true }),
+    limitedExecutionTask(writeRecord, "three-in-all", { limit: 3, isKeyed: false }),
+    holdConcurrencySlot,
     blockEventLoopTask,
     recordAbortAfterBlocking,
     waitThenRecord,

@@ -5,6 +5,10 @@ export type WorkerTiming = {
   stallIntervalInMilliseconds: DurationInMilliseconds;
   stallCountThatFailsARun: number;
   abortedAttemptsGraceInMilliseconds: DurationInMilliseconds;
+  concurrencySlotSafetyDelayInMilliseconds: DurationInMilliseconds;
+  unknownNameHandBackDelayInMilliseconds: DurationInMilliseconds;
+  unknownNameGiveUpDelayInMilliseconds: DurationInMilliseconds;
+  testOnlyPauseBeforeParkingInMilliseconds: DurationInMilliseconds;
 };
 
 export const DEFAULT_WORKER_TIMING: WorkerTiming = {
@@ -12,6 +16,10 @@ export const DEFAULT_WORKER_TIMING: WorkerTiming = {
   stallIntervalInMilliseconds: 30 * 1000,
   stallCountThatFailsARun: 3,
   abortedAttemptsGraceInMilliseconds: 1000,
+  concurrencySlotSafetyDelayInMilliseconds: 2 * 60 * 1000,
+  unknownNameHandBackDelayInMilliseconds: 10 * 1000,
+  unknownNameGiveUpDelayInMilliseconds: 30 * 60 * 1000,
+  testOnlyPauseBeforeParkingInMilliseconds: 0,
 };
 
 let currentWorkerTiming: WorkerTiming = DEFAULT_WORKER_TIMING;

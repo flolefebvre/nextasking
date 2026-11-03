@@ -2,12 +2,16 @@ import { expect, test } from "vitest";
 
 import { DEFAULT_WORKER_TIMING, bullmqMaxStalledCountOf } from "./worker-timing.js";
 
-test("holds a 2-minute lock, a 30-second stall check, 3 stalls to fail a run and a 1-second abort grace", () => {
+test("holds a 2-minute lock, a 30-second stall check, 3 stalls to fail a run, a 1-second abort grace, a 2-minute safety delay for waiting runs, and a 10-second hand-back given up after 30 minutes for an unknown name", () => {
   expect(DEFAULT_WORKER_TIMING).toEqual({
     lockDurationInMilliseconds: 120_000,
     stallIntervalInMilliseconds: 30_000,
     stallCountThatFailsARun: 3,
     abortedAttemptsGraceInMilliseconds: 1000,
+    concurrencySlotSafetyDelayInMilliseconds: 120_000,
+    unknownNameHandBackDelayInMilliseconds: 10_000,
+    unknownNameGiveUpDelayInMilliseconds: 1_800_000,
+    testOnlyPauseBeforeParkingInMilliseconds: 0,
   });
 });
 

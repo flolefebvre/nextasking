@@ -83,7 +83,7 @@ export const recordInvoicePayment = defineListener("record-invoice-payment", {
 ```
 
 - The payload is the event's schema output: a listener has no `schema` of its own.
-- It takes every task option (`retries`, `backoff`, `timeout`, `concurrency`) and the same handler context. See [Retries and failures](retries-and-failures.md) for the first three.
+- It takes every task option (`retries`, `backoff`, `timeout`, `concurrency`) and the same handler context. See [Retries and failures](retries-and-failures.md) for the first three and [Concurrency](concurrency.md) for `concurrency`.
 - `on` takes the event definition, not its name.
 - Give each reaction its own listener: one event can have any number of them, and each gets its own run.
 

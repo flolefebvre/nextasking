@@ -112,6 +112,30 @@ export function backoffOf(task: AnyTaskDefinition): Duration {
   return task.backoff ?? DEFAULT_BACKOFF;
 }
 
+export type ConcurrencyKey = string;
+
+export function concurrencyKeyOf(task: AnyTaskDefinition, payload: unknown): ConcurrencyKey | undefined {
+  const computeKey = task.concurrency?.key as ((payload: unknown) => unknown) | undefined;
+  if (computeKey === undefined) {
+    return undefined;
+  }
+  const invalidKeyMessage = `Task "${task.name}" has an invalid concurrency.key`;
+  let concurrencyKey: unknown;
+  try {
+    concurrencyKey = computeKey(payload);
+  } catch (error) {
+    const thrownMessage = error instanceof Error ? error.message : String(error);
+    throw new Error(`${invalidKeyMessage}: it threw ${JSON.stringify(thrownMessage)}`, { cause: error });
+  }
+  if (typeof concurrencyKey !== "string" || concurrencyKey === "") {
+    const returnedType = typeof concurrencyKey;
+    const returnedValue =
+      concurrencyKey === "" ? "an empty string" : `${/^[aeiou]/.test(returnedType) ? "an" : "a"} ${returnedType}`;
+    throw new Error(`${invalidKeyMessage}: it returned ${returnedValue}, not a non-empty string`);
+  }
+  return concurrencyKey;
+}
+
 export async function validatePayload(
   definitionKind: DefinitionKind,
   definition: { readonly name: string; readonly schema: PayloadSchema },

@@ -70,12 +70,12 @@ export const renderReport = defineTask("render-report", {
 
 ## What a failed run keeps
 
-A run fails for good when its last attempt fails, when it throws `NonRetriableError` or misuses a step, or when it stalls a third time with no step saved in between (see [Worker](worker.md#stalls)). It is then kept:
+A run fails for good when its last attempt fails, when it throws `NonRetriableError` or misuses a step, when it stalls a third time with no step saved in between (see [Worker](worker.md#stalls)), or when no worker defines its task for 30 minutes (see [Worker](worker.md#overlapping-releases)). It is then kept:
 
 - for 14 days, and at most 10,000 failed runs and fan-outs per queue: the oldest are removed first;
 - with its payload and its saved steps;
 - with one error record per failed attempt: `{ attempt, name, message, stack, failedAt }`, `failedAt` an ISO string;
-- with its `reason`: `"retries exhausted"`, `"non-retriable"` or `"stalled"`; a stalled run's last error record is named `StalledRunError`.
+- with its `reason`: `"retries exhausted"`, `"non-retriable"`, `"stalled"` or `"unknown task"`; a stalled run's last error record is named `StalledRunError`, an unknown task's `UnknownTaskRunError`.
 
 A thrown value that isn't an `Error`, such as `throw "boom"`, is recorded and logged as an `Error` whose message is that value as a string.
 

@@ -30,6 +30,7 @@ import { createRedisStepStore, keepSavedStepsForFailedRunRetention, removeSavedS
 import type { DispatchByName, EmitByName } from "./registry.js";
 import { FIRING_JOB_NAME, RUN_QUEUE_NAME, plannedInstantOfFiring, scheduledAtOf } from "./run-queue.js";
 import type { FailureReason, RunQueue, StoredFanOut, StoredFiring, StoredRun } from "./run-queue.js";
+import { attemptOf } from "./run-states.js";
 import { openStepEngine } from "./step-engine.js";
 import type { HandlerOutcome } from "./step-engine.js";
 import { handBackUnlessGivenUp } from "./unknown-name-hand-back.js";
@@ -168,7 +169,7 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
 
   const executeRunAttempt = async (task: AnyTaskDefinition, job: Job<StoredRun>, token: string | undefined) => {
     if (isDraining) {
-      return yieldAtShutdown(job, token, runLoggerOf(job, job.attemptsMade + 1));
+      return yieldAtShutdown(job, token, runLoggerOf(job, attemptOf(job, "executing")));
     }
     const trackedAttempt = trackAttemptInFlight(job, job.data.runId);
     const concurrencySlot = concurrencySlots.slotFor(job, token ?? "", () => {
@@ -218,7 +219,7 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
   ) => {
     let stretchStartedAt = Date.now();
     const { runId, payload } = job.data;
-    const attempt = job.attemptsMade + 1;
+    const attempt = attemptOf(job, "executing");
     const runLogger = runLoggerOf(job, attempt);
     const durationFieldsAt = (runEndedAt: number) => runDurationFieldsOf(job, stretchStartedAt, runEndedAt);
     const handler = task.handler as AnyTaskHandler;
@@ -411,7 +412,7 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
     await handBackRunOfUnknownTask(job as Job<StoredRun>, token);
   }
   async function handBackRunOfUnknownTask(job: Job<StoredRun>, token: string | undefined): Promise<void> {
-    const runLogger = runLoggerOf(job, job.attemptsMade + 1);
+    const runLogger = runLoggerOf(job, attemptOf(job, "executing"));
     if ((await handBackUnlessGivenUp(job, token, timing)) === "handed back") {
       runLogger.debug({}, "run handed back: unknown task");
       throw new DelayedError();
@@ -421,7 +422,7 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
       job.data.runId,
       shownDurationOf(timing.unknownNameGiveUpDelayInMilliseconds),
     );
-    await recordFinalFailure(job, error, "unknown task", job.attemptsMade + 1, Date.now());
+    await recordFinalFailure(job, error, "unknown task", attemptOf(job, "executing"), Date.now());
     throw error;
   }
   async function handBackFanOutOfUnknownEvent(job: Job<StoredFanOut>, token: string | undefined): Promise<void> {
@@ -436,7 +437,7 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
   const logAttemptStalled = async (jobId: string) => {
     const job = (await Job.fromId(worker, jobId)) as Job<StoredRun> | undefined;
     if (job !== undefined && config.tasksByName.has(job.name)) {
-      runLoggerOf(job, job.attemptsMade + 1).warn({}, "attempt stalled");
+      runLoggerOf(job, attemptOf(job, "executing")).warn({}, "attempt stalled");
     }
   };
   async function recordFinalFailure(
@@ -476,7 +477,10 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
     removeSavedSteps(client, job).catch(() => undefined);
     const durationFields = durationFieldsByCompletedJob.get(job);
     if (durationFields !== undefined) {
-      runLoggerOf(job as Job<StoredRun>, job.attemptsMade).info(durationFields, "run completed");
+      runLoggerOf(job as Job<StoredRun>, attemptOf(job as Job<StoredRun>, "completed")).info(
+        durationFields,
+        "run completed",
+      );
     }
   });
   worker.on("stalled", (jobId) => {

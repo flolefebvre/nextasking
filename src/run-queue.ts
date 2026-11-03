@@ -43,6 +43,12 @@ export type ErrorRecord = {
 
 export type FailureReason = "retries exhausted" | "non-retriable" | "stalled" | "unknown task";
 
+export type StoredDelayedRunState =
+  | { state: "waitingForConcurrencySlot" }
+  | { state: "suspended"; resumesAt: IsoTimestamp }
+  | { state: "backingOff"; nextAttemptAt: IsoTimestamp }
+  | { state: "pending" };
+
 export type StoredRun = {
   runId: RunId;
   payload: unknown;
@@ -52,6 +58,7 @@ export type StoredRun = {
   firstFoundUnknownAt?: IsoTimestamp;
   errors: ErrorRecord[];
   reason?: FailureReason;
+  delayedRunState?: StoredDelayedRunState;
   writeToken: WriteToken;
 };
 

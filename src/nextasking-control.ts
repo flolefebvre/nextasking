@@ -1,4 +1,5 @@
 import { Job } from "bullmq";
+import type { Redis } from "ioredis";
 import { setTimeout as sleep } from "node:timers/promises";
 
 import { createRedisConnections } from "./connection.js";
@@ -15,6 +16,7 @@ import { FIRING_JOB_NAME, createRunQueue } from "./run-queue.js";
 import type { RunQueue, StoredRun } from "./run-queue.js";
 import { BULLMQ_JOB_STATE_BY_SET, runStateOf } from "./run-states.js";
 import type { BullmqJobSet, RunState } from "./run-states.js";
+import { timezoneOf } from "./schedules.js";
 
 export type NextaskingControlOptions = {
   connection: ConnectionConfig;
@@ -25,6 +27,7 @@ export type NextaskingControl = {
   readonly waitForIdle: (options?: { timeout?: Duration }) => Promise<void>;
   readonly makeRunsDueNow: (options?: { task?: string }) => Promise<{ task: string; runId: RunId }[]>;
   readonly fireSchedule: (taskName: string) => Promise<{ runId: RunId }>;
+  readonly reset: (options?: { timeout?: Duration }) => Promise<void>;
   readonly close: () => Promise<void>;
   readonly [Symbol.asyncDispose]: () => Promise<void>;
 };
@@ -149,9 +152,61 @@ export function createNextaskingControl(options: NextaskingControlOptions): Next
         return { runId: deriveFiringRunId(taskName, plannedInstant) };
       }),
 
+    reset: async ({ timeout = DEFAULT_TIMEOUT } = {}) => {
+      if (process.env.NODE_ENV === "production") {
+        throw new Error(
+          "reset() removes every key under the prefix, so it refuses to run in a process whose NODE_ENV is production",
+        );
+      }
+      const deadline = Date.now() + timeoutInMillisecondsOf("reset", timeout);
+      await callOnQueue(async (openRunQueue) => {
+        for (;;) {
+          const executingCount = await openRunQueue.bullmqQueue.getActiveCount();
+          if (executingCount === 0) {
+            break;
+          }
+          if (Date.now() >= deadline) {
+            throw new Error(`reset() found attempts still executing after ${timeout}: ${executingCount} executing`);
+          }
+          await sleep(POLL_INTERVAL_IN_MILLISECONDS);
+        }
+        const storedSchedulers = await openRunQueue.bullmqQueue.getJobSchedulers(0, -1);
+        await unlinkKeysUnder(openRunQueue.client, prefix);
+        await openRunQueue.syncSchedules(
+          storedSchedulers.flatMap((storedScheduler) =>
+            storedScheduler.pattern === undefined || storedScheduler.pattern === null
+              ? []
+              : [
+                  {
+                    taskName: storedScheduler.key,
+                    cron: storedScheduler.pattern,
+                    timezone: timezoneOf({ cron: storedScheduler.pattern, timezone: storedScheduler.tz ?? undefined }),
+                  },
+                ],
+          ),
+        );
+      });
+    },
+
     close,
     [Symbol.asyncDispose]: close,
   };
+}
+
+const KEYS_SCANNED_PER_CALL = 1000;
+
+const GLOB_SPECIAL_CHARACTERS = /[*?[\]\\]/g;
+
+async function unlinkKeysUnder(client: Redis, prefix: string): Promise<void> {
+  const keyPattern = `${prefix.replace(GLOB_SPECIAL_CHARACTERS, (character) => `\\${character}`)}:*`;
+  let cursor = "0";
+  do {
+    const [nextCursor, keys] = await client.scan(cursor, "MATCH", keyPattern, "COUNT", KEYS_SCANNED_PER_CALL);
+    if (keys.length > 0) {
+      await client.unlink(...keys);
+    }
+    cursor = nextCursor;
+  } while (cursor !== "0");
 }
 
 function storedJobOf(

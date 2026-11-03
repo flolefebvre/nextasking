@@ -15,6 +15,7 @@ export type JobOnServer = {
 export type FinishReportingWorkerEvent = "completed" | "failed";
 
 export type FinishInFlight = {
+  token: string | undefined;
   reportedBy: FinishReportingWorkerEvent;
   isConfirmedBy: (jobOnServer: JobOnServer) => boolean;
   onConfirmed: (jobOnServer?: JobOnServer) => void;
@@ -58,16 +59,19 @@ function isCompletedByActivation(processedOn: EpochMilliseconds | undefined) {
 
 export function runCompletionInFlight({
   processedOn,
+  token,
   runLogger,
   durationFields,
   removeSavedSteps,
 }: {
   processedOn: EpochMilliseconds | undefined;
+  token: string | undefined;
   runLogger: Logger;
   durationFields: RunDurationFields;
   removeSavedSteps: () => Promise<void>;
 }): FinishInFlight {
   return {
+    token,
     reportedBy: "completed",
     isConfirmedBy: isCompletedByActivation(processedOn),
     onConfirmed: () => {
@@ -82,9 +86,11 @@ export function runCompletionInFlight({
 
 function silentCompletionInFlight(
   processedOn: EpochMilliseconds | undefined,
+  token: string | undefined,
   warnCompletionUnconfirmed: (error: unknown) => void,
 ): FinishInFlight {
   return {
+    token,
     reportedBy: "completed",
     isConfirmedBy: isCompletedByActivation(processedOn),
     onConfirmed: () => undefined,
@@ -94,32 +100,36 @@ function silentCompletionInFlight(
 
 export function fanOutCompletionInFlight({
   processedOn,
+  token,
   logger,
   eventName,
   eventId,
 }: {
   processedOn: EpochMilliseconds | undefined;
+  token: string | undefined;
   logger: Logger;
   eventName: string;
   eventId: string;
 }): FinishInFlight {
-  return silentCompletionInFlight(processedOn, (error) => {
+  return silentCompletionInFlight(processedOn, token, (error) => {
     logger.warn({ eventName, eventId, err: error }, "fan-out completion unconfirmed");
   });
 }
 
 export function firingCompletionInFlight({
   processedOn,
+  token,
   logger,
   taskName,
   scheduledAt,
 }: {
   processedOn: EpochMilliseconds | undefined;
+  token: string | undefined;
   logger: Logger;
   taskName: string;
   scheduledAt: Date;
 }): FinishInFlight {
-  return silentCompletionInFlight(processedOn, (error) => {
+  return silentCompletionInFlight(processedOn, token, (error) => {
     logger.warn(
       { task: taskName, scheduledAt: scheduledAt.toISOString(), err: error },
       "firing completion unconfirmed",
@@ -129,24 +139,70 @@ export function firingCompletionInFlight({
 
 const STATES_AFTER_A_STORED_FAILURE = new Set(["failed", "delayed", "waiting"]);
 
+const STATES_AFTER_A_STORED_FINAL_FAILURE = new Set(["failed"]);
+
+function isFailureStoredByActivation(
+  statesAfterTheFailure: ReadonlySet<string>,
+  processedOn: EpochMilliseconds | undefined,
+  attemptsMade: number,
+) {
+  return (jobOnServer: JobOnServer) =>
+    statesAfterTheFailure.has(jobOnServer.state) &&
+    processedOn !== undefined &&
+    jobOnServer.processedOn === processedOn &&
+    jobOnServer.attemptsMade === attemptsMade + 1;
+}
+
+export function fanOutFailureInFlight({
+  processedOn,
+  attemptsMade,
+  token,
+  logger,
+  eventName,
+  eventId,
+  recordFanOutFailure,
+}: {
+  processedOn: EpochMilliseconds | undefined;
+  attemptsMade: number;
+  token: string | undefined;
+  logger: Logger;
+  eventName: string;
+  eventId: string;
+  recordFanOutFailure: () => Promise<void>;
+}): FinishInFlight {
+  const warnFailureUnconfirmed = (error: unknown) => {
+    logger.warn({ eventName, eventId, err: error }, "fan-out failure unconfirmed");
+  };
+  return {
+    token,
+    reportedBy: "failed",
+    isConfirmedBy: isFailureStoredByActivation(STATES_AFTER_A_STORED_FINAL_FAILURE, processedOn, attemptsMade),
+    onConfirmed: (jobOnServer) => {
+      if (jobOnServer !== undefined) {
+        recordFanOutFailure().catch(warnFailureUnconfirmed);
+      }
+    },
+    onUnconfirmed: warnFailureUnconfirmed,
+  };
+}
+
 export function runFailureInFlight({
   processedOn,
   attemptsMade,
+  token,
   runLogger,
   sendFailureNotice,
 }: {
   processedOn: EpochMilliseconds | undefined;
   attemptsMade: number;
+  token: string | undefined;
   runLogger: Logger;
   sendFailureNotice: () => Promise<void>;
 }): FinishInFlight {
   return {
+    token,
     reportedBy: "failed",
-    isConfirmedBy: (jobOnServer) =>
-      STATES_AFTER_A_STORED_FAILURE.has(jobOnServer.state) &&
-      processedOn !== undefined &&
-      jobOnServer.processedOn === processedOn &&
-      jobOnServer.attemptsMade === attemptsMade + 1,
+    isConfirmedBy: isFailureStoredByActivation(STATES_AFTER_A_STORED_FAILURE, processedOn, attemptsMade),
     onConfirmed: (jobOnServer) => {
       if (jobOnServer?.state === "failed") {
         sendFailureNotice().catch(() => undefined);
@@ -160,12 +216,33 @@ export function runFailureInFlight({
 
 export function createFinishesInFlight({
   readJobOnServer,
+  findActiveJobIdLockedBy,
+  moveActiveJobToWait,
+  logger,
   logWorkerError,
 }: {
   readJobOnServer: (jobId: string) => Promise<JobOnServer | undefined>;
+  findActiveJobIdLockedBy: (token: string) => Promise<string | undefined>;
+  moveActiveJobToWait: (jobId: string, token: string) => Promise<void>;
+  logger: Logger;
   logWorkerError: (error: unknown) => void;
 }): FinishesInFlight {
   const finishesByJobId = new Map<string, TrackedFinish>();
+
+  const handBackNextJobLockedBy = async (token: string) => {
+    let nextJobId: string | undefined;
+    try {
+      nextJobId = await findActiveJobIdLockedBy(token);
+      if (nextJobId !== undefined) {
+        await moveActiveJobToWait(nextJobId, token);
+      }
+    } catch (handBackError) {
+      logger.warn(
+        nextJobId === undefined ? { err: handBackError } : { jobId: nextJobId, err: handBackError },
+        "next job hand-back failed",
+      );
+    }
+  };
 
   const confirmedOutcomeOf = async (
     jobId: string,
@@ -185,6 +262,9 @@ export function createFinishesInFlight({
     }
     if (finish.isConfirmedBy(jobOnServer)) {
       finish.onConfirmed(jobOnServer);
+      if (finish.token !== undefined) {
+        void handBackNextJobLockedBy(finish.token);
+      }
       return "confirmed";
     }
     return "lock lost";

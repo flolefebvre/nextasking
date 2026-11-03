@@ -12,6 +12,7 @@ import {
   LOCK_ERROR_CODES,
   createFinishesInFlight,
   fanOutCompletionInFlight,
+  fanOutFailureInFlight,
   firingCompletionInFlight,
   runCompletionInFlight,
   runFailureInFlight,
@@ -148,6 +149,29 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
         attemptsMade: jobOnServer.attemptsMade,
       };
     },
+    findActiveJobIdLockedBy: async (token) => {
+      const activeJobIds = await client.lrange(worker.toKey("active"), 0, -1);
+      if (activeJobIds.length === 0) {
+        return undefined;
+      }
+      const lockReads = client.pipeline();
+      for (const activeJobId of activeJobIds) {
+        lockReads.get(`${worker.toKey(activeJobId)}:lock`);
+      }
+      const lockReadReplies = (await lockReads.exec()) ?? [];
+      return activeJobIds.find((_activeJobId, index) => {
+        const [readError, lockToken] = lockReadReplies[index] ?? [];
+        if (readError) {
+          throw readError;
+        }
+        return lockToken === token;
+      });
+    },
+    moveActiveJobToWait: async (jobId, token) => {
+      const activeJob = await Job.fromId(worker, jobId);
+      await activeJob?.moveToWait(token);
+    },
+    logger: config.logger,
     logWorkerError: listenerLoggingAnsweredErrors(config.logger, "worker error"),
   });
 
@@ -175,6 +199,19 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
   };
 
   type TrackedAttempt = ReturnType<typeof trackAttemptInFlight>;
+
+  const trackRunFailure = (job: Job<StoredRun>, token: string | undefined, runLogger: Logger) => {
+    finishesInFlight.trackFinish(
+      job.id ?? "",
+      runFailureInFlight({
+        processedOn: job.processedOn,
+        attemptsMade: job.attemptsMade,
+        token,
+        runLogger,
+        sendFailureNotice: () => sendFailureNotice(client, job, config.sendBuiltInEvent),
+      }),
+    );
+  };
 
   const executeRunAttempt = async (task: AnyTaskDefinition, job: Job<StoredRun>, token: string | undefined) => {
     if (isDraining) {
@@ -341,15 +378,7 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
         throw writeError;
       });
       backoffInMillisecondsByFailedJob.set(job, backoffInMilliseconds);
-      finishesInFlight.trackFinish(
-        job.id ?? "",
-        runFailureInFlight({
-          processedOn: job.processedOn,
-          attemptsMade: job.attemptsMade,
-          runLogger,
-          sendFailureNotice: () => sendFailureNotice(client, job, config.sendBuiltInEvent),
-        }),
-      );
+      trackRunFailure(job, token, runLogger);
       throw error;
     }
     if (outcome.kind === "suspended") {
@@ -364,6 +393,7 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
       job.id ?? "",
       runCompletionInFlight({
         processedOn: job.processedOn,
+        token,
         runLogger,
         durationFields: durationFieldsAt(Date.now()),
         removeSavedSteps: () => removeSavedSteps(client, job),
@@ -430,6 +460,7 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
         job.id ?? "",
         firingCompletionInFlight({
           processedOn: job.processedOn,
+          token,
           logger: config.logger,
           taskName: firingJob.data.taskName,
           scheduledAt: new Date(plannedInstantOf(firingJob)),
@@ -455,6 +486,7 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
         job.id ?? "",
         fanOutCompletionInFlight({
           processedOn: job.processedOn,
+          token,
           logger: config.logger,
           eventName: job.name,
           eventId: fanOut.eventId,
@@ -499,10 +531,11 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
         attempt,
         executionStartedAt: now.getTime(),
         failedAt: now,
-        runLogger: runLoggerOf(job, attempt),
+        runLogger,
       },
       (data) => saveRunDataIfLockIsHeld(client, job, token, data),
     );
+    trackRunFailure(job, token, runLogger);
     throw error;
   }
   async function handBackFanOutOfUnknownEvent(job: Job<StoredFanOut>, token: string | undefined): Promise<void> {
@@ -518,9 +551,29 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
       config.logger.debug({ eventName: job.name, eventId: job.data.eventId }, "fan-out handed back: unknown event");
       throw new DelayedError();
     }
-    throw new UnrecoverableError(
+    const error = new UnrecoverableError(
       `No worker defined event "${job.name}" within ${shownDurationOf(timing.unknownNameGiveUpDelayInMilliseconds)} after a worker first found event "${job.data.eventId}" unknown.`,
     );
+    const jobId = job.id ?? "";
+    finishesInFlight.trackFinish(
+      jobId,
+      fanOutFailureInFlight({
+        processedOn: job.processedOn,
+        attemptsMade: job.attemptsMade,
+        token,
+        logger: config.logger,
+        eventName: job.name,
+        eventId: job.data.eventId,
+        recordFanOutFailure: async () => {
+          const failedJob = await Job.fromId(worker, jobId);
+          if (failedJob === undefined) {
+            throw new Error(`The fan-out of event "${job.data.eventId}" is gone from Redis.`);
+          }
+          await recordFinalFailureOfJob(failedJob, error);
+        },
+      }),
+    );
+    throw error;
   }
   const logAttemptStalled = async (jobId: string) => {
     const job = (await Job.fromId(worker, jobId)) as Job<StoredRun> | undefined;
@@ -548,7 +601,7 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
     } else if (error.message === STALL_LIMIT_FAILED_REASON && config.tasksByName.has(job.name)) {
       await failRunForStalling(job as Job<StoredRun>);
     }
-    await sendFailureNotice(client, job, config.sendBuiltInEvent);
+    await sendFailureNotice(client, job, config.sendBuiltInEvent).catch(() => undefined);
   };
   worker.on("failed", (job, error) => {
     if (job?.id !== undefined) {

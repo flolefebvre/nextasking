@@ -82,7 +82,7 @@ Each `startWorker()` reconciles the schedules stored in Redis with the scheduled
 
 Each line is logged at `info` with `task`, `cron` and `timezone`. See [Logging](logging.md).
 
-- There is no lock: when two releases boot side by side during a rolling deploy, the last one to boot sets the schedules.
+- Nothing coordinates the boots: when two releases boot side by side during a rolling deploy, the last one to boot sets the schedules.
 - A firing that reaches a worker whose release no longer schedules its task starts no run, and logs `firing dropped: task not scheduled` at `debug`.
 - A process that never calls `startWorker()` never touches the schedules.
 - Renaming a scheduled task removes the old name's schedule and adds the new one.

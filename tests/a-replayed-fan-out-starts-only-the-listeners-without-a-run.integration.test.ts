@@ -118,11 +118,17 @@ integrationTest(
     try {
       await nextasking.startWorker();
       const { eventId } = await nextasking.emit("invoice.paid", { invoiceId: "inv-7" });
-      await waitForLogMessage(lines, "run failed");
+      const recordPaymentRunId = deriveListenerRunId(eventId, "record-payment");
+      await vi.waitFor(
+        async () => {
+          expect(await nextasking.getRun("record-payment", recordPaymentRunId)).toMatchObject({ state: "failed" });
+        },
+        { timeout: 10_000 },
+      );
       await waitForLogMessage(lines, "run completed");
       isLedgerFixed = true;
 
-      await nextasking.replay("record-payment", deriveListenerRunId(eventId, "record-payment"));
+      await nextasking.replay("record-payment", recordPaymentRunId);
       await vi.waitFor(
         async () => {
           expect(await nextasking.getEvent("invoice.paid", eventId)).toMatchObject({

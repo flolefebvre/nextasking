@@ -48,7 +48,7 @@ The next attempt of a run reuses the steps an earlier attempt saved, by id, even
 - a step whose id is new runs;
 - a step whose id was removed is ignored.
 
-So after changing a handler's steps, dispatch a new run to try the change rather than letting an old run resume on the new code.
+So after changing a handler's steps, dispatch a new run to try the change rather than letting an old run resume on the new code. In production, runs in progress do resume on the new code: see [Deploys](deploys.md#rename-or-rework-a-step).
 
 ```ts
 // after restarting the dev server

@@ -27,6 +27,7 @@ export const sendWelcomeEmail = defineTask("send-welcome-email", {
   - `runId`: the id `dispatch` returned for this run
   - `attempt`: the attempt number, starting at 1
   - `logger`: a logger that tags every line with the run; see [Logging](logging.md)
+  - `abortSignal`: aborts when the attempt must stop; see [Worker](worker.md#stop-a-handler-cleanly-with-abortsignal)
 - The schema's input and output must be JSON: `z.date()`, or a transform into a `Date`, doesn't compile. Pass a date as an ISO string.
 - Keep the payload small: ids and short values, not whole records. Load the rest in the handler.
 - A misspelt option doesn't compile, and neither does a handler typed for another payload.
@@ -295,5 +296,6 @@ export async function register() {
 - `startWorker()` runs one worker in this process, executing every task the instance lists and fanning out every event it lists.
 - A process that never calls `startWorker()` only dispatches and emits.
 - Calling `startWorker()` a second time in the same process throws.
+- Set `NEXT_MANUAL_SIG_HANDLE=1` in the environment of `next start`, so a deploy lets running attempts finish instead of cutting them. See [Worker](worker.md) for this, `concurrency` and the other options.
 - Completed runs and completed fan-outs are kept 24 hours, and at most 1,000.
 - A fan-out that fails is retried 5 times, waiting 30 seconds and doubling, and kept 14 days once it has failed, like a failed run. A retry skips the listeners that already have a run.

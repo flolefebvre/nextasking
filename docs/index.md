@@ -33,6 +33,12 @@ Events and background tasks for a Next.js app, on BullMQ with Redis or Valkey. D
 | Know what a stall is and when a run fails stalled | [Worker](worker.md)                             |
 | Pick the Valkey or Redis for the queues           | [Worker](worker.md)                             |
 | Configure webpack with `serverExternalPackages`   | [Worker](worker.md)                             |
+| Run a task on a cron, in a time zone              | [Scheduled tasks](scheduled-tasks.md)           |
+| Know what `scheduledAt` holds                     | [Scheduled tasks](scheduled-tasks.md)           |
+| Run a scheduled task now                          | [Scheduled tasks](scheduled-tasks.md)           |
+| Know what a deploy does to schedules              | [Scheduled tasks](scheduled-tasks.md)           |
+| Know what daylight saving time does to a schedule | [Scheduled tasks](scheduled-tasks.md)           |
+| Know what happens to firings missed in downtime   | [Scheduled tasks](scheduled-tasks.md)           |
 | Make a side effect run once across retries        | [Steps](steps.md)                               |
 | Name steps, in a loop too                         | [Steps](steps.md)                               |
 | Return a step result that compiles                | [Steps](steps.md)                               |
@@ -61,6 +67,7 @@ import {
   createNextasking,
   defineEvent,
   defineListener,
+  defineScheduledTask,
   defineTask,
   InvalidPayloadError,
   NonRetriableError,
@@ -79,6 +86,9 @@ import type {
   Logger,
   Register,
   RunId,
+  Schedule,
+  ScheduledTaskContext,
+  ScheduledTaskDefinition,
   StartWorkerOptions,
   StepContext,
   StepTools,
@@ -88,30 +98,34 @@ import type {
 } from "@flefebvre/nextasking";
 ```
 
-| Export                | What it is                                                                                        |
-| --------------------- | ------------------------------------------------------------------------------------------------- |
-| `defineTask`          | Defines a task: a name, a Standard Schema payload schema and a handler                            |
-| `defineEvent`         | Defines an event: a name and a Standard Schema payload schema                                     |
-| `defineListener`      | Defines a listener: a task subscribed to one event, taking that event's payload                   |
-| `createNextasking`    | Builds the instance from the connection, the prefix, the logger, the events and the tasks         |
-| `UnknownTaskError`    | Thrown by `dispatch` for a name the instance doesn't list                                         |
-| `UnknownEventError`   | Thrown by `emit` for a name the instance doesn't list                                             |
-| `InvalidPayloadError` | Thrown by `dispatch` and `emit` for a payload the schema refuses                                  |
-| `NonRetriableError`   | Thrown by a handler to fail its run at once, skipping the retries left                            |
-| `StepMisuseError`     | Thrown by a step on a bug: a repeated id, a nested step, a bad result, duration or wake time      |
-| `DispatchOptions`     | The type of `dispatch`'s third argument: `runId` and `delay`                                      |
-| `Duration`            | The type of a duration option: a whole number and `s`, `m`, `h` or `d`                            |
-| `EmitOptions`         | The type of `emit`'s third argument: `eventId`                                                    |
-| `EventDefinition`     | The type `defineEvent` returns                                                                    |
-| `EventId`             | The type of an event id: a string                                                                 |
-| `EventName`           | The union of the registered instance's event names; `never` without the `Register` augmentation   |
-| `ListenerDefinition`  | The type `defineListener` returns                                                                 |
-| `Logger`              | The type of the `logger` option and of the handler's `logger`                                     |
-| `Register`            | The interface you augment with your instance's type; it types names and a handler's calls         |
-| `RunId`               | The type of a run id: a string                                                                    |
-| `StartWorkerOptions`  | The type of `startWorker`'s argument: `concurrency` and `shutdownTimeout`                         |
-| `StepContext`         | The type of the object a step's `fn` receives: `idempotencyKey`                                   |
-| `StepTools`           | The type of the handler's `step`: `step.run`, `step.sleep` and `step.sleepUntil`                  |
-| `TaskContext`         | The type of the object a handler receives                                                         |
-| `TaskDefinition`      | The type `defineTask` returns                                                                     |
-| `TaskName`            | The union of the registered instance's task names, listeners included; `never` without `Register` |
+| Export                    | What it is                                                                                                            |
+| ------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `defineTask`              | Defines a task: a name, a Standard Schema payload schema and a handler                                                |
+| `defineEvent`             | Defines an event: a name and a Standard Schema payload schema                                                         |
+| `defineListener`          | Defines a listener: a task subscribed to one event, taking that event's payload                                       |
+| `defineScheduledTask`     | Defines a scheduled task: a name, a cron with its time zone and a handler, and no payload                             |
+| `createNextasking`        | Builds the instance from the connection, the prefix, the logger, the events and the tasks                             |
+| `UnknownTaskError`        | Thrown by `dispatch` for a name the instance doesn't list                                                             |
+| `UnknownEventError`       | Thrown by `emit` for a name the instance doesn't list                                                                 |
+| `InvalidPayloadError`     | Thrown by `dispatch` and `emit` for a payload the schema refuses                                                      |
+| `NonRetriableError`       | Thrown by a handler to fail its run at once, skipping the retries left                                                |
+| `StepMisuseError`         | Thrown by a step on a bug: a repeated id, a nested step, a bad result, duration or wake time                          |
+| `DispatchOptions`         | The type of `dispatch`'s third argument: `runId` and `delay`                                                          |
+| `Duration`                | The type of a duration option: a whole number and `s`, `m`, `h` or `d`                                                |
+| `EmitOptions`             | The type of `emit`'s third argument: `eventId`                                                                        |
+| `EventDefinition`         | The type `defineEvent` returns                                                                                        |
+| `EventId`                 | The type of an event id: a string                                                                                     |
+| `EventName`               | The union of the registered instance's event names; `never` without the `Register` augmentation                       |
+| `ListenerDefinition`      | The type `defineListener` returns                                                                                     |
+| `Logger`                  | The type of the `logger` option and of the handler's `logger`                                                         |
+| `Register`                | The interface you augment with your instance's type; it types names and a handler's calls                             |
+| `RunId`                   | The type of a run id: a string                                                                                        |
+| `Schedule`                | The type of a scheduled task's `schedule` option: `cron` and `timezone`                                               |
+| `ScheduledTaskContext`    | The type of the object a scheduled task's handler receives: no `payload`, and `scheduledAt`                           |
+| `ScheduledTaskDefinition` | The type `defineScheduledTask` returns                                                                                |
+| `StartWorkerOptions`      | The type of `startWorker`'s argument: `concurrency` and `shutdownTimeout`                                             |
+| `StepContext`             | The type of the object a step's `fn` receives: `idempotencyKey`                                                       |
+| `StepTools`               | The type of the handler's `step`: `step.run`, `step.sleep` and `step.sleepUntil`                                      |
+| `TaskContext`             | The type of the object a handler receives                                                                             |
+| `TaskDefinition`          | The type `defineTask` returns                                                                                         |
+| `TaskName`                | The union of the registered instance's task names, listeners and scheduled tasks included; `never` without `Register` |

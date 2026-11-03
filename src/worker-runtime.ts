@@ -8,7 +8,14 @@ import { settleWithinTimeout } from "./attempt-timeout.js";
 import { setTimeout as sleep } from "node:timers/promises";
 
 import { UnknownTaskRunError } from "./attempt-errors.js";
-import { LOCK_ERROR_CODES, createCompletionsInFlight } from "./completions-in-flight.js";
+import {
+  LOCK_ERROR_CODES,
+  createFinishesInFlight,
+  fanOutCompletionInFlight,
+  firingCompletionInFlight,
+  runCompletionInFlight,
+  runFailureInFlight,
+} from "./finishes-in-flight.js";
 import { createConcurrencySlots } from "./concurrency-slots.js";
 import type { ConcurrencySlot } from "./concurrency-slots.js";
 import { listenerLoggingAnsweredErrors } from "./connection.js";
@@ -129,13 +136,17 @@ export async function isSettledWithin(settlement: Promise<void>, timeoutInMillis
 
 export function startRunWorker(config: WorkerConfig): RunningWorker {
   const backoffInMillisecondsByFailedJob = new WeakMap<MinimalJob, DurationInMilliseconds>();
-  const completionsInFlight = createCompletionsInFlight({
+  const finishesInFlight = createFinishesInFlight({
     readJobOnServer: async (jobId) => {
       const jobOnServer = await Job.fromId(worker, jobId);
       if (jobOnServer === undefined) {
         return undefined;
       }
-      return { state: await jobOnServer.getState(), processedOn: jobOnServer.processedOn };
+      return {
+        state: await jobOnServer.getState(),
+        processedOn: jobOnServer.processedOn,
+        attemptsMade: jobOnServer.attemptsMade,
+      };
     },
     logWorkerError: listenerLoggingAnsweredErrors(config.logger, "worker error"),
   });
@@ -330,6 +341,15 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
         throw writeError;
       });
       backoffInMillisecondsByFailedJob.set(job, backoffInMilliseconds);
+      finishesInFlight.trackFinish(
+        job.id ?? "",
+        runFailureInFlight({
+          processedOn: job.processedOn,
+          attemptsMade: job.attemptsMade,
+          runLogger,
+          sendFailureNotice: () => sendFailureNotice(client, job, config.sendBuiltInEvent),
+        }),
+      );
       throw error;
     }
     if (outcome.kind === "suspended") {
@@ -340,12 +360,15 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
       runLogger.debug({}, "run yielded at shutdown");
       throw new WaitingError();
     }
-    completionsInFlight.trackCompletion(job.id ?? "", {
-      processedOn: job.processedOn,
-      runLogger,
-      durationFields: durationFieldsAt(Date.now()),
-      removeSavedSteps: () => removeSavedSteps(client, job),
-    });
+    finishesInFlight.trackFinish(
+      job.id ?? "",
+      runCompletionInFlight({
+        processedOn: job.processedOn,
+        runLogger,
+        durationFields: durationFieldsAt(Date.now()),
+        removeSavedSteps: () => removeSavedSteps(client, job),
+      }),
+    );
   };
 
   const timing = workerTiming();
@@ -378,10 +401,11 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
     },
   });
   const concurrencySlots = createConcurrencySlots(client, worker, timing.lockDurationInMilliseconds);
+  const plannedInstantOf = (firingJob: Job<StoredFiring>): EpochMilliseconds =>
+    firingJob.data.plannedInstant ?? plannedInstantOfFiring(firingJob.id, firingJob.data.taskName);
   async function enqueueFiringRun(firingJob: Job<StoredFiring>): Promise<void> {
     const { taskName } = firingJob.data;
-    const plannedInstant: EpochMilliseconds =
-      firingJob.data.plannedInstant ?? plannedInstantOfFiring(firingJob.id, taskName);
+    const plannedInstant = plannedInstantOf(firingJob);
     const scheduledAt = new Date(plannedInstant);
     const task = config.tasksByName.get(taskName);
     if (task?.schedule === undefined) {
@@ -400,7 +424,17 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
   }
   async function processJob(job: Job, token: string | undefined): Promise<void> {
     if (job.name === FIRING_JOB_NAME) {
-      await enqueueFiringRun(job as Job<StoredFiring>);
+      const firingJob = job as Job<StoredFiring>;
+      await enqueueFiringRun(firingJob);
+      finishesInFlight.trackFinish(
+        job.id ?? "",
+        firingCompletionInFlight({
+          processedOn: job.processedOn,
+          logger: config.logger,
+          taskName: firingJob.data.taskName,
+          scheduledAt: new Date(plannedInstantOf(firingJob)),
+        }),
+      );
       return;
     }
     if (config.eventsByName.has(job.name)) {
@@ -415,6 +449,15 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
             retries: retriesOf(listener),
             concurrencyKey: listener === undefined ? undefined : concurrencyKeyOf(listener, fanOut.payload),
           };
+        }),
+      );
+      finishesInFlight.trackFinish(
+        job.id ?? "",
+        fanOutCompletionInFlight({
+          processedOn: job.processedOn,
+          logger: config.logger,
+          eventName: job.name,
+          eventId: fanOut.eventId,
         }),
       );
       return;
@@ -487,14 +530,14 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
   };
   const failRunForStalling = (job: Job<StoredRun>) =>
     recordRunFailedForStalling(client, job, timing.stallCountThatFailsARun, runLoggerOf(job, job.attemptsMade));
-  worker.on("error", completionsInFlight.routeWorkerError);
+  worker.on("error", finishesInFlight.routeWorkerError);
   worker.on("lockRenewalFailed", (jobIds) => {
     for (const jobId of jobIds) {
       abortAttemptByJobId.get(jobId)?.("lock lost");
     }
   });
   worker.on("completed", (job) => {
-    completionsInFlight.recordRunCompleted(job.id ?? "");
+    finishesInFlight.recordFinishReported(job.id ?? "", "completed");
   });
   worker.on("stalled", (jobId) => {
     logAttemptStalled(jobId).catch(() => undefined);
@@ -508,6 +551,9 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
     await sendFailureNotice(client, job, config.sendBuiltInEvent);
   };
   worker.on("failed", (job, error) => {
+    if (job?.id !== undefined) {
+      finishesInFlight.recordFinishReported(job.id, "failed");
+    }
     if (job !== undefined && typeof job.finishedOn === "number") {
       recordFinalFailureOfJob(job, error).catch(() => undefined);
     }

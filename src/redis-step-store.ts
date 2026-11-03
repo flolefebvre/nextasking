@@ -21,6 +21,7 @@ const SAVE_STEP_IF_LOCK_IS_HELD = `
 if redis.call("GET", KEYS[1]) ~= ARGV[1] then
   return 0
 end
+redis.call("HSET", KEYS[3], "stc", 0)
 redis.call("HSET", KEYS[2], ARGV[3], ARGV[4])
 redis.call("PEXPIRE", KEYS[2], ARGV[2])
 return 1
@@ -43,9 +44,10 @@ export function createRedisStepStore(client: Redis, job: Job<{ runId: RunId }>, 
     save: async (stepId: StepId, serializedSavedStep: SerializedSavedStep) => {
       const outcome = await client.eval(
         SAVE_STEP_IF_LOCK_IS_HELD,
-        2,
+        3,
         `${jobKeyOf(job)}:lock`,
         savedStepsKey,
+        jobKeyOf(job),
         job.token ?? "",
         SAVED_STEPS_TIME_TO_LIVE_IN_MILLISECONDS,
         stepId,

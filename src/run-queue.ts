@@ -36,7 +36,7 @@ export type ErrorRecord = {
   failedAt: string;
 };
 
-export type FailureReason = "retries exhausted" | "non-retriable";
+export type FailureReason = "retries exhausted" | "non-retriable" | "stalled";
 
 export type StoredRun = {
   runId: RunId;

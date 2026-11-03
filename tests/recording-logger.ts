@@ -28,11 +28,15 @@ export function createRecordingLogger(): { logger: Logger; lines: RecordedLogLin
   };
 }
 
-export async function waitForLogMessage(lines: readonly RecordedLogLine[], message: string): Promise<void> {
+export async function waitForLogMessage(
+  lines: readonly RecordedLogLine[],
+  message: string,
+  { timeout = 10_000 }: { timeout?: number } = {},
+): Promise<void> {
   await vi.waitFor(
     () => {
       expect(lines.map((line) => line.message)).toContain(message);
     },
-    { timeout: 10_000 },
+    { timeout },
   );
 }

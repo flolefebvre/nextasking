@@ -1,5 +1,5 @@
-import { DelayedError, Worker } from "bullmq";
-import type { Job, MinimalJob } from "bullmq";
+import { DelayedError, Job, Worker } from "bullmq";
+import type { MinimalJob } from "bullmq";
 
 import { AttemptAbortedError, abortCauseOf } from "./attempt-abort.js";
 import type { AttemptAbortCause } from "./attempt-abort.js";
@@ -11,14 +11,14 @@ import { backoffOf, retriesOf } from "./definitions.js";
 import type { AnyTaskDefinition, EventDefinition, TaskHandler } from "./definitions.js";
 import { parseDuration } from "./durations.js";
 import type { Duration, DurationInMilliseconds } from "./durations.js";
-import { errorFromThrownValue, errorRecordFor, failureReasonFor } from "./failed-attempts.js";
+import { StalledRunError, errorFromThrownValue, errorRecordFor, failureReasonFor } from "./failed-attempts.js";
 import type { RunId } from "./ids.js";
 import { loggerWithFields } from "./logger.js";
 import type { Logger } from "./logger.js";
 import { createRedisStepStore, keepSavedStepsForFailedRunRetention, removeSavedSteps } from "./redis-step-store.js";
 import type { DispatchByName, EmitByName } from "./registry.js";
 import { RUN_QUEUE_NAME } from "./run-queue.js";
-import type { RunQueue, StoredFanOut, StoredRun } from "./run-queue.js";
+import type { FailureReason, RunQueue, StoredFanOut, StoredRun } from "./run-queue.js";
 import { openStepEngine } from "./step-engine.js";
 import type { WakeTimeInEpochMilliseconds } from "./step-engine.js";
 import { bullmqMaxStalledCountOf, workerTiming } from "./worker-timing.js";
@@ -70,6 +70,26 @@ export type WorkerConfig = {
 
 const NO_RETRY = -1;
 
+type RunDurationFields = {
+  runDurationInMilliseconds: DurationInMilliseconds;
+  executionDurationInMilliseconds: DurationInMilliseconds;
+};
+
+type EpochMilliseconds = number;
+
+function runDurationFieldsOf(
+  job: MinimalJob,
+  executionStartedAt: EpochMilliseconds,
+  runEndedAt: EpochMilliseconds,
+): RunDurationFields {
+  return {
+    runDurationInMilliseconds: runEndedAt - job.timestamp,
+    executionDurationInMilliseconds: runEndedAt - executionStartedAt,
+  };
+}
+
+const STALL_LIMIT_FAILED_REASON = "job stalled more than allowable limit";
+
 let isWorkerRunningInThisProcess = false;
 
 export function startRunWorker(config: WorkerConfig): RunningWorker {
@@ -79,6 +99,10 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
   isWorkerRunningInThisProcess = true;
 
   const backoffInMillisecondsByFailedJob = new WeakMap<MinimalJob, DurationInMilliseconds>();
+  const durationFieldsByCompletedJob = new WeakMap<MinimalJob, RunDurationFields>();
+
+  const runLoggerOf = (job: Job<StoredRun>, attempt: number) =>
+    loggerWithFields(config.logger, { task: job.name, runId: job.data.runId, attempt, ...job.data.sourceEvent });
   const abortAttemptByJobId = new Map<string, (abortCause: AttemptAbortCause) => void>();
 
   const trackAttemptInFlight = (job: Job<StoredRun>, runId: RunId) => {
@@ -117,13 +141,10 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
     { abortSignal, abortAttempt }: TrackedAttempt,
   ) => {
     const stretchStartedAt = Date.now();
-    const { runId, payload, sourceEvent } = job.data;
+    const { runId, payload } = job.data;
     const attempt = job.attemptsMade + 1;
-    const runLogger = loggerWithFields(config.logger, { task: task.name, runId, attempt, ...sourceEvent });
-    const durationFieldsAt = (runEndedAt: number) => ({
-      runDurationInMilliseconds: runEndedAt - job.timestamp,
-      executionDurationInMilliseconds: runEndedAt - stretchStartedAt,
-    });
+    const runLogger = runLoggerOf(job, attempt);
+    const durationFieldsAt = (runEndedAt: number) => runDurationFieldsOf(job, stretchStartedAt, runEndedAt);
     const handler = task.handler as TaskHandler<unknown>;
     let wakeAt: WakeTimeInEpochMilliseconds | undefined;
     try {
@@ -186,7 +207,7 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
       runLogger.debug({ wakeAt: new Date(wakeAt).toISOString() }, "run suspended");
       throw new DelayedError();
     }
-    runLogger.info(durationFieldsAt(Date.now()), "run completed");
+    durationFieldsByCompletedJob.set(job, durationFieldsAt(Date.now()));
   };
 
   const timing = workerTiming();
@@ -225,6 +246,31 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
       },
     },
   );
+  const logAttemptStalled = async (jobId: string) => {
+    const job = (await Job.fromId(worker, jobId)) as Job<StoredRun> | undefined;
+    if (job !== undefined && config.tasksByName.has(job.name)) {
+      runLoggerOf(job, job.attemptsMade + 1).warn({}, "attempt stalled");
+    }
+  };
+  const failRunForStalling = async (job: Job<StoredRun>) => {
+    const failedAt = new Date();
+    const error = new StalledRunError(job.data.runId, timing.stallCountThatFailsARun);
+    const reason: FailureReason = "stalled";
+    await job.updateData({
+      ...job.data,
+      errors: [...job.data.errors, errorRecordFor(error, job.attemptsMade, failedAt)],
+      reason,
+    });
+    await keepSavedStepsForFailedRunRetention(client, job).catch(() => undefined);
+    runLoggerOf(job, job.attemptsMade).error(
+      {
+        err: error,
+        reason,
+        ...runDurationFieldsOf(job, job.processedOn ?? failedAt.getTime(), failedAt.getTime()),
+      },
+      "run failed",
+    );
+  };
   worker.on("error", () => undefined);
   worker.on("lockRenewalFailed", (jobIds) => {
     for (const jobId of jobIds) {
@@ -233,6 +279,18 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
   });
   worker.on("completed", (job) => {
     removeSavedSteps(client, job).catch(() => undefined);
+    const durationFields = durationFieldsByCompletedJob.get(job);
+    if (durationFields !== undefined) {
+      runLoggerOf(job as Job<StoredRun>, job.attemptsMade).info(durationFields, "run completed");
+    }
+  });
+  worker.on("stalled", (jobId) => {
+    logAttemptStalled(jobId).catch(() => undefined);
+  });
+  worker.on("failed", (job, error) => {
+    if (job !== undefined && error.message === STALL_LIMIT_FAILED_REASON && config.tasksByName.has(job.name)) {
+      failRunForStalling(job as Job<StoredRun>).catch(() => undefined);
+    }
   });
   config.logger.info({}, "worker started");
 

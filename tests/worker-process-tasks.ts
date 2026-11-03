@@ -8,7 +8,11 @@ export type WriteRecord = (taskName: string, record: unknown) => Promise<void>;
 const ABORT_WAIT_LIMIT_IN_MILLISECONDS = 30_000;
 
 function blockEventLoop(blockInMilliseconds: number): void {
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, blockInMilliseconds);
+  const blockEndsAt = Date.now() + blockInMilliseconds;
+  const neverNotified = new Int32Array(new SharedArrayBuffer(4));
+  while (Date.now() < blockEndsAt) {
+    Atomics.wait(neverNotified, 0, 0, blockEndsAt - Date.now());
+  }
 }
 
 async function waitForAbort(abortSignal: AbortSignal): Promise<void> {

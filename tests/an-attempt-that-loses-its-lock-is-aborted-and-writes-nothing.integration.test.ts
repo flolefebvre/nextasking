@@ -9,6 +9,7 @@ import { createWorkerProcessNextasking } from "./worker-process-nextasking.js";
 
 integrationTest(
   "an attempt whose event loop blocks past its lock is aborted: its later steps throw the reason, and it writes nothing to the run",
+  { timeout: 30_000 },
   async ({ redisUrl, keyPrefix }) => {
     const workerProcess = await startWorkerProcess({
       redisUrl,

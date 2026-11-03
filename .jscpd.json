@@ -3,5 +3,6 @@
   "format": ["typescript"],
   "minTokens": 50,
   "exitCode": 1,
-  "reporters": ["consoleFull"]
+  "reporters": ["consoleFull"],
+  "ignore": ["**/node_modules/**", "**/.next/**"]
 }

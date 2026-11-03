@@ -42,6 +42,10 @@ Events and background tasks for a Next.js app, on BullMQ with Redis or Valkey. D
 | Know what a failed run keeps, and for how long    | [Retries and failures](retries-and-failures.md) |
 | Pass a logger and read the lifecycle lines        | [Logging](logging.md)                           |
 | Log from a handler                                | [Logging](logging.md)                           |
+| Run the worker under `next dev`                   | [Dev](dev.md)                                   |
+| Pick up a task edit                               | [Dev](dev.md)                                   |
+| Know what Ctrl-C does to the attempt in flight    | [Dev](dev.md)                                   |
+| Change a task's steps                             | [Dev](dev.md)                                   |
 
 ## Import map
 

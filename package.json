@@ -35,7 +35,7 @@
   },
   "scripts": {
     "check": "tsx scripts/gate.ts format:check+lint+duplication+typecheck,test:changed",
-    "gate": "tsx scripts/gate.ts format:check+lint+duplication+typecheck,test,build,pack:check+typecheck:dist",
+    "gate": "tsx scripts/gate.ts format:check+lint+duplication+typecheck,test,build,pack:check+typecheck:dist,test:e2e",
     "build": "rm -rf dist && tsc -p tsconfig.build.json",
     "pack:check": "tsx scripts/pack-check.ts",
     "typecheck:dist": "tsc -p tests/dist-consumer && pnpm --dir tests/dist-consumer exec tsc -p .",
@@ -45,10 +45,11 @@
     "lint": "eslint --cache --cache-location node_modules/.cache/eslint/ --cache-strategy content --max-warnings=0 .",
     "duplication": "jscpd",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run",
+    "test": "vitest run --project unit --project integration",
     "test:unit": "vitest run --project unit",
     "test:integration": "vitest run --project integration",
-    "test:changed": "vitest run --changed ${CHECK_BASE:-origin/main}",
+    "test:changed": "vitest run --project unit --project integration --changed ${CHECK_BASE:-origin/main}",
+    "test:e2e": "vitest run --project e2e",
     "test:watch": "vitest"
   },
   "devDependencies": {

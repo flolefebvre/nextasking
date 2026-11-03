@@ -135,7 +135,9 @@ Task "rebuild-index" has an invalid timeout: "0.5h" is not a duration: a whole n
 Task "sync-account" has an invalid retries: -1 is not a non-negative integer
 ```
 
-The error is a startup crash: fix the definition, don't catch it.
+Fix the definition; don't catch the error.
+
+- Thrown from `register()`, it fails loudly but doesn't stop the process: `next start` keeps running and answers 500 to every request, and logs the error on boot and on each request as `Error: An error occurred while loading instrumentation hook:` followed by the message above.
 
 ## Dispatch a task
 

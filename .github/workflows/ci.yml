@@ -94,11 +94,38 @@ jobs:
       - name: Typecheck dist
         run: pnpm typecheck:dist
 
+  # The gate's last stage. It reads the built dist too, but runs as a job of its own, once per Next
+  # version: the lowest the peer range admits and the newest.
+  e2e:
+    name: e2e (next ${{ matrix.next-version }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    strategy:
+      fail-fast: false
+      matrix:
+        next-version: [16.0.0, latest]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Setup
+        uses: ./.github/actions/setup
+
+      - name: Build
+        run: pnpm build
+
+      - name: E2E
+        run: pnpm test:e2e
+        env:
+          NEXTASKING_E2E_NEXT_VERSION: ${{ matrix.next-version }}
+
   # The main ruleset requires a check named `ci`: keep this job's name. A skipped required check
   # counts as passing, so this job runs whatever the others did and fails unless every one succeeded.
   ci:
     if: ${{ !cancelled() }}
-    needs: [static, test, build]
+    needs: [static, test, build, e2e]
     runs-on: ubuntu-latest
     timeout-minutes: 5
 

@@ -12,7 +12,7 @@ type Manifest = {
 
 const PACKAGE_DIR = fileURLToPath(new URL("../", import.meta.url));
 
-const EXPECTED_SUBPATHS = [".", "./package.json"];
+const EXPECTED_SUBPATHS = [".", "./testing", "./package.json"];
 
 const ALWAYS_SHIPPED_PATHS = ["README.md", "LICENSE"];
 

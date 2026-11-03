@@ -46,7 +46,7 @@ export type TaskNameIn<Registration> = Registration extends {
   : never;
 
 export type EventNameIn<Registration> = Registration extends {
-  nextasking: { isEventName: (name: string) => name is infer Name extends string };
+  nextasking: { eventDefinitions: readonly { readonly name: infer Name extends string }[] };
 }
   ? Name
   : never;
@@ -143,7 +143,7 @@ export type Nextasking<Task extends AnyTaskDefinition, Event extends EventDefini
   readonly replay: <Name extends Task["name"]>(name: Name, runId: RunId) => Promise<ReplayedRun>;
   readonly replayEvent: <Name extends Event["name"]>(name: Name, eventId: EventId) => Promise<ReplayedEvent>;
   readonly isTaskName: (name: string) => name is Task["name"];
-  readonly isEventName: (name: string) => name is Event["name"];
+  readonly isEventName: (name: string) => name is EmittableEventNameOf<Event>;
   readonly startWorker: (options?: StartWorkerOptions) => Promise<void>;
   readonly getRun: <Name extends Task["name"]>(
     name: Name,
@@ -294,7 +294,8 @@ export function createNextasking<
     replay,
     replayEvent,
     isTaskName: (name): name is Tasks[number]["name"] => tasksByName.has(name),
-    isEventName: (name): name is (Events[number] | BuiltInEvent)["name"] => eventsByName.has(name),
+    isEventName: (name): name is EmittableEventNameOf<Events[number] | BuiltInEvent> =>
+      eventsByName.has(name) && !isBuiltInEventName(name),
     getRun: queueReader.getRun as Instance["getRun"],
     listRuns: queueReader.listRuns as Instance["listRuns"],
     countRuns: queueReader.countRuns as Instance["countRuns"],

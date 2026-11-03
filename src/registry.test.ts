@@ -569,14 +569,13 @@ describe("isTaskName and isEventName", () => {
     ]);
   });
 
-  test("narrow a runtime string to the instance's task and event names, the built-in events included", () => {
+  test("narrow a runtime string to the names dispatch and emit take", () => {
     const nextasking = createTestNextasking();
     const name: string = "invoice.paid";
 
     if (nextasking.isEventName(name)) {
-      expectTypeOf(name).toEqualTypeOf<
-        "invoice.paid" | "user.signed-up" | "nextasking/run.failed" | "nextasking/fan-out.failed"
-      >();
+      expectTypeOf(name).toEqualTypeOf<"invoice.paid" | "user.signed-up">();
+      expectTypeOf(nextasking.emit).toBeCallableWith(name, { invoiceId: "inv-7", amountInCents: 100 });
     }
     if (nextasking.isTaskName(name)) {
       expectTypeOf(name).toEqualTypeOf<
@@ -695,7 +694,7 @@ describe("built-in events", () => {
     });
   }
 
-  test("are added to the registry automatically, with their listeners", () => {
+  test("are added to the registry automatically, with their listeners, and left out of isEventName", () => {
     const nextasking = createAlertingNextasking();
 
     expect(nextasking.eventDefinitions).toEqual([
@@ -703,8 +702,8 @@ describe("built-in events", () => {
       { name: "nextasking/run.failed", listenerNames: ["alert-on-run-failed"] },
       { name: "nextasking/fan-out.failed", listenerNames: ["alert-on-fan-out-failed"] },
     ]);
-    expect(nextasking.isEventName("nextasking/run.failed")).toBe(true);
-    expect(nextasking.isEventName("nextasking/fan-out.failed")).toBe(true);
+    expect(nextasking.isEventName("nextasking/run.failed")).toBe(false);
+    expect(nextasking.isEventName("nextasking/fan-out.failed")).toBe(false);
   });
 
   test.each(["nextasking/run.failed", "nextasking/fan-out.failed"])(

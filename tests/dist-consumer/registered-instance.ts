@@ -335,6 +335,22 @@ export const replayedBuiltInFanOut: Promise<ReplayedEvent> = nextasking.replayEv
 // @ts-expect-error only the library emits a built-in event
 export const emittedBuiltInEvent = nextasking.emit("nextasking/run.failed", {});
 
+function eventNameFor(webhookType: string) {
+  const eventName = `user.${webhookType}`;
+  return nextasking.isEventName(eventName) ? eventName : undefined;
+}
+
+export async function emitWebhookEvent(webhookType: string, data: { userId: string }): Promise<void> {
+  const eventName = eventNameFor(webhookType);
+  if (eventName !== undefined) {
+    await nextasking.emit(eventName, data);
+  }
+}
+
+export type IsEventNameNarrowsToTheEmittableEvents = Expect<
+  IsEqual<NonNullable<ReturnType<typeof eventNameFor>>, "user.signed-up">
+>;
+
 export const alertOnRunFailed = defineListener("alert-on-run-failed", {
   on: runFailed,
   handler: async ({ payload }) => {

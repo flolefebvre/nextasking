@@ -243,10 +243,9 @@ So the window lasts at least 24 hours after the dispatch, and longer when the ru
 
 ```ts
 // src/app/api/webhooks/route.ts
-import type { EventName } from "@flefebvre/nextasking";
 import { nextasking } from "@/nextasking";
 
-function eventNameFor(webhookType: string): EventName | undefined {
+function eventNameFor(webhookType: string) {
   const eventName = `billing.${webhookType}`;
   return nextasking.isEventName(eventName) ? eventName : undefined;
 }
@@ -260,8 +259,8 @@ export async function POST(request: Request) {
 }
 ```
 
-- `isTaskName(name)` is true for every name in `tasks`, listeners included. `isEventName(name)` is true for every name in `events`.
-- `TaskName` and `EventName` are the union of the names the registered instance lists. They come from the `Register` augmentation, and are `never` without it.
+- `isTaskName(name)` is true for every name in `tasks`, listeners included. `isEventName(name)` is true for every name in `events`, and false for the built-in events, which `emit` doesn't take.
+- `TaskName` and `EventName` are the union of the names the registered instance lists, the built-in events included in `EventName`. They come from the `Register` augmentation, and are `never` without it.
 - A narrowed name still takes a typed payload: validate untrusted data with the schema first, or let `emit` throw `InvalidPayloadError`.
 
 ## Dispatch and emit errors

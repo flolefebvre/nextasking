@@ -153,7 +153,7 @@ import type {
 | `EventDefinition`          | The type `defineEvent` returns                                                                                        |
 | `EventDefinitionSummary`   | The type of one entry of `eventDefinitions`: `name` and `listenerNames`                                               |
 | `EventId`                  | The type of an event id: a string                                                                                     |
-| `EventName`                | The union of the registered instance's event names; `never` without the `Register` augmentation                       |
+| `EventName`                | The union of the registered instance's event names, the built-in events included; `never` without `Register`          |
 | `EventWithRuns`            | The type `getEvent` returns: `event`, `eventId`, `fanOut` and `runsByListener`                                        |
 | `FailureReason`            | The type of a failed run's `reason`: `"retries exhausted"`, `"non-retriable"`, `"stalled"` or `"unknown task"`        |
 | `FanOutState`              | The type of `getEvent`'s `fanOut`: `"pending"`, `"completed"` or `"failed"`                                           |

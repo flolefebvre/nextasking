@@ -4,8 +4,9 @@ Test app code and handlers without mocking the library:
 
 - `fakeNextasking(nextasking)` tests code that dispatches or emits, without Redis. It switches your own instance to recording mode in place: code that imports `nextasking` is faked with no module mocking. Every check still runs for real; only the Redis write is replaced, by a record of what would have been written.
 - `executeAttempt(nextasking, taskName, payload)` tests a whole handler in one call, without Redis, on the production step code.
+- `createNextaskingControl({ connection, prefix })` drives a real queue from an e2e test or a script in offline dev: wait until it is idle, skip delays and sleeps, fire a schedule, start clean.
 
-Import them from `@flefebvre/nextasking/testing`, in test files only. They have no test-runner dependency: assert with your runner's own `expect`.
+Import them from `@flefebvre/nextasking/testing`, in test files and dev scripts only. They have no test-runner dependency: assert with your runner's own `expect`.
 
 ## Fake the instance in a test
 
@@ -180,16 +181,124 @@ await expect(
 expect(saveContacts).not.toHaveBeenCalled();
 ```
 
+## Drive the queue from an e2e test
+
+`createNextaskingControl` works on the queue in Redis directly, next to a running app and its worker. It takes no tasks and no events, and reads no runs: point it at the same `connection` and `prefix` as your `createNextasking` call (the prefix defaults to `"nextasking"` in both).
+
+```ts
+// e2e/signup.spec.ts
+import { test, expect } from "@playwright/test";
+import { createNextaskingControl } from "@flefebvre/nextasking/testing";
+
+const control = createNextaskingControl({ connection: { url: process.env.REDIS_URL ?? "redis://localhost:6379" } });
+
+test.beforeEach(async () => {
+  await control.reset();
+});
+
+test.afterAll(async () => {
+  await control.close();
+});
+
+test("a new user gets the tips email the day after signing up", async ({ page }) => {
+  await page.goto("/signup");
+  await page.getByLabel("Email").fill("ada@example.com");
+  await page.getByRole("button", { name: "Sign up" }).click();
+  await control.waitForIdle();
+
+  await control.makeRunsDueNow({ task: "onboard-user" });
+  await control.waitForIdle();
+
+  await page.goto("/admin/emails");
+  await expect(page.getByText("Tips for ada@example.com")).toBeVisible();
+});
+```
+
+| Call                        | What it does                                                                                                     |
+| --------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `waitForIdle({ timeout? })` | Resolves once the queue is idle; rejects at `timeout` (a `Duration`, default `"30s"`) with the counts still busy |
+| `makeRunsDueNow({ task? })` | Starts every `delayed`, `suspended` and `backingOff` run now, of one task when given; resolves with them         |
+| `fireSchedule(taskName)`    | Starts one run of a scheduled task now; resolves with its `runId`                                                |
+| `reset({ timeout? })`       | Waits until no attempt executes, removes every key under the prefix, and keeps the schedules                     |
+| `close()`                   | Closes the control's connection; `await using` calls it for you                                                  |
+
+### When the queue is idle
+
+`waitForIdle` waits while any of these is left:
+
+- a run `pending`, `executing` or `waitingForConcurrencySlot`;
+- a fan-out waiting, executing, or delayed for a retry;
+- a schedule firing waiting or executing, which is about to start its run.
+
+It doesn't wait for a run `delayed`, `suspended` or `backingOff`, nor for a firing still to come: those can wait for hours. Call `makeRunsDueNow()` then `waitForIdle()` again to get past them.
+
+### Get past a delay, a sleep or a backoff
+
+`makeRunsDueNow` starts at once the runs dispatched with a `delay`, the runs asleep in `step.sleep` or `step.sleepUntil`, and the runs waiting out a retry backoff. It resolves with `{ task, runId }` per run started.
+
+- A sleeping run resumes in the same attempt, past the sleep, as if its wake time had come: every sleep of that run still to come is moved to now.
+- A run in backoff starts its next attempt.
+- A run waiting for a concurrency slot and a firing still to come are left alone.
+
+### Fire a schedule
+
+`fireSchedule(taskName)` starts one run of a scheduled task now, through the same path as a firing of its cron: the handler gets `scheduledAt` set to now, and the retries of the task. It throws when no schedule is stored for that task: start the worker once first, since the worker stores the schedules at boot.
+
+### Start each test clean
+
+`reset()` removes every key under the prefix with `SCAN` and `UNLINK`, never `FLUSHDB`: every run, fan-out and saved step is gone, and keys under another prefix stay. The schedules are kept, each with its next firing. A running worker keeps working.
+
+- It first waits until no attempt executes, up to `timeout` (default `"30s"`), then rejects naming how many still execute.
+- It throws before touching anything when the calling process has `NODE_ENV=production`.
+- Give your e2e app a prefix of its own, so a reset never reaches your dev data.
+
+## Fire a schedule or skip a sleep in offline dev
+
+Save this script once, and run it with `tsx` while the app and its worker run under `next dev`, to check a flow without waiting for a cron or a sleep:
+
+```ts
+// scripts/nextasking-control.mts
+import { createNextaskingControl } from "@flefebvre/nextasking/testing";
+
+const control = createNextaskingControl({
+  connection: { url: process.env.REDIS_URL ?? "redis://localhost:6379" },
+});
+const [command, taskName] = process.argv.slice(2);
+
+try {
+  if (command === "fire" && taskName !== undefined) {
+    console.log(await control.fireSchedule(taskName));
+  } else if (command === "skip") {
+    console.log(await control.makeRunsDueNow(taskName === undefined ? {} : { task: taskName }));
+  } else {
+    console.log("usage: tsx scripts/nextasking-control.mts fire <scheduled-task> | skip [task]");
+  }
+  await control.waitForIdle();
+} finally {
+  await control.close();
+}
+```
+
+```sh
+npx tsx scripts/nextasking-control.mts fire purge-expired-sessions
+npx tsx scripts/nextasking-control.mts skip onboard-user
+```
+
+The `.mts` extension makes it an ES module, for the top-level `await`, whatever your `package.json` says. Pass the same `prefix` as your `createNextasking` call when it sets one.
+
 ## Exports
 
-| Export                  | What it is                                                                                                       |
-| ----------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| `executeAttempt`        | Runs one attempt of a handler in the test process and resolves with its `ExecutedAttempt`                        |
-| `ExecutedAttempt`       | The type `executeAttempt` resolves with: `steps`, `sleeps`, `dispatches` and `emits`                             |
-| `ExecuteAttemptOptions` | The type of `executeAttempt`'s options: `savedSteps`, `attempt`, `runId`, `abortSignal`, `scheduledAt`, `logger` |
-| `RecordedSleep`         | The type of one entry of `sleeps`: `id` and `wakeAt`                                                             |
-| `fakeNextasking`        | Switches an instance to recording mode and returns its `NextaskingFake`                                          |
-| `NextaskingFake`        | The type `fakeNextasking` returns: `dispatches`, `emits`, `replays`, `restore` and `[Symbol.dispose]`            |
-| `RecordedDispatch`      | The type of one entry of `dispatches`                                                                            |
-| `RecordedEmit`          | The type of one entry of `emits`                                                                                 |
-| `RecordedReplay`        | The type of one entry of `replays`                                                                               |
+| Export                     | What it is                                                                                                       |
+| -------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `executeAttempt`           | Runs one attempt of a handler in the test process and resolves with its `ExecutedAttempt`                        |
+| `ExecutedAttempt`          | The type `executeAttempt` resolves with: `steps`, `sleeps`, `dispatches` and `emits`                             |
+| `ExecuteAttemptOptions`    | The type of `executeAttempt`'s options: `savedSteps`, `attempt`, `runId`, `abortSignal`, `scheduledAt`, `logger` |
+| `RecordedSleep`            | The type of one entry of `sleeps`: `id` and `wakeAt`                                                             |
+| `fakeNextasking`           | Switches an instance to recording mode and returns its `NextaskingFake`                                          |
+| `NextaskingFake`           | The type `fakeNextasking` returns: `dispatches`, `emits`, `replays`, `restore` and `[Symbol.dispose]`            |
+| `RecordedDispatch`         | The type of one entry of `dispatches`                                                                            |
+| `RecordedEmit`             | The type of one entry of `emits`                                                                                 |
+| `RecordedReplay`           | The type of one entry of `replays`                                                                               |
+| `createNextaskingControl`  | Opens a control on a queue: `waitForIdle`, `makeRunsDueNow`, `fireSchedule`, `reset` and `close`                 |
+| `NextaskingControl`        | The type `createNextaskingControl` returns                                                                       |
+| `NextaskingControlOptions` | The type of `createNextaskingControl`'s argument: `connection` and `prefix`                                      |

@@ -1,4 +1,4 @@
-import { DelayedError, Job, Worker } from "bullmq";
+import { DelayedError, ErrorCode, Job, WaitingError, Worker } from "bullmq";
 import type { MinimalJob } from "bullmq";
 
 import { AttemptAbortedError, abortCauseOf } from "./attempt-abort.js";
@@ -20,11 +20,12 @@ import type { DispatchByName, EmitByName } from "./registry.js";
 import { RUN_QUEUE_NAME } from "./run-queue.js";
 import type { FailureReason, RunQueue, StoredFanOut, StoredRun } from "./run-queue.js";
 import { openStepEngine } from "./step-engine.js";
-import type { WakeTimeInEpochMilliseconds } from "./step-engine.js";
+import type { HandlerOutcome } from "./step-engine.js";
 import { bullmqMaxStalledCountOf, workerTiming } from "./worker-timing.js";
 
 export type RunningWorker = {
   close: () => Promise<void>;
+  shutDown: () => Promise<void>;
 };
 
 export type StartWorkerOptions = {
@@ -90,7 +91,34 @@ function runDurationFieldsOf(
 
 const STALL_LIMIT_FAILED_REASON = "job stalled more than allowable limit";
 
+const LOCK_ERROR_CODES = new Set<unknown>([ErrorCode.JobLockNotExist, ErrorCode.JobLockMismatch]);
+
 let isWorkerRunningInThisProcess = false;
+
+async function handBackAtShutdown(job: Job, token: string | undefined, runLogger: Logger): Promise<never> {
+  const isHandedBack = await job.moveToWait(token).then(
+    () => true,
+    () => false,
+  );
+  if (isHandedBack) {
+    runLogger.debug({}, "run yielded at shutdown");
+  }
+  throw new WaitingError();
+}
+
+async function isSettledWithin(settlement: Promise<void>, timeoutInMilliseconds: DurationInMilliseconds) {
+  let timeoutTimer: NodeJS.Timeout | undefined;
+  const timeoutExpiry = new Promise<false>((resolve) => {
+    timeoutTimer = setTimeout(() => {
+      resolve(false);
+    }, timeoutInMilliseconds);
+  });
+  try {
+    return await Promise.race([settlement.then(() => true), timeoutExpiry]);
+  } finally {
+    clearTimeout(timeoutTimer);
+  }
+}
 
 export function startRunWorker(config: WorkerConfig): RunningWorker {
   if (isWorkerRunningInThisProcess) {
@@ -104,6 +132,7 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
   const runLoggerOf = (job: Job<StoredRun>, attempt: number) =>
     loggerWithFields(config.logger, { task: job.name, runId: job.data.runId, attempt, ...job.data.sourceEvent });
   const abortAttemptByJobId = new Map<string, (abortCause: AttemptAbortCause) => void>();
+  let isDraining = false;
 
   const trackAttemptInFlight = (job: Job<StoredRun>, runId: RunId) => {
     const abortController = new AbortController();
@@ -126,6 +155,9 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
   type TrackedAttempt = ReturnType<typeof trackAttemptInFlight>;
 
   const executeRunAttempt = async (task: AnyTaskDefinition, job: Job<StoredRun>, token: string | undefined) => {
+    if (isDraining) {
+      return handBackAtShutdown(job, token, runLoggerOf(job, job.attemptsMade + 1));
+    }
     const trackedAttempt = trackAttemptInFlight(job, job.data.runId);
     try {
       await executeTrackedRunAttempt(task, job, token, trackedAttempt);
@@ -146,7 +178,17 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
     const runLogger = runLoggerOf(job, attempt);
     const durationFieldsAt = (runEndedAt: number) => runDurationFieldsOf(job, stretchStartedAt, runEndedAt);
     const handler = task.handler as TaskHandler<unknown>;
-    let wakeAt: WakeTimeInEpochMilliseconds | undefined;
+    const handOff = async (moveJob: () => Promise<unknown>) => {
+      try {
+        await moveJob();
+      } catch (error) {
+        if (LOCK_ERROR_CODES.has((error as { code?: unknown }).code)) {
+          abortAttempt("lock lost");
+        }
+        throw error;
+      }
+    };
+    let outcome: HandlerOutcome;
     try {
       const stepEngine = await openStepEngine({
         taskName: task.name,
@@ -158,11 +200,12 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
         dispatch: config.dispatch,
         emit: config.emit,
         abortSignal,
+        isWorkerDraining: () => isDraining,
       });
       runLogger.debug({}, stepEngine.isResumingAfterSleep ? "run resumed" : "attempt started");
       const { step, dispatch, emit } = stepEngine;
       try {
-        wakeAt = await settleWithinTimeout(
+        outcome = await settleWithinTimeout(
           task.name,
           task.timeout,
           stepEngine.executeHandler(() =>
@@ -175,13 +218,21 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
       if (abortCauseOf(abortSignal) === "lock lost") {
         throw abortSignal.reason;
       }
-      if (wakeAt !== undefined) {
-        await job.moveToDelayed(wakeAt, token);
+      if (outcome.kind === "suspended") {
+        const { wakeAt } = outcome;
+        await handOff(() => job.moveToDelayed(wakeAt, token));
+      }
+      if (outcome.kind === "yielded") {
+        await handOff(() => job.moveToWait(token));
       }
     } catch (thrownValue) {
-      if (abortCauseOf(abortSignal) === "lock lost") {
+      const abortCause = abortCauseOf(abortSignal);
+      if (abortCause === "lock lost") {
         runLogger.debug({}, "attempt aborted: lock lost");
         throw thrownValue;
+      }
+      if (abortCause === "shutdown deadline") {
+        return handBackAtShutdown(job, token, runLogger);
       }
       const error = errorFromThrownValue(thrownValue);
       const failedAt = new Date();
@@ -203,49 +254,65 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
       }
       throw error;
     }
-    if (wakeAt !== undefined) {
-      runLogger.debug({ wakeAt: new Date(wakeAt).toISOString() }, "run suspended");
+    if (outcome.kind === "suspended") {
+      runLogger.debug({ wakeAt: new Date(outcome.wakeAt).toISOString() }, "run suspended");
       throw new DelayedError();
+    }
+    if (outcome.kind === "yielded") {
+      runLogger.debug({}, "run yielded at shutdown");
+      throw new WaitingError();
     }
     durationFieldsByCompletedJob.set(job, durationFieldsAt(Date.now()));
   };
 
   const timing = workerTiming();
   const client = createRedisClient(config.connection, "worker");
-  const worker = new Worker(
-    RUN_QUEUE_NAME,
-    async (job, token) => {
-      if (config.eventsByName.has(job.name)) {
-        const fanOut = job.data as StoredFanOut;
-        await config.openRunQueue().enqueueListenerRuns(
-          job.name,
-          fanOut,
-          fanOut.listenerNames.map((listenerName) => ({
-            listenerName,
-            retries: retriesOf(config.tasksByName.get(listenerName)),
-          })),
-        );
-        return;
-      }
-      const task = config.tasksByName.get(job.name);
-      if (task === undefined) {
-        throw new Error(`Unknown task "${job.name}"`);
-      }
-      await executeRunAttempt(task, job as Job<StoredRun>, token);
+  const attemptSettlements = new Set<Promise<void>>();
+  const trackSettlement = (execution: Promise<void>): Promise<void> => {
+    const settlement = execution.then(
+      () => undefined,
+      () => undefined,
+    );
+    attemptSettlements.add(settlement);
+    void settlement.then(() => attemptSettlements.delete(settlement));
+    return execution;
+  };
+  const waitForAttemptsInFlight = async () => {
+    while (attemptSettlements.size > 0) {
+      await Promise.all(attemptSettlements);
+    }
+  };
+  const worker = new Worker(RUN_QUEUE_NAME, (job, token) => trackSettlement(processJob(job, token)), {
+    connection: client,
+    prefix: config.prefix,
+    concurrency: config.options.concurrency,
+    lockDuration: timing.lockDurationInMilliseconds,
+    stalledInterval: timing.stallIntervalInMilliseconds,
+    maxStalledCount: bullmqMaxStalledCountOf(timing),
+    settings: {
+      backoffStrategy: (_attemptsMade, _backoffType, _error, job) =>
+        (job === undefined ? undefined : backoffInMillisecondsByFailedJob.get(job)) ?? NO_RETRY,
     },
-    {
-      connection: client,
-      prefix: config.prefix,
-      concurrency: config.options.concurrency,
-      lockDuration: timing.lockDurationInMilliseconds,
-      stalledInterval: timing.stallIntervalInMilliseconds,
-      maxStalledCount: bullmqMaxStalledCountOf(timing),
-      settings: {
-        backoffStrategy: (_attemptsMade, _backoffType, _error, job) =>
-          (job === undefined ? undefined : backoffInMillisecondsByFailedJob.get(job)) ?? NO_RETRY,
-      },
-    },
-  );
+  });
+  async function processJob(job: Job, token: string | undefined): Promise<void> {
+    if (config.eventsByName.has(job.name)) {
+      const fanOut = job.data as StoredFanOut;
+      await config.openRunQueue().enqueueListenerRuns(
+        job.name,
+        fanOut,
+        fanOut.listenerNames.map((listenerName) => ({
+          listenerName,
+          retries: retriesOf(config.tasksByName.get(listenerName)),
+        })),
+      );
+      return;
+    }
+    const task = config.tasksByName.get(job.name);
+    if (task === undefined) {
+      throw new Error(`Unknown task "${job.name}"`);
+    }
+    await executeRunAttempt(task, job as Job<StoredRun>, token);
+  }
   const logAttemptStalled = async (jobId: string) => {
     const job = (await Job.fromId(worker, jobId)) as Job<StoredRun> | undefined;
     if (job !== undefined && config.tasksByName.has(job.name)) {
@@ -294,12 +361,27 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
   });
   config.logger.info({}, "worker started");
 
+  const closeWorker = async (shouldForce: boolean) => {
+    await worker.close(shouldForce);
+    await closeRedisClient(client);
+    isWorkerRunningInThisProcess = false;
+    config.logger.info({}, "worker stopped");
+  };
+
   return {
-    close: async () => {
-      await worker.close();
-      await closeRedisClient(client);
-      isWorkerRunningInThisProcess = false;
-      config.logger.info({}, "worker stopped");
+    close: () => closeWorker(false),
+    shutDown: async () => {
+      isDraining = true;
+      await worker.pause(true);
+      let isDrained = await isSettledWithin(waitForAttemptsInFlight(), config.options.shutdownTimeoutInMilliseconds);
+      if (!isDrained) {
+        for (const abortAttempt of abortAttemptByJobId.values()) {
+          abortAttempt("shutdown deadline");
+        }
+        config.logger.warn({}, "attempts aborted at shutdown deadline");
+        isDrained = await isSettledWithin(waitForAttemptsInFlight(), timing.abortedAttemptsGraceInMilliseconds);
+      }
+      await closeWorker(!isDrained);
     },
   };
 }

@@ -37,6 +37,12 @@ integrationTest(
       const runFields = { task: "send-welcome-email", runId };
       const attemptFields = { ...runFields, attempt: 1 };
       expect(lines.at(0)).toEqual({ level: "info", fields: {}, message: "worker started" });
+      expect(lines.at(1)).toEqual({
+        level: "warn",
+        fields: {},
+        message:
+          "NEXT_MANUAL_SIG_HANDLE is not set: on SIGTERM Next exits at once and cuts the attempts running in this worker",
+      });
       expect(lines.at(-1)).toEqual({ level: "info", fields: {}, message: "worker stopped" });
       expect(lines).toContainEqual({ level: "debug", fields: runFields, message: "run dispatched" });
       expect(lines.filter((line) => line.fields.attempt !== undefined)).toEqual([

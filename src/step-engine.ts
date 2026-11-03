@@ -35,9 +35,12 @@ export type StepEngine = {
   dispatch: DispatchByName;
   emit: EmitByName;
   isResumingAfterSleep: boolean;
-  executeHandler: (handlerExecution: () => Promise<void>) => Promise<WakeTimeInEpochMilliseconds | undefined>;
+  executeHandler: (handlerExecution: () => Promise<void>) => Promise<HandlerOutcome>;
   throwRecordedMisuse: () => void;
 };
+
+export type HandlerOutcome =
+  { kind: "completed" } | { kind: "suspended"; wakeAt: WakeTimeInEpochMilliseconds } | { kind: "yielded" };
 
 export type StepEngineConfig = {
   taskName: string;
@@ -47,6 +50,7 @@ export type StepEngineConfig = {
   dispatch: DispatchByName;
   emit: EmitByName;
   abortSignal: AbortSignal;
+  isWorkerDraining: () => boolean;
 };
 
 type SavedSleep = {
@@ -67,6 +71,16 @@ class RunSuspension extends Error {
   constructor(wakeAt: WakeTimeInEpochMilliseconds) {
     super(
       `The run is suspended until ${new Date(wakeAt).toISOString()}. Let this error through: the run resumes at that time.`,
+    );
+  }
+}
+
+class RunYield extends Error {
+  override readonly name = "RunYield";
+
+  constructor() {
+    super(
+      "The worker is shutting down, so the run goes back to pending at this step. Let this error through: another worker resumes it from its saved steps.",
     );
   }
 }
@@ -101,6 +115,7 @@ export async function openStepEngine(config: StepEngineConfig): Promise<StepEngi
   );
   let recordedMisuse: StepMisuseError | undefined;
   let recordedWakeAt: WakeTimeInEpochMilliseconds | undefined;
+  let isYieldRecorded = false;
 
   const recordMisuse = (message: string): StepMisuseError => {
     const misuse = new StepMisuseError(message);
@@ -119,6 +134,10 @@ export async function openStepEngine(config: StepEngineConfig): Promise<StepEngi
     throwRecordedMisuse();
     if (recordedWakeAt !== undefined) {
       throw new RunSuspension(recordedWakeAt);
+    }
+    if (isYieldRecorded || config.isWorkerDraining()) {
+      isYieldRecorded = true;
+      throw new RunYield();
     }
   };
 
@@ -294,17 +313,20 @@ export async function openStepEngine(config: StepEngineConfig): Promise<StepEngi
       } catch (error) {
         handlerFailure = { error };
       }
-      if (recordedWakeAt !== undefined && recordedMisuse === undefined) {
+      if ((recordedWakeAt !== undefined || isYieldRecorded) && recordedMisuse === undefined) {
         await waitForStepsInFlight();
       }
       throwRecordedMisuse();
       if (recordedWakeAt !== undefined) {
-        return recordedWakeAt;
+        return { kind: "suspended", wakeAt: recordedWakeAt };
+      }
+      if (isYieldRecorded) {
+        return { kind: "yielded" };
       }
       if (handlerFailure !== undefined) {
         throw handlerFailure.error;
       }
-      return undefined;
+      return { kind: "completed" };
     },
     throwRecordedMisuse,
   };

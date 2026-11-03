@@ -36,7 +36,7 @@ function savedStepsKeyOf(job: MinimalJob): string {
   return `${jobKeyOf(job)}:steps`;
 }
 
-export function createRedisStepStore(client: Redis, job: Job<{ runId: RunId }>): StepStore {
+export function createRedisStepStore(client: Redis, job: Job<{ runId: RunId }>, markLockLost: () => void): StepStore {
   const savedStepsKey = savedStepsKeyOf(job);
   return {
     load: () => client.hgetall(savedStepsKey),
@@ -52,6 +52,7 @@ export function createRedisStepStore(client: Redis, job: Job<{ runId: RunId }>):
         serializedSavedStep,
       );
       if (outcome !== STEP_SAVED) {
+        markLockLost();
         throw new LostRunLockError(stepId, job.data.runId);
       }
     },

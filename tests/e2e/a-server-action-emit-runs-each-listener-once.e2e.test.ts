@@ -1,7 +1,7 @@
 import { expect, vi } from "vitest";
 
 import { e2eTest } from "./e2e-test.js";
-import { fixtureRecordsOf } from "./fixture-records.js";
+import { fixtureRecordsOf } from "../fixture-records.js";
 import { startNext } from "./next-process.js";
 import { submitServerActionForm } from "./server-action-form.js";
 

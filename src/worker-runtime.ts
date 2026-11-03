@@ -1,6 +1,8 @@
 import { DelayedError, Worker } from "bullmq";
 import type { Job, MinimalJob } from "bullmq";
 
+import { AttemptAbortedError, abortCauseOf } from "./attempt-abort.js";
+import type { AttemptAbortCause } from "./attempt-abort.js";
 import { settleWithinTimeout } from "./attempt-timeout.js";
 import { backoffInMillisecondsFor } from "./backoff.js";
 import { closeRedisClient, createRedisClient } from "./connection.js";
@@ -10,6 +12,7 @@ import type { AnyTaskDefinition, EventDefinition, TaskHandler } from "./definiti
 import { parseDuration } from "./durations.js";
 import type { Duration, DurationInMilliseconds } from "./durations.js";
 import { errorFromThrownValue, errorRecordFor, failureReasonFor } from "./failed-attempts.js";
+import type { RunId } from "./ids.js";
 import { loggerWithFields } from "./logger.js";
 import type { Logger } from "./logger.js";
 import { createRedisStepStore, keepSavedStepsForFailedRunRetention, removeSavedSteps } from "./redis-step-store.js";
@@ -76,8 +79,43 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
   isWorkerRunningInThisProcess = true;
 
   const backoffInMillisecondsByFailedJob = new WeakMap<MinimalJob, DurationInMilliseconds>();
+  const abortAttemptByJobId = new Map<string, (abortCause: AttemptAbortCause) => void>();
+
+  const trackAttemptInFlight = (job: Job<StoredRun>, runId: RunId) => {
+    const abortController = new AbortController();
+    const abortAttempt = (abortCause: AttemptAbortCause) => {
+      abortController.abort(new AttemptAbortedError(abortCause, runId));
+    };
+    const jobId = job.id ?? "";
+    abortAttemptByJobId.set(jobId, abortAttempt);
+    return {
+      abortSignal: abortController.signal,
+      abortAttempt,
+      untrack: () => {
+        if (abortAttemptByJobId.get(jobId) === abortAttempt) {
+          abortAttemptByJobId.delete(jobId);
+        }
+      },
+    };
+  };
+
+  type TrackedAttempt = ReturnType<typeof trackAttemptInFlight>;
 
   const executeRunAttempt = async (task: AnyTaskDefinition, job: Job<StoredRun>, token: string | undefined) => {
+    const trackedAttempt = trackAttemptInFlight(job, job.data.runId);
+    try {
+      await executeTrackedRunAttempt(task, job, token, trackedAttempt);
+    } finally {
+      trackedAttempt.untrack();
+    }
+  };
+
+  const executeTrackedRunAttempt = async (
+    task: AnyTaskDefinition,
+    job: Job<StoredRun>,
+    token: string | undefined,
+    { abortSignal, abortAttempt }: TrackedAttempt,
+  ) => {
     const stretchStartedAt = Date.now();
     const { runId, payload, sourceEvent } = job.data;
     const attempt = job.attemptsMade + 1;
@@ -93,9 +131,12 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
         taskName: task.name,
         runId,
         attempt,
-        store: createRedisStepStore(client, job),
+        store: createRedisStepStore(client, job, () => {
+          abortAttempt("lock lost");
+        }),
         dispatch: config.dispatch,
         emit: config.emit,
+        abortSignal,
       });
       runLogger.debug({}, stepEngine.isResumingAfterSleep ? "run resumed" : "attempt started");
       const { step, dispatch, emit } = stepEngine;
@@ -104,16 +145,23 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
           task.name,
           task.timeout,
           stepEngine.executeHandler(() =>
-            handler({ payload, step, emit, dispatch, runId, attempt, logger: runLogger }),
+            handler({ payload, step, emit, dispatch, runId, attempt, logger: runLogger, abortSignal }),
           ),
         );
       } finally {
         stepEngine.throwRecordedMisuse();
       }
+      if (abortCauseOf(abortSignal) === "lock lost") {
+        throw abortSignal.reason;
+      }
       if (wakeAt !== undefined) {
         await job.moveToDelayed(wakeAt, token);
       }
     } catch (thrownValue) {
+      if (abortCauseOf(abortSignal) === "lock lost") {
+        runLogger.debug({}, "attempt aborted: lock lost");
+        throw thrownValue;
+      }
       const error = errorFromThrownValue(thrownValue);
       const failedAt = new Date();
       const retriesLeft = (job.opts.attempts ?? 1) - attempt;
@@ -178,6 +226,11 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
     },
   );
   worker.on("error", () => undefined);
+  worker.on("lockRenewalFailed", (jobIds) => {
+    for (const jobId of jobIds) {
+      abortAttemptByJobId.get(jobId)?.("lock lost");
+    }
+  });
   worker.on("completed", (job) => {
     removeSavedSteps(client, job).catch(() => undefined);
   });

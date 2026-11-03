@@ -48,7 +48,16 @@ function createRecordingSends(): RecordingSends {
   };
 }
 
-function openAttempt(store: StepStore, attempt = 1, recordingSends: RecordingSends = createRecordingSends()) {
+type AttemptControls = {
+  abortSignal?: AbortSignal;
+};
+
+function openAttempt(
+  store: StepStore,
+  attempt = 1,
+  recordingSends: RecordingSends = createRecordingSends(),
+  { abortSignal = new AbortController().signal }: AttemptControls = {},
+) {
   return openStepEngine({
     taskName: "send-invoice",
     runId: "run-7",
@@ -56,6 +65,7 @@ function openAttempt(store: StepStore, attempt = 1, recordingSends: RecordingSen
     store,
     dispatch: recordingSends.dispatch,
     emit: recordingSends.emit,
+    abortSignal,
   });
 }
 
@@ -686,5 +696,43 @@ describe("handler dispatch and emit", () => {
 
     expect(await suspension).toBeGreaterThan(Date.now());
     expect(await store.load()).toHaveProperty([topLevelSendId(0)], JSON.stringify({ kind: "emit", eventId: "evt-1" }));
+  });
+});
+
+describe("an aborted attempt", () => {
+  test("throws the abort reason from every step, emit and dispatch, without running or saving any", async () => {
+    const store = createInMemoryStepStore();
+    const recordingSends = createRecordingSends();
+    const abortController = new AbortController();
+    const abortReason = new Error("the attempt lost its lock");
+    const { step, emit, dispatch } = await openAttempt(store, 1, recordingSends, {
+      abortSignal: abortController.signal,
+    });
+    const chargeCard = vi.fn(() => "charged");
+    abortController.abort(abortReason);
+
+    const thrownValues = await Promise.all([
+      step.run("charge-card", chargeCard).catch((error: unknown) => error),
+      step.sleep("cool-down", "1h").catch((error: unknown) => error),
+      step.sleepUntil("follow-up", new Date(0)).catch((error: unknown) => error),
+      emit("invoice.sent", {}).catch((error: unknown) => error),
+      dispatch("send-receipt", {}).catch((error: unknown) => error),
+    ]);
+
+    expect(thrownValues).toStrictEqual([abortReason, abortReason, abortReason, abortReason, abortReason]);
+    expect(chargeCard).not.toHaveBeenCalled();
+    expect(recordingSends.sends).toStrictEqual([]);
+    expect(await store.load()).toStrictEqual({});
+  });
+
+  test("still serves no saved result once aborted, so a replayed step throws too", async () => {
+    const abortController = new AbortController();
+    const abortReason = new Error("the worker reached its shutdown deadline");
+    const { step } = await openAttempt(createInMemoryStepStore({ "charge-card": '["charged"]' }), 2, undefined, {
+      abortSignal: abortController.signal,
+    });
+    abortController.abort(abortReason);
+
+    await expect(step.run("charge-card", () => "charged again")).rejects.toBe(abortReason);
   });
 });

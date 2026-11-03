@@ -46,6 +46,7 @@ export type StepEngineConfig = {
   store: StepStore;
   dispatch: DispatchByName;
   emit: EmitByName;
+  abortSignal: AbortSignal;
 };
 
 type SavedSleep = {
@@ -114,6 +115,7 @@ export async function openStepEngine(config: StepEngineConfig): Promise<StepEngi
   };
 
   const throwIfStretchIsOver = () => {
+    config.abortSignal.throwIfAborted();
     throwRecordedMisuse();
     if (recordedWakeAt !== undefined) {
       throw new RunSuspension(recordedWakeAt);

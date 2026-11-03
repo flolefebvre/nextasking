@@ -1,6 +1,6 @@
 # Worker
 
-`startWorker()` runs one worker in the process that calls it. This page covers its options, what a deploy does to the attempts it is running, how a handler stops cleanly, and what a stall is.
+`startWorker()` runs one worker in the process that calls it: `next start`, or the `nextasking worker` bin. This page covers its options, where it runs, what a deploy does to the attempts it is running, how a handler stops cleanly, and what a stall is.
 
 ## Start the worker with options
 
@@ -61,6 +61,76 @@ On the first SIGTERM or SIGINT (a repeat is ignored):
 - An attempt still running when the process exits is cut. Its run comes back as a stall. See [Stalls](#stalls).
 - Without `NEXT_MANUAL_SIG_HANDLE`, Next exits on SIGTERM at once and cuts every running attempt. The worker then warns at startup with `NEXT_MANUAL_SIG_HANDLE is not set: on SIGTERM Next exits at once and cuts the attempts running in this worker`, except under `NODE_ENV=development`. See [Dev](dev.md#what-ctrl-c-does-to-the-attempt-in-flight).
 - With `NEXT_MANUAL_SIG_HANDLE` set, Next leaves both signals to your code: the worker exits the process once it has stopped, with code 1 if stopping itself failed.
+- The `nextasking worker` bin sets `NEXT_MANUAL_SIG_HANDLE` itself. See [Run the worker in its own process](#run-the-worker-in-its-own-process).
+
+## Run the worker in its own process
+
+Run CPU-heavy or long tasks in a process of their own with the `nextasking worker` bin, on the same build as `next start`:
+
+```json
+// package.json
+{
+  "scripts": {
+    "build": "next build",
+    "start": "next start",
+    "worker": "NEXTASKING_WORKER=on nextasking worker"
+  }
+}
+```
+
+- Run it after `next build`, from the app's directory. It loads that build the way `next start` does, so `register()` in `instrumentation.ts` runs and task code resolves the same modules, `server-only` and `@/` imports included.
+- It answers no HTTP and binds no port. Deploy it as a worker component with no route and no port.
+- It sets `NEXT_MANUAL_SIG_HANDLE` itself, and `NODE_ENV=production` when `NODE_ENV` is unset. A SIGTERM drains the attempts in flight as in [Let a deploy finish the running attempts](#let-a-deploy-finish-the-running-attempts), then the process exits 0.
+- When `register()` doesn't call `startWorker()`, the bin exits 1 with this line on stderr. Turn on, in the bin's environment, the variable your `instrumentation.ts` checks:
+
+```text
+nextasking worker: register() started no worker. Turn on the environment variable your instrumentation.ts checks before calling startWorker().
+```
+
+- `nextasking worker` takes no other argument; anything else prints `Usage: nextasking worker` and exits 1.
+
+### Choose which processes run a worker
+
+`instrumentation.ts` starts the worker behind an environment variable you own, `NEXTASKING_WORKER` in these examples. Set it in each process that should run tasks:
+
+| Process                    | Command                                                    | Runs a worker |
+| -------------------------- | ---------------------------------------------------------- | ------------- |
+| Web server with the worker | `NEXT_MANUAL_SIG_HANDLE=1 NEXTASKING_WORKER=on next start` | yes           |
+| Web server only            | `next start`                                               | no            |
+| Worker only                | `NEXTASKING_WORKER=on nextasking worker`                   | yes           |
+
+- A process that never calls `startWorker()` only dispatches and emits.
+- Run as many workers as you need, embedded, separate or both: each takes attempts from the same queues. `concurrency` counts per process.
+
+### Run the bin with `output: "standalone"`
+
+Next bundles the library into its server chunks, so the standalone output holds no copy of the bin unless you list it. Add both files to `outputFileTracingIncludes`; `package.json` makes Node load the bin as an ES module:
+
+```ts
+// next.config.ts
+import type { NextConfig } from "next";
+
+const nextConfig: NextConfig = {
+  output: "standalone",
+  outputFileTracingIncludes: {
+    "/*": ["./node_modules/@flefebvre/nextasking/package.json", "./node_modules/@flefebvre/nextasking/dist/bin.js"],
+  },
+};
+
+export default nextConfig;
+```
+
+The standalone output has no `node_modules/.bin`, so run the bin by its path, from inside the standalone directory or a copy of it:
+
+```sh
+# the web process
+cd .next/standalone && node server.js
+# the worker process
+cd .next/standalone && NEXTASKING_WORKER=on node node_modules/@flefebvre/nextasking/dist/bin.js worker
+```
+
+- The bin reads the build's config from `.next/required-server-files.json`, as the generated `server.js` does, and runs with `NODE_ENV=production`.
+- The standalone directory runs on its own: copy it into an image without the project's `node_modules`.
 
 ## Stop a handler cleanly with abortSignal
 

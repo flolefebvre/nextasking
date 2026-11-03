@@ -11,6 +11,8 @@ import { UnknownTaskRunError } from "./attempt-errors.js";
 import {
   LOCK_ERROR_CODES,
   createFinishesInFlight,
+  fanOutCompletionInFlight,
+  firingCompletionInFlight,
   runCompletionInFlight,
   runFailureInFlight,
 } from "./finishes-in-flight.js";
@@ -399,10 +401,11 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
     },
   });
   const concurrencySlots = createConcurrencySlots(client, worker, timing.lockDurationInMilliseconds);
+  const plannedInstantOf = (firingJob: Job<StoredFiring>): EpochMilliseconds =>
+    firingJob.data.plannedInstant ?? plannedInstantOfFiring(firingJob.id, firingJob.data.taskName);
   async function enqueueFiringRun(firingJob: Job<StoredFiring>): Promise<void> {
     const { taskName } = firingJob.data;
-    const plannedInstant: EpochMilliseconds =
-      firingJob.data.plannedInstant ?? plannedInstantOfFiring(firingJob.id, taskName);
+    const plannedInstant = plannedInstantOf(firingJob);
     const scheduledAt = new Date(plannedInstant);
     const task = config.tasksByName.get(taskName);
     if (task?.schedule === undefined) {
@@ -421,7 +424,17 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
   }
   async function processJob(job: Job, token: string | undefined): Promise<void> {
     if (job.name === FIRING_JOB_NAME) {
-      await enqueueFiringRun(job as Job<StoredFiring>);
+      const firingJob = job as Job<StoredFiring>;
+      await enqueueFiringRun(firingJob);
+      finishesInFlight.trackFinish(
+        job.id ?? "",
+        firingCompletionInFlight({
+          processedOn: job.processedOn,
+          logger: config.logger,
+          taskName: firingJob.data.taskName,
+          scheduledAt: new Date(plannedInstantOf(firingJob)),
+        }),
+      );
       return;
     }
     if (config.eventsByName.has(job.name)) {
@@ -436,6 +449,15 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
             retries: retriesOf(listener),
             concurrencyKey: listener === undefined ? undefined : concurrencyKeyOf(listener, fanOut.payload),
           };
+        }),
+      );
+      finishesInFlight.trackFinish(
+        job.id ?? "",
+        fanOutCompletionInFlight({
+          processedOn: job.processedOn,
+          logger: config.logger,
+          eventName: job.name,
+          eventId: fanOut.eventId,
         }),
       );
       return;

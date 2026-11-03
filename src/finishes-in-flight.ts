@@ -80,6 +80,53 @@ export function runCompletionInFlight({
   };
 }
 
+function silentCompletionInFlight(
+  processedOn: EpochMilliseconds | undefined,
+  warnCompletionUnconfirmed: (error: unknown) => void,
+): FinishInFlight {
+  return {
+    reportedBy: "completed",
+    isConfirmedBy: isCompletedByActivation(processedOn),
+    onConfirmed: () => undefined,
+    onUnconfirmed: warnCompletionUnconfirmed,
+  };
+}
+
+export function fanOutCompletionInFlight({
+  processedOn,
+  logger,
+  eventName,
+  eventId,
+}: {
+  processedOn: EpochMilliseconds | undefined;
+  logger: Logger;
+  eventName: string;
+  eventId: string;
+}): FinishInFlight {
+  return silentCompletionInFlight(processedOn, (error) => {
+    logger.warn({ eventName, eventId, err: error }, "fan-out completion unconfirmed");
+  });
+}
+
+export function firingCompletionInFlight({
+  processedOn,
+  logger,
+  taskName,
+  scheduledAt,
+}: {
+  processedOn: EpochMilliseconds | undefined;
+  logger: Logger;
+  taskName: string;
+  scheduledAt: Date;
+}): FinishInFlight {
+  return silentCompletionInFlight(processedOn, (error) => {
+    logger.warn(
+      { task: taskName, scheduledAt: scheduledAt.toISOString(), err: error },
+      "firing completion unconfirmed",
+    );
+  });
+}
+
 const STATES_AFTER_A_STORED_FAILURE = new Set(["failed", "delayed", "waiting"]);
 
 export function runFailureInFlight({

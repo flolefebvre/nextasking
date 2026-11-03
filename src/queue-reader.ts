@@ -132,8 +132,6 @@ const JOBS_READ_PER_BATCH = 200;
 
 const RUN_JOB_FIELD_NAMES = ["name", "data", "timestamp", "delay", "atm", "finishedOn"];
 
-type JobFieldValues = (string | null)[];
-
 type RunJobRecord = {
   jobKey: string;
   name: string;
@@ -222,6 +220,48 @@ function zeroRunCountsOf(taskNames: Iterable<string>): RunCountsOf<string> {
   );
 }
 
+export type JobFieldValues = (string | null)[];
+
+export type JobFields = { jobKey: string; fieldValues: JobFieldValues };
+
+export type QueueAccess = Pick<RunQueue, "bullmqQueue" | "client">;
+
+export async function readJobFields(
+  { bullmqQueue, client }: QueueAccess,
+  jobIds: readonly JobId[],
+  fieldNames: readonly string[],
+): Promise<JobFields[]> {
+  const jobKeys = jobIds.map((jobId) => bullmqQueue.toKey(jobId));
+  const pipeline = client.pipeline();
+  for (const jobKey of jobKeys) {
+    pipeline.hmget(jobKey, ...fieldNames);
+  }
+  const replies = (await pipeline.exec()) ?? [];
+  return replies.map(([error, fieldValues], index) => {
+    if (error !== null) {
+      throw error;
+    }
+    return { jobKey: jobKeys[index] ?? "", fieldValues: fieldValues as JobFieldValues };
+  });
+}
+
+export async function forEachBatchOfJobIds(
+  { bullmqQueue }: QueueAccess,
+  set: BullmqJobSet,
+  firstOffset: number,
+  useBatch: (jobIds: JobId[], offset: number) => Promise<"next batch" | "stop">,
+): Promise<"set walked" | "stopped"> {
+  for (let offset = firstOffset; ; offset += JOBS_READ_PER_BATCH) {
+    const jobIds = await bullmqQueue.getRanges([set], offset, offset + JOBS_READ_PER_BATCH - 1, false);
+    if ((await useBatch(jobIds, offset)) === "stop") {
+      return "stopped";
+    }
+    if (jobIds.length < JOBS_READ_PER_BATCH) {
+      return "set walked";
+    }
+  }
+}
+
 export function createQueueReader(config: QueueReaderConfig): QueueReader {
   const rejectUnknownTask = (taskName: string): void => {
     if (!config.tasksByName.has(taskName)) {
@@ -229,49 +269,20 @@ export function createQueueReader(config: QueueReaderConfig): QueueReader {
     }
   };
 
-  const readJobFields = async (
-    jobIds: readonly JobId[],
-    fieldNames: readonly string[],
-  ): Promise<{ jobKey: string; fieldValues: JobFieldValues }[]> => {
-    const { bullmqQueue, client } = await config.openRunQueue();
-    const jobKeys = jobIds.map((jobId) => bullmqQueue.toKey(jobId));
-    const pipeline = client.pipeline();
-    for (const jobKey of jobKeys) {
-      pipeline.hmget(jobKey, ...fieldNames);
-    }
-    const replies = (await pipeline.exec()) ?? [];
-    return replies.map(([error, fieldValues], index) => {
-      if (error !== null) {
-        throw error;
-      }
-      return { jobKey: jobKeys[index] ?? "", fieldValues: fieldValues as JobFieldValues };
-    });
-  };
+  const readJobFieldsOfQueue = async (jobIds: readonly JobId[], fieldNames: readonly string[]) =>
+    readJobFields(await config.openRunQueue(), jobIds, fieldNames);
 
   const readRunJobRecords = async (jobIds: readonly JobId[]): Promise<RunJobRecord[]> =>
-    (await readJobFields(jobIds, RUN_JOB_FIELD_NAMES)).flatMap(({ jobKey, fieldValues }) => {
+    (await readJobFieldsOfQueue(jobIds, RUN_JOB_FIELD_NAMES)).flatMap(({ jobKey, fieldValues }) => {
       const record = runJobRecordOf(jobKey, fieldValues);
       return record !== undefined && config.tasksByName.has(record.name) ? [record] : [];
     });
 
-  const jobIdsIn = async (set: BullmqJobSet, offset: number): Promise<JobId[]> =>
-    (await config.openRunQueue()).bullmqQueue.getRanges([set], offset, offset + JOBS_READ_PER_BATCH - 1, false);
-
-  const forEachBatchOfJobIds = async (
+  const forEachBatchOfJobIdsOfQueue = async (
     set: BullmqJobSet,
     firstOffset: number,
     useBatch: (jobIds: JobId[], offset: number) => Promise<"next batch" | "stop">,
-  ): Promise<"set walked" | "stopped"> => {
-    for (let offset = firstOffset; ; offset += JOBS_READ_PER_BATCH) {
-      const jobIds = await jobIdsIn(set, offset);
-      if ((await useBatch(jobIds, offset)) === "stop") {
-        return "stopped";
-      }
-      if (jobIds.length < JOBS_READ_PER_BATCH) {
-        return "set walked";
-      }
-    }
-  };
+  ) => forEachBatchOfJobIds(await config.openRunQueue(), set, firstOffset, useBatch);
 
   const getRun: QueueReader["getRun"] = async (taskName, runId) => {
     rejectUnknownTask(taskName);
@@ -308,8 +319,8 @@ export function createQueueReader(config: QueueReaderConfig): QueueReader {
       for (let setIndex = startPosition.setIndex; setIndex < sets.length && nextCursor === undefined; setIndex += 1) {
         const set = sets[setIndex] ?? "wait";
         const firstOffset = setIndex === startPosition.setIndex ? startPosition.offset : 0;
-        await forEachBatchOfJobIds(set, firstOffset, async (jobIds, offset) => {
-          const fieldsByJob = await readJobFields(jobIds, RUN_JOB_FIELD_NAMES);
+        await forEachBatchOfJobIdsOfQueue(set, firstOffset, async (jobIds, offset) => {
+          const fieldsByJob = await readJobFieldsOfQueue(jobIds, RUN_JOB_FIELD_NAMES);
           for (const [index, { jobKey, fieldValues }] of fieldsByJob.entries()) {
             const record = runJobRecordOf(jobKey, fieldValues);
             const listedRun =
@@ -334,8 +345,8 @@ export function createQueueReader(config: QueueReaderConfig): QueueReader {
       const runCounts = zeroRunCountsOf(config.tasksByName.keys());
       for (const set of Object.keys(BULLMQ_JOB_STATE_BY_SET) as BullmqJobSet[]) {
         const fieldNames = set === "delayed" ? ["name", "data"] : ["name"];
-        await forEachBatchOfJobIds(set, 0, async (jobIds) => {
-          for (const { fieldValues } of await readJobFields(jobIds, fieldNames)) {
+        await forEachBatchOfJobIdsOfQueue(set, 0, async (jobIds) => {
+          for (const { fieldValues } of await readJobFieldsOfQueue(jobIds, fieldNames)) {
             const [name, data] = fieldValues;
             const taskRunCounts =
               name === null || name === undefined || !config.tasksByName.has(name) ? undefined : runCounts[name];

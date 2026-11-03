@@ -154,7 +154,7 @@ export type NextaskingConfig<
   tasks: Tasks;
 };
 
-const DEFAULT_PREFIX = "nextasking";
+export const DEFAULT_PREFIX = "nextasking";
 
 let isWorkerStartedInThisProcess = false;
 

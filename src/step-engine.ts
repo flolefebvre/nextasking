@@ -369,6 +369,18 @@ export function serializedStepResultOf(stepId: StepId, result: unknown): Seriali
   return serializedResult;
 }
 
+export function savedSleepWokenAt(
+  serializedSavedStep: SerializedSavedStep,
+  wakeAt: WakeTimeInEpochMilliseconds,
+): SerializedSavedStep | undefined {
+  const savedStep = deserializeSavedStep(serializedSavedStep);
+  if (savedStep.kind !== "sleep" || savedStep.wakeAt <= wakeAt) {
+    return undefined;
+  }
+  const wokenSleep: SavedSleep = { ...savedStep, wakeAt };
+  return JSON.stringify(wokenSleep);
+}
+
 export function wakeAtOfSavedSleep(serializedSavedStep: SerializedSavedStep): WakeTimeInEpochMilliseconds | undefined {
   const savedStep = deserializeSavedStep(serializedSavedStep);
   return savedStep.kind === "sleep" ? savedStep.wakeAt : undefined;

@@ -4,6 +4,7 @@ import type { Redis } from "ioredis";
 import type { RunId, StepId } from "./ids.js";
 import { LostRunLockError, RETURN_0_UNLESS_LOCK_IS_HELD, jobKeyOf, lockKeyOf } from "./job-lock.js";
 import { FAILED_JOB_RETENTION } from "./job-retention.js";
+import { savedSleepWokenAt } from "./step-engine.js";
 import type { SerializedSavedStep, StepStore } from "./step-engine.js";
 
 const SAVED_STEPS_TIME_TO_LIVE_IN_MILLISECONDS = FAILED_JOB_RETENTION.age * 1000;
@@ -51,6 +52,19 @@ export function createRedisStepStore(client: Redis, job: Job<{ runId: RunId }>, 
       }
     },
   };
+}
+
+export async function wakeSavedSleepsNow(client: Redis, jobKey: string): Promise<void> {
+  const now = Date.now();
+  const wokenSleepFields = Object.entries(await loadSavedSteps(client, jobKey)).flatMap(
+    ([stepId, serializedSavedStep]) => {
+      const wokenSleep = savedSleepWokenAt(serializedSavedStep, now);
+      return wokenSleep === undefined ? [] : [stepId, wokenSleep];
+    },
+  );
+  if (wokenSleepFields.length > 0) {
+    await client.hset(savedStepsKeyOfJobKey(jobKey), ...wokenSleepFields);
+  }
 }
 
 export async function removeSavedSteps(client: Redis, job: MinimalJob): Promise<void> {

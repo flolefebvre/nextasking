@@ -79,15 +79,60 @@ A run fails for good when its last attempt fails, when it throws `NonRetriableEr
 
 A thrown value that isn't an `Error`, such as `throw "boom"`, is recorded and logged as an `Error` whose message is that value as a string.
 
-A repeat of a failed run's `runId` is dropped as long as the run is kept: a failure doesn't let the same `runId` run again. See [Tasks and events](tasks-and-events.md#the-dedup-window).
+A repeat of a failed run's `runId` is dropped as long as the run is kept: a failure doesn't let the same `runId` run again. See [Tasks and events](tasks-and-events.md#the-dedup-window). Replay it instead.
+
+## Replay a failed run
+
+Deploy the fix, then replay the run from server code: an admin route, a server action, a script.
+
+```ts
+// src/app/admin/runs/actions.ts
+"use server";
+import { RunNotReplayableError } from "@flefebvre/nextasking";
+import { nextasking } from "@/nextasking";
+
+export async function replayRun(runId: string) {
+  try {
+    await nextasking.replay("sync-account", runId);
+  } catch (error) {
+    if (error instanceof RunNotReplayableError) {
+      return { replayed: false, message: error.message };
+    }
+    throw error;
+  }
+  return { replayed: true };
+}
+```
+
+- `replay(taskName, runId)` resolves with `{ runId }`. The run keeps its `runId` and its payload, and goes back to pending.
+- It reuses the steps the run saved: a step that succeeded before the failure returns its saved result and doesn't run again.
+- The retry budget starts over: the next attempt is `attempt` 1, and the run gets the retry count it was stored with.
+- The failed life's `errors` and `reason` are cleared. Read them with `getRun` before you replay if you need them.
+- It throws `RunNotReplayableError` when no run with that id is kept (unknown, or removed after 14 days) or when the run isn't failed: it is still pending or retrying, it completed, or it was already replayed. It throws `UnknownTaskError` for a task name the instance doesn't list.
+- A replayed run that fails again is a new failure: it keeps its new errors and `reason`, and can be replayed again.
+
+## Replay a failed fan-out
+
+A fan-out fails when the worker can't turn an event into its listener runs: Redis kept failing, the worker stalled, or no worker defined the event for 30 minutes. Replay it with the event's name and id:
+
+```ts
+await nextasking.replayEvent("invoice.paid", eventId);
+```
+
+- `replayEvent(eventName, eventId)` resolves with `{ eventId }`. The fan-out runs again from the listener names it saved when it was emitted.
+- A listener that already has a run is skipped, whatever that run's state: replaying a fan-out never runs a listener twice.
+- It throws `FanOutNotReplayableError` when no fan-out with that id is kept or when it isn't failed, and `UnknownEventError` for an event name the instance doesn't list.
+- A failed listener run is a failed run: replay it on its own with `replay(listenerName, runId)`. The other listeners don't run again. `getEvent` lists each listener's `runId`; see [Dashboard](dashboard.md).
 
 ## Log lines
 
 | Level   | Message          | Fields                                                                                                      |
 | ------- | ---------------- | ----------------------------------------------------------------------------------------------------------- |
+| `info`  | `run replayed`   | `task`, `runId`                                                                                             |
 | `warn`  | `attempt failed` | `task`, `runId`, `attempt`, `err`, `retriesLeft`, `backoffInMilliseconds`                                   |
 | `error` | `run failed`     | `task`, `runId`, `attempt`, `err`, `reason`, `runDurationInMilliseconds`, `executionDurationInMilliseconds` |
 
+- `run replayed` is written by the process that calls `replay`, through its own instance's logger.
 - `attempt failed` is written only when a retry follows; a final failure writes `run failed` alone.
 - `err` is the `Error` the attempt failed with, under pino's `err` key so pino serializes it.
 - `backoffInMilliseconds` is the wait actually applied before the next attempt.

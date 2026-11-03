@@ -107,6 +107,8 @@ export default async function FailedRunsPage({ searchParams }: { searchParams: P
 }
 ```
 
+Give each row a replay button backed by a server action that calls `replay(run.task, run.runId)`. See [Retries and failures](retries-and-failures.md#replay-a-failed-run).
+
 ## Count the backlog
 
 ```ts
@@ -125,7 +127,7 @@ runsByListener["record-invoice-payment"]?.state;
 
 `getEvent(event, eventId)` returns `{ event, eventId, fanOut, runsByListener }`. An unknown event name throws `UnknownEventError`.
 
-- `fanOut` is `"pending"` until a worker has turned the event into listener runs, then `"completed"`, or `"failed"` when the fan-out failed for good. It is `undefined` when the queue holds no fan-out for that id: never emitted, emitted with no listener, or removed by retention.
+- `fanOut` is `"pending"` until a worker has turned the event into listener runs, then `"completed"`, or `"failed"` when the fan-out failed for good; replay a failed one with `replayEvent(event, eventId)`, see [Retries and failures](retries-and-failures.md#replay-a-failed-fan-out). It is `undefined` when the queue holds no fan-out for that id: never emitted, emitted with no listener, or removed by retention.
 - `runsByListener` has one key per listener the code defines for the event, each holding that listener's `Run`, typed by its listener, or `undefined` while it has none.
 - A listener the code no longer defines is left out, even when the emitting release fanned out to it. A listener added after the emit shows `undefined`.
 

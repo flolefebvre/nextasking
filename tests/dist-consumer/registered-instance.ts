@@ -4,8 +4,10 @@ import {
   defineListener,
   defineScheduledTask,
   defineTask,
+  FanOutNotReplayableError,
   InvalidPayloadError,
   NonRetriableError,
+  RunNotReplayableError,
   StepMisuseError,
   UnknownEventError,
   UnknownTaskError,
@@ -37,6 +39,8 @@ import type {
   PayloadSchema,
   PreviousFiring,
   Register,
+  ReplayedEvent,
+  ReplayedRun,
   Run,
   RunCounts,
   RunError,
@@ -267,8 +271,10 @@ export const anyPayloadSchema: PayloadSchema = userSignedUpSchema;
 export const payloadIssues: PayloadIssue[] = [];
 
 export const errorClasses: (new (...args: never[]) => Error)[] = [
+  FanOutNotReplayableError,
   InvalidPayloadError,
   NonRetriableError,
+  RunNotReplayableError,
   StepMisuseError,
   UnknownEventError,
   UnknownTaskError,
@@ -306,6 +312,13 @@ export const scheduledTaskRunNowWithItsOwnId = nextasking.dispatch("purge-expire
 export const scheduledTaskGivenAPayload = nextasking.dispatch("purge-expired-sessions", { olderThanDays: 30 });
 
 export const workerStarted: Promise<void> = nextasking.startWorker();
+
+export const replayedRun: Promise<ReplayedRun> = nextasking.replay("send-welcome-email", "welcome-ada");
+
+export const replayedEvent: Promise<ReplayedEvent> = nextasking.replayEvent("user.signed-up", "event-1");
+
+// @ts-expect-error the instance lists no such task
+export const replayedUnknownTask = nextasking.replay("send-goodbye-email", "goodbye-ada");
 
 export const runReadBack = nextasking.getRun("send-welcome-email", "welcome-ada");
 

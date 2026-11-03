@@ -124,6 +124,43 @@ await nextasking.replayEvent("invoice.paid", eventId);
 - It throws `FanOutNotReplayableError` when no fan-out with that id is kept or when it isn't failed, and `UnknownEventError` for an event name the instance doesn't list.
 - A failed listener run is a failed run: replay it on its own with `replay(listenerName, runId)`. The other listeners don't run again. `getEvent` lists each listener's `runId`; see [Dashboard](dashboard.md).
 
+## React to a failure
+
+The library emits a built-in event on each final failure. Listen to it with an ordinary listener, so the alert is itself a retried, durable run.
+
+```ts
+// src/nextasking/tasks/alert-on-run-failed.ts
+import { defineListener, runFailed } from "@flefebvre/nextasking";
+
+export const alertOnRunFailed = defineListener("alert-on-run-failed", {
+  on: runFailed,
+  handler: async ({ payload, step }) => {
+    await step.run("page-on-call", () =>
+      pager.trigger(`${payload.task} failed (${payload.reason}): ${payload.error.message}`, { runId: payload.runId }),
+    );
+  },
+});
+```
+
+```ts
+// src/nextasking/index.ts
+export const nextasking = createNextasking({
+  connection: { url: process.env.REDIS_URL! },
+  events: [invoicePaid],
+  tasks: [syncAccount, recordInvoicePayment, alertOnRunFailed],
+});
+```
+
+- List the listener in `tasks`. Don't list `runFailed` or `fanOutFailed` in `events`: they are added automatically, and `createNextasking` throws if you list them.
+- `runFailed` (`nextasking/run.failed`) carries `{ task, runId, reason, error: { name, message, stack }, attempt, failedAt }`, plus `eventName` and `eventId` when the failed run is a listener's. `failedAt` is an ISO string.
+- `fanOutFailed` (`nextasking/fan-out.failed`) carries `{ eventName, eventId, error: { name, message, stack }, failedAt }`. Replay the fan-out with `replayEvent(eventName, eventId)`.
+- Neither carries the failed run's payload. Read it with `getRun(task, runId)` if the alert needs it.
+- One notice per final failure: a run that is replayed and fails again sends a second one. A failed run sends its notice right after the failure is saved. If a crash loses it, the next `startWorker()` re-sends the unsent notices among the failures of the last 24 hours. A re-sent notice keeps its event id, derived from the failure, so it falls within the [dedup window](tasks-and-events.md#the-dedup-window) and still starts one run per listener.
+- A failed run of a listener of a built-in event sends no notice, and neither does a failed fan-out of a built-in event, so an alert that fails can't loop. Its failure is still logged and replayable.
+- With no listener on a built-in event, its notices are dropped silently: no `no listeners for event` line. A listener added later doesn't receive past failures.
+- `emit` doesn't take the built-in events, in its types or at runtime, and `isEventName` is false for them. `EventName`, `getEvent`, `replayEvent` and `eventDefinitions` include them.
+- The types are exported as `RunFailedPayload`, `FanOutFailedPayload` and `FailureNoticeError`.
+
 ## Log lines
 
 | Level   | Message          | Fields                                                                                                      |
@@ -131,9 +168,11 @@ await nextasking.replayEvent("invoice.paid", eventId);
 | `info`  | `run replayed`   | `task`, `runId`                                                                                             |
 | `warn`  | `attempt failed` | `task`, `runId`, `attempt`, `err`, `retriesLeft`, `backoffInMilliseconds`                                   |
 | `error` | `run failed`     | `task`, `runId`, `attempt`, `err`, `reason`, `runDurationInMilliseconds`, `executionDurationInMilliseconds` |
+| `error` | `fan-out failed` | `eventName`, `eventId`, `err`                                                                               |
 
 - `run replayed` is written by the process that calls `replay`, through its own instance's logger.
 - `attempt failed` is written only when a retry follows; a final failure writes `run failed` alone.
+- `fan-out failed` is written when a fan-out fails for good, stalls included.
 - `err` is the `Error` the attempt failed with, under pino's `err` key so pino serializes it.
 - `backoffInMilliseconds` is the wait actually applied before the next attempt.
 - See [Logging](logging.md) for the other lines.

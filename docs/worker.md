@@ -20,6 +20,7 @@ export async function register() {
 
 - `startWorker` rejects an invalid option before opening any connection.
 - Before it takes its first attempt, `startWorker` reconciles the schedules stored in Redis with the instance's scheduled tasks. See [Scheduled tasks](scheduled-tasks.md#what-a-deploy-does-to-schedules).
+- Then it re-sends the failure notices a crash lost among the failures of the last 24 hours. See [Retries and failures](retries-and-failures.md#react-to-a-failure).
 - Type the options with `StartWorkerOptions`.
 
 ## Cap the attempts in flight with concurrency

@@ -18,6 +18,10 @@ _Avoid_: Message, signal
 An event the library defines and emits itself when a run or a fan-out fails; a consumer can listen to it but not emit it.
 _Avoid_: System event, hook, notification
 
+**Failure notice**:
+One emission of a built-in event for one final failure of a run or a fan-out, under an event id derived from that failure, so a re-sent notice starts no listener twice.
+_Avoid_: Alert, failure event, notification
+
 **Listener**:
 A task subscribed to exactly one event, declared by the task itself, whose payload is that event's payload.
 _Avoid_: Subscriber, handler

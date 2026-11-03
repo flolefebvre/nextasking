@@ -8,7 +8,7 @@ import { settleWithinTimeout } from "./attempt-timeout.js";
 import { setTimeout as sleep } from "node:timers/promises";
 
 import { UnknownTaskRunError } from "./attempt-errors.js";
-import { LOCK_ERROR_CODES, createCompletionsInFlight } from "./completions-in-flight.js";
+import { LOCK_ERROR_CODES, createFinishesInFlight, runCompletionInFlight } from "./finishes-in-flight.js";
 import { createConcurrencySlots } from "./concurrency-slots.js";
 import type { ConcurrencySlot } from "./concurrency-slots.js";
 import { listenerLoggingAnsweredErrors } from "./connection.js";
@@ -129,13 +129,17 @@ export async function isSettledWithin(settlement: Promise<void>, timeoutInMillis
 
 export function startRunWorker(config: WorkerConfig): RunningWorker {
   const backoffInMillisecondsByFailedJob = new WeakMap<MinimalJob, DurationInMilliseconds>();
-  const completionsInFlight = createCompletionsInFlight({
+  const finishesInFlight = createFinishesInFlight({
     readJobOnServer: async (jobId) => {
       const jobOnServer = await Job.fromId(worker, jobId);
       if (jobOnServer === undefined) {
         return undefined;
       }
-      return { state: await jobOnServer.getState(), processedOn: jobOnServer.processedOn };
+      return {
+        state: await jobOnServer.getState(),
+        processedOn: jobOnServer.processedOn,
+        attemptsMade: jobOnServer.attemptsMade,
+      };
     },
     logWorkerError: listenerLoggingAnsweredErrors(config.logger, "worker error"),
   });
@@ -340,12 +344,15 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
       runLogger.debug({}, "run yielded at shutdown");
       throw new WaitingError();
     }
-    completionsInFlight.trackCompletion(job.id ?? "", {
-      processedOn: job.processedOn,
-      runLogger,
-      durationFields: durationFieldsAt(Date.now()),
-      removeSavedSteps: () => removeSavedSteps(client, job),
-    });
+    finishesInFlight.trackFinish(
+      job.id ?? "",
+      runCompletionInFlight({
+        processedOn: job.processedOn,
+        runLogger,
+        durationFields: durationFieldsAt(Date.now()),
+        removeSavedSteps: () => removeSavedSteps(client, job),
+      }),
+    );
   };
 
   const timing = workerTiming();
@@ -487,14 +494,14 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
   };
   const failRunForStalling = (job: Job<StoredRun>) =>
     recordRunFailedForStalling(client, job, timing.stallCountThatFailsARun, runLoggerOf(job, job.attemptsMade));
-  worker.on("error", completionsInFlight.routeWorkerError);
+  worker.on("error", finishesInFlight.routeWorkerError);
   worker.on("lockRenewalFailed", (jobIds) => {
     for (const jobId of jobIds) {
       abortAttemptByJobId.get(jobId)?.("lock lost");
     }
   });
   worker.on("completed", (job) => {
-    completionsInFlight.recordRunCompleted(job.id ?? "");
+    finishesInFlight.recordFinishReported(job.id ?? "", "completed");
   });
   worker.on("stalled", (jobId) => {
     logAttemptStalled(jobId).catch(() => undefined);

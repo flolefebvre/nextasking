@@ -11,3 +11,5 @@ export type WorkerProcessConfig = {
 export const WORKER_PROCESS_CONFIG_VARIABLE = "NEXTASKING_WORKER_PROCESS_CONFIG";
 
 export const WORKER_PROCESS_READY = "worker process ready";
+
+export const CLOSE_WHILE_BOOTING_URL_VARIABLE = "NEXTASKING_CLOSE_WHILE_BOOTING_URL";

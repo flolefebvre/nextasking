@@ -92,8 +92,6 @@ const STALL_LIMIT_FAILED_REASON = "job stalled more than allowable limit";
 
 const LOCK_ERROR_CODES = new Set<unknown>([ErrorCode.JobLockNotExist, ErrorCode.JobLockMismatch]);
 
-let isWorkerRunningInThisProcess = false;
-
 async function moveRunToDelayed(
   client: Redis,
   job: Job<StoredRun>,
@@ -118,7 +116,7 @@ async function yieldAtShutdown(job: Job, token: string | undefined, runLogger: L
   throw new WaitingError();
 }
 
-async function isSettledWithin(settlement: Promise<void>, timeoutInMilliseconds: DurationInMilliseconds) {
+export async function isSettledWithin(settlement: Promise<void>, timeoutInMilliseconds: DurationInMilliseconds) {
   let timeoutTimer: NodeJS.Timeout | undefined;
   const timeoutExpiry = new Promise<false>((resolve) => {
     timeoutTimer = setTimeout(() => {
@@ -133,11 +131,6 @@ async function isSettledWithin(settlement: Promise<void>, timeoutInMilliseconds:
 }
 
 export function startRunWorker(config: WorkerConfig): RunningWorker {
-  if (isWorkerRunningInThisProcess) {
-    throw new Error("The nextasking worker is already started in this process");
-  }
-  isWorkerRunningInThisProcess = true;
-
   const backoffInMillisecondsByFailedJob = new WeakMap<MinimalJob, DurationInMilliseconds>();
   const durationFieldsByCompletedJob = new WeakMap<MinimalJob, RunDurationFields>();
 
@@ -519,7 +512,6 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
 
   const closeWorker = async (shouldForce: boolean) => {
     await worker.close(shouldForce);
-    isWorkerRunningInThisProcess = false;
     config.logger.info({}, "worker stopped");
   };
 

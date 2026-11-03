@@ -32,7 +32,7 @@ import type { EventDefinitionSummary, TaskDefinitionSummary } from "./definition
 import { createRunQueue } from "./run-queue.js";
 import type { RunState } from "./run-states.js";
 import type { RunQueue } from "./run-queue.js";
-import { sendUnsentFailureNotices } from "./failure-notices.js";
+import { bootWorker } from "./worker-boot.js";
 import { rejectInvalidSchedule, timezoneOf } from "./schedules.js";
 import {
   MISSING_MANUAL_SIGNAL_HANDLING_WARNING,
@@ -153,6 +153,8 @@ export type NextaskingConfig<
 
 const DEFAULT_PREFIX = "nextasking";
 
+let isWorkerStartedInThisProcess = false;
+
 const closeByNextasking = new WeakMap<object, () => Promise<void>>();
 
 export function createNextasking<
@@ -221,28 +223,60 @@ export function createNextasking<
     eventDefinitions: eventDefinitionSummariesOf(events, listenerNamesByEventName) as Instance["eventDefinitions"],
     startWorker: async (options = {}) => {
       const workerOptions = workerOptionsFrom(options);
+      if (isWorkerStartedInThisProcess) {
+        throw new Error("The nextasking worker is already started in this process");
+      }
+      isWorkerStartedInThisProcess = true;
       const workerRunQueue = createRunQueue(connections, "worker", prefix);
       runQueueOfWorker = workerRunQueue;
       const workerEnqueuer = createEnqueuer({
         ...enqueuerConfig,
         runQueueAccess: { openRunQueue: async () => workerRunQueue, callOnRedis: (_callIds, call) => call() },
       });
-      const scheduleChanges = await workerRunQueue.syncSchedules(declaredSchedules);
-      for (const { kind, taskName, cron, timezone } of scheduleChanges) {
-        logger.info({ task: taskName, cron, timezone }, `schedule ${kind}`);
-      }
-      await sendUnsentFailureNotices(workerRunQueue, workerEnqueuer.sendBuiltInEvent);
-      runningWorker = startRunWorker({
-        options: workerOptions,
+      const isWorkerRunQueueOpen = () => runQueueOfWorker === workerRunQueue;
+      const startTheWorker = () => {
+        runningWorker = startRunWorker({
+          options: workerOptions,
+          runQueue: workerRunQueue,
+          prefix,
+          logger,
+          tasksByName,
+          eventsByName,
+          dispatch: workerEnqueuer.dispatch,
+          emit: workerEnqueuer.emit,
+          sendBuiltInEvent: workerEnqueuer.sendBuiltInEvent,
+        });
+      };
+      const { isFirstRoundTripAnswered, completion } = await bootWorker({
         runQueue: workerRunQueue,
-        prefix,
+        declaredSchedules,
         logger,
-        tasksByName,
-        eventsByName,
-        dispatch: workerEnqueuer.dispatch,
-        emit: workerEnqueuer.emit,
         sendBuiltInEvent: workerEnqueuer.sendBuiltInEvent,
+        giveUpAfterInMilliseconds: connections.giveUpAfterInMilliseconds,
       });
+      if (isFirstRoundTripAnswered) {
+        try {
+          await completion;
+        } catch (error) {
+          await closeWorkerRunQueue();
+          throw error;
+        }
+        startTheWorker();
+      } else {
+        completion.then(
+          () => {
+            if (isWorkerRunQueueOpen()) {
+              startTheWorker();
+            }
+          },
+          async (error: unknown) => {
+            if (isWorkerRunQueueOpen()) {
+              logger.error({ err: error }, "worker not started");
+              await closeWorkerRunQueue();
+            }
+          },
+        );
+      }
       if (isSignalHandlingLeftToTheApp()) {
         stopExitingOnShutdownSignals = exitOnShutdownSignals(() => closeInstance({ isDraining: true }), logger);
       } else if (!isDevelopment()) {
@@ -252,6 +286,15 @@ export function createNextasking<
   };
 
   let stopExitingOnShutdownSignals: (() => void) | undefined;
+  const closeWorkerRunQueue = async () => {
+    const closedRunQueue = runQueueOfWorker;
+    if (closedRunQueue === undefined) {
+      return;
+    }
+    runQueueOfWorker = undefined;
+    await closedRunQueue.close();
+    isWorkerStartedInThisProcess = false;
+  };
   const closeInstance = async ({ isDraining }: { isDraining: boolean }) => {
     if (!isDraining) {
       stopExitingOnShutdownSignals?.();
@@ -259,8 +302,7 @@ export function createNextasking<
     }
     await (isDraining ? runningWorker?.shutDown() : runningWorker?.close());
     runningWorker = undefined;
-    await runQueueOfWorker?.close();
-    runQueueOfWorker = undefined;
+    await closeWorkerRunQueue();
     await runQueue?.close();
     runQueue = undefined;
   };

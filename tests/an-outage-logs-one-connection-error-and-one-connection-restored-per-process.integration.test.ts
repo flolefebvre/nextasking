@@ -1,8 +1,7 @@
 import { expect, vi } from "vitest";
-import { z } from "zod";
 
-import { createNextasking, defineTask } from "../src/index.js";
 import { closeNextasking } from "../src/registry.js";
+import { createGiveUpAfterOneSecondNextasking } from "./give-up-after-one-second-nextasking.js";
 import { integrationTest } from "./integration-test.js";
 import { createRecordingLogger, waitForLogMessage } from "./recording-logger.js";
 import { startTcpProxy } from "./tcp-proxy.js";
@@ -15,18 +14,9 @@ integrationTest(
     const proxy = await startTcpProxy(redisUrl);
     const { logger, lines } = createRecordingLogger();
     const completedEmails: string[] = [];
-    const nextasking = createNextasking({
-      connection: { url: proxy.url, giveUpAfter: "1s" },
-      prefix: keyPrefix,
+    const nextasking = createGiveUpAfterOneSecondNextasking(proxy.url, keyPrefix, {
       logger,
-      tasks: [
-        defineTask("send-welcome-email", {
-          schema: z.object({ email: z.string() }),
-          handler: async ({ payload }) => {
-            completedEmails.push(payload.email);
-          },
-        }),
-      ],
+      onWelcomeEmail: (email) => completedEmails.push(email),
     });
 
     try {

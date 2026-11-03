@@ -1,3 +1,4 @@
+import "server-only";
 import { Redis } from "ioredis";
 
 let recordsClient: Redis | undefined;

@@ -88,6 +88,8 @@ Run CPU-heavy or long tasks in a process of their own with the `nextasking worke
 nextasking worker: register() started no worker. Turn on the environment variable your instrumentation.ts checks before calling startWorker().
 ```
 
+- `register()` may await anything before `startWorker()`: imports, a secret, a database warm-up. The bin gives up on it only once the process has nothing left to run, or 60 seconds after Next has loaded the build when something keeps the process alive (an interval, a database pool). Call `startWorker()` within those 60 seconds.
+
 - When Redis was down at boot and the boot then fails, such as on an evicting `maxmemory-policy`, the bin exits 1 once `worker not started` is written and your `onWorkerNotStarted`, if any, has settled. See [Exit when the worker can't start](#exit-when-the-worker-cant-start).
 - `nextasking worker` takes no other argument; anything else prints `Usage: nextasking worker` and exits 1.
 

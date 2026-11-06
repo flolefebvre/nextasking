@@ -3,7 +3,7 @@ import * as v from "valibot";
 import { describe, expect, expectTypeOf, test, vi } from "vitest";
 import { z } from "zod";
 
-import { hasStartWorkerBeenCalled } from "./bin.js";
+import { listenForLibraryNotifications } from "./bin.js";
 import { fanOutFailed, runFailed } from "./built-in-events.js";
 import type { FanOutFailedPayload, RunFailedPayload } from "./built-in-events.js";
 import { defineEvent, defineListener, defineScheduledTask, defineTask } from "./definitions.js";
@@ -606,15 +606,19 @@ describe("isTaskName and isEventName", () => {
 });
 
 describe("startWorker", () => {
-  test("marks the global scope before its first await, so the bin knows register() called it", async () => {
+  test("notifies the worker bin of the call before its first await", async () => {
     const nextasking = createTestNextasking();
-    const isCalledBefore = hasStartWorkerBeenCalled();
+    const notifications: unknown[] = [];
+    const stopListening = listenForLibraryNotifications((notification) => notifications.push(notification));
 
-    const starting = nextasking.startWorker({ concurrency: 0 });
+    try {
+      const starting = nextasking.startWorker({ concurrency: 0 });
 
-    expect(isCalledBefore).toBe(false);
-    expect(hasStartWorkerBeenCalled()).toBe(true);
-    await expect(starting).rejects.toThrow("Invalid startWorker concurrency");
+      expect(notifications).toEqual(["startWorkerCalled"]);
+      await expect(starting).rejects.toThrow("Invalid startWorker concurrency");
+    } finally {
+      stopListening();
+    }
   });
 
   test.each([

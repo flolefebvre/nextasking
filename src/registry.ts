@@ -36,7 +36,7 @@ import type { RunState } from "./run-states.js";
 import type { RunQueue } from "./run-queue.js";
 import { bootWorker, finishBootInBackground } from "./worker-boot.js";
 import { rejectInvalidSchedule, timezoneOf } from "./schedules.js";
-import { markStartWorkerCalled, notifyWorkerBinOfWorkerNotStarted } from "./worker-bin-handshake.js";
+import { notifyWorkerBin } from "./worker-bin-handshake.js";
 import {
   MISSING_MANUAL_SIGNAL_HANDLING_WARNING,
   exitOnShutdownSignals,
@@ -260,7 +260,7 @@ export function createNextasking<
     taskDefinitions: taskDefinitionSummariesOf(config.tasks) as Instance["taskDefinitions"],
     eventDefinitions: eventDefinitionSummariesOf(events, listenerNamesByEventName) as Instance["eventDefinitions"],
     startWorker: async (options = {}) => {
-      markStartWorkerCalled();
+      notifyWorkerBin("startWorkerCalled");
       if (recordingRunWriter !== undefined) {
         throw fakedInstanceError("startWorker");
       }
@@ -308,7 +308,7 @@ export function createNextasking<
           isWorkerRunQueueOpen,
           startTheWorker,
           closeWorkerRunQueue,
-          notifyWorkerBin: () => notifyWorkerBinOfWorkerNotStarted(),
+          notifyWorkerBin: () => notifyWorkerBin("workerNotStarted"),
           onWorkerNotStarted: options.onWorkerNotStarted,
           logger,
         });

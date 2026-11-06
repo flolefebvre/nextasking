@@ -1,10 +1,10 @@
-import { expect } from "vitest";
+import { expect, vi } from "vitest";
 
 import { closeNextasking } from "../src/registry.js";
 import { EVICTING_POLICY_REJECTION, startEvictingServer } from "./evicting-server.js";
 import { createGiveUpAfterOneSecondNextasking } from "./give-up-after-one-second-nextasking.js";
 import { integrationTest } from "./integration-test.js";
-import { createRecordingLogger, waitForLogMessage } from "./recording-logger.js";
+import { createRecordingLogger } from "./recording-logger.js";
 import { providedRedisUrl } from "./valkey-container.js";
 import { withRedis } from "./with-redis.js";
 
@@ -34,7 +34,7 @@ integrationTest(
 );
 
 integrationTest.skipIf(providedRedisUrl() !== undefined)(
-  "a worker refuses a server with CONFIG disabled whose maxmemory-policy evicts: startWorker() rejects, or logs worker not started when it finds it in the background",
+  "a worker refuses a server with CONFIG disabled whose maxmemory-policy evicts: startWorker() rejects, or logs worker not started then calls onWorkerNotStarted when it finds it in the background",
   async ({ keyPrefix }) => {
     const evictingServer = await startEvictingServer({ isConfigDisabled: true });
     const backgroundBoot = createRecordingLogger();
@@ -43,13 +43,22 @@ integrationTest.skipIf(providedRedisUrl() !== undefined)(
       logger: backgroundBoot.logger,
     });
 
+    const foregroundOnWorkerNotStarted = vi.fn();
+    const messagesWrittenWhenCalledBack: string[][] = [];
+    const backgroundOnWorkerNotStarted = vi.fn(() => {
+      messagesWrittenWhenCalledBack.push(backgroundBoot.lines.map((line) => line.message));
+    });
+    const exitCodeBefore = process.exitCode;
+
     try {
-      await expect(foregroundNextasking.startWorker()).rejects.toThrow(EVICTING_POLICY_REJECTION);
+      await expect(
+        foregroundNextasking.startWorker({ onWorkerNotStarted: foregroundOnWorkerNotStarted }),
+      ).rejects.toThrow(EVICTING_POLICY_REJECTION);
       await closeNextasking(foregroundNextasking);
       await evictingServer.proxy.cut();
-      await backgroundNextasking.startWorker();
+      await backgroundNextasking.startWorker({ onWorkerNotStarted: backgroundOnWorkerNotStarted });
       await evictingServer.proxy.restore();
-      await waitForLogMessage(backgroundBoot.lines, "worker not started", { timeout: 15_000 });
+      await vi.waitFor(() => expect(backgroundOnWorkerNotStarted).toHaveBeenCalled(), { timeout: 15_000 });
 
       expect(backgroundBoot.lines.filter((line) => line.message === "worker not started")).toEqual([
         {
@@ -59,6 +68,12 @@ integrationTest.skipIf(providedRedisUrl() !== undefined)(
         },
       ]);
       expect(backgroundBoot.lines.map((line) => line.message)).not.toContain("worker started");
+      expect(backgroundOnWorkerNotStarted.mock.calls).toEqual([
+        [expect.objectContaining({ message: EVICTING_POLICY_REJECTION })],
+      ]);
+      expect(messagesWrittenWhenCalledBack[0]).toContain("worker not started");
+      expect(foregroundOnWorkerNotStarted).not.toHaveBeenCalled();
+      expect(process.exitCode).toBe(exitCodeBefore);
     } finally {
       await closeNextasking(foregroundNextasking);
       await closeNextasking(backgroundNextasking);

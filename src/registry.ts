@@ -34,7 +34,7 @@ import type { EventDefinitionSummary, TaskDefinitionSummary } from "./definition
 import { createRunQueue } from "./run-queue.js";
 import type { RunState } from "./run-states.js";
 import type { RunQueue } from "./run-queue.js";
-import { bootWorker } from "./worker-boot.js";
+import { bootWorker, finishBootInBackground } from "./worker-boot.js";
 import { rejectInvalidSchedule, timezoneOf } from "./schedules.js";
 import { markStartWorkerCalled } from "./start-worker-mark.js";
 import {
@@ -303,19 +303,14 @@ export function createNextasking<
         }
         startTheWorker();
       } else {
-        completion.then(
-          () => {
-            if (isWorkerRunQueueOpen()) {
-              startTheWorker();
-            }
-          },
-          async (error: unknown) => {
-            if (isWorkerRunQueueOpen()) {
-              logger.error({ err: error }, "worker not started");
-              await closeWorkerRunQueue();
-            }
-          },
-        );
+        void finishBootInBackground({
+          completion,
+          isWorkerRunQueueOpen,
+          startTheWorker,
+          closeWorkerRunQueue,
+          onWorkerNotStarted: options.onWorkerNotStarted,
+          logger,
+        });
       }
       if (isSignalHandlingLeftToTheApp()) {
         stopExitingOnShutdownSignals = exitOnShutdownSignals(() => closeInstance({ isDraining: true }), logger);

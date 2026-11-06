@@ -221,8 +221,15 @@ export type DispatchOptionsHoldRunIdAndDelay = Expect<IsEqual<DispatchOptions, {
 
 export type EmitOptionsHoldEventId = Expect<IsEqual<EmitOptions, { eventId?: EventId }>>;
 
-export type StartWorkerOptionsHoldConcurrencyAndShutdownTimeout = Expect<
-  IsEqual<StartWorkerOptions, { concurrency?: number; shutdownTimeout?: Duration }>
+export type StartWorkerOptionsHoldConcurrencyShutdownTimeoutAndOnWorkerNotStarted = Expect<
+  IsEqual<
+    StartWorkerOptions,
+    {
+      concurrency?: number;
+      shutdownTimeout?: Duration;
+      onWorkerNotStarted?: (error: unknown) => void | Promise<void>;
+    }
+  >
 >;
 
 export type StartWorkerTakesItsOptions = Expect<

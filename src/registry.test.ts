@@ -642,11 +642,31 @@ describe("startWorker", () => {
     );
   });
 
-  test("takes concurrency and a shutdownTimeout duration, and rejects other options at compile time", () => {
+  test.each([
+    ["a string", "exit", '"exit"'],
+    ["null", null, "null"],
+  ])("rejects an onWorkerNotStarted that is %s, before opening any connection", async (_, value, shownValue) => {
+    const nextasking = createTestNextasking();
+    const networkResourcesBefore = networkResources();
+
+    await expect(nextasking.startWorker({ onWorkerNotStarted: value as unknown as () => void })).rejects.toThrow(
+      `Invalid startWorker onWorkerNotStarted: ${shownValue} is not a function`,
+    );
+    await setImmediate();
+    expect(networkResources()).toEqual(networkResourcesBefore);
+  });
+
+  test("takes concurrency, a shutdownTimeout duration and an onWorkerNotStarted callback, and rejects other options at compile time", () => {
     const nextasking = createTestNextasking();
 
     expectTypeOf(nextasking.startWorker).toBeCallableWith();
     expectTypeOf(nextasking.startWorker).toBeCallableWith({ concurrency: 4, shutdownTimeout: "25s" });
+    expectTypeOf(nextasking.startWorker).toBeCallableWith({
+      onWorkerNotStarted: (error: unknown) => console.error(error),
+    });
+    expectTypeOf(nextasking.startWorker).toBeCallableWith({ onWorkerNotStarted: async () => undefined });
+    // @ts-expect-error onWorkerNotStarted is a function
+    expectTypeOf(nextasking.startWorker).toBeCallableWith({ onWorkerNotStarted: "exit" });
     // @ts-expect-error a shutdownTimeout is a Duration
     expectTypeOf(nextasking.startWorker).toBeCallableWith({ shutdownTimeout: 25_000 });
   });

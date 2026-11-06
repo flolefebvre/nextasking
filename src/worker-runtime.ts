@@ -60,6 +60,7 @@ export type RunningWorker = {
 export type StartWorkerOptions = {
   concurrency?: number;
   shutdownTimeout?: Duration;
+  onWorkerNotStarted?: (error: unknown) => void | Promise<void>;
 };
 
 export type WorkerOptions = {
@@ -82,6 +83,12 @@ export function workerOptionsFrom(options: StartWorkerOptions): WorkerOptions {
     shutdownTimeoutInMilliseconds = parseDuration(options.shutdownTimeout ?? DEFAULT_SHUTDOWN_TIMEOUT);
   } catch (error) {
     throw new Error(`Invalid startWorker shutdownTimeout: ${(error as Error).message}`, { cause: error });
+  }
+  const onWorkerNotStarted: unknown = options.onWorkerNotStarted;
+  if (onWorkerNotStarted !== undefined && typeof onWorkerNotStarted !== "function") {
+    const shownCallback =
+      typeof onWorkerNotStarted === "string" ? JSON.stringify(onWorkerNotStarted) : String(onWorkerNotStarted);
+    throw new Error(`Invalid startWorker onWorkerNotStarted: ${shownCallback} is not a function`);
   }
   return { concurrency, shutdownTimeoutInMilliseconds };
 }

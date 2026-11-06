@@ -13,10 +13,11 @@ export async function register() {
 }
 ```
 
-| Option            | Default   | What it does                                                          |
-| ----------------- | --------- | --------------------------------------------------------------------- |
-| `concurrency`     | unlimited | The most attempts this process runs at once, a whole number 1 or more |
-| `shutdownTimeout` | `"25s"`   | How long a shutdown waits for running attempts before it aborts them  |
+| Option               | Default   | What it does                                                                                                                   |
+| -------------------- | --------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| `concurrency`        | unlimited | The most attempts this process runs at once, a whole number 1 or more                                                          |
+| `shutdownTimeout`    | `"25s"`   | How long a shutdown waits for running attempts before it aborts them                                                           |
+| `onWorkerNotStarted` | none      | Called with the error when the boot that waited for Redis fails. See [When Redis is down at boot](#when-redis-is-down-at-boot) |
 
 - `startWorker` rejects an invalid option before opening any connection.
 - Then it checks the server's `maxmemory-policy`. See [Give queues their own Valkey or Redis](#give-queues-their-own-valkey-or-redis).
@@ -198,6 +199,33 @@ maxmemory-policy is "allkeys-lru": the Valkey or Redis holding the queues must u
 - An evicting policy found in the background writes `worker not started` at error, `err` naming the policy, and the worker stays off until the process restarts.
 - A SIGTERM while the worker waits for Redis stops it at once: nothing to drain.
 
+### Exit when the worker can't start
+
+`startWorker()` fails in one of two ways: it rejects when it finds the problem at once, or, when the boot waited for Redis, it has already resolved and calls `onWorkerNotStarted` instead. Handle both with the same function, flush your logs, then exit so your platform restarts the process:
+
+```ts
+// src/instrumentation.ts
+export async function register() {
+  if (process.env.NEXT_RUNTIME !== "nodejs" || process.env.NEXTASKING_WORKER !== "on") return;
+  const { nextasking } = await import("@/nextasking");
+  const { appLogger, flushLogs } = await import("@/logger");
+  const exitOnWorkerNotStarted = async (error: unknown) => {
+    appLogger.error({ err: error }, "exiting: the nextasking worker did not start");
+    await flushLogs();
+    process.exit(1);
+  };
+  try {
+    await nextasking.startWorker({ onWorkerNotStarted: exitOnWorkerNotStarted });
+  } catch (error) {
+    await exitOnWorkerNotStarted(error);
+  }
+}
+```
+
+- Exit yourself under `next start`. In production Next doesn't await `register()` before serving, and a rejected `register()` leaves the server answering 500 to every request without exiting (observed with Next 16.3.5). Rethrowing or setting `process.exitCode` doesn't stop it.
+- `onWorkerNotStarted` is called once, right after `worker not started` is written, with the same error. It isn't called when `startWorker()` rejects, when the worker starts, or when the instance was closed before the boot finished.
+- A callback that throws or rejects writes `onWorkerNotStarted failed` at error with `err`. The library never exits the process for you under `next start`.
+
 Once started, the worker waits out an outage: its commands, and a handler's `emit` and `dispatch`, wait for Redis to come back instead of failing the attempt. A run whose completion was stored just before the cut, its reply lost, is read back after the reconnect: it writes `run completed`, or `run completion unconfirmed` when Redis can't tell; see [Logging](logging.md#lifecycle-lines). After each reconnect, the worker hands back to pending, at once and with no stall counted, every job its lock holds that no attempt of this process is running: the next job a lost completion or failure reply carried, or the job a lost fetch reply carried. That job starts within seconds instead of waiting out its lock. A lock that expires during a long outage aborts the attempt like any lost lock; see [Stalls](#stalls).
 
 ## Bundling
@@ -228,6 +256,7 @@ export default nextConfig;
 | `warn`  | `maxmemory-policy unreadable`           | `err`                      |
 | `error` | `worker shutdown failed`                | `err`                      |
 | `error` | `worker not started`                    | `err`                      |
+| `error` | `onWorkerNotStarted failed`             | `err`                      |
 | `error` | `worker error`                          | `err`                      |
 | `error` | `queue error`                           | `err`                      |
 

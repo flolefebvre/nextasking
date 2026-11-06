@@ -7,6 +7,7 @@ import type { Logger } from "./logger.js";
 import type { RunQueue } from "./run-queue.js";
 import type { DeclaredSchedule } from "./schedules.js";
 import { isSettledWithin } from "./worker-runtime.js";
+import type { StartWorkerOptions } from "./worker-runtime.js";
 
 const NO_EVICTION_POLICY = "noeviction";
 
@@ -131,4 +132,37 @@ export async function bootWorker(config: WorkerBootConfig): Promise<WorkerBoot> 
     config.giveUpAfterInMilliseconds,
   );
   return { isFirstRoundTripAnswered, completion };
+}
+
+export type BackgroundBootConfig = {
+  completion: Promise<void>;
+  isWorkerRunQueueOpen: () => boolean;
+  startTheWorker: () => void;
+  closeWorkerRunQueue: () => Promise<void>;
+  onWorkerNotStarted: StartWorkerOptions["onWorkerNotStarted"];
+  logger: Logger;
+};
+
+async function callOnWorkerNotStarted(config: BackgroundBootConfig, error: unknown): Promise<void> {
+  try {
+    await config.onWorkerNotStarted?.(error);
+  } catch (callbackError) {
+    config.logger.error({ err: callbackError }, "onWorkerNotStarted failed");
+  }
+}
+
+export async function finishBootInBackground(config: BackgroundBootConfig): Promise<void> {
+  try {
+    await config.completion;
+  } catch (error) {
+    if (config.isWorkerRunQueueOpen()) {
+      config.logger.error({ err: error }, "worker not started");
+      await callOnWorkerNotStarted(config, error);
+      await config.closeWorkerRunQueue();
+    }
+    return;
+  }
+  if (config.isWorkerRunQueueOpen()) {
+    config.startTheWorker();
+  }
 }

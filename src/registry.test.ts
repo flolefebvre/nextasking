@@ -632,17 +632,17 @@ describe("startWorker", () => {
   });
 
   test("sets the mark a 0.1.0 worker bin reads before its first await, and still notifies the call", async () => {
-    const startWorkerCalledMark = Symbol.for("@flefebvre/nextasking/start-worker-called");
+    const version010StartWorkerCalledMark = Symbol.for("@flefebvre/nextasking/start-worker-called");
     const nextasking = createTestNextasking();
     const notifications: unknown[] = [];
     const stopListening = listenForLibraryNotifications((notification) => notifications.push(notification));
-    Reflect.deleteProperty(globalThis, startWorkerCalledMark);
+    Reflect.deleteProperty(globalThis, version010StartWorkerCalledMark);
 
     try {
-      expect(startWorkerCalledMark in globalThis).toBe(false);
+      expect(version010StartWorkerCalledMark in globalThis).toBe(false);
 
       const starting = nextasking.startWorker({ concurrency: 0 });
-      const markBeforeTheFirstAwait = (globalThis as Record<symbol, unknown>)[startWorkerCalledMark];
+      const markBeforeTheFirstAwait = (globalThis as Record<symbol, unknown>)[version010StartWorkerCalledMark];
       const notificationsBeforeTheFirstAwait = [...notifications];
       await expect(starting).rejects.toThrow("Invalid startWorker concurrency");
 
@@ -650,7 +650,7 @@ describe("startWorker", () => {
       expect(notificationsBeforeTheFirstAwait).toEqual(["startWorkerCalled"]);
     } finally {
       stopListening();
-      Reflect.deleteProperty(globalThis, startWorkerCalledMark);
+      Reflect.deleteProperty(globalThis, version010StartWorkerCalledMark);
     }
   });
 

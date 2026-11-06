@@ -18,6 +18,8 @@ export type RegisterWatch = { onPrepared: () => void };
 
 const WORKER_BIN_LISTENER = Symbol.for("@flefebvre/nextasking/worker-bin-listener");
 
+const VERSION_010_START_WORKER_CALLED_MARK = Symbol.for("@flefebvre/nextasking/start-worker-called");
+
 export const NO_WORKER_EXIT_DELAY_IN_MILLISECONDS = 60_000;
 
 export const WORKER_BIN_USAGE = "Usage: nextasking worker";
@@ -49,7 +51,7 @@ export function listenForLibraryNotifications(
 }
 
 export function watchRegister(binProcess: WorkerBinProcess = process, globalScope: object = globalThis): RegisterWatch {
-  let hasStartWorkerBeenCalled = false;
+  let hasBeenNotifiedOfStartWorkerCall = false;
   let hasWrittenNoWorkerStarted = false;
   let isExitCodeSetByTheBin = false;
   let noWorkerExitTimer: NodeJS.Timeout | undefined;
@@ -69,37 +71,42 @@ export function watchRegister(binProcess: WorkerBinProcess = process, globalScop
     }
     isExitCodeSetByTheBin = false;
   };
-  const exitWithNoWorker = () => {
-    if (hasStartWorkerBeenCalled) {
-      console.error(START_WORKER_REJECTED_ERROR);
-    } else {
+  const hasStartWorkerBeenCalled = () =>
+    hasBeenNotifiedOfStartWorkerCall ||
+    (globalScope as Record<symbol, unknown>)[VERSION_010_START_WORKER_CALLED_MARK] === true;
+  const exitIfStartWorkerNeverCalled = () => {
+    if (!hasStartWorkerBeenCalled()) {
       writeNoWorkerStartedOnce();
+      binProcess.exit(1);
     }
+  };
+  const exitWithStartWorkerRejected = () => {
+    console.error(START_WORKER_REJECTED_ERROR);
     binProcess.exit(1);
   };
   const stopNoWorkerExitTimer = () => {
     clearTimeout(noWorkerExitTimer);
     noWorkerExitTimer = undefined;
   };
-  const startNoWorkerExitTimer = () => {
+  const startNoWorkerExitTimer = (exitWithNoWorker: () => void) => {
     stopNoWorkerExitTimer();
     noWorkerExitTimer = setTimeout(exitWithNoWorker, NO_WORKER_EXIT_DELAY_IN_MILLISECONDS).unref();
   };
   binProcess.on("beforeExit", () => {
-    if (!hasStartWorkerBeenCalled) {
+    if (!hasStartWorkerBeenCalled()) {
       writeNoWorkerStartedOnce();
       setExitCodeForNoWorker();
     }
   });
   const listenToTheLibrary = (notification: unknown) => {
     if (notification === "startWorkerCalled") {
-      hasStartWorkerBeenCalled = true;
+      hasBeenNotifiedOfStartWorkerCall = true;
       stopNoWorkerExitTimer();
     } else if (notification === "startWorkerResolved") {
       clearExitCodeSetByTheBin();
     } else if (notification === "startWorkerRejectedWithNoWorker") {
       setExitCodeForNoWorker();
-      startNoWorkerExitTimer();
+      startNoWorkerExitTimer(exitWithStartWorkerRejected);
     } else if (notification === "workerNotStarted") {
       binProcess.exit(1);
     }
@@ -107,8 +114,8 @@ export function watchRegister(binProcess: WorkerBinProcess = process, globalScop
   listenForLibraryNotifications(listenToTheLibrary, globalScope);
   return {
     onPrepared: () => {
-      if (!hasStartWorkerBeenCalled) {
-        startNoWorkerExitTimer();
+      if (!hasStartWorkerBeenCalled()) {
+        startNoWorkerExitTimer(exitIfStartWorkerNeverCalled);
       }
     },
   };

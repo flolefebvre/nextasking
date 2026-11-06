@@ -85,6 +85,9 @@ describe("watchRegister", () => {
       binProcess,
       registerWatch,
       notify: (notification: WorkerBinNotification) => notifyWorkerBin(notification, globalScope),
+      setVersion010StartWorkerCalledMark: () => {
+        Object.assign(globalScope, { [Symbol.for("@flefebvre/nextasking/start-worker-called")]: true });
+      },
     };
   }
 
@@ -154,6 +157,39 @@ describe("watchRegister", () => {
 
     expect(binProcess.exit).not.toHaveBeenCalled();
     expect(writtenErrors).toEqual([]);
+  });
+
+  test.each([
+    ["before prepare() resolves", true],
+    ["after prepare() resolves", false],
+  ])(
+    "takes the mark a 0.1.0 library sets %s for a startWorker() call: no line, no exit code, no exit",
+    (_, isMarkedBeforePrepared) => {
+      const { binProcess, registerWatch, setVersion010StartWorkerCalledMark } = watchedBin();
+
+      if (isMarkedBeforePrepared) setVersion010StartWorkerCalledMark();
+      registerWatch.onPrepared();
+      if (!isMarkedBeforePrepared) setVersion010StartWorkerCalledMark();
+      binProcess.emit("beforeExit");
+      vi.advanceTimersByTime(10 * NO_WORKER_EXIT_DELAY_IN_MILLISECONDS);
+
+      expect(writtenErrors).toEqual([]);
+      expect(binProcess.exitCode).toBeUndefined();
+      expect(binProcess.exit).not.toHaveBeenCalled();
+    },
+  );
+
+  test("still exits 1 with the rejection line when a library that sets the 0.1.0 mark notifies a rejection", () => {
+    const { binProcess, registerWatch, notify, setVersion010StartWorkerCalledMark } = watchedBin();
+    registerWatch.onPrepared();
+    setVersion010StartWorkerCalledMark();
+    notify("startWorkerCalled");
+    notify("startWorkerRejectedWithNoWorker");
+
+    vi.advanceTimersByTime(NO_WORKER_EXIT_DELAY_IN_MILLISECONDS);
+
+    expect(binProcess.exit).toHaveBeenCalledExactlyOnceWith(1);
+    expect(writtenErrors).toEqual([START_WORKER_REJECTED_ERROR]);
   });
 
   test("exits 1 when the library notifies a worker not started in the background", () => {

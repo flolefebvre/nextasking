@@ -20,19 +20,74 @@ export function maxmemoryPolicyRejectionOf(policy: string): Error | undefined {
       );
 }
 
-async function readMaxmemoryPolicy(client: Redis): Promise<MaxmemoryPolicyReading> {
+export type MaxmemoryPolicySource = Pick<Redis, "info" | "config">;
+
+type PolicyQuery = { kind: "answered"; policy: string } | { kind: "failed"; error: unknown };
+
+const INFO_MAXMEMORY_POLICY_PREFIX = "maxmemory_policy:";
+
+async function queryPolicy<Reply>({
+  send,
+  policyIn,
+  missingPolicyErrorOf,
+}: {
+  send: () => Promise<Reply>;
+  policyIn: (reply: Reply) => string | undefined;
+  missingPolicyErrorOf: (reply: Reply) => Error;
+}): Promise<PolicyQuery> {
+  let reply: Reply;
   try {
-    const reply = await client.config("GET", "maxmemory-policy");
-    const policy = Array.isArray(reply) ? (reply as unknown[])[1] : undefined;
-    return typeof policy === "string"
-      ? { kind: "read", policy }
-      : { kind: "unreadable", error: new Error(`CONFIG GET maxmemory-policy returned ${JSON.stringify(reply)}`) };
+    reply = await send();
   } catch (error) {
     if ((error as Error).name === "ReplyError") {
-      return { kind: "unreadable", error };
+      return { kind: "failed", error };
     }
     throw error;
   }
+  const policy = policyIn(reply);
+  return policy === undefined ? { kind: "failed", error: missingPolicyErrorOf(reply) } : { kind: "answered", policy };
+}
+
+function queryPolicyFromInfo(source: MaxmemoryPolicySource): Promise<PolicyQuery> {
+  return queryPolicy({
+    send: () => source.info("memory"),
+    policyIn: (reply) =>
+      reply
+        .split(/\r?\n/)
+        .find((line) => line.startsWith(INFO_MAXMEMORY_POLICY_PREFIX))
+        ?.slice(INFO_MAXMEMORY_POLICY_PREFIX.length)
+        .trim(),
+    missingPolicyErrorOf: () => new Error("INFO memory has no maxmemory_policy line"),
+  });
+}
+
+function queryPolicyFromConfig(source: MaxmemoryPolicySource): Promise<PolicyQuery> {
+  return queryPolicy<unknown>({
+    send: () => source.config("GET", "maxmemory-policy"),
+    policyIn: (reply) => {
+      const policy = Array.isArray(reply) ? (reply as unknown[])[1] : undefined;
+      return typeof policy === "string" ? policy : undefined;
+    },
+    missingPolicyErrorOf: (reply) => new Error(`CONFIG GET maxmemory-policy returned ${JSON.stringify(reply)}`),
+  });
+}
+
+export async function readMaxmemoryPolicy(source: MaxmemoryPolicySource): Promise<MaxmemoryPolicyReading> {
+  const infoQuery = await queryPolicyFromInfo(source);
+  if (infoQuery.kind === "answered") {
+    return { kind: "read", policy: infoQuery.policy };
+  }
+  const configQuery = await queryPolicyFromConfig(source);
+  if (configQuery.kind === "answered") {
+    return { kind: "read", policy: configQuery.policy };
+  }
+  return {
+    kind: "unreadable",
+    error: new AggregateError(
+      [infoQuery.error, configQuery.error],
+      "maxmemory-policy is readable from neither INFO memory nor CONFIG GET",
+    ),
+  };
 }
 
 export type WorkerBootConfig = {

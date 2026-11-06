@@ -180,10 +180,10 @@ During a deploy, an old and a new release run side by side. A worker that picks 
 
 Point `connection` at a Valkey or Redis that holds only queues, not your cache or sessions. A cache evicts keys when memory runs short; a queue loses runs that way. A dedicated server also keeps a cache flush or a busy cache from stalling attempts.
 
-Set `maxmemory-policy noeviction` on it. The worker reads the policy at boot:
+Set `maxmemory-policy noeviction` on it. The worker reads the policy at boot from the `maxmemory_policy` line of `INFO memory`, and from `CONFIG GET maxmemory-policy` when `INFO` fails or has no such line. Managed services that block `CONFIG` still answer `INFO`, so the check runs there too:
 
-- A readable policy other than `noeviction` makes `startWorker()` reject with a one-line error naming it. An evicted lock lets a second worker run the same attempt.
-- A policy it can't read, `CONFIG` being disabled or denied as on many managed services, writes `maxmemory-policy unreadable` at warn with `err`, and the worker starts. Check the policy in your provider's console.
+- A policy other than `noeviction` makes `startWorker()` reject with a one-line error naming it. An evicted lock lets a second worker run the same attempt.
+- A policy neither command yields writes `maxmemory-policy unreadable` at warn, `err` being an `AggregateError` of both failures, and the worker starts. Check the policy in your provider's console.
 
 ```text
 maxmemory-policy is "allkeys-lru": the Valkey or Redis holding the queues must use "noeviction", or it evicts locks and runs

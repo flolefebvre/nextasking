@@ -10,6 +10,8 @@ type RequiredServerFiles = { config?: { output?: unknown } };
 
 const START_WORKER_CALLED_MARK = Symbol.for("@flefebvre/nextasking/start-worker-called");
 
+const WORKER_NOT_STARTED_LISTENER = Symbol.for("@flefebvre/nextasking/worker-not-started-listener");
+
 export const WORKER_BIN_USAGE = "Usage: nextasking worker";
 
 export const NO_WORKER_STARTED_ERROR =
@@ -30,6 +32,10 @@ export function hasStartWorkerBeenCalled(globalScope: object = globalThis): bool
   return (globalScope as Record<symbol, unknown>)[START_WORKER_CALLED_MARK] === true;
 }
 
+export function listenForWorkerNotStarted(onWorkerNotStarted: () => void, globalScope: object = globalThis): void {
+  Object.assign(globalScope, { [WORKER_NOT_STARTED_LISTENER]: onWorkerNotStarted });
+}
+
 async function loadNextServerFactory(appDir: string): Promise<NextServerFactory> {
   const nextPath = createRequire(join(appDir, "package.json")).resolve("next");
   const nextModule = (await import(pathToFileURL(nextPath).href)) as { default: NextServerFactory };
@@ -45,6 +51,7 @@ async function runWorker(appDir: string): Promise<void> {
     process.env.NODE_ENV = "production";
   }
   process.env.NEXT_MANUAL_SIG_HANDLE = "1";
+  listenForWorkerNotStarted(() => process.exit(1));
   const next = await loadNextServerFactory(appDir);
   await next({ dev: false, dir: appDir }).prepare();
   if (!hasStartWorkerBeenCalled()) {

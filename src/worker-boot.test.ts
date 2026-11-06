@@ -202,6 +202,7 @@ describe("finishBootInBackground", () => {
       closeWorkerRunQueue: async () => {
         steps.push("run queue closed");
       },
+      notifyWorkerBin: () => steps.push("worker bin notified"),
       onWorkerNotStarted:
         onWorkerNotStarted &&
         (async (error) => {
@@ -222,7 +223,7 @@ describe("finishBootInBackground", () => {
     expect(steps).toEqual(["worker started"]);
   });
 
-  test("writes worker not started, then awaits onWorkerNotStarted called with the error, then closes the run queue", async () => {
+  test("writes worker not started, awaits onWorkerNotStarted called with the error, closes the run queue, then notifies the worker bin", async () => {
     const onWorkerNotStarted = vi.fn(async () => {
       await setImmediate();
     });
@@ -238,6 +239,7 @@ describe("finishBootInBackground", () => {
       "onWorkerNotStarted called",
       "onWorkerNotStarted settled",
       "run queue closed",
+      "worker bin notified",
     ]);
     expect(onWorkerNotStarted.mock.calls).toEqual([[bootFailure]]);
     expect(lines).toEqual([{ level: "error", fields: { err: bootFailure }, message: "worker not started" }]);
@@ -252,7 +254,7 @@ describe("finishBootInBackground", () => {
     ],
     ["rejects", async () => Promise.reject(new Error("logger flush failed"))],
   ])(
-    "writes onWorkerNotStarted failed at error with err when the callback %s, and still closes the run queue",
+    "writes onWorkerNotStarted failed at error with err when the callback %s, then still closes the run queue and notifies the worker bin",
     async (_, onWorkerNotStarted) => {
       const { finishing, steps, lines } = backgroundBootRecordingItsSteps({
         completion: Promise.reject(bootFailure),
@@ -269,16 +271,16 @@ describe("finishBootInBackground", () => {
           message: "onWorkerNotStarted failed",
         },
       ]);
-      expect(steps.at(-1)).toBe("run queue closed");
+      expect(steps.slice(-2)).toEqual(["run queue closed", "worker bin notified"]);
     },
   );
 
-  test("writes worker not started and closes the run queue without a callback", async () => {
+  test("writes worker not started, closes the run queue and notifies the worker bin without a callback", async () => {
     const { finishing, steps } = backgroundBootRecordingItsSteps({ completion: Promise.reject(bootFailure) });
 
     await finishing;
 
-    expect(steps).toEqual(["line: worker not started", "run queue closed"]);
+    expect(steps).toEqual(["line: worker not started", "run queue closed", "worker bin notified"]);
   });
 
   test("does nothing when the boot fails after the instance closed the worker's run queue", async () => {

@@ -88,6 +88,7 @@ Run CPU-heavy or long tasks in a process of their own with the `nextasking worke
 nextasking worker: register() started no worker. Turn on the environment variable your instrumentation.ts checks before calling startWorker().
 ```
 
+- When Redis was down at boot and the boot then fails, such as on an evicting `maxmemory-policy`, the bin exits 1 once `worker not started` is written and your `onWorkerNotStarted`, if any, has settled. See [Exit when the worker can't start](#exit-when-the-worker-cant-start).
 - `nextasking worker` takes no other argument; anything else prints `Usage: nextasking worker` and exits 1.
 
 ### Choose which processes run a worker
@@ -199,6 +200,8 @@ maxmemory-policy is "allkeys-lru": the Valkey or Redis holding the queues must u
 - An evicting policy found in the background writes `worker not started` at error, `err` naming the policy, and the worker stays off until the process restarts.
 - A SIGTERM while the worker waits for Redis stops it at once: nothing to drain.
 
+Once started, the worker waits out an outage: its commands, and a handler's `emit` and `dispatch`, wait for Redis to come back instead of failing the attempt. A run whose completion was stored just before the cut, its reply lost, is read back after the reconnect: it writes `run completed`, or `run completion unconfirmed` when Redis can't tell; see [Logging](logging.md#lifecycle-lines). After each reconnect, the worker hands back to pending, at once and with no stall counted, every job its lock holds that no attempt of this process is running: the next job a lost completion or failure reply carried, or the job a lost fetch reply carried. That job starts within seconds instead of waiting out its lock. A lock that expires during a long outage aborts the attempt like any lost lock; see [Stalls](#stalls).
+
 ### Exit when the worker can't start
 
 `startWorker()` fails in one of two ways: it rejects when it finds the problem at once, or, when the boot waited for Redis, it has already resolved and calls `onWorkerNotStarted` instead. Handle both with the same function, flush your logs, then exit so your platform restarts the process:
@@ -208,8 +211,8 @@ maxmemory-policy is "allkeys-lru": the Valkey or Redis holding the queues must u
 export async function register() {
   if (process.env.NEXT_RUNTIME !== "nodejs" || process.env.NEXTASKING_WORKER !== "on") return;
   const { nextasking } = await import("@/nextasking");
-  const { appLogger, flushLogs } = await import("@/logger");
   const exitOnWorkerNotStarted = async (error: unknown) => {
+    const { appLogger, flushLogs } = await import("@/logger");
     appLogger.error({ err: error }, "exiting: the nextasking worker did not start");
     await flushLogs();
     process.exit(1);
@@ -223,10 +226,10 @@ export async function register() {
 ```
 
 - Exit yourself under `next start`. In production Next doesn't await `register()` before serving, and a rejected `register()` leaves the server answering 500 to every request without exiting (observed with Next 16.3.5). Rethrowing or setting `process.exitCode` doesn't stop it.
+- Await nothing but the instance's import before `startWorker()`: the `nextasking worker` bin checks that `register()` called it as soon as Next has loaded the build.
 - `onWorkerNotStarted` is called once, right after `worker not started` is written, with the same error. It isn't called when `startWorker()` rejects, when the worker starts, or when the instance was closed before the boot finished.
 - A callback that throws or rejects writes `onWorkerNotStarted failed` at error with `err`. The library never exits the process for you under `next start`.
-
-Once started, the worker waits out an outage: its commands, and a handler's `emit` and `dispatch`, wait for Redis to come back instead of failing the attempt. A run whose completion was stored just before the cut, its reply lost, is read back after the reconnect: it writes `run completed`, or `run completion unconfirmed` when Redis can't tell; see [Logging](logging.md#lifecycle-lines). After each reconnect, the worker hands back to pending, at once and with no stall counted, every job its lock holds that no attempt of this process is running: the next job a lost completion or failure reply carried, or the job a lost fetch reply carried. That job starts within seconds instead of waiting out its lock. A lock that expires during a long outage aborts the attempt like any lost lock; see [Stalls](#stalls).
+- The `nextasking worker` bin exits 1 on its own once the callback has settled; the callback still lets it flush your logs first.
 
 ## Bundling
 

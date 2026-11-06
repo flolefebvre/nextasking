@@ -19,7 +19,7 @@ e2eTest.for(WORKER_BIN_PLACEMENTS)(
       expect(exit).toEqual({ code: 1, signal: null, wasForced: false });
       expect(Date.now() - spawnedAt).toBeLessThan(NO_WORKER_EXIT_DELAY_IN_MILLISECONDS / 2);
       expect(workerBin.output()).toContain(
-        "nextasking worker: register() started no worker. Turn on the environment variable your instrumentation.ts checks before calling startWorker().",
+        "nextasking worker: register() started no worker. If an error is printed above, register() failed before it called startWorker(). If not, turn on the environment variable your instrumentation.ts checks before calling startWorker().",
       );
       expect(workerBin.output()).not.toContain('"message":"worker started"');
     } finally {

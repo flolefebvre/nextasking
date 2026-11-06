@@ -25,7 +25,7 @@ export const NO_WORKER_EXIT_DELAY_IN_MILLISECONDS = 60_000;
 export const WORKER_BIN_USAGE = "Usage: nextasking worker";
 
 export const NO_WORKER_STARTED_ERROR =
-  "nextasking worker: register() started no worker. Turn on the environment variable your instrumentation.ts checks before calling startWorker().";
+  "nextasking worker: register() started no worker. If an error is printed above, register() failed before it called startWorker(). If not, turn on the environment variable your instrumentation.ts checks before calling startWorker().";
 
 export const START_WORKER_REJECTED_ERROR = `nextasking worker: startWorker() rejected and no worker started within ${String(NO_WORKER_EXIT_DELAY_IN_MILLISECONDS / 1_000)} seconds. Exiting with code 1.`;
 

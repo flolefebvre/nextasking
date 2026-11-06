@@ -226,7 +226,6 @@ export async function register() {
 ```
 
 - Exit yourself under `next start`. In production Next doesn't await `register()` before serving, and a rejected `register()` leaves the server answering 500 to every request without exiting (observed with Next 16.3.5). Rethrowing or setting `process.exitCode` doesn't stop it.
-- Await nothing but the instance's import before `startWorker()`: the `nextasking worker` bin checks that `register()` called it as soon as Next has loaded the build.
 - `onWorkerNotStarted` is called once, right after `worker not started` is written, with the same error. It isn't called when `startWorker()` rejects, when the worker starts, or when the instance was closed before the boot finished.
 - A callback that throws or rejects writes `onWorkerNotStarted failed` at error with `err`. The library never exits the process for you under `next start`.
 - The `nextasking worker` bin exits 1 on its own once the callback has settled; the callback still lets it flush your logs first.

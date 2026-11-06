@@ -6,9 +6,18 @@ import type { CapturedProcess } from "./captured-process.js";
 
 export type WorkerBinPlacement = "installed" | "standalone";
 
+export const WORKER_BIN_PLACEMENTS: readonly WorkerBinPlacement[] = ["installed", "standalone"];
+
 const WORKER_STARTED_TIMEOUT_IN_MILLISECONDS = 60_000;
 
 export const STANDALONE_WORKER_BIN_PATH = "node_modules/@flefebvre/nextasking/dist/bin.js";
+
+export function appDirOfPlacement(
+  placement: WorkerBinPlacement,
+  { fixtureAppDir, standaloneAppDir }: { fixtureAppDir: string; standaloneAppDir: string },
+): string {
+  return placement === "standalone" ? standaloneAppDir : fixtureAppDir;
+}
 
 export function spawnWorkerBin(
   appDir: string,

@@ -3,14 +3,20 @@ import * as v from "valibot";
 import { describe, expect, expectTypeOf, test, vi } from "vitest";
 import { z } from "zod";
 
-import { hasStartWorkerBeenCalled } from "./bin.js";
+import { listenForLibraryNotifications } from "./bin.js";
 import { fanOutFailed, runFailed } from "./built-in-events.js";
 import type { FanOutFailedPayload, RunFailedPayload } from "./built-in-events.js";
 import { defineEvent, defineListener, defineScheduledTask, defineTask } from "./definitions.js";
 import { InvalidPayloadError, UnknownEventError, UnknownTaskError } from "./errors.js";
 import type { Duration } from "./durations.js";
 import type { Logger } from "./logger.js";
-import { createNextasking } from "./registry.js";
+import { closeNextasking, createNextasking } from "./registry.js";
+import { bootWorker } from "./worker-boot.js";
+
+vi.mock(import("./worker-boot.js"), async (importOriginal) => {
+  const workerBoot = await importOriginal();
+  return { ...workerBoot, bootWorker: vi.fn(workerBoot.bootWorker) };
+});
 
 const UNREACHABLE_URL = "redis://nextasking.invalid:6379";
 
@@ -61,6 +67,10 @@ const RANDOM_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-
 
 function networkResources(): string[] {
   return process.getActiveResourcesInfo().filter((resource) => /TCP|GetAddrInfo|Pipe/.test(resource));
+}
+
+async function expectNetworkResourcesBackTo(networkResourcesBefore: string[]): Promise<void> {
+  await vi.waitFor(() => expect(networkResources()).toEqual(networkResourcesBefore), { timeout: 4_000 });
 }
 
 describe("createNextasking", () => {
@@ -606,15 +616,90 @@ describe("isTaskName and isEventName", () => {
 });
 
 describe("startWorker", () => {
-  test("marks the global scope before its first await, so the bin knows register() called it", async () => {
+  test("notifies the worker bin of the call before its first await", async () => {
     const nextasking = createTestNextasking();
-    const isCalledBefore = hasStartWorkerBeenCalled();
+    const notifications: unknown[] = [];
+    const stopListening = listenForLibraryNotifications((notification) => notifications.push(notification));
 
-    const starting = nextasking.startWorker({ concurrency: 0 });
+    try {
+      const starting = nextasking.startWorker({ concurrency: 0 });
 
-    expect(isCalledBefore).toBe(false);
-    expect(hasStartWorkerBeenCalled()).toBe(true);
-    await expect(starting).rejects.toThrow("Invalid startWorker concurrency");
+      expect(notifications).toEqual(["startWorkerCalled"]);
+      await expect(starting).rejects.toThrow("Invalid startWorker concurrency");
+    } finally {
+      stopListening();
+    }
+  });
+
+  test("notifies the worker bin that it rejected with no worker in the process, on an invalid option", async () => {
+    const nextasking = createTestNextasking();
+    const notifications: unknown[] = [];
+    const stopListening = listenForLibraryNotifications((notification) => notifications.push(notification));
+
+    try {
+      await expect(nextasking.startWorker({ concurrency: 0 })).rejects.toThrow("Invalid startWorker concurrency");
+
+      expect(notifications).toEqual(["startWorkerCalled", "startWorkerRejectedWithNoWorker"]);
+    } finally {
+      stopListening();
+    }
+  });
+
+  test("leaves process.exitCode untouched when it rejects with no worker bin listening", async () => {
+    const nextasking = createTestNextasking();
+    const exitCodeBefore = process.exitCode;
+
+    await expect(nextasking.startWorker({ concurrency: 0 })).rejects.toThrow("Invalid startWorker concurrency");
+
+    expect(process.exitCode).toBe(exitCodeBefore);
+  });
+
+  test("closes its run queue and frees the process for another worker when its boot throws, and tells the worker bin", async () => {
+    const nextasking = createTestNextasking();
+    const networkResourcesBefore = networkResources();
+    const notifications: unknown[] = [];
+    const stopListening = listenForLibraryNotifications((notification) => notifications.push(notification));
+    vi.mocked(bootWorker)
+      .mockRejectedValueOnce(new Error("boot threw"))
+      .mockRejectedValueOnce(new Error("boot threw again"));
+
+    try {
+      await expect(nextasking.startWorker()).rejects.toThrow("boot threw");
+
+      await expect(nextasking.startWorker()).rejects.toThrow("boot threw again");
+      expect(notifications).toEqual([
+        "startWorkerCalled",
+        "startWorkerRejectedWithNoWorker",
+        "startWorkerCalled",
+        "startWorkerRejectedWithNoWorker",
+      ]);
+      await expectNetworkResourcesBackTo(networkResourcesBefore);
+    } finally {
+      stopListening();
+      await closeNextasking(nextasking);
+    }
+  });
+
+  test("starts no worker, and resolves, when the instance is closed while its boot completes in the foreground", async () => {
+    const logger = createSpyLogger();
+    const nextasking = createTestNextasking(logger);
+    const networkResourcesBefore = networkResources();
+    let completeTheBoot = () => {};
+    vi.mocked(bootWorker).mockResolvedValueOnce({
+      isFirstRoundTripAnswered: true,
+      completion: new Promise<void>((resolve) => {
+        completeTheBoot = resolve;
+      }),
+    });
+
+    const starting = nextasking.startWorker();
+    await setImmediate();
+    await closeNextasking(nextasking);
+    completeTheBoot();
+
+    await expect(starting).resolves.toBeUndefined();
+    expect(logger.info).not.toHaveBeenCalledWith({}, "worker started");
+    await expectNetworkResourcesBackTo(networkResourcesBefore);
   });
 
   test.each([

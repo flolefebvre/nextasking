@@ -88,6 +88,15 @@ Run CPU-heavy or long tasks in a process of their own with the `nextasking worke
 nextasking worker: register() started no worker. Turn on the environment variable your instrumentation.ts checks before calling startWorker().
 ```
 
+- `register()` may await anything before `startWorker()`: imports, a secret, a database warm-up. The bin gives up on it only once the process has nothing left to run, or 60 seconds after Next has loaded the build when something keeps the process alive (an interval, a database pool). Call `startWorker()` within those 60 seconds.
+- When `startWorker()` rejects and no worker runs in the process (an evicting `maxmemory-policy`, an invalid option, any boot failure found before it resolves), the bin exits 1. It sets exit code 1 and lets your `catch` run to the end first; if you exit yourself, your code stands. If something still keeps the process alive 60 seconds after the rejection with no worker started, the bin exits 1 with this line on stderr:
+
+```text
+nextasking worker: startWorker() rejected and no worker started within 60 seconds. Exiting with code 1.
+```
+
+- A second `startWorker()` call rejected while a worker runs, such as `already started in this process`, changes neither the exit code nor the process.
+
 - When Redis was down at boot and the boot then fails, such as on an evicting `maxmemory-policy`, the bin exits 1 once `worker not started` is written and your `onWorkerNotStarted`, if any, has settled. See [Exit when the worker can't start](#exit-when-the-worker-cant-start).
 - `nextasking worker` takes no other argument; anything else prints `Usage: nextasking worker` and exits 1.
 
@@ -228,7 +237,7 @@ export async function register() {
 - Exit yourself under `next start`. In production Next doesn't await `register()` before serving, and a rejected `register()` leaves the server answering 500 to every request without exiting (observed with Next 16.3.5). Rethrowing or setting `process.exitCode` doesn't stop it.
 - `onWorkerNotStarted` is called once, right after `worker not started` is written, with the same error. It isn't called when `startWorker()` rejects, when the worker starts, or when the instance was closed before the boot finished.
 - A callback that throws or rejects writes `onWorkerNotStarted failed` at error with `err`. The library never exits the process for you under `next start`.
-- The `nextasking worker` bin exits 1 on its own once the callback has settled; the callback still lets it flush your logs first.
+- The `nextasking worker` bin exits 1 on its own in both paths, so the example above is optional there. When `startWorker()` rejects, it sets exit code 1 and the process ends once your `catch` has finished, or 60 seconds after the rejection if something keeps it alive. When the boot fails in the background, it exits 1 once `onWorkerNotStarted` has settled. Either way your handler still runs first, so flush your logs in it. See [Run the worker in its own process](#run-the-worker-in-its-own-process).
 
 ## Bundling
 

@@ -10,7 +10,13 @@ import { defineEvent, defineListener, defineScheduledTask, defineTask } from "./
 import { InvalidPayloadError, UnknownEventError, UnknownTaskError } from "./errors.js";
 import type { Duration } from "./durations.js";
 import type { Logger } from "./logger.js";
-import { createNextasking } from "./registry.js";
+import { closeNextasking, createNextasking } from "./registry.js";
+import { bootWorker } from "./worker-boot.js";
+
+vi.mock(import("./worker-boot.js"), async (importOriginal) => {
+  const workerBoot = await importOriginal();
+  return { ...workerBoot, bootWorker: vi.fn(workerBoot.bootWorker) };
+});
 
 const UNREACHABLE_URL = "redis://nextasking.invalid:6379";
 
@@ -618,6 +624,53 @@ describe("startWorker", () => {
       await expect(starting).rejects.toThrow("Invalid startWorker concurrency");
     } finally {
       stopListening();
+    }
+  });
+
+  test("notifies the worker bin that it rejected with no worker in the process, on an invalid option", async () => {
+    const nextasking = createTestNextasking();
+    const notifications: unknown[] = [];
+    const stopListening = listenForLibraryNotifications((notification) => notifications.push(notification));
+
+    try {
+      await expect(nextasking.startWorker({ concurrency: 0 })).rejects.toThrow("Invalid startWorker concurrency");
+
+      expect(notifications).toEqual(["startWorkerCalled", "startWorkerRejectedWithNoWorker"]);
+    } finally {
+      stopListening();
+    }
+  });
+
+  test("leaves process.exitCode untouched when it rejects with no worker bin listening", async () => {
+    const nextasking = createTestNextasking();
+    const exitCodeBefore = process.exitCode;
+
+    await expect(nextasking.startWorker({ concurrency: 0 })).rejects.toThrow("Invalid startWorker concurrency");
+
+    expect(process.exitCode).toBe(exitCodeBefore);
+  });
+
+  test("closes its run queue and frees the process for another worker when its boot throws, and tells the worker bin", async () => {
+    const nextasking = createTestNextasking();
+    const notifications: unknown[] = [];
+    const stopListening = listenForLibraryNotifications((notification) => notifications.push(notification));
+    vi.mocked(bootWorker)
+      .mockRejectedValueOnce(new Error("boot threw"))
+      .mockRejectedValueOnce(new Error("boot threw again"));
+
+    try {
+      await expect(nextasking.startWorker()).rejects.toThrow("boot threw");
+
+      await expect(nextasking.startWorker()).rejects.toThrow("boot threw again");
+      expect(notifications).toEqual([
+        "startWorkerCalled",
+        "startWorkerRejectedWithNoWorker",
+        "startWorkerCalled",
+        "startWorkerRejectedWithNoWorker",
+      ]);
+    } finally {
+      stopListening();
+      await closeNextasking(nextasking);
     }
   });
 

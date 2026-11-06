@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import {
   NO_WORKER_EXIT_DELAY_IN_MILLISECONDS,
   NO_WORKER_STARTED_ERROR,
+  START_WORKER_REJECTED_ERROR,
   isWorkerCommand,
   standaloneConfigOf,
   watchRegister,
@@ -87,6 +88,13 @@ describe("watchRegister", () => {
     };
   }
 
+  function runThroughTheBound(binProcess: { exit: ReturnType<typeof vi.fn> }) {
+    vi.advanceTimersByTime(NO_WORKER_EXIT_DELAY_IN_MILLISECONDS - 1);
+    const hasExitedBeforeTheBound = binProcess.exit.mock.calls.length > 0;
+    vi.advanceTimersByTime(1);
+    return { hasExitedBeforeTheBound };
+  }
+
   test("sets exit code 1 and writes the no-worker line once when the loop drains before any startWorker() call", () => {
     const { binProcess, registerWatch } = watchedBin();
     registerWatch.onPrepared();
@@ -115,9 +123,7 @@ describe("watchRegister", () => {
     vi.advanceTimersByTime(2 * NO_WORKER_EXIT_DELAY_IN_MILLISECONDS);
     registerWatch.onPrepared();
 
-    vi.advanceTimersByTime(NO_WORKER_EXIT_DELAY_IN_MILLISECONDS - 1);
-    const hasExitedBeforeTheBound = binProcess.exit.mock.calls.length > 0;
-    vi.advanceTimersByTime(1);
+    const { hasExitedBeforeTheBound } = runThroughTheBound(binProcess);
 
     expect(hasExitedBeforeTheBound).toBe(false);
     expect(binProcess.exit).toHaveBeenCalledExactlyOnceWith(1);
@@ -158,6 +164,83 @@ describe("watchRegister", () => {
     notify("workerNotStarted");
 
     expect(binProcess.exit).toHaveBeenCalledExactlyOnceWith(1);
+  });
+
+  test("sets exit code 1 without exiting when startWorker() rejects with no worker, so the app's catch runs to the end", () => {
+    const { binProcess, registerWatch, notify } = watchedBin();
+    registerWatch.onPrepared();
+    notify("startWorkerCalled");
+
+    notify("startWorkerRejectedWithNoWorker");
+    binProcess.emit("beforeExit");
+
+    expect(binProcess.exitCode).toBe(1);
+    expect(binProcess.exit).not.toHaveBeenCalled();
+    expect(writtenErrors).toEqual([]);
+  });
+
+  test("exits 1 with the rejection line when no worker runs within the bound counted from the rejection", () => {
+    const { binProcess, registerWatch, notify } = watchedBin();
+    registerWatch.onPrepared();
+    vi.advanceTimersByTime(NO_WORKER_EXIT_DELAY_IN_MILLISECONDS / 2);
+    notify("startWorkerCalled");
+    notify("startWorkerRejectedWithNoWorker");
+
+    const { hasExitedBeforeTheBound } = runThroughTheBound(binProcess);
+
+    expect(hasExitedBeforeTheBound).toBe(false);
+    expect(binProcess.exit).toHaveBeenCalledExactlyOnceWith(1);
+    expect(writtenErrors).toEqual([START_WORKER_REJECTED_ERROR]);
+    expect(START_WORKER_REJECTED_ERROR).toBe(
+      "nextasking worker: startWorker() rejected and no worker started within 60 seconds. Exiting with code 1.",
+    );
+  });
+
+  test.each([
+    ["a rejected startWorker() the app retries", "rejection"],
+    ["a drain whose loop a listener revives", "drain"],
+  ])("clears the exit code it set on %s, and never gives up, once startWorker() resolves", (_, cause) => {
+    const { binProcess, registerWatch, notify } = watchedBin();
+    registerWatch.onPrepared();
+    if (cause === "rejection") {
+      notify("startWorkerCalled");
+      notify("startWorkerRejectedWithNoWorker");
+    } else {
+      binProcess.emit("beforeExit");
+    }
+
+    notify("startWorkerCalled");
+    notify("startWorkerResolved");
+    vi.advanceTimersByTime(10 * NO_WORKER_EXIT_DELAY_IN_MILLISECONDS);
+
+    expect(binProcess.exitCode).toBeUndefined();
+    expect(binProcess.exit).not.toHaveBeenCalled();
+  });
+
+  test("keeps an exit code the app set itself after the rejection", () => {
+    const { binProcess, registerWatch, notify } = watchedBin();
+    registerWatch.onPrepared();
+    notify("startWorkerCalled");
+    notify("startWorkerRejectedWithNoWorker");
+
+    binProcess.exitCode = 3;
+    notify("startWorkerCalled");
+    notify("startWorkerResolved");
+
+    expect(binProcess.exitCode).toBe(3);
+  });
+
+  test("changes nothing when a second startWorker() call is rejected while a worker runs", () => {
+    const { binProcess, registerWatch, notify } = watchedBin();
+    registerWatch.onPrepared();
+    notify("startWorkerCalled");
+    notify("startWorkerResolved");
+
+    notify("startWorkerCalled");
+    vi.advanceTimersByTime(10 * NO_WORKER_EXIT_DELAY_IN_MILLISECONDS);
+
+    expect(binProcess.exitCode).toBeUndefined();
+    expect(binProcess.exit).not.toHaveBeenCalled();
   });
 
   test("ignores a notification it doesn't know, as from a newer library", () => {

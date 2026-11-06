@@ -261,64 +261,103 @@ export function createNextasking<
     eventDefinitions: eventDefinitionSummariesOf(events, listenerNamesByEventName) as Instance["eventDefinitions"],
     startWorker: async (options = {}) => {
       notifyWorkerBin("startWorkerCalled");
-      if (recordingRunWriter !== undefined) {
-        throw fakedInstanceError("startWorker");
-      }
-      const workerOptions = workerOptionsFrom(options);
-      if (isWorkerStartedInThisProcess) {
-        throw new Error("The nextasking worker is already started in this process");
-      }
-      isWorkerStartedInThisProcess = true;
-      const workerRunQueue = createRunQueue(connections, "worker", prefix, logger);
-      runQueueOfWorker = workerRunQueue;
-      const workerEnqueuer = createEnqueuerWritingTo(workerRunQueue);
-      const isWorkerRunQueueOpen = () => runQueueOfWorker === workerRunQueue;
-      const startTheWorker = () => {
-        runningWorker = startRunWorker({
-          options: workerOptions,
-          runQueue: workerRunQueue,
-          prefix,
-          logger,
-          tasksByName,
-          eventsByName,
-          dispatch: workerEnqueuer.dispatch,
-          emit: workerEnqueuer.emit,
-          sendBuiltInEvent: workerEnqueuer.sendBuiltInEvent,
-          onConnectionRestored: connections.onConnectionRestored,
-        });
-      };
-      const { isFirstRoundTripAnswered, completion } = await bootWorker({
-        runQueue: workerRunQueue,
-        declaredSchedules,
-        logger,
-        sendBuiltInEvent: workerEnqueuer.sendBuiltInEvent,
-        giveUpAfterInMilliseconds: connections.giveUpAfterInMilliseconds,
-      });
-      if (isFirstRoundTripAnswered) {
-        try {
-          await completion;
-        } catch (error) {
-          await closeWorkerRunQueue();
-          throw error;
+      try {
+        await startTheWorkerOfThisInstance(options);
+      } catch (error) {
+        if (!isWorkerStartedInThisProcess) {
+          notifyWorkerBin("startWorkerRejectedWithNoWorker");
         }
-        startTheWorker();
-      } else {
-        void finishBootInBackground({
-          completion,
-          isWorkerRunQueueOpen,
-          startTheWorker,
-          closeWorkerRunQueue,
-          notifyWorkerBin: () => notifyWorkerBin("workerNotStarted"),
-          onWorkerNotStarted: options.onWorkerNotStarted,
-          logger,
-        });
+        throw error;
       }
-      if (isSignalHandlingLeftToTheApp()) {
-        stopExitingOnShutdownSignals = exitOnShutdownSignals(() => closeInstance({ isDraining: true }), logger);
-      } else if (!isDevelopment()) {
-        logger.warn({}, MISSING_MANUAL_SIGNAL_HANDLING_WARNING);
-      }
+      notifyWorkerBin("startWorkerResolved");
     },
+  };
+
+  const startTheWorkerOfThisInstance = async (options: StartWorkerOptions) => {
+    if (recordingRunWriter !== undefined) {
+      throw fakedInstanceError("startWorker");
+    }
+    const workerOptions = workerOptionsFrom(options);
+    if (isWorkerStartedInThisProcess) {
+      throw new Error("The nextasking worker is already started in this process");
+    }
+    isWorkerStartedInThisProcess = true;
+    let workerRunQueue: RunQueue;
+    try {
+      workerRunQueue = createRunQueue(connections, "worker", prefix, logger);
+    } catch (error) {
+      isWorkerStartedInThisProcess = false;
+      throw error;
+    }
+    runQueueOfWorker = workerRunQueue;
+    const isWorkerRunQueueOpen = () => runQueueOfWorker === workerRunQueue;
+    try {
+      await bootTheWorker({
+        workerRunQueue,
+        workerOptions,
+        isWorkerRunQueueOpen,
+        onWorkerNotStarted: options.onWorkerNotStarted,
+      });
+    } catch (error) {
+      if (isWorkerRunQueueOpen()) {
+        await closeWorkerRunQueue();
+      }
+      throw error;
+    }
+    if (isSignalHandlingLeftToTheApp()) {
+      stopExitingOnShutdownSignals = exitOnShutdownSignals(() => closeInstance({ isDraining: true }), logger);
+    } else if (!isDevelopment()) {
+      logger.warn({}, MISSING_MANUAL_SIGNAL_HANDLING_WARNING);
+    }
+  };
+
+  const bootTheWorker = async ({
+    workerRunQueue,
+    workerOptions,
+    isWorkerRunQueueOpen,
+    onWorkerNotStarted,
+  }: {
+    workerRunQueue: RunQueue;
+    workerOptions: ReturnType<typeof workerOptionsFrom>;
+    isWorkerRunQueueOpen: () => boolean;
+    onWorkerNotStarted: StartWorkerOptions["onWorkerNotStarted"];
+  }) => {
+    const workerEnqueuer = createEnqueuerWritingTo(workerRunQueue);
+    const startTheWorker = () => {
+      runningWorker = startRunWorker({
+        options: workerOptions,
+        runQueue: workerRunQueue,
+        prefix,
+        logger,
+        tasksByName,
+        eventsByName,
+        dispatch: workerEnqueuer.dispatch,
+        emit: workerEnqueuer.emit,
+        sendBuiltInEvent: workerEnqueuer.sendBuiltInEvent,
+        onConnectionRestored: connections.onConnectionRestored,
+      });
+    };
+    const { isFirstRoundTripAnswered, completion } = await bootWorker({
+      runQueue: workerRunQueue,
+      declaredSchedules,
+      logger,
+      sendBuiltInEvent: workerEnqueuer.sendBuiltInEvent,
+      giveUpAfterInMilliseconds: connections.giveUpAfterInMilliseconds,
+    });
+    if (isFirstRoundTripAnswered) {
+      await completion;
+      startTheWorker();
+    } else {
+      void finishBootInBackground({
+        completion,
+        isWorkerRunQueueOpen,
+        startTheWorker,
+        closeWorkerRunQueue,
+        notifyWorkerBin: () => notifyWorkerBin("workerNotStarted"),
+        onWorkerNotStarted,
+        logger,
+      });
+    }
   };
 
   let stopExitingOnShutdownSignals: (() => void) | undefined;
@@ -328,8 +367,11 @@ export function createNextasking<
       return;
     }
     runQueueOfWorker = undefined;
-    await closedRunQueue.close();
-    isWorkerStartedInThisProcess = false;
+    try {
+      await closedRunQueue.close();
+    } finally {
+      isWorkerStartedInThisProcess = false;
+    }
   };
   const closeInstance = async ({ isDraining }: { isDraining: boolean }) => {
     if (!isDraining) {

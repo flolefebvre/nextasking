@@ -262,7 +262,7 @@ export function createNextasking<
     startWorker: async (options = {}) => {
       notifyWorkerBin("startWorkerCalled");
       try {
-        await startTheWorkerOfThisInstance(options);
+        await startWorkerWithoutNotifyingTheBin(options);
       } catch (error) {
         if (!isWorkerStartedInThisProcess) {
           notifyWorkerBin("startWorkerRejectedWithNoWorker");
@@ -273,7 +273,7 @@ export function createNextasking<
     },
   };
 
-  const startTheWorkerOfThisInstance = async (options: StartWorkerOptions) => {
+  const startWorkerWithoutNotifyingTheBin = async (options: StartWorkerOptions) => {
     if (recordingRunWriter !== undefined) {
       throw fakedInstanceError("startWorker");
     }
@@ -292,7 +292,7 @@ export function createNextasking<
     runQueueOfWorker = workerRunQueue;
     const isWorkerRunQueueOpen = () => runQueueOfWorker === workerRunQueue;
     try {
-      await bootTheWorker({
+      await bootThenStartTheWorkerOrFinishInBackground({
         workerRunQueue,
         workerOptions,
         isWorkerRunQueueOpen,
@@ -311,7 +311,7 @@ export function createNextasking<
     }
   };
 
-  const bootTheWorker = async ({
+  const bootThenStartTheWorkerOrFinishInBackground = async ({
     workerRunQueue,
     workerOptions,
     isWorkerRunQueueOpen,
@@ -346,7 +346,9 @@ export function createNextasking<
     });
     if (isFirstRoundTripAnswered) {
       await completion;
-      startTheWorker();
+      if (isWorkerRunQueueOpen()) {
+        startTheWorker();
+      }
     } else {
       void finishBootInBackground({
         completion,

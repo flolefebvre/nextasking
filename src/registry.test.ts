@@ -674,6 +674,26 @@ describe("startWorker", () => {
     }
   });
 
+  test("starts no worker, and resolves, when the instance is closed while its boot completes in the foreground", async () => {
+    const logger = createSpyLogger();
+    const nextasking = createTestNextasking(logger);
+    let completeTheBoot = () => {};
+    vi.mocked(bootWorker).mockResolvedValueOnce({
+      isFirstRoundTripAnswered: true,
+      completion: new Promise<void>((resolve) => {
+        completeTheBoot = resolve;
+      }),
+    });
+
+    const starting = nextasking.startWorker();
+    await setImmediate();
+    await closeNextasking(nextasking);
+    completeTheBoot();
+
+    await expect(starting).resolves.toBeUndefined();
+    expect(logger.info).not.toHaveBeenCalledWith({}, "worker started");
+  });
+
   test.each([
     [0, "0"],
     [-2, "-2"],

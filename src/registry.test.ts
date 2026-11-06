@@ -69,6 +69,10 @@ function networkResources(): string[] {
   return process.getActiveResourcesInfo().filter((resource) => /TCP|GetAddrInfo|Pipe/.test(resource));
 }
 
+async function expectNetworkResourcesBackTo(networkResourcesBefore: string[]): Promise<void> {
+  await vi.waitFor(() => expect(networkResources()).toEqual(networkResourcesBefore), { timeout: 4_000 });
+}
+
 describe("createNextasking", () => {
   test("opens no connection", async () => {
     const networkResourcesBefore = networkResources();
@@ -652,6 +656,7 @@ describe("startWorker", () => {
 
   test("closes its run queue and frees the process for another worker when its boot throws, and tells the worker bin", async () => {
     const nextasking = createTestNextasking();
+    const networkResourcesBefore = networkResources();
     const notifications: unknown[] = [];
     const stopListening = listenForLibraryNotifications((notification) => notifications.push(notification));
     vi.mocked(bootWorker)
@@ -668,6 +673,7 @@ describe("startWorker", () => {
         "startWorkerCalled",
         "startWorkerRejectedWithNoWorker",
       ]);
+      await expectNetworkResourcesBackTo(networkResourcesBefore);
     } finally {
       stopListening();
       await closeNextasking(nextasking);
@@ -677,6 +683,7 @@ describe("startWorker", () => {
   test("starts no worker, and resolves, when the instance is closed while its boot completes in the foreground", async () => {
     const logger = createSpyLogger();
     const nextasking = createTestNextasking(logger);
+    const networkResourcesBefore = networkResources();
     let completeTheBoot = () => {};
     vi.mocked(bootWorker).mockResolvedValueOnce({
       isFirstRoundTripAnswered: true,
@@ -692,6 +699,7 @@ describe("startWorker", () => {
 
     await expect(starting).resolves.toBeUndefined();
     expect(logger.info).not.toHaveBeenCalledWith({}, "worker started");
+    await expectNetworkResourcesBackTo(networkResourcesBefore);
   });
 
   test.each([

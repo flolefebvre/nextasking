@@ -82,10 +82,10 @@ Run CPU-heavy or long tasks in a process of their own with the `nextasking worke
 - Run it after `next build`, from the app's directory. It loads that build the way `next start` does, so `register()` in `instrumentation.ts` runs and task code resolves the same modules, `server-only` and `@/` imports included.
 - It answers no HTTP and binds no port. Deploy it as a worker component with no route and no port.
 - It sets `NEXT_MANUAL_SIG_HANDLE` itself, and `NODE_ENV=production` when `NODE_ENV` is unset. A SIGTERM drains the attempts in flight as in [Let a deploy finish the running attempts](#let-a-deploy-finish-the-running-attempts), then the process exits 0.
-- When `register()` doesn't call `startWorker()`, the bin exits 1 with this line on stderr. Turn on, in the bin's environment, the variable your `instrumentation.ts` checks:
+- When `register()` doesn't call `startWorker()`, the bin exits 1 with this line on stderr. A `register()` that throws ends the same way, with its error printed first: fix that error. With no error above the line, turn on, in the bin's environment, the variable your `instrumentation.ts` checks:
 
 ```text
-nextasking worker: register() started no worker. Turn on the environment variable your instrumentation.ts checks before calling startWorker().
+nextasking worker: register() started no worker. If an error is printed above, register() failed before it called startWorker(). If not, turn on the environment variable your instrumentation.ts checks before calling startWorker().
 ```
 
 - `register()` may await anything before `startWorker()`: imports, a secret, a database warm-up. The bin gives up on it only once the process has nothing left to run, or 60 seconds after Next has loaded the build when something keeps the process alive (an interval, a database pool). Call `startWorker()` within those 60 seconds.

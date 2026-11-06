@@ -43,10 +43,11 @@ integrationTest(
     await proxy.cut();
     const { logger, lines } = createRecordingLogger();
     const nextasking = createGiveUpAfterOneSecondNextasking(proxy.url, keyPrefix, { logger });
+    const onWorkerNotStarted = vi.fn();
 
     try {
       const startedAt = performance.now();
-      await nextasking.startWorker();
+      await nextasking.startWorker({ onWorkerNotStarted });
 
       expect(performance.now() - startedAt).toBeLessThan(SLOWEST_RESOLVING_START_IN_MILLISECONDS);
       expect(lines.map((line) => line.message)).toContain("connection error");
@@ -66,6 +67,7 @@ integrationTest(
       expect(messages.indexOf("schedule added")).toBeGreaterThan(-1);
       expect(messages.indexOf("schedule added")).toBeLessThan(messages.indexOf("worker started"));
       expect(messages.indexOf("connection restored")).toBeLessThan(messages.indexOf("worker started"));
+      expect(onWorkerNotStarted).not.toHaveBeenCalled();
     } finally {
       await closeNextasking(nextasking);
       await proxy.stop();

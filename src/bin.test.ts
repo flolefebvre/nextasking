@@ -1,10 +1,10 @@
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
-import { hasStartWorkerBeenCalled, isWorkerCommand, standaloneConfigOf } from "./bin.js";
-import { markStartWorkerCalled } from "./start-worker-mark.js";
+import { hasStartWorkerBeenCalled, isWorkerCommand, listenForWorkerNotStarted, standaloneConfigOf } from "./bin.js";
+import { markStartWorkerCalled, notifyWorkerBinOfWorkerNotStarted } from "./worker-bin-handshake.js";
 
 describe("isWorkerCommand", () => {
   test("accepts worker alone", () => {
@@ -58,5 +58,21 @@ describe("hasStartWorkerBeenCalled", () => {
 
     expect(isCalledBeforeTheMark).toBe(false);
     expect(hasStartWorkerBeenCalled(globalScope)).toBe(true);
+  });
+});
+
+describe("listenForWorkerNotStarted", () => {
+  test("hears the library notify the worker bin on the same global scope", () => {
+    const globalScope = {};
+    const onWorkerNotStarted = vi.fn();
+
+    listenForWorkerNotStarted(onWorkerNotStarted, globalScope);
+    notifyWorkerBinOfWorkerNotStarted(globalScope);
+
+    expect(onWorkerNotStarted).toHaveBeenCalledOnce();
+  });
+
+  test("lets the library notify a global scope no bin listens on", () => {
+    expect(() => notifyWorkerBinOfWorkerNotStarted({})).not.toThrow();
   });
 });

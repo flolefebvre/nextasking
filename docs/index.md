@@ -50,6 +50,7 @@ Events and background tasks for a Next.js app, on BullMQ with Redis or Valkey. D
 | Pick the Valkey or Redis for the queues            | [Worker](worker.md)                             |
 | Set `maxmemory-policy` to `noeviction`             | [Worker](worker.md)                             |
 | Know what the worker does when Redis is down       | [Worker](worker.md)                             |
+| Exit when the worker can't start                   | [Worker](worker.md)                             |
 | Configure webpack with `serverExternalPackages`    | [Worker](worker.md)                             |
 | Limit a task's attempts across every instance      | [Concurrency](concurrency.md)                   |
 | Limit a task's attempts per account or other key   | [Concurrency](concurrency.md)                   |

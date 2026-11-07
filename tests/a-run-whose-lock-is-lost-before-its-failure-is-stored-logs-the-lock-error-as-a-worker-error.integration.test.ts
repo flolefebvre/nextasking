@@ -26,28 +26,31 @@ integrationTest(
           }
         },
       };
-      const nextasking = createNextasking({
+      const chargeInvoice = defineTask("charge-invoice", {
+        schema: z.object({ invoiceId: z.string() }),
+        retries: 1,
+        backoff: "1s",
+        handler: async ({ attempt }) => {
+          if (attempt === 1) {
+            throw new Error("card declined");
+          }
+        },
+      });
+      const workerNextasking = createNextasking({
         connection: { url: proxy.url, giveUpAfter: "1s" },
         prefix: keyPrefix,
         logger,
-        tasks: [
-          defineTask("charge-invoice", {
-            schema: z.object({ invoiceId: z.string() }),
-            retries: 1,
-            backoff: "1s",
-            handler: async ({ attempt }) => {
-              if (attempt === 1) {
-                throw new Error("card declined");
-              }
-            },
-          }),
-        ],
+        tasks: [chargeInvoice],
       });
+      const directNextasking = createNextasking({
+        connection: { url: redisUrl },
+        prefix: keyPrefix,
+        tasks: [chargeInvoice],
+      });
+      closeWhenTestFinishes({ proxy, nextaskings: [workerNextasking, directNextasking], lines });
 
-      closeWhenTestFinishes({ proxy, nextaskings: [nextasking], lines });
-
-      await nextasking.startWorker();
-      const { runId } = await nextasking.dispatch("charge-invoice", { invoiceId: "invoice-7" });
+      await workerNextasking.startWorker();
+      const { runId } = await directNextasking.dispatch("charge-invoice", { invoiceId: "invoice-7" });
       await waitForLogMessage(lines, "connection error");
       await redis.del(`${runJobKey(keyPrefix, "charge-invoice", runId)}:lock`);
       await proxy.restore();

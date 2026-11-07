@@ -21,26 +21,30 @@ integrationTest(
     const proxy = await startTcpProxy(redisUrl);
     const { logger, lines } = createRecordingLogger();
     let completionReplyCut: Promise<void> | undefined;
-    const nextasking = createNextasking({
+    const sendWelcomeEmail = defineTask("send-welcome-email", {
+      schema: z.object({ email: z.string() }),
+      handler: async ({ runId }) => {
+        const jobKey = runJobKey(keyPrefix, "send-welcome-email", runId);
+        completionReplyCut = proxy.cutBeforeReplyTo(
+          (request) => request.includes(jobKey) && request.includes(MOVE_TO_COMPLETED_ARGUMENT),
+        );
+      },
+    });
+    const workerNextasking = createNextasking({
       connection: { url: proxy.url, giveUpAfter: "1s" },
       prefix: keyPrefix,
       logger,
-      tasks: [
-        defineTask("send-welcome-email", {
-          schema: z.object({ email: z.string() }),
-          handler: async ({ runId }) => {
-            const jobKey = runJobKey(keyPrefix, "send-welcome-email", runId);
-            completionReplyCut = proxy.cutBeforeReplyTo(
-              (request) => request.includes(jobKey) && request.includes(MOVE_TO_COMPLETED_ARGUMENT),
-            );
-          },
-        }),
-      ],
+      tasks: [sendWelcomeEmail],
     });
-    closeWhenTestFinishes({ proxy, nextaskings: [nextasking], lines });
+    const directNextasking = createNextasking({
+      connection: { url: redisUrl },
+      prefix: keyPrefix,
+      tasks: [sendWelcomeEmail],
+    });
+    closeWhenTestFinishes({ proxy, nextaskings: [workerNextasking, directNextasking], lines });
 
-    await nextasking.startWorker();
-    const { runId } = await nextasking.dispatch("send-welcome-email", { email: "ada@example.com" });
+    await workerNextasking.startWorker();
+    const { runId } = await directNextasking.dispatch("send-welcome-email", { email: "ada@example.com" });
     await waitForLogMessage(lines, "connection error");
     await completionReplyCut;
     await proxy.restore();

@@ -28,29 +28,36 @@ integrationTest(
     const { logger, lines } = createRecordingLogger();
     const listenerRunIds: string[] = [];
     const invoicePaid = defineEvent("invoice.paid", { schema: z.object({ invoiceId: z.string() }) });
-    const nextasking = createNextasking({
+    const listeners = LISTENER_NAMES.map((listenerName) =>
+      defineListener(listenerName, {
+        on: invoicePaid,
+        handler: async ({ runId }) => {
+          listenerRunIds.push(runId);
+        },
+      }),
+    );
+    const workerNextasking = createNextasking({
       connection: { url: proxy.url, giveUpAfter: "1s" },
       prefix: keyPrefix,
       logger,
       events: [invoicePaid],
-      tasks: LISTENER_NAMES.map((listenerName) =>
-        defineListener(listenerName, {
-          on: invoicePaid,
-          handler: async ({ runId }) => {
-            listenerRunIds.push(runId);
-          },
-        }),
-      ),
+      tasks: listeners,
+    });
+    const directNextasking = createNextasking({
+      connection: { url: redisUrl },
+      prefix: keyPrefix,
+      events: [invoicePaid],
+      tasks: listeners,
     });
     const eventId = "stripe-evt-7";
     const fanOutJobKey = `${runQueueKeyPrefix(keyPrefix)}${deriveJobId("invoice.paid", eventId)}`;
-    closeWhenTestFinishes({ proxy, nextaskings: [nextasking], lines });
+    closeWhenTestFinishes({ proxy, nextaskings: [workerNextasking, directNextasking], lines });
 
-    await nextasking.startWorker({ concurrency: 1 });
+    await workerNextasking.startWorker({ concurrency: 1 });
     const completionReplyCut = proxy.cutBeforeReplyTo(
       (request) => request.includes(fanOutJobKey) && request.includes(MOVE_TO_COMPLETED_ARGUMENT),
     );
-    await nextasking.emit("invoice.paid", { invoiceId: "invoice-7" }, { eventId });
+    await directNextasking.emit("invoice.paid", { invoiceId: "invoice-7" }, { eventId });
     await waitForLogMessage(lines, "connection error");
     await completionReplyCut;
     await proxy.restore();

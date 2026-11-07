@@ -17,7 +17,7 @@ import { startTcpProxy } from "./tcp-proxy.js";
 const MOVE_TO_FAILED_ARGUMENT = "failedReason";
 
 type FailureReplyOutage = {
-  nextasking: ReturnType<typeof createNextasking>;
+  directNextasking: ReturnType<typeof createNextasking>;
   lines: RecordedLogLine[];
   runId: string;
   runFailedNotices: RunFailedPayload[];
@@ -31,43 +31,45 @@ async function withFailureReplyCut(
   const { logger, lines } = createRecordingLogger();
   const runFailedNotices: RunFailedPayload[] = [];
   let failureReplyCut: Promise<void> | undefined;
-  const nextasking = createNextasking({
+  const tasks = [
+    defineTask("sync-account", {
+      schema: z.object({ accountId: z.string() }),
+      retries,
+      backoff: "1s",
+      handler: async ({ runId, attempt }) => {
+        if (attempt > 1) {
+          return;
+        }
+        const jobKey = runJobKey(keyPrefix, "sync-account", runId);
+        failureReplyCut = proxy.cutBeforeReplyTo(
+          (request) => request.includes(jobKey) && request.includes(MOVE_TO_FAILED_ARGUMENT),
+        );
+        throw new Error("upstream unavailable");
+      },
+    }),
+    defineListener("alert-on-run-failed", {
+      on: runFailed,
+      handler: async ({ payload }) => {
+        runFailedNotices.push(payload);
+      },
+    }),
+  ];
+  const workerNextasking = createNextasking({
     connection: { url: proxy.url, giveUpAfter: "1s" },
     prefix: keyPrefix,
     logger,
-    tasks: [
-      defineTask("sync-account", {
-        schema: z.object({ accountId: z.string() }),
-        retries,
-        backoff: "1s",
-        handler: async ({ runId, attempt }) => {
-          if (attempt > 1) {
-            return;
-          }
-          const jobKey = runJobKey(keyPrefix, "sync-account", runId);
-          failureReplyCut = proxy.cutBeforeReplyTo(
-            (request) => request.includes(jobKey) && request.includes(MOVE_TO_FAILED_ARGUMENT),
-          );
-          throw new Error("upstream unavailable");
-        },
-      }),
-      defineListener("alert-on-run-failed", {
-        on: runFailed,
-        handler: async ({ payload }) => {
-          runFailedNotices.push(payload);
-        },
-      }),
-    ],
+    tasks,
   });
-  closeWhenTestFinishes({ proxy, nextaskings: [nextasking], lines });
+  const directNextasking = createNextasking({ connection: { url: redisUrl }, prefix: keyPrefix, tasks });
+  closeWhenTestFinishes({ proxy, nextaskings: [workerNextasking, directNextasking], lines });
 
-  await nextasking.startWorker();
-  const { runId } = await nextasking.dispatch("sync-account", { accountId: "account-7" });
+  await workerNextasking.startWorker();
+  const { runId } = await directNextasking.dispatch("sync-account", { accountId: "account-7" });
   await waitForLogMessage(lines, "connection error");
   await failureReplyCut;
   await proxy.restore();
   await waitForLogMessage(lines, "connection restored", { timeout: 15_000 });
-  await afterOutage({ nextasking, lines, runId, runFailedNotices });
+  await afterOutage({ directNextasking, lines, runId, runFailedNotices });
 
   expectOneConnectionErrorAndOneConnectionRestored(lines);
   expect(lines.filter((line) => line.message === "worker error" || line.message === "run failure unconfirmed")).toEqual(
@@ -110,7 +112,7 @@ integrationTest(
   async ({ redisUrl, keyPrefix }) => {
     await withFailureReplyCut(
       { redisUrl, keyPrefix, retries: 0 },
-      async ({ nextasking, lines, runId, runFailedNotices }) => {
+      async ({ directNextasking, lines, runId, runFailedNotices }) => {
         await vi.waitFor(
           () => {
             expect(runFailedNotices).toHaveLength(1);
@@ -124,7 +126,7 @@ integrationTest(
             fields: expect.objectContaining({ runId, attempt: 1, reason: "retries exhausted" }),
           }),
         ]);
-        expect(await nextasking.getRun("sync-account", runId)).toMatchObject({ runId, state: "failed" });
+        expect(await directNextasking.getRun("sync-account", runId)).toMatchObject({ runId, state: "failed" });
       },
     );
   },

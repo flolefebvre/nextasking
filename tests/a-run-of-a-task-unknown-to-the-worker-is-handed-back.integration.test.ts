@@ -183,8 +183,9 @@ integrationTest(
       const fanOutFailure = await vi.waitFor(
         () =>
           withRunQueue(redisUrl, keyPrefix, async (runQueue) => {
-            const fanOutJob = await runQueue.getJob(deriveJobId("account.closed", eventId));
-            expect(await fanOutJob?.getState()).toBe("failed");
+            const fanOutJobId = deriveJobId("account.closed", eventId);
+            expect(await runQueue.getJobState(fanOutJobId)).toBe("failed");
+            const fanOutJob = await runQueue.getJob(fanOutJobId);
             return { failedReason: fanOutJob?.failedReason, data: fanOutJob?.data as Record<string, unknown> };
           }),
         { timeout: 15_000, interval: 200 },

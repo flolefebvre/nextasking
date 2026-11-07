@@ -1,7 +1,7 @@
 import { expect, vi } from "vitest";
 
-import { closeNextasking } from "../src/registry.js";
 import { createGiveUpAfterOneSecondNextasking } from "./give-up-after-one-second-nextasking.js";
+import { closeWhenTestFinishes } from "./close-when-test-finishes.js";
 import { integrationTest } from "./integration-test.js";
 import {
   createRecordingLogger,
@@ -23,23 +23,20 @@ integrationTest(
       onWelcomeEmail: (email) => completedEmails.push(email),
     });
 
-    try {
-      await nextasking.startWorker();
-      await nextasking.dispatch("send-welcome-email", { email: "ada@example.com" });
-      await waitForLogMessage(lines, "run completed");
+    closeWhenTestFinishes({ proxy, nextaskings: [nextasking], lines });
 
-      const outage = proxy.cutFor(OUTAGE_DURATION_IN_MILLISECONDS);
-      await waitForLogMessage(lines, "connection error");
-      await outage;
-      await waitForLogMessage(lines, "connection restored", { timeout: 15_000 });
-      await nextasking.dispatch("send-welcome-email", { email: "grace@example.com" });
-      await vi.waitFor(() => expect(completedEmails).toContain("grace@example.com"), { timeout: 10_000 });
+    await nextasking.startWorker();
+    await nextasking.dispatch("send-welcome-email", { email: "ada@example.com" });
+    await waitForLogMessage(lines, "run completed");
 
-      expectOneConnectionErrorAndOneConnectionRestored(lines);
-      expect(lines.filter((line) => line.message === "queue error" || line.message === "worker error")).toEqual([]);
-    } finally {
-      await closeNextasking(nextasking);
-      await proxy.stop();
-    }
+    const outage = proxy.cutFor(OUTAGE_DURATION_IN_MILLISECONDS);
+    await waitForLogMessage(lines, "connection error");
+    await outage;
+    await waitForLogMessage(lines, "connection restored", { timeout: 15_000 });
+    await nextasking.dispatch("send-welcome-email", { email: "grace@example.com" });
+    await vi.waitFor(() => expect(completedEmails).toContain("grace@example.com"), { timeout: 10_000 });
+
+    expectOneConnectionErrorAndOneConnectionRestored(lines);
+    expect(lines.filter((line) => line.message === "queue error" || line.message === "worker error")).toEqual([]);
   },
 );

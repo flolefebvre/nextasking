@@ -3,7 +3,7 @@ import { z } from "zod";
 
 import { createNextasking, defineTask } from "../src/index.js";
 import type { Logger } from "../src/index.js";
-import { closeNextasking } from "../src/registry.js";
+import { closeWhenTestFinishes } from "./close-when-test-finishes.js";
 import { integrationTest } from "./integration-test.js";
 import { createRecordingLogger, waitForLogMessage } from "./recording-logger.js";
 import { runJobKey } from "./run-job-key.js";
@@ -44,36 +44,33 @@ integrationTest(
         ],
       });
 
-      try {
-        await nextasking.startWorker();
-        const { runId } = await nextasking.dispatch("charge-invoice", { invoiceId: "invoice-7" });
-        await waitForLogMessage(lines, "connection error");
-        await redis.del(`${runJobKey(keyPrefix, "charge-invoice", runId)}:lock`);
-        await proxy.restore();
-        const workerErrorLines = await vi.waitUntil(
-          () => {
-            const workerErrors = lines.filter((line) => line.message === "worker error");
-            return workerErrors.length >= 1 ? workerErrors : undefined;
-          },
-          { timeout: 15_000 },
-        );
+      closeWhenTestFinishes({ proxy, nextaskings: [nextasking], lines });
 
-        expect(workerErrorLines).toEqual([
-          {
-            level: "error",
-            fields: {
-              err: expect.objectContaining({
-                message: expect.stringMatching(/^Missing lock for job .+\. moveToDelayed$/),
-              }),
-            },
-            message: "worker error",
+      await nextasking.startWorker();
+      const { runId } = await nextasking.dispatch("charge-invoice", { invoiceId: "invoice-7" });
+      await waitForLogMessage(lines, "connection error");
+      await redis.del(`${runJobKey(keyPrefix, "charge-invoice", runId)}:lock`);
+      await proxy.restore();
+      const workerErrorLines = await vi.waitUntil(
+        () => {
+          const workerErrors = lines.filter((line) => line.message === "worker error");
+          return workerErrors.length >= 1 ? workerErrors : undefined;
+        },
+        { timeout: 15_000 },
+      );
+
+      expect(workerErrorLines).toEqual([
+        {
+          level: "error",
+          fields: {
+            err: expect.objectContaining({
+              message: expect.stringMatching(/^Missing lock for job .+\. moveToDelayed$/),
+            }),
           },
-        ]);
-        expect(lines.filter((line) => line.message === "run failure unconfirmed")).toEqual([]);
-      } finally {
-        await closeNextasking(nextasking);
-        await proxy.stop();
-      }
+          message: "worker error",
+        },
+      ]);
+      expect(lines.filter((line) => line.message === "run failure unconfirmed")).toEqual([]);
     });
   },
 );

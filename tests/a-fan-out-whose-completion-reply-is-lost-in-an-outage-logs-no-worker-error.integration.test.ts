@@ -3,7 +3,7 @@ import { z } from "zod";
 
 import { deriveJobId } from "../src/ids.js";
 import { createNextasking, defineEvent, defineListener } from "../src/index.js";
-import { closeNextasking } from "../src/registry.js";
+import { closeWhenTestFinishes } from "./close-when-test-finishes.js";
 import { integrationTest } from "./integration-test.js";
 import {
   createRecordingLogger,
@@ -44,47 +44,43 @@ integrationTest(
     });
     const eventId = "stripe-evt-7";
     const fanOutJobKey = `${runQueueKeyPrefix(keyPrefix)}${deriveJobId("invoice.paid", eventId)}`;
+    closeWhenTestFinishes({ proxy, nextaskings: [nextasking], lines });
 
-    try {
-      await nextasking.startWorker({ concurrency: 1 });
-      const completionReplyCut = proxy.cutBeforeReplyTo(
-        (request) => request.includes(fanOutJobKey) && request.includes(MOVE_TO_COMPLETED_ARGUMENT),
-      );
-      await nextasking.emit("invoice.paid", { invoiceId: "invoice-7" }, { eventId });
-      await waitForLogMessage(lines, "connection error");
-      await completionReplyCut;
-      await proxy.restore();
-      await waitForLogMessage(lines, "connection restored", { timeout: 15_000 });
-      await vi.waitFor(
-        () => {
-          expect(
-            lines
-              .filter((line) => line.message === "run completed")
-              .map((line) => line.fields.task)
-              .sort(),
-          ).toEqual(LISTENER_NAMES);
-        },
-        { timeout: WAIT_WELL_UNDER_THE_LOCK_DURATION_IN_MILLISECONDS },
-      );
-      const stalledCountersOfListenerRuns = await withRunQueue(redisUrl, keyPrefix, async (runQueue) =>
-        (await runQueue.getCompleted(0, -1))
-          .filter((completedJob) => LISTENER_NAMES.includes(completedJob.name))
-          .map((completedJob) => completedJob.stalledCounter),
-      );
+    await nextasking.startWorker({ concurrency: 1 });
+    const completionReplyCut = proxy.cutBeforeReplyTo(
+      (request) => request.includes(fanOutJobKey) && request.includes(MOVE_TO_COMPLETED_ARGUMENT),
+    );
+    await nextasking.emit("invoice.paid", { invoiceId: "invoice-7" }, { eventId });
+    await waitForLogMessage(lines, "connection error");
+    await completionReplyCut;
+    await proxy.restore();
+    await waitForLogMessage(lines, "connection restored", { timeout: 15_000 });
+    await vi.waitFor(
+      () => {
+        expect(
+          lines
+            .filter((line) => line.message === "run completed")
+            .map((line) => line.fields.task)
+            .sort(),
+        ).toEqual(LISTENER_NAMES);
+      },
+      { timeout: WAIT_WELL_UNDER_THE_LOCK_DURATION_IN_MILLISECONDS },
+    );
+    const stalledCountersOfListenerRuns = await withRunQueue(redisUrl, keyPrefix, async (runQueue) =>
+      (await runQueue.getCompleted(0, -1))
+        .filter((completedJob) => LISTENER_NAMES.includes(completedJob.name))
+        .map((completedJob) => completedJob.stalledCounter),
+    );
 
-      expect(listenerRunIds).toHaveLength(LISTENER_NAMES.length);
-      expect(stalledCountersOfListenerRuns).toEqual([0, 0]);
-      expectOneConnectionErrorAndOneConnectionRestored(lines);
-      expect(
-        lines.filter((line) =>
-          ["worker error", "fan-out completion unconfirmed", "attempt stalled", "next job hand-back failed"].includes(
-            line.message,
-          ),
+    expect(listenerRunIds).toHaveLength(LISTENER_NAMES.length);
+    expect(stalledCountersOfListenerRuns).toEqual([0, 0]);
+    expectOneConnectionErrorAndOneConnectionRestored(lines);
+    expect(
+      lines.filter((line) =>
+        ["worker error", "fan-out completion unconfirmed", "attempt stalled", "next job hand-back failed"].includes(
+          line.message,
         ),
-      ).toEqual([]);
-    } finally {
-      await closeNextasking(nextasking);
-      await proxy.stop();
-    }
+      ),
+    ).toEqual([]);
   },
 );

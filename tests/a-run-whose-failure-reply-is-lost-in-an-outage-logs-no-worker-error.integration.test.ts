@@ -3,7 +3,7 @@ import { z } from "zod";
 
 import { createNextasking, defineListener, defineTask, runFailed } from "../src/index.js";
 import type { RunFailedPayload } from "../src/index.js";
-import { closeNextasking } from "../src/registry.js";
+import { closeWhenTestFinishes } from "./close-when-test-finishes.js";
 import { integrationTest } from "./integration-test.js";
 import {
   createRecordingLogger,
@@ -59,24 +59,20 @@ async function withFailureReplyCut(
       }),
     ],
   });
+  closeWhenTestFinishes({ proxy, nextaskings: [nextasking], lines });
 
-  try {
-    await nextasking.startWorker();
-    const { runId } = await nextasking.dispatch("sync-account", { accountId: "account-7" });
-    await waitForLogMessage(lines, "connection error");
-    await failureReplyCut;
-    await proxy.restore();
-    await waitForLogMessage(lines, "connection restored", { timeout: 15_000 });
-    await afterOutage({ nextasking, lines, runId, runFailedNotices });
+  await nextasking.startWorker();
+  const { runId } = await nextasking.dispatch("sync-account", { accountId: "account-7" });
+  await waitForLogMessage(lines, "connection error");
+  await failureReplyCut;
+  await proxy.restore();
+  await waitForLogMessage(lines, "connection restored", { timeout: 15_000 });
+  await afterOutage({ nextasking, lines, runId, runFailedNotices });
 
-    expectOneConnectionErrorAndOneConnectionRestored(lines);
-    expect(
-      lines.filter((line) => line.message === "worker error" || line.message === "run failure unconfirmed"),
-    ).toEqual([]);
-  } finally {
-    await closeNextasking(nextasking);
-    await proxy.stop();
-  }
+  expectOneConnectionErrorAndOneConnectionRestored(lines);
+  expect(lines.filter((line) => line.message === "worker error" || line.message === "run failure unconfirmed")).toEqual(
+    [],
+  );
 }
 
 integrationTest(

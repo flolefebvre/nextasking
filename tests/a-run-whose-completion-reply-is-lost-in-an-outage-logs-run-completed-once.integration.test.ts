@@ -2,7 +2,7 @@ import { expect } from "vitest";
 import { z } from "zod";
 
 import { createNextasking, defineTask } from "../src/index.js";
-import { closeNextasking } from "../src/registry.js";
+import { closeWhenTestFinishes } from "./close-when-test-finishes.js";
 import { integrationTest } from "./integration-test.js";
 import {
   createRecordingLogger,
@@ -21,52 +21,52 @@ integrationTest(
     const proxy = await startTcpProxy(redisUrl);
     const { logger, lines } = createRecordingLogger();
     let completionReplyCut: Promise<void> | undefined;
-    const nextasking = createNextasking({
+    const sendWelcomeEmail = defineTask("send-welcome-email", {
+      schema: z.object({ email: z.string() }),
+      handler: async ({ runId }) => {
+        const jobKey = runJobKey(keyPrefix, "send-welcome-email", runId);
+        completionReplyCut = proxy.cutBeforeReplyTo(
+          (request) => request.includes(jobKey) && request.includes(MOVE_TO_COMPLETED_ARGUMENT),
+        );
+      },
+    });
+    const workerNextasking = createNextasking({
       connection: { url: proxy.url, giveUpAfter: "1s" },
       prefix: keyPrefix,
       logger,
-      tasks: [
-        defineTask("send-welcome-email", {
-          schema: z.object({ email: z.string() }),
-          handler: async ({ runId }) => {
-            const jobKey = runJobKey(keyPrefix, "send-welcome-email", runId);
-            completionReplyCut = proxy.cutBeforeReplyTo(
-              (request) => request.includes(jobKey) && request.includes(MOVE_TO_COMPLETED_ARGUMENT),
-            );
-          },
-        }),
-      ],
+      tasks: [sendWelcomeEmail],
     });
+    const directNextasking = createNextasking({
+      connection: { url: redisUrl },
+      prefix: keyPrefix,
+      tasks: [sendWelcomeEmail],
+    });
+    closeWhenTestFinishes({ proxy, nextaskings: [workerNextasking, directNextasking], lines });
 
-    try {
-      await nextasking.startWorker();
-      const { runId } = await nextasking.dispatch("send-welcome-email", { email: "ada@example.com" });
-      await waitForLogMessage(lines, "connection error");
-      await completionReplyCut;
-      await proxy.restore();
-      await waitForLogMessage(lines, "run completed", { timeout: 15_000 });
-      await waitForLogMessage(lines, "connection restored", { timeout: 15_000 });
+    await workerNextasking.startWorker();
+    const { runId } = await directNextasking.dispatch("send-welcome-email", { email: "ada@example.com" });
+    await waitForLogMessage(lines, "connection error");
+    await completionReplyCut;
+    await proxy.restore();
+    await waitForLogMessage(lines, "run completed", { timeout: 15_000 });
+    await waitForLogMessage(lines, "connection restored", { timeout: 15_000 });
 
-      expect(lines.filter((line) => line.message === "run completed")).toEqual([
-        {
-          level: "info",
-          fields: {
-            task: "send-welcome-email",
-            runId,
-            attempt: 1,
-            runDurationInMilliseconds: expect.any(Number),
-            executionDurationInMilliseconds: expect.any(Number),
-          },
-          message: "run completed",
+    expect(lines.filter((line) => line.message === "run completed")).toEqual([
+      {
+        level: "info",
+        fields: {
+          task: "send-welcome-email",
+          runId,
+          attempt: 1,
+          runDurationInMilliseconds: expect.any(Number),
+          executionDurationInMilliseconds: expect.any(Number),
         },
-      ]);
-      expectOneConnectionErrorAndOneConnectionRestored(lines);
-      expect(
-        lines.filter((line) => line.message === "worker error" || line.message === "run completion unconfirmed"),
-      ).toEqual([]);
-    } finally {
-      await closeNextasking(nextasking);
-      await proxy.stop();
-    }
+        message: "run completed",
+      },
+    ]);
+    expectOneConnectionErrorAndOneConnectionRestored(lines);
+    expect(
+      lines.filter((line) => line.message === "worker error" || line.message === "run completion unconfirmed"),
+    ).toEqual([]);
   },
 );

@@ -141,8 +141,9 @@ export async function startTcpProxy(targetUrl: string): Promise<TcpProxy> {
     }
     await listenerClosing;
   };
+  let isStopped = false;
   const restore = async () => {
-    if (!server.listening) {
+    if (!isStopped && !server.listening) {
       await listen(server, proxyPort);
     }
   };
@@ -160,6 +161,9 @@ export async function startTcpProxy(targetUrl: string): Promise<TcpProxy> {
       new Promise<void>((markCut) => {
         armedReplyCut = { isRequestToCut, markCut };
       }),
-    stop: cut,
+    stop: async () => {
+      isStopped = true;
+      await cut();
+    },
   };
 }

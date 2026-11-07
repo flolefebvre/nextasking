@@ -3,7 +3,7 @@ import { z } from "zod";
 
 import { deriveJobId } from "../src/ids.js";
 import { createNextasking, defineEvent, defineListener, defineTask, runFailed } from "../src/index.js";
-import { closeNextasking } from "../src/registry.js";
+import { closeWhenTestFinishes } from "./close-when-test-finishes.js";
 import { integrationTest } from "./integration-test.js";
 import {
   createRecordingLogger,
@@ -82,32 +82,31 @@ async function withGivenUpFailureReplyCut(
       }),
     ],
   });
+  closeWhenTestFinishes({
+    proxy,
+    nextaskings: [olderReleaseNextasking, nextReleaseNextasking],
+    lines,
+  });
 
-  try {
-    const { jobId } = await enqueueJobOfANameTheWorkerLacks(nextReleaseNextasking);
-    await storeFirstFoundUnknownLongerAgoThanTheGiveUpDelay(redisUrl, keyPrefix, jobId);
-    const jobKey = `${runQueueKeyPrefix(keyPrefix)}${jobId}`;
-    const failureReplyCut = proxy.cutBeforeReplyTo(
-      (request) => request.includes(jobKey) && request.includes(MOVE_TO_FAILED_ARGUMENT),
-    );
-    await olderReleaseNextasking.startWorker({ concurrency: 1 });
-    await waitForLogMessage(lines, "connection error");
-    await failureReplyCut;
-    await proxy.restore();
-    await waitForLogMessage(lines, "connection restored", { timeout: 15_000 });
-    await afterOutage({ lines, runFailedListenerTaskNames });
+  const { jobId } = await enqueueJobOfANameTheWorkerLacks(nextReleaseNextasking);
+  await storeFirstFoundUnknownLongerAgoThanTheGiveUpDelay(redisUrl, keyPrefix, jobId);
+  const jobKey = `${runQueueKeyPrefix(keyPrefix)}${jobId}`;
+  const failureReplyCut = proxy.cutBeforeReplyTo(
+    (request) => request.includes(jobKey) && request.includes(MOVE_TO_FAILED_ARGUMENT),
+  );
+  await olderReleaseNextasking.startWorker({ concurrency: 1 });
+  await waitForLogMessage(lines, "connection error");
+  await failureReplyCut;
+  await proxy.restore();
+  await waitForLogMessage(lines, "connection restored", { timeout: 15_000 });
+  await afterOutage({ lines, runFailedListenerTaskNames });
 
-    expectOneConnectionErrorAndOneConnectionRestored(lines);
-    expect(
-      lines.filter((line) =>
-        ["worker error", "run failure unconfirmed", "fan-out failure unconfirmed"].includes(line.message),
-      ),
-    ).toEqual([]);
-  } finally {
-    await closeNextasking(olderReleaseNextasking);
-    await closeNextasking(nextReleaseNextasking);
-    await proxy.stop();
-  }
+  expectOneConnectionErrorAndOneConnectionRestored(lines);
+  expect(
+    lines.filter((line) =>
+      ["worker error", "run failure unconfirmed", "fan-out failure unconfirmed"].includes(line.message),
+    ),
+  ).toEqual([]);
 }
 
 integrationTest(

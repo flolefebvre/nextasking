@@ -3,7 +3,7 @@ import { once } from "node:events";
 import { fileURLToPath } from "node:url";
 import { expect, vi } from "vitest";
 
-import { closeNextasking } from "../src/registry.js";
+import { closeWhenTestFinishes } from "./close-when-test-finishes.js";
 import { createGiveUpAfterOneSecondNextasking } from "./give-up-after-one-second-nextasking.js";
 import { integrationTest } from "./integration-test.js";
 import { createRecordingLogger, waitForLogMessage } from "./recording-logger.js";
@@ -45,33 +45,30 @@ integrationTest(
     const nextasking = createGiveUpAfterOneSecondNextasking(proxy.url, keyPrefix, { logger });
     const onWorkerNotStarted = vi.fn();
 
-    try {
-      const startedAt = performance.now();
-      await nextasking.startWorker({ onWorkerNotStarted });
+    closeWhenTestFinishes({ proxy, nextaskings: [nextasking], lines });
 
-      expect(performance.now() - startedAt).toBeLessThan(SLOWEST_RESOLVING_START_IN_MILLISECONDS);
-      expect(lines.map((line) => line.message)).toContain("connection error");
-      expect(lines.map((line) => line.message)).not.toContain("worker started");
+    const startedAt = performance.now();
+    await nextasking.startWorker({ onWorkerNotStarted });
 
-      await proxy.restore();
-      await waitForLogMessage(lines, "worker started", { timeout: 15_000 });
-      const { runId } = await nextasking.dispatch("send-welcome-email", { email: "ada@example.com" });
-      await vi.waitFor(
-        async () => {
-          expect(await nextasking.getRun("send-welcome-email", runId)).toMatchObject({ state: "completed" });
-        },
-        { timeout: 10_000 },
-      );
+    expect(performance.now() - startedAt).toBeLessThan(SLOWEST_RESOLVING_START_IN_MILLISECONDS);
+    expect(lines.map((line) => line.message)).toContain("connection error");
+    expect(lines.map((line) => line.message)).not.toContain("worker started");
 
-      const messages = lines.map((line) => line.message);
-      expect(messages.indexOf("schedule added")).toBeGreaterThan(-1);
-      expect(messages.indexOf("schedule added")).toBeLessThan(messages.indexOf("worker started"));
-      expect(messages.indexOf("connection restored")).toBeLessThan(messages.indexOf("worker started"));
-      expect(onWorkerNotStarted).not.toHaveBeenCalled();
-    } finally {
-      await closeNextasking(nextasking);
-      await proxy.stop();
-    }
+    await proxy.restore();
+    await waitForLogMessage(lines, "worker started", { timeout: 15_000 });
+    const { runId } = await nextasking.dispatch("send-welcome-email", { email: "ada@example.com" });
+    await vi.waitFor(
+      async () => {
+        expect(await nextasking.getRun("send-welcome-email", runId)).toMatchObject({ state: "completed" });
+      },
+      { timeout: 10_000 },
+    );
+
+    const messages = lines.map((line) => line.message);
+    expect(messages.indexOf("schedule added")).toBeGreaterThan(-1);
+    expect(messages.indexOf("schedule added")).toBeLessThan(messages.indexOf("worker started"));
+    expect(messages.indexOf("connection restored")).toBeLessThan(messages.indexOf("worker started"));
+    expect(onWorkerNotStarted).not.toHaveBeenCalled();
   },
   30_000,
 );
@@ -82,11 +79,9 @@ integrationTest(
     const proxy = await startTcpProxy(redisUrl);
     await proxy.cut();
 
-    try {
-      expect(await exitOfAProcessClosingAWorkerWhileItBoots(proxy.url)).toEqual({ code: 0, output: "" });
-    } finally {
-      await proxy.stop();
-    }
+    closeWhenTestFinishes({ proxy });
+
+    expect(await exitOfAProcessClosingAWorkerWhileItBoots(proxy.url)).toEqual({ code: 0, output: "" });
   },
   30_000,
 );

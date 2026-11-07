@@ -2,7 +2,7 @@ import { expect, vi } from "vitest";
 import { z } from "zod";
 
 import { createNextasking, defineTask } from "../src/index.js";
-import { closeNextasking } from "../src/registry.js";
+import { closeWhenTestFinishes } from "./close-when-test-finishes.js";
 import { integrationTest } from "./integration-test.js";
 import { createRecordingLogger } from "./recording-logger.js";
 import { startTcpProxy } from "./tcp-proxy.js";
@@ -58,32 +58,29 @@ integrationTest(
       ],
     });
 
-    try {
-      await nextasking.startWorker();
-      const { runId } = await nextasking.dispatch("create-workspace", { userId: "ada" });
+    closeWhenTestFinishes({ proxy, nextaskings: [nextasking] });
 
-      await resumeTheHandlerDuringAnOutage(proxy, heldHandler);
+    await nextasking.startWorker();
+    const { runId } = await nextasking.dispatch("create-workspace", { userId: "ada" });
 
-      await vi.waitFor(
-        async () => {
-          expect(await nextasking.getRun("create-workspace", runId)).toMatchObject({
-            state: "completed",
-            attempt: 1,
-          });
-        },
-        { timeout: 15_000 },
-      );
-      await vi.waitFor(
-        async () => {
-          const runs = await nextasking.listRuns({ state: "completed", task: "send-welcome-email" });
-          expect(runs.runs).toHaveLength(1);
-        },
-        { timeout: 15_000 },
-      );
-    } finally {
-      await closeNextasking(nextasking);
-      await proxy.stop();
-    }
+    await resumeTheHandlerDuringAnOutage(proxy, heldHandler);
+
+    await vi.waitFor(
+      async () => {
+        expect(await nextasking.getRun("create-workspace", runId)).toMatchObject({
+          state: "completed",
+          attempt: 1,
+        });
+      },
+      { timeout: 15_000 },
+    );
+    await vi.waitFor(
+      async () => {
+        const runs = await nextasking.listRuns({ state: "completed", task: "send-welcome-email" });
+        expect(runs.runs).toHaveLength(1);
+      },
+      { timeout: 15_000 },
+    );
   },
   30_000,
 );
@@ -110,31 +107,28 @@ integrationTest(
       ],
     });
 
-    try {
-      await nextasking.startWorker();
-      const { runId } = await nextasking.dispatch("charge-card", { cardId: "card-7" });
+    closeWhenTestFinishes({ proxy, nextaskings: [nextasking], lines });
 
-      await resumeTheHandlerDuringAnOutage(proxy, heldHandler);
+    await nextasking.startWorker();
+    const { runId } = await nextasking.dispatch("charge-card", { cardId: "card-7" });
 
-      await vi.waitFor(
-        async () => {
-          expect(await nextasking.getRun("charge-card", runId)).toMatchObject({
-            state: "failed",
-            reason: "retries exhausted",
-            errors: [{ attempt: 1, message: "card declined" }],
-          });
-        },
-        { timeout: 15_000 },
-      );
-      expect(lines.filter((line) => line.message === "run failed")).toEqual([
-        expect.objectContaining({
-          fields: expect.objectContaining({ err: expect.objectContaining({ message: "card declined" }) }),
-        }),
-      ]);
-    } finally {
-      await closeNextasking(nextasking);
-      await proxy.stop();
-    }
+    await resumeTheHandlerDuringAnOutage(proxy, heldHandler);
+
+    await vi.waitFor(
+      async () => {
+        expect(await nextasking.getRun("charge-card", runId)).toMatchObject({
+          state: "failed",
+          reason: "retries exhausted",
+          errors: [{ attempt: 1, message: "card declined" }],
+        });
+      },
+      { timeout: 15_000 },
+    );
+    expect(lines.filter((line) => line.message === "run failed")).toEqual([
+      expect.objectContaining({
+        fields: expect.objectContaining({ err: expect.objectContaining({ message: "card declined" }) }),
+      }),
+    ]);
   },
   30_000,
 );

@@ -2,7 +2,7 @@ import { expect, vi } from "vitest";
 import { z } from "zod";
 
 import { RedisUnavailableError, createNextasking, defineEvent, defineListener, defineTask } from "../src/index.js";
-import { closeNextasking } from "../src/registry.js";
+import { closeWhenTestFinishes } from "./close-when-test-finishes.js";
 import { integrationTest } from "./integration-test.js";
 import { startTcpProxy } from "./tcp-proxy.js";
 
@@ -41,38 +41,35 @@ integrationTest(
     await proxy.cut();
     const nextasking = createInvoicingNextasking(proxy.url, keyPrefix);
 
-    try {
-      const dispatchRejection = await rejectionOf(
-        nextasking.dispatch("send-welcome-email", { email: "ada@example.com" }, { runId: "welcome-ada" }),
-      );
-      const emitRejection = await rejectionOf(nextasking.emit("invoice.paid", { invoiceId: "inv-7" }));
-      const getRunRejection = await rejectionOf(nextasking.getRun("send-welcome-email", "welcome-ada"));
-      const countRunsRejection = await rejectionOf(nextasking.countRuns());
+    closeWhenTestFinishes({ proxy, nextaskings: [nextasking] });
 
-      expect(dispatchRejection).toBeInstanceOf(RedisUnavailableError);
-      expect(dispatchRejection).toMatchObject({
-        name: "RedisUnavailableError",
-        message: "Redis didn't answer within 1s",
-        runId: "welcome-ada",
-        cause: expect.any(Error),
-      });
-      expect(emitRejection).toBeInstanceOf(RedisUnavailableError);
-      expect((emitRejection as RedisUnavailableError).eventId).toEqual(expect.any(String));
-      expect(getRunRejection).toMatchObject({ name: "RedisUnavailableError", runId: "welcome-ada" });
-      expect(countRunsRejection).toBeInstanceOf(RedisUnavailableError);
+    const dispatchRejection = await rejectionOf(
+      nextasking.dispatch("send-welcome-email", { email: "ada@example.com" }, { runId: "welcome-ada" }),
+    );
+    const emitRejection = await rejectionOf(nextasking.emit("invoice.paid", { invoiceId: "inv-7" }));
+    const getRunRejection = await rejectionOf(nextasking.getRun("send-welcome-email", "welcome-ada"));
+    const countRunsRejection = await rejectionOf(nextasking.countRuns());
 
-      await proxy.restore();
-      await vi.waitFor(
-        async () => {
-          await nextasking.dispatch("send-welcome-email", { email: "ada@example.com" }, { runId: "welcome-ada" });
-        },
-        { timeout: 10_000 },
-      );
-      expect(await nextasking.getRun("send-welcome-email", "welcome-ada")).toMatchObject({ runId: "welcome-ada" });
-    } finally {
-      await closeNextasking(nextasking);
-      await proxy.stop();
-    }
+    expect(dispatchRejection).toBeInstanceOf(RedisUnavailableError);
+    expect(dispatchRejection).toMatchObject({
+      name: "RedisUnavailableError",
+      message: "Redis didn't answer within 1s",
+      runId: "welcome-ada",
+      cause: expect.any(Error),
+    });
+    expect(emitRejection).toBeInstanceOf(RedisUnavailableError);
+    expect((emitRejection as RedisUnavailableError).eventId).toEqual(expect.any(String));
+    expect(getRunRejection).toMatchObject({ name: "RedisUnavailableError", runId: "welcome-ada" });
+    expect(countRunsRejection).toBeInstanceOf(RedisUnavailableError);
+
+    await proxy.restore();
+    await vi.waitFor(
+      async () => {
+        await nextasking.dispatch("send-welcome-email", { email: "ada@example.com" }, { runId: "welcome-ada" });
+      },
+      { timeout: 10_000 },
+    );
+    expect(await nextasking.getRun("send-welcome-email", "welcome-ada")).toMatchObject({ runId: "welcome-ada" });
   },
   30_000,
 );
@@ -83,34 +80,31 @@ integrationTest(
     const proxy = await startTcpProxy(redisUrl);
     const nextasking = createInvoicingNextasking(proxy.url, keyPrefix);
 
-    try {
-      await nextasking.dispatch("send-welcome-email", { email: "ada@example.com" });
-      await proxy.cut();
+    closeWhenTestFinishes({ proxy, nextaskings: [nextasking] });
 
-      const dispatchRejection = await rejectionOf(
-        nextasking.dispatch("send-welcome-email", { email: "grace@example.com" }, { runId: "welcome-grace" }),
-      );
-      const replayEventRejection = await rejectionOf(nextasking.replayEvent("invoice.paid", "invoice-7-paid"));
+    await nextasking.dispatch("send-welcome-email", { email: "ada@example.com" });
+    await proxy.cut();
 
-      expect(dispatchRejection).toMatchObject({
-        name: "RedisUnavailableError",
-        runId: "welcome-grace",
-        cause: expect.any(Error),
-      });
-      expect(replayEventRejection).toMatchObject({ name: "RedisUnavailableError", eventId: "invoice-7-paid" });
+    const dispatchRejection = await rejectionOf(
+      nextasking.dispatch("send-welcome-email", { email: "grace@example.com" }, { runId: "welcome-grace" }),
+    );
+    const replayEventRejection = await rejectionOf(nextasking.replayEvent("invoice.paid", "invoice-7-paid"));
 
-      await proxy.restore();
-      await vi.waitFor(
-        async () => {
-          await nextasking.dispatch("send-welcome-email", { email: "grace@example.com" }, { runId: "welcome-grace" });
-        },
-        { timeout: 10_000 },
-      );
-      expect(await nextasking.getRun("send-welcome-email", "welcome-grace")).toMatchObject({ runId: "welcome-grace" });
-    } finally {
-      await closeNextasking(nextasking);
-      await proxy.stop();
-    }
+    expect(dispatchRejection).toMatchObject({
+      name: "RedisUnavailableError",
+      runId: "welcome-grace",
+      cause: expect.any(Error),
+    });
+    expect(replayEventRejection).toMatchObject({ name: "RedisUnavailableError", eventId: "invoice-7-paid" });
+
+    await proxy.restore();
+    await vi.waitFor(
+      async () => {
+        await nextasking.dispatch("send-welcome-email", { email: "grace@example.com" }, { runId: "welcome-grace" });
+      },
+      { timeout: 10_000 },
+    );
+    expect(await nextasking.getRun("send-welcome-email", "welcome-grace")).toMatchObject({ runId: "welcome-grace" });
   },
   30_000,
 );

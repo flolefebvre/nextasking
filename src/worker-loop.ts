@@ -86,11 +86,21 @@ export function startWorkerLoop(config: WorkerLoopConfig): WorkerLoop {
           fetchCueWaiter = resolve;
         });
 
-  const wakeUpOrCue = () => {
-    pendingWakeUp ??= config.waitForWakeUp(timing.tickIntervalInMilliseconds).finally(() => {
-      pendingWakeUp = undefined;
-    });
-    return Promise.race([pendingWakeUp, fetchCued()]);
+  const keepWaitingForWakeUp = () => {
+    if (pendingWakeUp !== undefined || !isFetching || concurrency - attemptsInFlightByLockToken.size <= 0) {
+      return;
+    }
+    pendingWakeUp = (async () => {
+      await config.waitForWakeUp(timing.tickIntervalInMilliseconds);
+    })().then(
+      () => {
+        pendingWakeUp = undefined;
+        cueFetch();
+      },
+      () => {
+        pendingWakeUp = undefined;
+      },
+    );
   };
 
   const executeAttempt = async (task: AnyTaskDefinition, lockedRun: LockedRun, fetchRepliedAt: EpochMilliseconds) => {
@@ -168,7 +178,8 @@ export function startWorkerLoop(config: WorkerLoopConfig): WorkerLoop {
       if (!isFetching) {
         break;
       }
-      await (concurrency - attemptsInFlightByLockToken.size > 0 ? wakeUpOrCue() : fetchCued());
+      keepWaitingForWakeUp();
+      await fetchCued();
     }
   })();
 

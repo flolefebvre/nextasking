@@ -8,7 +8,7 @@ import type { FetchRequest, RunToCreate, SettleRequest, TickRequest } from "./en
 import { deriveFailureNoticeEventId, deriveListenerRunId } from "./ids.js";
 import type { HandlerSender } from "./step-engine.js";
 import { startWorkerLoop } from "./worker-loop.js";
-import type { WorkerLoop, WorkerLoopEngine } from "./worker-loop.js";
+import type { WaitForWakeUp, WorkerLoop, WorkerLoopEngine } from "./worker-loop.js";
 import { DEFAULT_WORKER_TIMING } from "./worker-timing.js";
 import { createInMemoryEngine } from "../tests/in-memory-engine.js";
 import type { InMemoryEngine } from "../tests/in-memory-engine.js";
@@ -61,7 +61,13 @@ function startedLoopOf(
     concurrency = 50,
     engine = createInMemoryEngine(),
     loopEngine = engine,
-  }: { concurrency?: number; engine?: InMemoryEngine; loopEngine?: WorkerLoopEngine } = {},
+    waitForWakeUp = engine.waitForWakeUp,
+  }: {
+    concurrency?: number;
+    engine?: InMemoryEngine;
+    loopEngine?: WorkerLoopEngine;
+    waitForWakeUp?: WaitForWakeUp;
+  } = {},
 ): LoopScenario {
   const { logger, lines } = createRecordingLogger();
   const loop = startWorkerLoop({
@@ -71,7 +77,7 @@ function startedLoopOf(
     logger,
     concurrency,
     sender: NO_SENDER,
-    waitForWakeUp: engine.waitForWakeUp,
+    waitForWakeUp,
   });
   startedLoops.push(loop);
   return { engine, lines, loop };
@@ -429,4 +435,71 @@ test("the loop survives a rejected fetch and keeps fetching", async () => {
 
   expect(rejectedFetchCount).toBe(1);
   expect(engine.storedRunOf("send-email-1")?.state).toBe("completed");
+});
+
+test("the loop survives a rejected wake-up wait without spinning, and a run enqueued afterwards still completes", async () => {
+  const unhandledRejections: unknown[] = [];
+  const recordUnhandledRejection = (reason: unknown) => {
+    unhandledRejections.push(reason);
+  };
+  process.on("unhandledRejection", recordUnhandledRejection);
+  try {
+    const sendEmail = defineTask("send-email", { schema: v.object({}), handler: async () => undefined });
+    const engine = createInMemoryEngine();
+    let waitCount = 0;
+    const waitRejectedFirst: WaitForWakeUp = async (timeoutInMilliseconds) => {
+      waitCount += 1;
+      if (waitCount === 1) {
+        throw new Error("LOADING Redis is loading the dataset in memory");
+      }
+      return engine.waitForWakeUp(timeoutInMilliseconds);
+    };
+    startedLoopOf([sendEmail] as AnyTaskDefinition[], { engine, waitForWakeUp: waitRejectedFirst });
+    await vi.advanceTimersByTimeAsync(100);
+
+    await engine.enqueue({ runs: runsOf("send-email", 1) });
+    await vi.advanceTimersByTimeAsync(2_000);
+
+    expect(engine.storedRunOf("send-email-1")?.state).toBe("completed");
+    expect(waitCount).toBeLessThan(10);
+    expect(unhandledRejections).toEqual([]);
+  } finally {
+    process.off("unhandledRejection", recordUnhandledRejection);
+  }
+});
+
+test("a wake-up landing while a fetch is in flight is followed by another fetch, with no tick in between", async () => {
+  const handlerGate = createHandlerGate();
+  const sendEmail = defineTask("send-email", { schema: v.object({}), handler: handlerGate.enter });
+  const engine = createInMemoryEngine();
+  let isNextFetchReplyHeld = false;
+  let releaseFetchReply = () => undefined as void;
+  const fetchWithAReplyHeldOnce: WorkerLoopEngine["fetch"] = async (request) => {
+    const reply = await engine.fetch(request);
+    if (isNextFetchReplyHeld) {
+      isNextFetchReplyHeld = false;
+      await new Promise<void>((resolve) => {
+        releaseFetchReply = resolve;
+      });
+    }
+    return reply;
+  };
+  await engine.enqueue({ runs: runsOf("send-email", 1, { runId: "first-run" }) });
+  startedLoopOf([sendEmail] as AnyTaskDefinition[], {
+    engine,
+    concurrency: 2,
+    loopEngine: { ...engine, fetch: fetchWithAReplyHeldOnce },
+  });
+  await vi.advanceTimersByTimeAsync(0);
+  isNextFetchReplyHeld = true;
+  handlerGate.release(1);
+  await vi.advanceTimersByTimeAsync(0);
+  await engine.enqueue({ runs: runsOf("send-email", 1, { runId: "second-run" }) });
+  await vi.advanceTimersByTimeAsync(0);
+
+  releaseFetchReply();
+  await vi.advanceTimersByTimeAsync(0);
+
+  expect(requestsOf(engine, "tick")).toEqual([]);
+  expect(engine.storedRunOf("second-run")?.state).toBe("executing");
 });

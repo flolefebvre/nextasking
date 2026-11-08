@@ -30,10 +30,10 @@ import {
 import { READ_STEP_SCRIPT, readStepKeysOf } from "./read-step-script.js";
 import { RENEW_SCRIPT, renewKeysOf } from "./renew-script.js";
 import { SAVE_STEP_SCRIPT, saveStepKeysOf } from "./save-step-script.js";
-import { SYNC_SCHEDULES_SCRIPT, syncSchedulesKeysOf } from "./sync-schedules-script.js";
-import { SETTLE_SCRIPT, settleKeysOf } from "./settle-script.js";
 import { defineScriptCommand } from "./script-commands.js";
 import type { ScriptArgument } from "./script-commands.js";
+import { SETTLE_SCRIPT, settleKeysOf } from "./settle-script.js";
+import { SYNC_SCHEDULES_SCRIPT, syncSchedulesKeysOf } from "./sync-schedules-script.js";
 
 export const RECORD_VERSION = 1;
 

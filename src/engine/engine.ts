@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import type { Redis } from "ioredis";
+import type { ChainableCommander, Redis } from "ioredis";
 
 import type { RunFailedPayload } from "../built-in-events.js";
 import type { ConcurrencyKey } from "../definitions.js";
@@ -245,7 +245,21 @@ export type ReplayReply = { kind: "replayed"; task: string } | NotFoundReply | W
 
 export type MakeDueReply = { kind: "madeDue"; madeDueRunCount: number };
 
+export type TickRequest = {
+  heldLocks: readonly HeldLock[];
+  lockDurationInMilliseconds: DurationInMilliseconds;
+  prune?: PruneRequest;
+};
+
+export type TickReply = {
+  promote: PromoteReply;
+  renewals: LockRenewal[];
+  prune: PruneReply | undefined;
+  taskNames: string[];
+};
+
 export type Engine = {
+  tick: (request: TickRequest) => Promise<TickReply>;
   enqueue: (request: EnqueueRequest) => Promise<EnqueueReply>;
   fetch: (request: FetchRequest) => Promise<FetchReply>;
   renew: (request: RenewRequest) => Promise<LockRenewal[]>;
@@ -263,7 +277,9 @@ export type Engine = {
 export type ImplementedEngine = Pick<
   Engine,
   "enqueue" | "fetch" | "renew" | "settle" | "promote" | "saveStep" | "readStep" | "fire" | "syncSchedules" | "makeDue"
->;
+> & {
+  tick: (request: TickRequest & { prune?: undefined }) => Promise<TickReply>;
+};
 
 function unreadableReplyError(scriptName: string, reply: unknown): Error {
   return new Error(`The ${scriptName} script sent a reply the engine cannot read: ${JSON.stringify(reply)}`);
@@ -687,6 +703,42 @@ type ScriptRunnerWithKeys = (
   scriptArguments: readonly ScriptArgument[],
 ) => Promise<unknown>;
 
+type PipelinedScriptRunner = ScriptRunner & {
+  appendTo: (pipeline: ChainableCommander, scriptArguments: readonly ScriptArgument[]) => void;
+};
+
+const PROMOTE_ARGUMENTS: readonly ScriptArgument[] = [
+  MOST_DUE_RUNS_PROMOTED_PER_PROMOTE,
+  NEWER_VERSION_RECORDS_PASSED_OVER_PER_PROMOTE,
+];
+
+function renewArgumentsOf({ heldLocks, lockDurationInMilliseconds }: RenewRequest): ScriptArgument[] {
+  return [
+    lockDurationInMilliseconds,
+    heldLocks.length,
+    ...heldLocks.flatMap(({ runId, lockToken }) => [runId, lockToken]),
+  ];
+}
+
+function taskNamesOf(reply: unknown): string[] {
+  if (!isStringList(reply)) {
+    throw unreadableReplyError("tick", reply);
+  }
+  return reply;
+}
+
+function pipelineRepliesOf(results: [error: Error | null, reply: unknown][] | null): unknown[] {
+  if (results === null) {
+    throw new Error("The tick pipeline was discarded before it ran");
+  }
+  return results.map(([error, reply]) => {
+    if (error !== null) {
+      throw error;
+    }
+    return reply;
+  });
+}
+
 export function createEngine(client: Redis, prefix: string): ImplementedEngine {
   const keys = engineKeysOf(prefix);
   const sharedArguments: ScriptArgument[] = [hashTaggedPrefixOf(prefix), RECORD_VERSION];
@@ -694,9 +746,19 @@ export function createEngine(client: Redis, prefix: string): ImplementedEngine {
     const command = defineScriptCommand(client, commandName, `${LUA_LIBRARY}\n${script}`, keyCount);
     return (scriptKeys, scriptArguments) => command.call(scriptKeys, [...sharedArguments, ...scriptArguments]);
   };
-  const scriptRunnerOf = (commandName: string, script: string, scriptKeys: readonly string[]): ScriptRunner => {
-    const runScript = scriptRunnerWithKeysOf(commandName, script, scriptKeys.length);
-    return (scriptArguments) => runScript(scriptKeys, scriptArguments);
+  const scriptRunnerOf = (
+    commandName: string,
+    script: string,
+    scriptKeys: readonly string[],
+  ): PipelinedScriptRunner => {
+    const command = defineScriptCommand(client, commandName, `${LUA_LIBRARY}\n${script}`, scriptKeys.length);
+    const runScript = (scriptArguments: readonly ScriptArgument[]) =>
+      command.call(scriptKeys, [...sharedArguments, ...scriptArguments]);
+    return Object.assign(runScript, {
+      appendTo: (pipeline: ChainableCommander, scriptArguments: readonly ScriptArgument[]) => {
+        command.appendTo(pipeline, scriptKeys, [...sharedArguments, ...scriptArguments]);
+      },
+    });
   };
   const runEnqueueScript = scriptRunnerOf("nextaskingEnqueue", ENQUEUE_SCRIPT, enqueueKeysOf(keys));
   const runFetchScript = scriptRunnerOf("nextaskingFetch", FETCH_SCRIPT, fetchKeysOf(keys));
@@ -738,10 +800,20 @@ export function createEngine(client: Redis, prefix: string): ImplementedEngine {
       ),
     readStep: async ({ runId, lockToken, stepId }) =>
       readStepReplyOf(await runReadStepScript(readStepKeysOf(keys, runId), [runId, lockToken, stepId])),
-    promote: async () =>
-      promoteReplyOf(
-        await runPromoteScript([MOST_DUE_RUNS_PROMOTED_PER_PROMOTE, NEWER_VERSION_RECORDS_PASSED_OVER_PER_PROMOTE]),
-      ),
+    promote: async () => promoteReplyOf(await runPromoteScript(PROMOTE_ARGUMENTS)),
+    tick: async (request) => {
+      const pipeline = client.pipeline();
+      runPromoteScript.appendTo(pipeline, PROMOTE_ARGUMENTS);
+      runRenewScript.appendTo(pipeline, renewArgumentsOf(request));
+      pipeline.smembers(keys.tasks);
+      const [promoteReply, renewReply, taskNamesReply] = pipelineRepliesOf(await pipeline.exec());
+      return {
+        promote: promoteReplyOf(promoteReply),
+        renewals: renewalsOf(renewReply),
+        prune: undefined,
+        taskNames: taskNamesOf(taskNamesReply),
+      };
+    },
     settle: async ({ runId, lockToken, outcome, concurrencyLimit }) =>
       settleReplyOf(
         await runSettleScript([
@@ -753,14 +825,7 @@ export function createEngine(client: Redis, prefix: string): ImplementedEngine {
           ...settleArgumentsOf(outcome),
         ]),
       ),
-    renew: async ({ heldLocks, lockDurationInMilliseconds }) =>
-      renewalsOf(
-        await runRenewScript([
-          lockDurationInMilliseconds,
-          heldLocks.length,
-          ...heldLocks.flatMap(({ runId, lockToken }) => [runId, lockToken]),
-        ]),
-      ),
+    renew: async (request) => renewalsOf(await runRenewScript(renewArgumentsOf(request))),
     fetch: async ({ lockTokens, concurrencyLimitsByTask, lockDurationInMilliseconds }) => {
       const concurrencyLimits = Object.entries(concurrencyLimitsByTask);
       return fetchReplyOf(

@@ -79,7 +79,7 @@ Always reach for documentation rather than working from memory: the installed pa
 Don't write comments in the code — `pnpm lint` fails on any that isn't a directive.
 
 - The top-level pages of `docs/` are the shipped manual, written for consumers' agents first: short, imperative, example-dense. A change to the public interface updates the manual in the same PR; `docs/index.md` routes each job to its page.
-- Leave the `docs/` subfolders untouched unless the user asks.
+- Edit the `docs/` subfolders only when the user asks, with one standing exception: a change to the test harness (`tests/`, the Vitest config) updates `docs/codebase/testing.md` in the same PR.
 
 ## Language
 

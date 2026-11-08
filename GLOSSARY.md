@@ -153,7 +153,7 @@ To return a run, a fan-out or a firing to pending without executing it: because 
 _Avoid_: Requeue, reject, release; not yield, the shutdown hand-off at a step boundary (see **Yield**)
 
 **Worker**:
-The role of a process that executes attempts, whether embedded in the Next.js server or standalone.
+The role of a Next.js server process that executes attempts, started from the app's instrumentation.
 _Avoid_: Consumer, processor
 
 **Lifecycle log**:

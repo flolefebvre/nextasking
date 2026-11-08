@@ -1,12 +1,150 @@
-import { ReplyError } from "ioredis";
-import { describe, expect, test } from "vitest";
+import { once } from "node:events";
 
-import { createConnectionOutageTracker, isUnansweredError, reconnectDecisionOn } from "./connection.js";
+import { ReplyError } from "ioredis";
+import type { Redis } from "ioredis";
+import { afterEach, describe, expect, test, vi } from "vitest";
+
+import {
+  createConnectionOutageTracker,
+  createRedisConnections,
+  isUnansweredError,
+  reconnectDecisionOn,
+} from "./connection.js";
+import type { RedisConnections } from "./connection.js";
 import { createRecordingLogger } from "../tests/recording-logger.js";
+
+const CONCURRENT_CALLER_COUNT = 20;
 
 function networkError(code: string): Error {
   return Object.assign(new Error(`connect ${code} 127.0.0.1:6379`), { code });
 }
+
+async function withNeverConnectingClient(
+  body: (connections: RedisConnections, client: Redis) => Promise<void>,
+): Promise<void> {
+  const connections = createRedisConnections(
+    { url: "redis://127.0.0.1:1", giveUpAfter: "1s" },
+    createRecordingLogger().logger,
+  );
+  const client = connections.createClient("instance");
+  const ended = once(client, "end");
+  client.disconnect();
+  await ended;
+  try {
+    await body(connections, client);
+  } finally {
+    client.disconnect();
+  }
+}
+
+function waitsOfConcurrentCallers(connections: RedisConnections, client: Redis): Promise<PromiseSettledResult<void>[]> {
+  return Promise.allSettled(
+    Array.from({ length: CONCURRENT_CALLER_COUNT }, () => connections.waitUntilReadyWithinGiveUpAfter(client)),
+  );
+}
+
+function fulfilledResultsOfAllCallers(): PromiseSettledResult<void>[] {
+  return Array.from({ length: CONCURRENT_CALLER_COUNT }, () => ({ status: "fulfilled", value: undefined }));
+}
+
+function rejectedResultsOfAllCallersWithCause(cause: unknown): PromiseSettledResult<void>[] {
+  return Array.from({ length: CONCURRENT_CALLER_COUNT }, () => ({
+    status: "rejected",
+    reason: expect.objectContaining({ name: "ConnectionNotReadyError", cause }),
+  }));
+}
+
+describe("waitUntilReadyWithinGiveUpAfter", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  test("shares one ready listener between concurrent callers, resolves them all on one ready event, and removes it", async () => {
+    await withNeverConnectingClient(async (connections, client) => {
+      const readyListenerCountBefore = client.listenerCount("ready");
+
+      const waits = waitsOfConcurrentCallers(connections, client);
+      const readyListenerCountWhileWaiting = client.listenerCount("ready");
+      client.emit("ready");
+
+      expect(readyListenerCountWhileWaiting).toBe(readyListenerCountBefore + 1);
+      expect(await waits).toEqual(fulfilledResultsOfAllCallers());
+      expect(client.listenerCount("ready")).toBe(readyListenerCountBefore);
+    });
+  });
+
+  test("rejects every concurrent caller with the client's last error as cause after giveUpAfter, and removes the listener", async () => {
+    await withNeverConnectingClient(async (connections, client) => {
+      vi.useFakeTimers();
+      const connectionRefused = networkError("ECONNREFUSED");
+      client.emit("error", connectionRefused);
+      const readyListenerCountBefore = client.listenerCount("ready");
+
+      const waits = waitsOfConcurrentCallers(connections, client);
+      const readyListenerCountWhileWaiting = client.listenerCount("ready");
+      await vi.advanceTimersByTimeAsync(connections.giveUpAfterInMilliseconds);
+
+      expect(readyListenerCountWhileWaiting).toBe(readyListenerCountBefore + 1);
+      expect(await waits).toEqual(rejectedResultsOfAllCallersWithCause(connectionRefused));
+      expect(client.listenerCount("ready")).toBe(readyListenerCountBefore);
+      expect(vi.getTimerCount()).toBe(0);
+    });
+  });
+
+  test("starts a fresh wait with a full giveUpAfter after a wait that gave up", async () => {
+    await withNeverConnectingClient(async (connections, client) => {
+      vi.useFakeTimers();
+      const firstWaits = waitsOfConcurrentCallers(connections, client);
+      await vi.advanceTimersByTimeAsync(connections.giveUpAfterInMilliseconds);
+      await firstWaits;
+
+      const secondWaits = waitsOfConcurrentCallers(connections, client);
+      await vi.advanceTimersByTimeAsync(connections.giveUpAfterInMilliseconds - 1);
+      client.emit("ready");
+
+      expect(await secondWaits).toEqual(fulfilledResultsOfAllCallers());
+    });
+  });
+
+  test("starts a fresh wait after a wait that resolved", async () => {
+    await withNeverConnectingClient(async (connections, client) => {
+      vi.useFakeTimers();
+      const firstWaits = waitsOfConcurrentCallers(connections, client);
+      client.emit("ready");
+      await firstWaits;
+
+      const secondWaits = waitsOfConcurrentCallers(connections, client);
+      await vi.advanceTimersByTimeAsync(connections.giveUpAfterInMilliseconds);
+
+      expect((await secondWaits).map((result) => result.status)).toEqual(
+        Array.from({ length: CONCURRENT_CALLER_COUNT }, () => "rejected"),
+      );
+    });
+  });
+
+  test("returns at once without a listener or a timer when the client is ready, with no wait pending or with one", async () => {
+    await withNeverConnectingClient(async (connections, client) => {
+      vi.useFakeTimers();
+      const readyListenerCountBefore = client.listenerCount("ready");
+      const pendingWait = connections.waitUntilReadyWithinGiveUpAfter(client);
+      client.status = "ready";
+
+      const waitsWithOnePending = waitsOfConcurrentCallers(connections, client);
+      const readyListenerCountWithOnePending = client.listenerCount("ready");
+      const timerCountWithOnePending = vi.getTimerCount();
+      client.emit("ready");
+      await pendingWait;
+      const waitsWithNonePending = waitsOfConcurrentCallers(connections, client);
+
+      expect(readyListenerCountWithOnePending).toBe(readyListenerCountBefore + 1);
+      expect(timerCountWithOnePending).toBe(1);
+      expect(client.listenerCount("ready")).toBe(readyListenerCountBefore);
+      expect(vi.getTimerCount()).toBe(0);
+      expect(await waitsWithOnePending).toEqual(fulfilledResultsOfAllCallers());
+      expect(await waitsWithNonePending).toEqual(fulfilledResultsOfAllCallers());
+    });
+  });
+});
 
 describe("the connection outage tracker", () => {
   test("logs one error and one restored line for an outage that every client goes through, flapping included", () => {

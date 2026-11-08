@@ -1,0 +1,3 @@
+# The fan-out is the emit itself
+
+An `emit` creates every listener run in one atomic `enqueue` script, so there is no event record: nothing is fetched, retried, handed back or replayed for a fan-out, and `getEvent` derives each listener's run id from the event id and the listener name. 0.1.0 stored a fan-out as its own job, which split one emit into two writes in two namespaces and gave it a 30-minute unknown-event failure, a replay path and a stranded-job window of its own. Do not add an event record to make emits retryable: a failed listener run is retried and replayed as a run. Decided in [Fan-out and replay as engine scripts](https://github.com/flolefebvre/nextasking/issues/129).

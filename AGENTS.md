@@ -22,6 +22,7 @@ scripts/        Repo tooling, run with tsx
 tests/          The test harness and the scenarios that cross modules or processes
 skills/         The git-only skill stub pointing consumers' agents at the shipped manual; never shipped
 docs/           Top-level pages: the shipped manual, for consumers' agents
+  adr/          Decisions, numbered
   agents/       Agent-skill config: issue tracker, triage labels, domain docs
   codebase/     Conventions, one file per area, linked from the AGENTS.md section it governs
 ```

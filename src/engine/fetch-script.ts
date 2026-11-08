@@ -65,16 +65,11 @@ local function lockedRunReplyOf(runId, lockToken, isResume)
   }
 end
 
-local function isLockOfToken(runId, lockToken)
-  local record = redis.call("HMGET", runRecordKey(runId), "state", "lockToken")
-  return record[1] == "executing" and record[2] == lockToken
-end
-
 local lockedRuns, parkedRuns, passedOverRecordVersions = {}, {}, {}
 local freshLockTokens = {}
 for _, lockToken in ipairs(lockTokens) do
   local lockedRunId = redis.call("GET", lockKey(lockToken))
-  if lockedRunId and isLockOfToken(lockedRunId, lockToken) then
+  if lockedRunId and isCurrentLockOf(lockedRunId, lockToken) then
     table.insert(lockedRuns, lockedRunReplyOf(lockedRunId, lockToken, false))
   else
     table.insert(freshLockTokens, lockToken)

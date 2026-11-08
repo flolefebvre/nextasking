@@ -80,6 +80,14 @@ local function unknownVersionRefusalOf(runId)
   return { "unknownVersion", storedVersion }
 end
 
+local function isCurrentLockOf(runId, lockToken)
+  if redis.call("EXISTS", runRecordKey(runId)) == 0 or unknownVersionRefusalOf(runId) then
+    return false
+  end
+  local record = redis.call("HMGET", runRecordKey(runId), "state", "lockToken")
+  return record[1] == "executing" and record[2] == lockToken
+end
+
 local function nonNegativeIntegerArgumentOf(value, argumentName)
   local number = tonumber(value)
   if not number or number < 0 or number ~= math.floor(number) then

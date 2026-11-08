@@ -16,6 +16,7 @@ import {
   NEWER_VERSION_RECORDS_PASSED_OVER_PER_FETCH,
 } from "./fetch-script.js";
 import { LUA_LIBRARY } from "./lua-library.js";
+import { RENEW_SCRIPT, renewKeysOf } from "./renew-script.js";
 import { defineScriptCommand } from "./script-commands.js";
 import type { ScriptArgument } from "./script-commands.js";
 
@@ -233,6 +234,7 @@ export type Engine = {
 export type ImplementedEngine = {
   enqueue: (request: DispatchOrEmitRequest) => Promise<EnqueueReply>;
   fetch: (request: FetchRequest) => Promise<FetchReply>;
+  renew: (request: RenewRequest) => Promise<LockRenewal[]>;
 };
 
 function unreadableReplyError(scriptName: string, reply: unknown): Error {
@@ -340,6 +342,24 @@ function fetchReplyOf(reply: unknown): FetchReply {
   throw unreadableReplyError("fetch", reply);
 }
 
+function lockRenewalOf(reply: unknown): LockRenewal | undefined {
+  if (Array.isArray(reply) && reply.length === 1 && reply[0] === "stale") {
+    return { kind: "stale" };
+  }
+  if (Array.isArray(reply) && reply.length === 2 && reply[0] === "renewed" && Number.isSafeInteger(reply[1])) {
+    return { kind: "renewed", lockedUntil: Number(reply[1]) };
+  }
+  return undefined;
+}
+
+function renewalsOf(reply: unknown): LockRenewal[] {
+  const renewals = Array.isArray(reply) ? definedElementsOf(reply.map(lockRenewalOf)) : undefined;
+  if (renewals === undefined) {
+    throw unreadableReplyError("renew", reply);
+  }
+  return renewals;
+}
+
 function enqueueReplyOf(reply: unknown): EnqueueReply {
   if (Array.isArray(reply) && reply.length === 1 && reply[0] === "duplicate") {
     return { kind: "duplicate" };
@@ -366,28 +386,31 @@ function runArgumentsOf(run: RunToCreate): ScriptArgument[] {
   ];
 }
 
+type ScriptRunner = (scriptArguments: readonly ScriptArgument[]) => Promise<unknown>;
+
 export function createEngine(client: Redis, prefix: string): ImplementedEngine {
-  const enqueueKeys = enqueueKeysOf(engineKeysOf(prefix));
+  const keys = engineKeysOf(prefix);
   const sharedArguments: ScriptArgument[] = [hashTaggedPrefixOf(prefix), RECORD_VERSION];
-  const enqueueCommand = defineScriptCommand(
-    client,
-    "nextaskingEnqueue",
-    `${LUA_LIBRARY}\n${ENQUEUE_SCRIPT}`,
-    enqueueKeys.length,
-  );
-  const fetchKeys = fetchKeysOf(engineKeysOf(prefix));
-  const fetchCommand = defineScriptCommand(
-    client,
-    "nextaskingFetch",
-    `${LUA_LIBRARY}\n${FETCH_SCRIPT}`,
-    fetchKeys.length,
-  );
+  const scriptRunnerOf = (commandName: string, script: string, scriptKeys: readonly string[]): ScriptRunner => {
+    const command = defineScriptCommand(client, commandName, `${LUA_LIBRARY}\n${script}`, scriptKeys.length);
+    return (scriptArguments) => command.call(scriptKeys, [...sharedArguments, ...scriptArguments]);
+  };
+  const runEnqueueScript = scriptRunnerOf("nextaskingEnqueue", ENQUEUE_SCRIPT, enqueueKeysOf(keys));
+  const runFetchScript = scriptRunnerOf("nextaskingFetch", FETCH_SCRIPT, fetchKeysOf(keys));
+  const runRenewScript = scriptRunnerOf("nextaskingRenew", RENEW_SCRIPT, renewKeysOf(keys));
   return {
+    renew: async ({ heldLocks, lockDurationInMilliseconds }) =>
+      renewalsOf(
+        await runRenewScript([
+          lockDurationInMilliseconds,
+          heldLocks.length,
+          ...heldLocks.flatMap(({ runId, lockToken }) => [runId, lockToken]),
+        ]),
+      ),
     fetch: async ({ lockTokens, concurrencyLimitsByTask, lockDurationInMilliseconds }) => {
       const concurrencyLimits = Object.entries(concurrencyLimitsByTask);
       return fetchReplyOf(
-        await fetchCommand.call(fetchKeys, [
-          ...sharedArguments,
+        await runFetchScript([
           lockDurationInMilliseconds,
           MOST_LOCK_TOKENS_PER_FETCH,
           MOST_RUNS_PARKED_PER_FETCH,
@@ -401,8 +424,7 @@ export function createEngine(client: Redis, prefix: string): ImplementedEngine {
     },
     enqueue: async ({ runs, eventDedup }) =>
       enqueueReplyOf(
-        await enqueueCommand.call(enqueueKeys, [
-          ...sharedArguments,
+        await runEnqueueScript([
           DEDUP_WINDOW_IN_MILLISECONDS,
           EXPIRED_DEDUP_ENTRIES_TRIMMED_PER_SET,
           eventDedup?.eventName ?? "",

@@ -88,7 +88,22 @@ local function nonNegativeIntegerArgumentOf(value, argumentName)
   return number
 end
 
-local dueInstantFieldByState = { delayed = "startsAt", suspended = "resumesAt", backingOff = "nextAttemptAt" }
+local function isLiveDedupEntry(dedupKey, member, now)
+  local expiresAt = redis.call("ZSCORE", dedupKey, member)
+  return expiresAt ~= false and tonumber(expiresAt) > now
+end
+
+local function trimExpiredDedupEntries(dedupKey, now, maximumTrimmed)
+  if maximumTrimmed == 0 then
+    return
+  end
+  local expiredMembers = redis.call("ZRANGE", dedupKey, "-inf", now, "BYSCORE", "LIMIT", 0, maximumTrimmed)
+  if #expiredMembers > 0 then
+    redis.call("ZREM", dedupKey, unpack(expiredMembers))
+  end
+end
+
+local dueInstantFieldByState ={ delayed = "startsAt", suspended = "resumesAt", backingOff = "nextAttemptAt" }
 
 local function armWakeUpMarker()
   redis.call("ZADD", engineKeys.wakeUpMarker, 0, "wake-up")

@@ -3,8 +3,10 @@ import { expect } from "vitest";
 
 import { integrationTest } from "../../tests/integration-test.js";
 import { expectNoInvariantViolations } from "../../tests/invariant-violations.js";
+import { serverInstantInMillisecondsOf } from "../../tests/server-instant.js";
 import { withRedis } from "../../tests/with-redis.js";
 import { engineKeysOf, hashTaggedPrefixOf } from "./engine-keys.js";
+import { RECORD_VERSION } from "./engine.js";
 import { LUA_LIBRARY } from "./lua-library.js";
 
 const PROBE_SCRIPT = `${LUA_LIBRARY}
@@ -39,15 +41,7 @@ elseif probe == "move the delayed run to pending" then
 end
 `;
 
-const SUPPORTED_RECORD_VERSION = 1;
-
-function runProbe(
-  redis: Redis,
-  keyPrefix: string,
-  probe: string,
-  runId = "run-1",
-  supportedVersion = SUPPORTED_RECORD_VERSION,
-) {
+function runProbe(redis: Redis, keyPrefix: string, probe: string, runId = "run-1", supportedVersion = RECORD_VERSION) {
   const keys = engineKeysOf(keyPrefix);
   return redis.eval(
     PROBE_SCRIPT,
@@ -62,11 +56,6 @@ function runProbe(
     probe,
     runId,
   );
-}
-
-async function serverInstantInMillisecondsOf(redis: Redis): Promise<number> {
-  const [seconds, microseconds] = await redis.time();
-  return Number(seconds) * 1000 + Math.floor(Number(microseconds) / 1000);
 }
 
 const UNKNOWN_VERSIONS = [
@@ -111,12 +100,12 @@ integrationTest(
         keyPrefix,
         "write after the version check",
         "older-run",
-        SUPPORTED_RECORD_VERSION + 1,
+        RECORD_VERSION + 1,
       );
 
       expect(replyOnTheCurrentVersion).toEqual(["written"]);
       expect(replyOnAnOlderVersion).toEqual(["written"]);
-      expect(await redis.hget(keys.runRecord("older-run"), "version")).toBe(String(SUPPORTED_RECORD_VERSION));
+      expect(await redis.hget(keys.runRecord("older-run"), "version")).toBe(String(RECORD_VERSION));
       await expectNoInvariantViolations(redis, keyPrefix);
     });
   },

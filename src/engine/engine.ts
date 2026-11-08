@@ -19,6 +19,7 @@ import {
   NEWER_VERSION_RECORDS_PASSED_OVER_PER_FETCH,
 } from "./fetch-script.js";
 import { LUA_LIBRARY } from "./lua-library.js";
+import { MAKE_DUE_SCRIPT, makeDueKeysOf } from "./make-due-script.js";
 import {
   MOST_DUE_RUNS_PROMOTED_PER_PROMOTE,
   NEWER_VERSION_RECORDS_PASSED_OVER_PER_PROMOTE,
@@ -256,7 +257,7 @@ export type Engine = {
 
 export type ImplementedEngine = Pick<
   Engine,
-  "enqueue" | "fetch" | "renew" | "settle" | "promote" | "saveStep" | "readStep"
+  "enqueue" | "fetch" | "renew" | "settle" | "promote" | "saveStep" | "readStep" | "makeDue"
 >;
 
 function unreadableReplyError(scriptName: string, reply: unknown): Error {
@@ -515,6 +516,13 @@ function stepArgumentOf(step: StepToSave): ScriptArgument {
   return step.kind === "sleep" ? step.durationInMilliseconds : step.resumesAt;
 }
 
+function makeDueReplyOf(reply: unknown): MakeDueReply {
+  if (Array.isArray(reply) && reply.length === 2 && reply[0] === "madeDue" && Number.isSafeInteger(reply[1])) {
+    return { kind: "madeDue", madeDueRunCount: Number(reply[1]) };
+  }
+  throw unreadableReplyError("makeDue", reply);
+}
+
 function enqueueReplyOf(reply: unknown): EnqueueReply {
   const fenceRefusalReply = fenceRefusalReplyOf(reply);
   if (fenceRefusalReply !== undefined) {
@@ -626,7 +634,12 @@ export function createEngine(client: Redis, prefix: string): ImplementedEngine {
   const runPromoteScript = scriptRunnerOf("nextaskingPromote", PROMOTE_SCRIPT, promoteKeysOf(keys));
   const runSaveStepScript = scriptRunnerWithKeysOf("nextaskingSaveStep", SAVE_STEP_SCRIPT, 1);
   const runReadStepScript = scriptRunnerWithKeysOf("nextaskingReadStep", READ_STEP_SCRIPT, 1);
+  const runMakeDueScript = scriptRunnerOf("nextaskingMakeDue", MAKE_DUE_SCRIPT, makeDueKeysOf(keys));
   return {
+    makeDue: async () =>
+      makeDueReplyOf(
+        await runMakeDueScript([MOST_DUE_RUNS_PROMOTED_PER_PROMOTE, NEWER_VERSION_RECORDS_PASSED_OVER_PER_PROMOTE]),
+      ),
     saveStep: async ({ runId, lockToken, stepId, step }) =>
       saveStepReplyOf(
         await runSaveStepScript(saveStepKeysOf(keys, runId), [

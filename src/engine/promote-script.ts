@@ -40,27 +40,8 @@ for _, runId in ipairs(redis.call("ZRANGE", engineKeys.locks, "-inf", now, "BYSC
   end
 end
 
-local promotedRunCount, passedOverRecordCount, firstUnknownVersion = 0, 0, nil
-while promotedRunCount < mostDueRunsPromoted and passedOverRecordCount < mostRecordsPassedOver do
-  local runId = redis.call("ZRANGE", engineKeys.due, "-inf", now, "BYSCORE", "LIMIT", passedOverRecordCount, 1)[1]
-  if not runId then
-    break
-  end
-  local refusal = unknownVersionRefusalOf(runId)
-  if refusal then
-    if passedOverRecordCount == 0 then
-      firstUnknownVersion = refusal[2]
-    end
-    passedOverRecordCount = passedOverRecordCount + 1
-  else
-    local record = redis.call("HMGET", runRecordKey(runId), "task", "state")
-    local task, state = record[1], record[2]
-    leaveState(runId, task, state)
-    redis.call("HDEL", runRecordKey(runId), "startsAt", "nextAttemptAt")
-    enterPending(runId, task, nil)
-    promotedRunCount = promotedRunCount + 1
-  end
-end
+local promotedRunCount, passedOverRecordCount, firstUnknownVersion =
+  promoteDueRuns(now, mostDueRunsPromoted, mostRecordsPassedOver, nil)
 
 if passedOverRecordCount == mostRecordsPassedOver and promotedRunCount == 0 and #stalledRuns == 0 and #thirdStalls == 0 then
   return { "unknownVersion", firstUnknownVersion }

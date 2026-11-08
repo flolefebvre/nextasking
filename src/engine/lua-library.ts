@@ -193,6 +193,34 @@ local function leaveState(runId, task, state)
   end
 end
 
+local function promoteDueRuns(dueBefore, mostDueRunsPromoted, mostRecordsPassedOver, beforePromotingSuspendedRun)
+  local promotedRunCount, passedOverRecordCount, firstUnknownVersion = 0, 0, nil
+  while promotedRunCount < mostDueRunsPromoted and passedOverRecordCount < mostRecordsPassedOver do
+    local runId = redis.call("ZRANGE", engineKeys.due, "-inf", dueBefore, "BYSCORE", "LIMIT", passedOverRecordCount, 1)[1]
+    if not runId then
+      break
+    end
+    local refusal = unknownVersionRefusalOf(runId)
+    if refusal then
+      if passedOverRecordCount == 0 then
+        firstUnknownVersion = refusal[2]
+      end
+      passedOverRecordCount = passedOverRecordCount + 1
+    else
+      local record = redis.call("HMGET", runRecordKey(runId), "task", "state")
+      local task, state = record[1], record[2]
+      if state == "suspended" and beforePromotingSuspendedRun then
+        beforePromotingSuspendedRun(runId)
+      end
+      leaveState(runId, task, state)
+      redis.call("HDEL", runRecordKey(runId), "startsAt", "nextAttemptAt")
+      enterPending(runId, task, nil)
+      promotedRunCount = promotedRunCount + 1
+    end
+  end
+  return promotedRunCount, passedOverRecordCount, firstUnknownVersion
+end
+
 local function releaseSlotAndWakeParkedRuns(runId, task, concurrencyKey, concurrencyLimit)
   local slotsKey = slotSetKey(task, concurrencyKey)
   redis.call("SREM", slotsKey, runId)

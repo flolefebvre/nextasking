@@ -1,26 +1,11 @@
-import type { Redis } from "ioredis";
 import { expect, vi } from "vitest";
 
-import { integrationTest } from "../../tests/integration-test.js";
-import { expectNoInvariantViolations } from "../../tests/invariant-violations.js";
+import { engineTest, storedValuesByKeyOf } from "../../tests/engine-test.js";
+import type { EngineTestContext } from "../../tests/engine-test.js";
 import { serverInstantInMillisecondsOf } from "../../tests/server-instant.js";
-import { withRedis } from "../../tests/with-redis.js";
 import type { EpochMilliseconds } from "../durations.js";
-import { engineKeysOf } from "./engine-keys.js";
-import type { EngineKeys } from "./engine-keys.js";
-import { createEngine, DEDUP_WINDOW_IN_MILLISECONDS, RECORD_VERSION } from "./engine.js";
-import type { DispatchOrEmitRequest, EnqueueReply, ImplementedEngine, RunToCreate } from "./engine.js";
-
-type EngineTestContext = { engine: ImplementedEngine; redis: Redis; keys: EngineKeys; keyPrefix: string };
-
-function engineTest(name: string, body: (context: EngineTestContext) => Promise<void>): void {
-  integrationTest(name, async ({ redisUrl, keyPrefix }) => {
-    await withRedis(redisUrl, async (redis) => {
-      await body({ engine: createEngine(redis, keyPrefix), redis, keys: engineKeysOf(keyPrefix), keyPrefix });
-      await expectNoInvariantViolations(redis, keyPrefix);
-    });
-  });
-}
+import { DEDUP_WINDOW_IN_MILLISECONDS, RECORD_VERSION } from "./engine.js";
+import type { DispatchOrEmitRequest, EnqueueReply, RunToCreate } from "./engine.js";
 
 async function enqueueTimedByTheServer(
   { engine, redis }: EngineTestContext,
@@ -29,15 +14,6 @@ async function enqueueTimedByTheServer(
   const instantBefore = await serverInstantInMillisecondsOf(redis);
   const reply = await engine.enqueue(request);
   return { reply, instantBefore, instantAfter: await serverInstantInMillisecondsOf(redis) };
-}
-
-async function storedValuesByKeyOf(redis: Redis, keyPrefix: string): Promise<Map<string, Buffer | null>> {
-  const storedKeys = (await redis.keys(`{${keyPrefix}}:*`)).sort();
-  const storedValuesByKey = new Map<string, Buffer | null>();
-  for (const storedKey of storedKeys) {
-    storedValuesByKey.set(storedKey, await redis.dumpBuffer(storedKey));
-  }
-  return storedValuesByKey;
 }
 
 const SEND_EMAIL_RUN: RunToCreate = {

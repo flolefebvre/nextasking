@@ -88,6 +88,14 @@ local function nonNegativeIntegerArgumentOf(value, argumentName)
   return number
 end
 
+local function positiveIntegerArgumentOf(value, argumentName)
+  local number = tonumber(value)
+  if not number or number < 1 or number ~= math.floor(number) then
+    error("invalid argument: " .. argumentName .. " must be a positive integer, got " .. tostring(value))
+  end
+  return number
+end
+
 local function isLiveDedupEntry(dedupKey, member, now)
   local expiresAt = redis.call("ZSCORE", dedupKey, member)
   return expiresAt ~= false and tonumber(expiresAt) > now

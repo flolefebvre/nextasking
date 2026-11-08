@@ -1,5 +1,8 @@
+import { randomUUID } from "node:crypto";
+
 import type { Redis } from "ioredis";
 
+import type { RunFailedPayload } from "../built-in-events.js";
 import type { ConcurrencyKey } from "../definitions.js";
 import type { DurationInMilliseconds, EpochMilliseconds } from "../durations.js";
 import type { RunId, StepId } from "../ids.js";
@@ -16,6 +19,12 @@ import {
   NEWER_VERSION_RECORDS_PASSED_OVER_PER_FETCH,
 } from "./fetch-script.js";
 import { LUA_LIBRARY } from "./lua-library.js";
+import {
+  MOST_DUE_RUNS_PROMOTED_PER_PROMOTE,
+  NEWER_VERSION_RECORDS_PASSED_OVER_PER_PROMOTE,
+  PROMOTE_SCRIPT,
+  promoteKeysOf,
+} from "./promote-script.js";
 import { RENEW_SCRIPT, renewKeysOf } from "./renew-script.js";
 import { SETTLE_SCRIPT, settleKeysOf } from "./settle-script.js";
 import { defineScriptCommand } from "./script-commands.js";
@@ -26,6 +35,12 @@ export const RECORD_VERSION = 1;
 export const DEDUP_WINDOW_IN_MILLISECONDS: DurationInMilliseconds = 24 * 60 * 60 * 1000;
 
 export const EXPIRED_DEDUP_ENTRIES_TRIMMED_PER_SET = 100;
+
+export const MOST_ERROR_TEXT_CHARACTERS = 4000;
+
+export const CUT_ERROR_TEXT_MARKER = `… [cut at ${String(MOST_ERROR_TEXT_CHARACTERS)} characters]`;
+
+export const UNKNOWN_TASK_FAILURE_DELAY_IN_MILLISECONDS: DurationInMilliseconds = 30 * 60 * 1000;
 
 export type SerializedPayload = string;
 
@@ -119,7 +134,8 @@ export type RenewRequest = {
 export type LockRenewal = { kind: "renewed"; lockedUntil: EpochMilliseconds } | StaleReply;
 
 export type FailureNotice = {
-  runs: readonly RunToCreate[];
+  payload: Omit<RunFailedPayload, "failedAt">;
+  runs: readonly Omit<RunToCreate, "payload" | "delayInMilliseconds">[];
   eventDedup: SourceEvent;
 };
 
@@ -137,10 +153,6 @@ export type SettleRequest = {
   outcome: SettleOutcome;
   concurrencyLimit?: number;
 };
-
-export type ImplementedSettleOutcome = Extract<SettleOutcome, { kind: "complete" | "yield" | "handBack" }>;
-
-export type ImplementedSettleRequest = Omit<SettleRequest, "outcome"> & { outcome: ImplementedSettleOutcome };
 
 export type SettledReply =
   | { kind: "completed"; finishedAt: EpochMilliseconds }
@@ -237,11 +249,8 @@ export type Engine = {
   makeDue: () => Promise<MakeDueReply>;
 };
 
-export type ImplementedEngine = {
+export type ImplementedEngine = Pick<Engine, "fetch" | "renew" | "settle" | "promote"> & {
   enqueue: (request: DispatchOrEmitRequest) => Promise<EnqueueReply>;
-  fetch: (request: FetchRequest) => Promise<FetchReply>;
-  renew: (request: RenewRequest) => Promise<LockRenewal[]>;
-  settle: (request: ImplementedSettleRequest) => Promise<SettleReply>;
 };
 
 function unreadableReplyError(scriptName: string, reply: unknown): Error {
@@ -374,6 +383,23 @@ const SETTLE_REPLIES_BY_KIND: Readonly<Record<string, SettleReply>> = {
   already: { kind: "already" },
 };
 
+const SETTLE_REPLIES_OF_INSTANT_BY_KIND: Readonly<Record<string, (instant: EpochMilliseconds) => SettleReply>> = {
+  completed: (finishedAt) => ({ kind: "completed", finishedAt }),
+  backingOff: (nextAttemptAt) => ({ kind: "backingOff", nextAttemptAt }),
+  suspended: (resumesAt) => ({ kind: "suspended", resumesAt }),
+};
+
+const IS_FAILURE_REASON_BY_REASON: Readonly<Record<FailureReason, true>> = {
+  "retries exhausted": true,
+  "non-retriable": true,
+  stalled: true,
+  "unknown task": true,
+};
+
+function isFailureReason(value: unknown): value is FailureReason {
+  return typeof value === "string" && Object.hasOwn(IS_FAILURE_REASON_BY_REASON, value);
+}
+
 function settleReplyOf(reply: unknown): SettleReply {
   const unknownVersionReply = unknownVersionReplyOf(reply);
   if (unknownVersionReply !== undefined) {
@@ -385,10 +411,62 @@ function settleReplyOf(reply: unknown): SettleReply {
       return settleReply;
     }
   }
-  if (Array.isArray(reply) && reply.length === 2 && reply[0] === "completed" && Number.isSafeInteger(reply[1])) {
-    return { kind: "completed", finishedAt: Number(reply[1]) };
+  if (Array.isArray(reply) && reply.length === 2 && typeof reply[0] === "string" && Number.isSafeInteger(reply[1])) {
+    const settleReplyOfInstant = SETTLE_REPLIES_OF_INSTANT_BY_KIND[reply[0]];
+    if (settleReplyOfInstant !== undefined) {
+      return settleReplyOfInstant(Number(reply[1]));
+    }
+  }
+  if (
+    Array.isArray(reply) &&
+    reply.length === 3 &&
+    reply[0] === "failed" &&
+    isFailureReason(reply[1]) &&
+    Number.isSafeInteger(reply[2])
+  ) {
+    return { kind: "failed", reason: reply[1], finishedAt: Number(reply[2]) };
   }
   throw unreadableReplyError("settle", reply);
+}
+
+function stalledRunOf(reply: unknown): StalledRun | undefined {
+  if (!isStringList(reply) || reply.length !== 4) {
+    return undefined;
+  }
+  const [runId, task, storedAttempt, storedStalls] = reply;
+  const integersByField = storedIntegersByFieldOf({ attempt: storedAttempt, stalls: storedStalls });
+  return runId === undefined || task === undefined || integersByField === undefined
+    ? undefined
+    : { runId, task, ...integersByField };
+}
+
+function thirdStallOf(reply: unknown): ThirdStall | undefined {
+  if (!isStringList(reply) || reply.length !== 4) {
+    return undefined;
+  }
+  const [runId, task, storedAttempt, expiredLockToken] = reply;
+  const attempt = storedIntegerOf(nullIfAbsent(storedAttempt));
+  return runId === undefined || task === undefined || attempt === undefined || expiredLockToken === undefined
+    ? undefined
+    : { runId, task, attempt, expiredLockToken };
+}
+
+function promoteReplyOf(reply: unknown): PromoteReply {
+  const unknownVersionReply = unknownVersionReplyOf(reply);
+  if (unknownVersionReply !== undefined) {
+    return unknownVersionReply;
+  }
+  if (Array.isArray(reply) && reply.length === 4 && reply[0] === "promoted" && Number.isSafeInteger(reply[1])) {
+    const [, promotedRunCount, stalledRunReplies, thirdStallReplies]: unknown[] = reply;
+    if (Array.isArray(stalledRunReplies) && Array.isArray(thirdStallReplies)) {
+      const stalledRuns = definedElementsOf(stalledRunReplies.map(stalledRunOf));
+      const thirdStalls = definedElementsOf(thirdStallReplies.map(thirdStallOf));
+      if (stalledRuns !== undefined && thirdStalls !== undefined) {
+        return { kind: "promoted", promotedRunCount: Number(promotedRunCount), stalledRuns, thirdStalls };
+      }
+    }
+  }
+  throw unreadableReplyError("promote", reply);
 }
 
 function enqueueReplyOf(reply: unknown): EnqueueReply {
@@ -417,6 +495,59 @@ function runArgumentsOf(run: RunToCreate): ScriptArgument[] {
   ];
 }
 
+export function errorTextCutOf(text: string): string {
+  const characters = Array.from(text);
+  if (characters.length <= MOST_ERROR_TEXT_CHARACTERS) {
+    return text;
+  }
+  return `${characters.slice(0, MOST_ERROR_TEXT_CHARACTERS).join("")}${CUT_ERROR_TEXT_MARKER}`;
+}
+
+type TextAroundFailedAt = [textBefore: string, textAfter: string];
+
+const NO_TEXT_AROUND_FAILED_AT: TextAroundFailedAt = ["", ""];
+
+function textAroundFailedAtOf(record: object): TextAroundFailedAt {
+  const sentinel = randomUUID();
+  const [textBefore, textAfter, ...textsAfterAnotherSentinel] = JSON.stringify({
+    ...record,
+    failedAt: sentinel,
+  }).split(sentinel);
+  if (textBefore === undefined || textAfter === undefined || textsAfterAnotherSentinel.length > 0) {
+    throw new Error(`The serialized record does not hold its failedAt sentinel exactly once`);
+  }
+  return [textBefore, textAfter];
+}
+
+function errorWithTextsCutOf<CutError extends { message: string; stack: string }>(error: CutError): CutError {
+  return { ...error, message: errorTextCutOf(error.message), stack: errorTextCutOf(error.stack) };
+}
+
+function failureNoticeArgumentsOf(failureNotice: FailureNotice | undefined): ScriptArgument[] {
+  if (failureNotice === undefined || failureNotice.runs.length === 0) {
+    return [...NO_TEXT_AROUND_FAILED_AT, "", "", 0];
+  }
+  const { payload, runs, eventDedup } = failureNotice;
+  return [
+    ...textAroundFailedAtOf({ ...payload, error: errorWithTextsCutOf(payload.error) }),
+    eventDedup.eventName,
+    eventDedup.eventId,
+    runs.length,
+    ...runs.flatMap((run) => runArgumentsOf({ ...run, payload: "" })),
+  ];
+}
+
+function settleArgumentsOf(outcome: SettleOutcome): ScriptArgument[] {
+  return [
+    ...("error" in outcome ? textAroundFailedAtOf(errorWithTextsCutOf(outcome.error)) : NO_TEXT_AROUND_FAILED_AT),
+    outcome.kind === "retry" ? outcome.backoffInMilliseconds : "",
+    outcome.kind === "suspend" ? outcome.resumesAt : "",
+    outcome.kind === "fail" ? outcome.reason : "",
+    outcome.kind === "handBack" ? UNKNOWN_TASK_FAILURE_DELAY_IN_MILLISECONDS : "",
+    ...failureNoticeArgumentsOf("failureNotice" in outcome ? outcome.failureNotice : undefined),
+  ];
+}
+
 type ScriptRunner = (scriptArguments: readonly ScriptArgument[]) => Promise<unknown>;
 
 export function createEngine(client: Redis, prefix: string): ImplementedEngine {
@@ -430,10 +561,22 @@ export function createEngine(client: Redis, prefix: string): ImplementedEngine {
   const runFetchScript = scriptRunnerOf("nextaskingFetch", FETCH_SCRIPT, fetchKeysOf(keys));
   const runRenewScript = scriptRunnerOf("nextaskingRenew", RENEW_SCRIPT, renewKeysOf(keys));
   const runSettleScript = scriptRunnerOf("nextaskingSettle", SETTLE_SCRIPT, settleKeysOf(keys));
+  const runPromoteScript = scriptRunnerOf("nextaskingPromote", PROMOTE_SCRIPT, promoteKeysOf(keys));
   return {
+    promote: async () =>
+      promoteReplyOf(
+        await runPromoteScript([MOST_DUE_RUNS_PROMOTED_PER_PROMOTE, NEWER_VERSION_RECORDS_PASSED_OVER_PER_PROMOTE]),
+      ),
     settle: async ({ runId, lockToken, outcome, concurrencyLimit }) =>
       settleReplyOf(
-        await runSettleScript([runId, lockToken, outcome.kind, DEDUP_WINDOW_IN_MILLISECONDS, concurrencyLimit ?? ""]),
+        await runSettleScript([
+          runId,
+          lockToken,
+          outcome.kind,
+          DEDUP_WINDOW_IN_MILLISECONDS,
+          concurrencyLimit ?? "",
+          ...settleArgumentsOf(outcome),
+        ]),
       ),
     renew: async ({ heldLocks, lockDurationInMilliseconds }) =>
       renewalsOf(

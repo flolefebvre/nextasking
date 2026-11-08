@@ -71,6 +71,38 @@ local function currentInstantInMilliseconds()
   return tonumber(serverTime[1]) * 1000 + math.floor(tonumber(serverTime[2]) / 1000)
 end
 
+local millisecondsPerDay = 86400000
+
+local function civilDateOf(daysSinceEpoch)
+  local shiftedDays = daysSinceEpoch + 719468
+  local era = math.floor(shiftedDays / 146097)
+  local dayOfEra = shiftedDays - era * 146097
+  local yearOfEra = math.floor((dayOfEra - math.floor(dayOfEra / 1460) + math.floor(dayOfEra / 36524)
+    - math.floor(dayOfEra / 146096)) / 365)
+  local dayOfYear = dayOfEra - (365 * yearOfEra + math.floor(yearOfEra / 4) - math.floor(yearOfEra / 100))
+  local shiftedMonth = math.floor((5 * dayOfYear + 2) / 153)
+  local day = dayOfYear - math.floor((153 * shiftedMonth + 2) / 5) + 1
+  local month = shiftedMonth < 10 and shiftedMonth + 3 or shiftedMonth - 9
+  local year = yearOfEra + era * 400
+  if month <= 2 then
+    year = year + 1
+  end
+  return year, month, day
+end
+
+local function isoTimestampOf(instantInMilliseconds)
+  local daysSinceEpoch = math.floor(instantInMilliseconds / millisecondsPerDay)
+  local millisecondOfDay = instantInMilliseconds - daysSinceEpoch * millisecondsPerDay
+  local year, month, day = civilDateOf(daysSinceEpoch)
+  return string.format("%04d-%02d-%02dT%02d:%02d:%02d.%03dZ", year, month, day,
+    math.floor(millisecondOfDay / 3600000), math.floor(millisecondOfDay / 60000) % 60,
+    math.floor(millisecondOfDay / 1000) % 60, millisecondOfDay % 1000)
+end
+
+local function textWithIsoTimestampOf(textBefore, instantInMilliseconds, textAfter)
+  return textBefore .. isoTimestampOf(instantInMilliseconds) .. textAfter
+end
+
 local function unknownVersionRefusalOf(runId)
   local storedVersion = redis.call("HGET", runRecordKey(runId), "version")
   local storedVersionNumber = tonumber(storedVersion)
@@ -203,5 +235,41 @@ local function createRun(run, now)
   end
   enterPending(run.runId, run.task, nil)
   return true
+end
+
+local argumentsPerRunToCreate = 8
+
+local function runsToCreateOf(firstRunArgument, runCount)
+  local runsToCreate = {}
+  for position = 1, runCount do
+    local runArgument = firstRunArgument + (position - 1) * argumentsPerRunToCreate
+    runsToCreate[position] = {
+      runId = ARGV[runArgument],
+      task = ARGV[runArgument + 1],
+      payload = ARGV[runArgument + 2],
+      retries = nonNegativeIntegerArgumentOf(ARGV[runArgument + 3], "retries"),
+      concurrencyKey = ARGV[runArgument + 4],
+      eventName = ARGV[runArgument + 5],
+      eventId = ARGV[runArgument + 6],
+      delayInMilliseconds = nonNegativeIntegerArgumentOf(ARGV[runArgument + 7], "delayInMilliseconds"),
+    }
+  end
+  return runsToCreate
+end
+
+local function enqueueRuns(runsToCreate, dedupEventName, dedupEventId, now, dedupWindowInMilliseconds)
+  local createdRunIds, skippedRunIds = {}, {}
+  for _, run in ipairs(runsToCreate) do
+    if redis.call("EXISTS", runRecordKey(run.runId)) == 1 or isLiveDedupEntry(runDedupKey(run.task), run.runId, now) then
+      table.insert(skippedRunIds, run.runId)
+    else
+      createRun(run, now)
+      table.insert(createdRunIds, run.runId)
+    end
+  end
+  if dedupEventName ~= "" then
+    redis.call("ZADD", eventDedupKey(dedupEventName), now + dedupWindowInMilliseconds, dedupEventId)
+  end
+  return createdRunIds, skippedRunIds
 end
 `;

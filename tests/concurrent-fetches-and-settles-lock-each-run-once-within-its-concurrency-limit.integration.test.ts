@@ -4,7 +4,7 @@ import { expect, vi } from "vitest";
 import { engineKeysOf } from "../src/engine/engine-keys.js";
 import type { LockToken } from "../src/engine/engine-keys.js";
 import { createEngine } from "../src/engine/engine.js";
-import type { ImplementedSettleOutcome, LockedRun, RunToCreate } from "../src/engine/engine.js";
+import type { LockedRun, RunToCreate, SettleOutcome } from "../src/engine/engine.js";
 import { RUN_STATES } from "../src/run-states.js";
 import { integrationTest } from "./integration-test.js";
 import { expectNoInvariantViolations } from "./invariant-violations.js";
@@ -26,9 +26,9 @@ const MOST_LOCK_TOKENS_PER_TEST_FETCH = 5;
 
 const LOCK_DURATION_IN_MILLISECONDS = 120_000;
 
-const COMPLETE: ImplementedSettleOutcome = { kind: "complete" };
+const COMPLETE: SettleOutcome = { kind: "complete" };
 
-const YIELD: ImplementedSettleOutcome = { kind: "yield" };
+const YIELD: SettleOutcome = { kind: "yield" };
 
 type LockHanding = { fetcher: number; runId: string };
 

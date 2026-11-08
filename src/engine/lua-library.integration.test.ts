@@ -38,10 +38,20 @@ elseif probe == "move the delayed run to pending" then
   leaveState(runId, "send-email", "delayed")
   enterPending(runId, "send-email", nil)
   return { "moved" }
+elseif probe == "iso timestamp" then
+  return isoTimestampOf(tonumber(ARGV[4]))
+elseif probe == "text with an iso timestamp" then
+  return textWithIsoTimestampOf(ARGV[4], tonumber(ARGV[5]), ARGV[6])
 end
 `;
 
-function runProbe(redis: Redis, keyPrefix: string, probe: string, runId = "run-1", supportedVersion = RECORD_VERSION) {
+function probeReplyOf(
+  redis: Redis,
+  keyPrefix: string,
+  supportedVersion: number,
+  probe: string,
+  ...probeArguments: (string | number)[]
+) {
   const probeKeys = enqueueKeysOf(engineKeysOf(keyPrefix));
   return redis.eval(
     PROBE_SCRIPT,
@@ -50,9 +60,67 @@ function runProbe(redis: Redis, keyPrefix: string, probe: string, runId = "run-1
     hashTaggedPrefixOf(keyPrefix),
     supportedVersion,
     probe,
-    runId,
+    ...probeArguments,
   );
 }
+
+function runProbe(redis: Redis, keyPrefix: string, probe: string, runId = "run-1", supportedVersion = RECORD_VERSION) {
+  return probeReplyOf(redis, keyPrefix, supportedVersion, probe, runId);
+}
+
+const INSTANTS_IN_MILLISECONDS = [
+  0,
+  Date.UTC(1999, 11, 31, 23, 59, 59, 999),
+  Date.UTC(2000, 0, 1),
+  Date.UTC(2000, 1, 29, 12, 30, 45, 7),
+  Date.UTC(2000, 2, 1),
+  Date.UTC(2023, 1, 28, 23, 59, 59, 999),
+  Date.UTC(2023, 2, 1),
+  Date.UTC(2024, 1, 29, 23, 59, 59, 999),
+  Date.UTC(2024, 11, 31, 23, 59, 59, 999),
+  Date.UTC(2025, 0, 1, 0, 0, 0, 1),
+  Date.UTC(2100, 1, 28, 23, 59, 59, 999),
+  Date.UTC(2100, 2, 1),
+  1_762_560_000_123,
+  Date.UTC(9999, 11, 31, 23, 59, 59, 999),
+];
+
+for (const instantInMilliseconds of INSTANTS_IN_MILLISECONDS) {
+  const isoTimestamp = new Date(instantInMilliseconds).toISOString();
+  integrationTest(
+    `the library formats ${String(instantInMilliseconds)} as ${isoTimestamp}`,
+    async ({ redisUrl, keyPrefix }) => {
+      await withRedis(redisUrl, async (redis) => {
+        const reply = await probeReplyOf(redis, keyPrefix, RECORD_VERSION, "iso timestamp", instantInMilliseconds);
+
+        expect(reply).toBe(isoTimestamp);
+        await expectNoInvariantViolations(redis, keyPrefix);
+      });
+    },
+  );
+}
+
+integrationTest(
+  "the library puts the iso timestamp of an instant between the two halves of a text",
+  async ({ redisUrl, keyPrefix }) => {
+    await withRedis(redisUrl, async (redis) => {
+      const instantInMilliseconds = Date.UTC(2024, 1, 29, 8, 5, 3, 42);
+
+      const reply = await probeReplyOf(
+        redis,
+        keyPrefix,
+        RECORD_VERSION,
+        "text with an iso timestamp",
+        '{"failedAt":"',
+        instantInMilliseconds,
+        '"}',
+      );
+
+      expect(reply).toBe('{"failedAt":"2024-02-29T08:05:03.042Z"}');
+      await expectNoInvariantViolations(redis, keyPrefix);
+    });
+  },
+);
 
 const UNKNOWN_VERSIONS = [
   { name: "a newer version", storedVersion: "2", reportedVersion: "2" },

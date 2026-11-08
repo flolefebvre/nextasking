@@ -149,7 +149,7 @@ To make the oldest parked run of a waiting list pending again, when a concurrenc
 _Avoid_: Promote, notify; not resume, which continues a suspended attempt (see **Resume**)
 
 **Hand back**:
-To return a run or a firing to pending without executing it, because the worker doesn't define its task, so that a worker of another release picks it up; a run no worker takes for long enough fails.
+To return a run to pending without executing it, because the worker doesn't define its task, so that a worker of another release picks it up; a run no worker takes for long enough fails.
 _Avoid_: Requeue, reject, release; not yield, the shutdown hand-off at a step boundary (see **Yield**)
 
 **Worker**:

@@ -52,7 +52,7 @@ export function createEngineStepStore(
       if (reply.resumesAt === undefined) {
         throw new Error(`The saveStep script saved sleep "${stepId}" of run "${runId}" without a resume time`);
       }
-      return reply.resumesAt;
+      return { resumesAt: reply.resumesAt, isDue: reply.isDue };
     },
   };
 }

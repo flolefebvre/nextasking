@@ -12,6 +12,7 @@ import type {
   FutureResumeTimeHandling,
   HandlerOutcome,
   HandlerSender,
+  ResumeTime,
   SendFence,
   StepEngineConfig,
   StepStore,
@@ -443,6 +444,23 @@ describe("step.sleep and step.sleepUntil", () => {
     const outcome = await executeHandler(() => step.sleepUntil("wait", new Date(0)));
 
     expect(outcome).toEqual({ kind: "suspended", resumesAt: savedResumesAt });
+  });
+
+  test("follows the store's clock on whether a sleep is due, not the app's", async () => {
+    const pastResumesAt = Date.now() - ONE_HOUR_IN_MILLISECONDS;
+    const futureResumesAt = Date.now() + ONE_HOUR_IN_MILLISECONDS;
+    const storeAnswering = (resumeTime: ResumeTime): StepStore => ({
+      ...createInMemoryStepStore(),
+      saveSleep: async () => resumeTime,
+    });
+    const notYetDue = openAttempt(storeAnswering({ resumesAt: pastResumesAt, isDue: false }));
+    const alreadyDue = openAttempt(storeAnswering({ resumesAt: futureResumesAt, isDue: true }));
+
+    const notYetDueOutcome = await notYetDue.executeHandler(() => notYetDue.step.sleep("wait", "1h"));
+    const alreadyDueOutcome = await alreadyDue.executeHandler(() => alreadyDue.step.sleep("wait", "1h"));
+
+    expect(notYetDueOutcome).toEqual({ kind: "suspended", resumesAt: pastResumesAt });
+    expect(alreadyDueOutcome).toEqual({ kind: "completed" });
   });
 
   test("suspends once the steps in flight settle, so their results are saved", async () => {

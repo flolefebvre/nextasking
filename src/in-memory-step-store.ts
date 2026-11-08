@@ -1,5 +1,5 @@
 import type { StepId } from "./ids.js";
-import { resumeTimeFromNowOf, savedStepOf, serializedSleepOf } from "./step-engine.js";
+import { resumeTimeByAppClockOf, resumeTimeFromNowOf, savedStepOf, serializedSleepOf } from "./step-engine.js";
 import type { SerializedStepValue, StepStore } from "./step-engine.js";
 
 export type InMemoryStepStore = StepStore & {
@@ -20,12 +20,12 @@ export function createInMemoryStepStore(savedSteps: Record<StepId, SerializedSte
       if (savedStep !== undefined) {
         const savedSleep = savedStepOf(stepId, savedStep);
         if (savedSleep.kind === "sleep") {
-          return savedSleep.resumesAt;
+          return resumeTimeByAppClockOf(savedSleep.resumesAt);
         }
       }
       const resumesAt = resumeTimeFromNowOf(sleep);
       serializedStepsById.set(stepId, serializedSleepOf(resumesAt));
-      return resumesAt;
+      return resumeTimeByAppClockOf(resumesAt);
     },
     savedSteps: () => Object.fromEntries(serializedStepsById),
   };

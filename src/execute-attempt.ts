@@ -70,9 +70,9 @@ export async function executeAttempt<
   const store: StepStore = {
     ...inMemoryStore,
     saveSleep: async (stepId, sleep) => {
-      const resumesAt = await inMemoryStore.saveSleep(stepId, sleep);
-      sleeps.push({ id: stepId, resumesAt: new Date(resumesAt) });
-      return resumesAt;
+      const resumeTime = await inMemoryStore.saveSleep(stepId, sleep);
+      sleeps.push({ id: stepId, resumesAt: new Date(resumeTime.resumesAt) });
+      return resumeTime;
     },
   };
   const runId = options.runId ?? createRandomId();

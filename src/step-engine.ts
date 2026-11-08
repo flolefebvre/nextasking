@@ -27,7 +27,12 @@ export type SleepToSave = Exclude<StepToSave, { kind: "value" }>;
 export type StepStore = {
   readStep: (stepId: StepId) => Promise<SerializedStepValue | undefined>;
   saveStep: (stepId: StepId, value: SerializedStepValue) => Promise<void>;
-  saveSleep: (stepId: StepId, sleep: SleepToSave) => Promise<EpochMilliseconds>;
+  saveSleep: (stepId: StepId, sleep: SleepToSave) => Promise<ResumeTime>;
+};
+
+export type ResumeTime = {
+  resumesAt: EpochMilliseconds;
+  isDue: boolean;
 };
 
 export type SendFence = {
@@ -244,13 +249,9 @@ export function openStepEngine(config: StepEngineConfig): StepEngine {
   };
 
   const sleepUntilResumeTime = async (stepId: StepId, sleep: SleepToSave) => {
-    const resumesAt = await noteLockLoss(config.store.saveSleep(stepId, sleep));
+    const { resumesAt, isDue } = await noteLockLoss(config.store.saveSleep(stepId, sleep));
     countSavedStep(serializedSleepOf(resumesAt));
-    if (
-      resumesAt <= Date.now() ||
-      config.futureResumeTime === "continue at once" ||
-      config.sleepsWokenAt !== undefined
-    ) {
+    if (isDue || config.futureResumeTime === "continue at once" || config.sleepsWokenAt !== undefined) {
       return;
     }
     recordedResumesAt = Math.min(recordedResumesAt ?? resumesAt, resumesAt);
@@ -405,6 +406,10 @@ export function serializeStepValue(value: RunId | EventId): SerializedStepValue 
 
 export function resumeTimeFromNowOf(sleep: SleepToSave): EpochMilliseconds {
   return sleep.kind === "sleep" ? Date.now() + sleep.durationInMilliseconds : sleep.resumesAt;
+}
+
+export function resumeTimeByAppClockOf(resumesAt: EpochMilliseconds): ResumeTime {
+  return { resumesAt, isDue: resumesAt <= Date.now() };
 }
 
 export function serializedSleepOf(resumesAt: EpochMilliseconds): SerializedStepValue {

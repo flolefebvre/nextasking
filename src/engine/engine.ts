@@ -198,8 +198,10 @@ export type SaveStepRequest = {
   step: StepToSave;
 };
 
+export type SavedSleepReply = { kind: "saved"; resumesAt: EpochMilliseconds; isDue: boolean };
+
 export type SaveStepReply =
-  { kind: "saved"; resumesAt: EpochMilliseconds | undefined } | StaleReply | UnknownVersionReply;
+  { kind: "saved"; resumesAt: undefined } | SavedSleepReply | StaleReply | UnknownVersionReply;
 
 export type ReadStepRequest = { runId: RunId; lockToken: LockToken; stepId: StepId };
 
@@ -497,8 +499,14 @@ function saveStepReplyOf(reply: unknown): SaveStepReply {
   if (Array.isArray(reply) && reply.length === 1 && reply[0] === "saved") {
     return { kind: "saved", resumesAt: undefined };
   }
-  if (Array.isArray(reply) && reply.length === 2 && reply[0] === "saved" && Number.isSafeInteger(reply[1])) {
-    return { kind: "saved", resumesAt: Number(reply[1]) };
+  if (
+    Array.isArray(reply) &&
+    reply.length === 3 &&
+    reply[0] === "saved" &&
+    Number.isSafeInteger(reply[1]) &&
+    (reply[2] === 0 || reply[2] === 1)
+  ) {
+    return { kind: "saved", resumesAt: Number(reply[1]), isDue: reply[2] === 1 };
   }
   throw unreadableReplyError("saveStep", reply);
 }

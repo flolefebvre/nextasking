@@ -5,7 +5,7 @@ import type { EpochMilliseconds } from "./durations.js";
 import type { RunId, StepId } from "./ids.js";
 import { LostRunLockError, RETURN_0_UNLESS_LOCK_IS_HELD, jobKeyOf, lockKeyOf } from "./job-lock.js";
 import { FAILED_JOB_RETENTION } from "./job-retention.js";
-import { resumeTimeFromNowOf, savedStepResultsOf } from "./step-engine.js";
+import { resumeTimeByAppClockOf, resumeTimeFromNowOf, savedStepResultsOf } from "./step-engine.js";
 import type { SavedStepResult, SerializedStepValue, StepStore } from "./step-engine.js";
 
 const SAVED_STEPS_TIME_TO_LIVE_IN_MILLISECONDS = FAILED_JOB_RETENTION.age * 1000;
@@ -91,12 +91,12 @@ export function createRedisStepStore(client: Redis, job: Job<{ runId: RunId }>, 
       const savedStep = await readStep(stepId);
       const savedSleep = savedStep === undefined ? undefined : savedSleepOf(savedStep);
       if (savedSleep !== undefined) {
-        return savedSleep.wakeAt;
+        return resumeTimeByAppClockOf(savedSleep.wakeAt);
       }
       const wakeAt = resumeTimeFromNowOf(sleep);
       const newSleep: SavedSleep = { kind: "sleep", wakeAt, attempt };
       await saveStep(stepId, JSON.stringify(newSleep));
-      return wakeAt;
+      return resumeTimeByAppClockOf(wakeAt);
     },
   };
 }

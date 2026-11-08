@@ -18,17 +18,22 @@ import {
   MOST_RUNS_PARKED_PER_FETCH,
   NEWER_VERSION_RECORDS_PASSED_OVER_PER_FETCH,
 } from "./fetch-script.js";
+import { FIRE_SCRIPT, fireKeysOf } from "./fire-script.js";
 import { LUA_LIBRARY } from "./lua-library.js";
+import { MAKE_DUE_SCRIPT, makeDueKeysOf } from "./make-due-script.js";
 import {
   MOST_DUE_RUNS_PROMOTED_PER_PROMOTE,
   NEWER_VERSION_RECORDS_PASSED_OVER_PER_PROMOTE,
   PROMOTE_SCRIPT,
   promoteKeysOf,
 } from "./promote-script.js";
+import { READ_STEP_SCRIPT, readStepKeysOf } from "./read-step-script.js";
 import { RENEW_SCRIPT, renewKeysOf } from "./renew-script.js";
-import { SETTLE_SCRIPT, settleKeysOf } from "./settle-script.js";
+import { SAVE_STEP_SCRIPT, saveStepKeysOf } from "./save-step-script.js";
 import { defineScriptCommand } from "./script-commands.js";
 import type { ScriptArgument } from "./script-commands.js";
+import { SETTLE_SCRIPT, settleKeysOf } from "./settle-script.js";
+import { SYNC_SCHEDULES_SCRIPT, syncSchedulesKeysOf } from "./sync-schedules-script.js";
 
 export const RECORD_VERSION = 1;
 
@@ -60,6 +65,7 @@ export type ParentFence = {
   parentRunId: RunId;
   lockToken: LockToken;
   stepId: StepId;
+  stepValue: SerializedStepValue;
 };
 
 export type EnqueueRequest = {
@@ -88,7 +94,9 @@ export type NotDueReply = { kind: "notDue" };
 
 export type EnqueuedReply = { kind: "enqueued"; createdRunIds: RunId[]; skippedRunIds: RunId[] };
 
-export type EnqueueReply = EnqueuedReply | DuplicateReply | StaleReply | UnknownVersionReply;
+export type AlreadySentReply = { kind: "alreadySent"; savedValue: SerializedStepValue };
+
+export type EnqueueReply = EnqueuedReply | AlreadySentReply | DuplicateReply | StaleReply | UnknownVersionReply;
 
 export type FetchRequest = {
   lockTokens: readonly LockToken[];
@@ -249,9 +257,10 @@ export type Engine = {
   makeDue: () => Promise<MakeDueReply>;
 };
 
-export type ImplementedEngine = Pick<Engine, "fetch" | "renew" | "settle" | "promote"> & {
-  enqueue: (request: DispatchOrEmitRequest) => Promise<EnqueueReply>;
-};
+export type ImplementedEngine = Pick<
+  Engine,
+  "enqueue" | "fetch" | "renew" | "settle" | "promote" | "saveStep" | "readStep" | "fire" | "syncSchedules" | "makeDue"
+>;
 
 function unreadableReplyError(scriptName: string, reply: unknown): Error {
   return new Error(`The ${scriptName} script sent a reply the engine cannot read: ${JSON.stringify(reply)}`);
@@ -359,7 +368,7 @@ function fetchReplyOf(reply: unknown): FetchReply {
 }
 
 function lockRenewalOf(reply: unknown): LockRenewal | undefined {
-  if (Array.isArray(reply) && reply.length === 1 && reply[0] === "stale") {
+  if (isStaleReply(reply)) {
     return { kind: "stale" };
   }
   if (Array.isArray(reply) && reply.length === 2 && reply[0] === "renewed" && Number.isSafeInteger(reply[1])) {
@@ -469,9 +478,121 @@ function promoteReplyOf(reply: unknown): PromoteReply {
   throw unreadableReplyError("promote", reply);
 }
 
+function isStaleReply(reply: unknown): reply is ["stale"] {
+  return Array.isArray(reply) && reply.length === 1 && reply[0] === "stale";
+}
+
+function fenceRefusalReplyOf(reply: unknown): StaleReply | UnknownVersionReply | undefined {
+  return isStaleReply(reply) ? { kind: "stale" } : unknownVersionReplyOf(reply);
+}
+
+function saveStepReplyOf(reply: unknown): SaveStepReply {
+  const fenceRefusalReply = fenceRefusalReplyOf(reply);
+  if (fenceRefusalReply !== undefined) {
+    return fenceRefusalReply;
+  }
+  if (Array.isArray(reply) && reply.length === 1 && reply[0] === "saved") {
+    return { kind: "saved", resumesAt: undefined };
+  }
+  if (Array.isArray(reply) && reply.length === 2 && reply[0] === "saved" && Number.isSafeInteger(reply[1])) {
+    return { kind: "saved", resumesAt: Number(reply[1]) };
+  }
+  throw unreadableReplyError("saveStep", reply);
+}
+
+function readStepReplyOf(reply: unknown): ReadStepReply {
+  const fenceRefusalReply = fenceRefusalReplyOf(reply);
+  if (fenceRefusalReply !== undefined) {
+    return fenceRefusalReply;
+  }
+  if (isStringList(reply) && reply[0] === "read" && reply.length <= 2) {
+    return { kind: "read", savedValue: reply[1] };
+  }
+  throw unreadableReplyError("readStep", reply);
+}
+
+function stepArgumentOf(step: StepToSave): ScriptArgument {
+  if (step.kind === "value") {
+    return step.value;
+  }
+  return step.kind === "sleep" ? step.durationInMilliseconds : step.resumesAt;
+}
+
+const FIRE_REFUSALS_BY_KIND: Readonly<Record<string, FireReply>> = {
+  already: { kind: "already" },
+  notDue: { kind: "notDue" },
+  noSchedule: { kind: "noSchedule" },
+};
+
+function fireReplyOf(reply: unknown): FireReply {
+  const unknownVersionReply = unknownVersionReplyOf(reply);
+  if (unknownVersionReply !== undefined) {
+    return unknownVersionReply;
+  }
+  if (Array.isArray(reply) && reply.length === 1 && typeof reply[0] === "string") {
+    const fireRefusal = FIRE_REFUSALS_BY_KIND[reply[0]];
+    if (fireRefusal !== undefined) {
+      return fireRefusal;
+    }
+  }
+  if (
+    Array.isArray(reply) &&
+    reply.length === 3 &&
+    reply[0] === "fired" &&
+    typeof reply[1] === "string" &&
+    (reply[2] === 0 || reply[2] === 1)
+  ) {
+    return { kind: "fired", runId: reply[1], isRunCreated: reply[2] === 1 };
+  }
+  throw unreadableReplyError("fire", reply);
+}
+
+function scheduleSummaryOf(reply: unknown): ScheduleSummary | undefined {
+  if (!isStringList(reply) || reply.length !== 3) {
+    return undefined;
+  }
+  const [task, cron, timezone] = reply as [string, string, string];
+  return { task, cron, timezone };
+}
+
+function scheduleSummariesOf(reply: unknown): ScheduleSummary[] | undefined {
+  return Array.isArray(reply) ? definedElementsOf(reply.map(scheduleSummaryOf)) : undefined;
+}
+
+function syncSchedulesReplyOf(reply: unknown): SyncSchedulesReply {
+  const unknownVersionReply = unknownVersionReplyOf(reply);
+  if (unknownVersionReply !== undefined) {
+    return unknownVersionReply;
+  }
+  if (Array.isArray(reply) && reply.length === 4 && reply[0] === "synced") {
+    const [, addedReplies, changedReplies, removedReplies]: unknown[] = reply;
+    const added = scheduleSummariesOf(addedReplies);
+    const changed = scheduleSummariesOf(changedReplies);
+    const removed = scheduleSummariesOf(removedReplies);
+    if (added !== undefined && changed !== undefined && removed !== undefined) {
+      return { kind: "synced", added, changed, removed };
+    }
+  }
+  throw unreadableReplyError("syncSchedules", reply);
+}
+
+function makeDueReplyOf(reply: unknown): MakeDueReply {
+  if (Array.isArray(reply) && reply.length === 2 && reply[0] === "madeDue" && Number.isSafeInteger(reply[1])) {
+    return { kind: "madeDue", madeDueRunCount: Number(reply[1]) };
+  }
+  throw unreadableReplyError("makeDue", reply);
+}
+
 function enqueueReplyOf(reply: unknown): EnqueueReply {
+  const fenceRefusalReply = fenceRefusalReplyOf(reply);
+  if (fenceRefusalReply !== undefined) {
+    return fenceRefusalReply;
+  }
   if (Array.isArray(reply) && reply.length === 1 && reply[0] === "duplicate") {
     return { kind: "duplicate" };
+  }
+  if (isStringList(reply) && reply.length === 2 && reply[0] === "alreadySent") {
+    return { kind: "alreadySent", savedValue: reply[1]! };
   }
   if (Array.isArray(reply) && reply.length === 3 && reply[0] === "enqueued") {
     const [, createdRunIds, skippedRunIds]: unknown[] = reply;
@@ -550,19 +671,62 @@ function settleArgumentsOf(outcome: SettleOutcome): ScriptArgument[] {
 
 type ScriptRunner = (scriptArguments: readonly ScriptArgument[]) => Promise<unknown>;
 
+type ScriptRunnerWithKeys = (
+  scriptKeys: readonly string[],
+  scriptArguments: readonly ScriptArgument[],
+) => Promise<unknown>;
+
 export function createEngine(client: Redis, prefix: string): ImplementedEngine {
   const keys = engineKeysOf(prefix);
   const sharedArguments: ScriptArgument[] = [hashTaggedPrefixOf(prefix), RECORD_VERSION];
+  const scriptRunnerWithKeysOf = (commandName: string, script: string, keyCount: number): ScriptRunnerWithKeys => {
+    const command = defineScriptCommand(client, commandName, `${LUA_LIBRARY}\n${script}`, keyCount);
+    return (scriptKeys, scriptArguments) => command.call(scriptKeys, [...sharedArguments, ...scriptArguments]);
+  };
   const scriptRunnerOf = (commandName: string, script: string, scriptKeys: readonly string[]): ScriptRunner => {
-    const command = defineScriptCommand(client, commandName, `${LUA_LIBRARY}\n${script}`, scriptKeys.length);
-    return (scriptArguments) => command.call(scriptKeys, [...sharedArguments, ...scriptArguments]);
+    const runScript = scriptRunnerWithKeysOf(commandName, script, scriptKeys.length);
+    return (scriptArguments) => runScript(scriptKeys, scriptArguments);
   };
   const runEnqueueScript = scriptRunnerOf("nextaskingEnqueue", ENQUEUE_SCRIPT, enqueueKeysOf(keys));
   const runFetchScript = scriptRunnerOf("nextaskingFetch", FETCH_SCRIPT, fetchKeysOf(keys));
   const runRenewScript = scriptRunnerOf("nextaskingRenew", RENEW_SCRIPT, renewKeysOf(keys));
   const runSettleScript = scriptRunnerOf("nextaskingSettle", SETTLE_SCRIPT, settleKeysOf(keys));
   const runPromoteScript = scriptRunnerOf("nextaskingPromote", PROMOTE_SCRIPT, promoteKeysOf(keys));
+  const runSaveStepScript = scriptRunnerWithKeysOf("nextaskingSaveStep", SAVE_STEP_SCRIPT, 1);
+  const runReadStepScript = scriptRunnerWithKeysOf("nextaskingReadStep", READ_STEP_SCRIPT, 1);
+  const runMakeDueScript = scriptRunnerOf("nextaskingMakeDue", MAKE_DUE_SCRIPT, makeDueKeysOf(keys));
+  const runSyncSchedulesScript = scriptRunnerOf(
+    "nextaskingSyncSchedules",
+    SYNC_SCHEDULES_SCRIPT,
+    syncSchedulesKeysOf(keys),
+  );
+  const runFireScript = scriptRunnerOf("nextaskingFire", FIRE_SCRIPT, fireKeysOf(keys));
   return {
+    fire: async ({ task, instant, instantAfter, runId, retries }) =>
+      fireReplyOf(await runFireScript([task, instant, instantAfter, runId, retries])),
+    syncSchedules: async ({ schedulesToSync }) =>
+      syncSchedulesReplyOf(
+        await runSyncSchedulesScript([
+          schedulesToSync.length,
+          ...schedulesToSync.flatMap(({ task, cron, timezone, nextFiringAt }) => [task, cron, timezone, nextFiringAt]),
+        ]),
+      ),
+    makeDue: async () =>
+      makeDueReplyOf(
+        await runMakeDueScript([MOST_DUE_RUNS_PROMOTED_PER_PROMOTE, NEWER_VERSION_RECORDS_PASSED_OVER_PER_PROMOTE]),
+      ),
+    saveStep: async ({ runId, lockToken, stepId, step }) =>
+      saveStepReplyOf(
+        await runSaveStepScript(saveStepKeysOf(keys, runId), [
+          runId,
+          lockToken,
+          stepId,
+          step.kind,
+          stepArgumentOf(step),
+        ]),
+      ),
+    readStep: async ({ runId, lockToken, stepId }) =>
+      readStepReplyOf(await runReadStepScript(readStepKeysOf(keys, runId), [runId, lockToken, stepId])),
     promote: async () =>
       promoteReplyOf(
         await runPromoteScript([MOST_DUE_RUNS_PROMOTED_PER_PROMOTE, NEWER_VERSION_RECORDS_PASSED_OVER_PER_PROMOTE]),
@@ -601,13 +765,17 @@ export function createEngine(client: Redis, prefix: string): ImplementedEngine {
         ]),
       );
     },
-    enqueue: async ({ runs, eventDedup }) =>
+    enqueue: async ({ runs, eventDedup, parentFence }) =>
       enqueueReplyOf(
         await runEnqueueScript([
           DEDUP_WINDOW_IN_MILLISECONDS,
           EXPIRED_DEDUP_ENTRIES_TRIMMED_PER_SET,
           eventDedup?.eventName ?? "",
           eventDedup?.eventId ?? "",
+          parentFence?.parentRunId ?? "",
+          parentFence?.lockToken ?? "",
+          parentFence?.stepId ?? "",
+          parentFence?.stepValue ?? "",
           runs.length,
           ...runs.flatMap(runArgumentsOf),
         ]),

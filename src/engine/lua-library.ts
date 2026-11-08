@@ -103,8 +103,8 @@ local function textWithIsoTimestampOf(textBefore, instantInMilliseconds, textAft
   return textBefore .. isoTimestampOf(instantInMilliseconds) .. textAfter
 end
 
-local function unknownVersionRefusalOf(runId)
-  local storedVersion = redis.call("HGET", runRecordKey(runId), "version")
+local function unknownVersionRefusalOfRecord(recordKey)
+  local storedVersion = redis.call("HGET", recordKey, "version")
   local storedVersionNumber = tonumber(storedVersion)
   if storedVersionNumber and storedVersionNumber <= supportedRecordVersion then
     return nil
@@ -112,12 +112,27 @@ local function unknownVersionRefusalOf(runId)
   return { "unknownVersion", storedVersion }
 end
 
-local function isCurrentLockOf(runId, lockToken)
-  if redis.call("EXISTS", runRecordKey(runId)) == 0 or unknownVersionRefusalOf(runId) then
-    return false
+local function unknownVersionRefusalOf(runId)
+  return unknownVersionRefusalOfRecord(runRecordKey(runId))
+end
+
+local function fenceRefusalOf(runId, lockToken)
+  if redis.call("EXISTS", runRecordKey(runId)) == 0 then
+    return { "stale" }
+  end
+  local refusal = unknownVersionRefusalOf(runId)
+  if refusal then
+    return refusal
   end
   local record = redis.call("HMGET", runRecordKey(runId), "state", "lockToken")
-  return record[1] == "executing" and record[2] == lockToken
+  if record[1] ~= "executing" or record[2] ~= lockToken then
+    return { "stale" }
+  end
+  return nil
+end
+
+local function isCurrentLockOf(runId, lockToken)
+  return fenceRefusalOf(runId, lockToken) == nil
 end
 
 local function nonNegativeIntegerArgumentOf(value, argumentName)
@@ -180,6 +195,34 @@ local function leaveState(runId, task, state)
   elseif dueInstantFieldByState[state] then
     redis.call("ZREM", engineKeys.due, runId)
   end
+end
+
+local function promoteDueRuns(dueBefore, mostDueRunsPromoted, mostRecordsPassedOver, beforePromotingSuspendedRun)
+  local promotedRunCount, passedOverRecordCount, firstUnknownVersion = 0, 0, nil
+  while promotedRunCount < mostDueRunsPromoted and passedOverRecordCount < mostRecordsPassedOver do
+    local runId = redis.call("ZRANGE", engineKeys.due, "-inf", dueBefore, "BYSCORE", "LIMIT", passedOverRecordCount, 1)[1]
+    if not runId then
+      break
+    end
+    local refusal = unknownVersionRefusalOf(runId)
+    if refusal then
+      if passedOverRecordCount == 0 then
+        firstUnknownVersion = refusal[2]
+      end
+      passedOverRecordCount = passedOverRecordCount + 1
+    else
+      local record = redis.call("HMGET", runRecordKey(runId), "task", "state")
+      local task, state = record[1], record[2]
+      if state == "suspended" and beforePromotingSuspendedRun then
+        beforePromotingSuspendedRun(runId)
+      end
+      leaveState(runId, task, state)
+      redis.call("HDEL", runRecordKey(runId), "startsAt", "nextAttemptAt")
+      enterPending(runId, task, nil)
+      promotedRunCount = promotedRunCount + 1
+    end
+  end
+  return promotedRunCount, passedOverRecordCount, firstUnknownVersion
 end
 
 local function releaseSlotAndWakeParkedRuns(runId, task, concurrencyKey, concurrencyLimit)

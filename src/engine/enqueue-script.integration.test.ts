@@ -1,11 +1,12 @@
 import { expect, vi } from "vitest";
 
-import { engineTest, storedValuesByKeyOf } from "../../tests/engine-test.js";
+import { engineTest, fetchedLockedRunsOf, storedValuesByKeyOf } from "../../tests/engine-test.js";
 import type { EngineTestContext } from "../../tests/engine-test.js";
+import { freshLockTokensOf } from "../../tests/lock-tokens.js";
 import { serverInstantInMillisecondsOf } from "../../tests/server-instant.js";
 import type { EpochMilliseconds } from "../durations.js";
 import { DEDUP_WINDOW_IN_MILLISECONDS, RECORD_VERSION } from "./engine.js";
-import type { DispatchOrEmitRequest, EnqueueReply, RunToCreate } from "./engine.js";
+import type { DispatchOrEmitRequest, EnqueueReply, ParentFence, RunToCreate } from "./engine.js";
 
 async function enqueueTimedByTheServer(
   { engine, redis }: EngineTestContext,
@@ -222,5 +223,118 @@ engineTest(
 
     expect(reply).toEqual({ kind: "enqueued", createdRunIds: ["run-1"], skippedRunIds: [] });
     expect(await redis.zcard(keys.runDedup("send-email"))).toBe(0);
+  },
+);
+
+async function parentFenceOf(context: EngineTestContext, stepValue: string): Promise<ParentFence> {
+  await context.engine.enqueue({ runs: [{ ...SEND_EMAIL_RUN, runId: "parent-run", task: "sign-up" }] });
+  const [lockedRun] = await fetchedLockedRunsOf(context, 1);
+  await context.redis.hset(context.keys.runRecord("parent-run"), "stalls", 2);
+  return { parentRunId: "parent-run", lockToken: lockedRun!.lockToken, stepId: "send-1", stepValue };
+}
+
+engineTest(
+  "a handler dispatch with the parent's current token creates the child and saves the parent's step, resetting stalls",
+  async (context) => {
+    const { engine, redis, keys } = context;
+    const parentFence = await parentFenceOf(context, '"run-1"');
+
+    const reply = await engine.enqueue({ runs: [SEND_EMAIL_RUN], parentFence });
+
+    expect(reply).toEqual({ kind: "enqueued", createdRunIds: ["run-1"], skippedRunIds: [] });
+    expect(await redis.hget(keys.runRecord("run-1"), "state")).toBe("pending");
+    expect(await redis.hgetall(keys.runSteps("parent-run"))).toEqual({ "send-1": '"run-1"' });
+    expect(await redis.hget(keys.runRecord("parent-run"), "stalls")).toBe("0");
+  },
+);
+
+engineTest(
+  "a handler emit with the parent's current token creates the listener runs and saves the event id as the step",
+  async (context) => {
+    const { engine, redis, keys } = context;
+    const parentFence = await parentFenceOf(context, '"event-1"');
+
+    const reply = await engine.enqueue({
+      runs: listenerRunsOf(USER_SIGNED_UP),
+      eventDedup: USER_SIGNED_UP,
+      parentFence,
+    });
+
+    expect(reply).toEqual({ kind: "enqueued", createdRunIds: ["welcome", "crm", "audit"], skippedRunIds: [] });
+    expect(await redis.hgetall(keys.runSteps("parent-run"))).toEqual({ "send-1": '"event-1"' });
+  },
+);
+
+engineTest("a handler send whose child already exists still saves the parent's step", async (context) => {
+  const { engine, redis, keys } = context;
+  const parentFence = await parentFenceOf(context, '"run-1"');
+  await engine.enqueue({ runs: [SEND_EMAIL_RUN] });
+
+  const reply = await engine.enqueue({ runs: [SEND_EMAIL_RUN], parentFence });
+
+  expect(reply).toEqual({ kind: "enqueued", createdRunIds: [], skippedRunIds: ["run-1"] });
+  expect(await redis.hgetall(keys.runSteps("parent-run"))).toEqual({ "send-1": '"run-1"' });
+});
+
+engineTest("a re-entered handler send replies alreadySent with the saved value and writes nothing", async (context) => {
+  const { engine, redis, keyPrefix } = context;
+  const parentFence = await parentFenceOf(context, '"event-1"');
+  await engine.enqueue({ runs: listenerRunsOf(USER_SIGNED_UP), eventDedup: USER_SIGNED_UP, parentFence });
+  const storedValuesBefore = await storedValuesByKeyOf(redis, keyPrefix);
+
+  const reply = await engine.enqueue({
+    runs: listenerRunsOf({ ...USER_SIGNED_UP, eventId: "event-2" }, "-diverging"),
+    eventDedup: { ...USER_SIGNED_UP, eventId: "event-2" },
+    parentFence: { ...parentFence, stepValue: '"event-2"' },
+  });
+
+  expect(reply).toEqual({ kind: "alreadySent", savedValue: '"event-1"' });
+  expect(await storedValuesByKeyOf(redis, keyPrefix)).toEqual(storedValuesBefore);
+});
+
+engineTest("a resent handler emit hears alreadySent rather than duplicate", async (context) => {
+  const { engine } = context;
+  const parentFence = await parentFenceOf(context, '"event-1"');
+  const handlerEmit = { runs: listenerRunsOf(USER_SIGNED_UP), eventDedup: USER_SIGNED_UP, parentFence };
+  await engine.enqueue(handlerEmit);
+
+  const reply = await engine.enqueue(handlerEmit);
+
+  expect(reply).toEqual({ kind: "alreadySent", savedValue: '"event-1"' });
+});
+
+for (const staleness of ["another token", "an ended lock", "a missing parent"] as const) {
+  engineTest(`a handler send with ${staleness} creates nothing and replies stale`, async (context) => {
+    const { engine, redis, keyPrefix } = context;
+    const parentFence = await parentFenceOf(context, '"run-1"');
+    if (staleness === "an ended lock") {
+      await engine.settle({ runId: "parent-run", lockToken: parentFence.lockToken, outcome: { kind: "yield" } });
+    }
+    const staleFence: ParentFence = {
+      ...parentFence,
+      ...(staleness === "another token" ? { lockToken: freshLockTokensOf(1)[0]! } : {}),
+      ...(staleness === "a missing parent" ? { parentRunId: "missing-run" } : {}),
+    };
+    const storedValuesBefore = await storedValuesByKeyOf(redis, keyPrefix);
+
+    const reply = await engine.enqueue({ runs: [SEND_EMAIL_RUN], parentFence: staleFence });
+
+    expect(reply).toEqual({ kind: "stale" });
+    expect(await storedValuesByKeyOf(redis, keyPrefix)).toEqual(storedValuesBefore);
+  });
+}
+
+engineTest(
+  "a handler send whose parent record is of a newer version replies unknownVersion and writes nothing",
+  async (context) => {
+    const { engine, redis, keys, keyPrefix } = context;
+    const parentFence = await parentFenceOf(context, '"run-1"');
+    await redis.hset(keys.runRecord("parent-run"), "version", RECORD_VERSION + 1);
+    const storedValuesBefore = await storedValuesByKeyOf(redis, keyPrefix);
+
+    const reply = await engine.enqueue({ runs: [SEND_EMAIL_RUN], parentFence });
+
+    expect(reply).toEqual({ kind: "unknownVersion", recordVersion: RECORD_VERSION + 1 });
+    expect(await storedValuesByKeyOf(redis, keyPrefix)).toEqual(storedValuesBefore);
   },
 );

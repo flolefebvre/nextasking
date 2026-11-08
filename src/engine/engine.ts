@@ -119,6 +119,7 @@ export type LockedRun = {
   scheduledAt?: EpochMilliseconds;
   sourceEvent?: SourceEvent;
   concurrencyKey?: ConcurrencyKey;
+  sleepsWokenAt?: EpochMilliseconds;
 };
 
 export type ParkedRun = { runId: RunId; task: string; attempt: number };
@@ -302,17 +303,18 @@ function storedIntegersByFieldOf<Field extends string>(
 }
 
 function lockedRunOf(reply: unknown): LockedRun | undefined {
-  if (!isStoredValueList(reply) || reply.length !== 15) {
+  if (!isStoredValueList(reply) || reply.length !== 16) {
     return undefined;
   }
   const [lockToken, runId, task, payload, ...storedFields] = reply.map(nullIfAbsent);
   const [attempt, retries, replays, isResume, dispatchedAt, startedAt, lockedUntil] = storedFields;
-  const [scheduledAt, eventName, eventId, concurrencyKey] = storedFields.slice(7);
+  const [scheduledAt, eventName, eventId, concurrencyKey, sleepsWokenAt] = storedFields.slice(7);
   const integersByField = storedIntegersByFieldOf({ attempt, retries, replays, dispatchedAt, startedAt, lockedUntil });
   if (lockToken == null || runId == null || task == null || payload == null || integersByField === undefined) {
     return undefined;
   }
   const storedScheduledAt = storedIntegerOf(nullIfAbsent(scheduledAt));
+  const storedSleepsWokenAt = storedIntegerOf(nullIfAbsent(sleepsWokenAt));
   return {
     lockToken,
     runId,
@@ -323,6 +325,7 @@ function lockedRunOf(reply: unknown): LockedRun | undefined {
     ...(storedScheduledAt === undefined ? {} : { scheduledAt: storedScheduledAt }),
     ...(eventName == null || eventId == null ? {} : { sourceEvent: { eventName, eventId } }),
     ...(concurrencyKey == null ? {} : { concurrencyKey }),
+    ...(storedSleepsWokenAt === undefined ? {} : { sleepsWokenAt: storedSleepsWokenAt }),
   };
 }
 

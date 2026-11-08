@@ -55,13 +55,14 @@ for position = 1, limitCount do
   concurrencyLimitsByTask[ARGV[limitArgument]] = positiveIntegerArgumentOf(ARGV[limitArgument + 1], "concurrencyLimit")
 end
 
-local function lockedRunReplyOf(runId, lockToken, isResume)
+local function lockedRunReplyOf(runId, lockToken, isResume, sleepsWokenAt)
   local record = redis.call("HMGET", runRecordKey(runId),
     "task", "attempt", "retries", "replays", "dispatchedAt", "startedAt", "lockedUntil",
     "scheduledAt", "eventName", "eventId", "concurrencyKey")
   return {
     lockToken, runId, record[1], redis.call("GET", runPayloadKey(runId)), record[2], record[3], record[4],
     isResume and "1" or "0", record[5], record[6], record[7], record[8], record[9], record[10], record[11],
+    sleepsWokenAt or false,
   }
 end
 
@@ -70,7 +71,7 @@ local freshLockTokens = {}
 for _, lockToken in ipairs(lockTokens) do
   local lockedRunId = redis.call("GET", lockKey(lockToken))
   if lockedRunId and isCurrentLockOf(lockedRunId, lockToken) then
-    table.insert(lockedRuns, lockedRunReplyOf(lockedRunId, lockToken, false))
+    table.insert(lockedRuns, lockedRunReplyOf(lockedRunId, lockToken, false, false))
   else
     table.insert(freshLockTokens, lockToken)
   end
@@ -82,13 +83,14 @@ local function lockRun(runId, task, concurrencyKey, lockToken)
   local recordKey = runRecordKey(runId)
   local lockedUntil = now + lockDurationInMilliseconds
   local isResume = redis.call("HEXISTS", recordKey, "resumesAt") == 1
-  redis.call("HDEL", recordKey, "resumesAt")
+  local sleepsWokenAt = redis.call("HGET", recordKey, "sleepsWokenAt")
+  redis.call("HDEL", recordKey, "resumesAt", "sleepsWokenAt")
   redis.call("HSET", recordKey, "state", "executing", "lockToken", lockToken, "lockedUntil", lockedUntil, "startedAt", now)
   redis.call("ZADD", engineKeys.locks, lockedUntil, runId)
   redis.call("ZADD", runIndexKey(task, "executing"), now, runId)
   redis.call("SADD", slotSetKey(task, concurrencyKey), runId)
   redis.call("SET", lockKey(lockToken), runId, "PX", lockDurationInMilliseconds)
-  table.insert(lockedRuns, lockedRunReplyOf(runId, lockToken, isResume))
+  table.insert(lockedRuns, lockedRunReplyOf(runId, lockToken, isResume, sleepsWokenAt))
 end
 
 local function parkRun(runId, task, concurrencyKey, order)

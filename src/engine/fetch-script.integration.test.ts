@@ -5,7 +5,7 @@ import type { EngineTestContext } from "../../tests/engine-test.js";
 import { freshLockTokensOf } from "../../tests/lock-tokens.js";
 import { serverInstantInMillisecondsOf } from "../../tests/server-instant.js";
 import type { EngineKeys } from "./engine-keys.js";
-import type { FetchedReply, FetchReply, FetchRequest, RunToCreate } from "./engine.js";
+import type { FetchedReply, FetchReply, FetchRequest, LockedRun, RunToCreate } from "./engine.js";
 import { MOST_LOCK_TOKENS_PER_FETCH, MOST_RUNS_PARKED_PER_FETCH } from "./fetch-script.js";
 
 const LOCK_DURATION_IN_MILLISECONDS = 120_000;
@@ -213,19 +213,45 @@ engineTest("a resent batch locks new runs only with the tokens the first fetch d
   ]);
 });
 
+async function resumedRunFetchedTwiceOf(
+  { engine, redis, keys }: EngineTestContext,
+  resumeFields: Record<string, number>,
+): Promise<{ lockedRun: LockedRun | undefined; resentLockedRun: LockedRun | undefined }> {
+  await engine.enqueue({ runs: sendEmailRunsOf(1) });
+  await redis.hset(keys.runRecord("run-1"), resumeFields);
+  const request = fetchRequestOf(1);
+  const [lockedRun] = fetchedReplyOf(await engine.fetch(request)).lockedRuns;
+  const [resentLockedRun] = fetchedReplyOf(await engine.fetch(request)).lockedRuns;
+  return { lockedRun, resentLockedRun };
+}
+
 engineTest(
   "a run with a resume instant is fetched as a resume and loses the instant, and a resent fetch reports no resume",
-  async ({ engine, redis, keys }) => {
-    await engine.enqueue({ runs: sendEmailRunsOf(1) });
-    await redis.hset(keys.runRecord("run-1"), "resumesAt", 1000);
-    const request = fetchRequestOf(1);
+  async (context) => {
+    const { redis, keys } = context;
 
-    const [lockedRun] = fetchedReplyOf(await engine.fetch(request)).lockedRuns;
-    const [resentLockedRun] = fetchedReplyOf(await engine.fetch(request)).lockedRuns;
+    const { lockedRun, resentLockedRun } = await resumedRunFetchedTwiceOf(context, { resumesAt: 1000 });
 
     expect(lockedRun?.isResume).toBe(true);
     expect(await redis.hexists(keys.runRecord("run-1"), "resumesAt")).toBe(0);
     expect(resentLockedRun).toEqual({ ...lockedRun, isResume: false });
+  },
+);
+
+engineTest(
+  "a run whose sleeps were woken carries sleepsWokenAt on its fresh lock only, and loses it from the record",
+  async (context) => {
+    const { redis, keys } = context;
+
+    const { lockedRun, resentLockedRun } = await resumedRunFetchedTwiceOf(context, {
+      resumesAt: 1000,
+      sleepsWokenAt: 1000,
+    });
+
+    expect(lockedRun?.sleepsWokenAt).toBe(1000);
+    expect(await redis.hexists(keys.runRecord("run-1"), "sleepsWokenAt")).toBe(0);
+    expect(resentLockedRun).not.toHaveProperty("sleepsWokenAt");
+    expect(resentLockedRun).toEqual({ ...lockedRun, isResume: false, sleepsWokenAt: undefined });
   },
 );
 

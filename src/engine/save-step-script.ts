@@ -1,0 +1,53 @@
+import type { EngineKeys } from "./engine-keys.js";
+
+export function saveStepKeysOf(keys: EngineKeys, runId: string): string[] {
+  return [keys.runRecord(runId)];
+}
+
+export const SAVE_STEP_SCRIPT = `
+local runId, lockToken, stepId, stepKind = ARGV[3], ARGV[4], ARGV[5], ARGV[6]
+if #ARGV ~= 7 then
+  error("invalid argument: a saveStep takes 7 arguments, got " .. tostring(#ARGV))
+end
+if stepId == "" then
+  error("invalid argument: stepId must not be empty")
+end
+local stepValue, durationInMilliseconds, resumesAt = nil, nil, nil
+if stepKind == "value" then
+  stepValue = ARGV[7]
+elseif stepKind == "sleep" then
+  durationInMilliseconds = nonNegativeIntegerArgumentOf(ARGV[7], "durationInMilliseconds")
+elseif stepKind == "sleepUntil" then
+  resumesAt = nonNegativeIntegerArgumentOf(ARGV[7], "resumesAt")
+else
+  error("invalid argument: unknown step kind " .. tostring(stepKind))
+end
+
+local refusal = fenceRefusalOf(runId, lockToken)
+if refusal then
+  return refusal
+end
+
+local stepsKey = runStepsKey(runId)
+local savedValue = redis.call("HGET", stepsKey, stepId)
+if savedValue then
+  if stepKind == "value" then
+    return { "saved" }
+  end
+  if not string.match(savedValue, "^%d+$") then
+    error("invalid argument: step " .. stepId .. " is saved but is not a sleep")
+  end
+  return { "saved", tonumber(savedValue) }
+end
+
+redis.call("HSET", runRecordKey(runId), "stalls", 0)
+if stepKind == "value" then
+  redis.call("HSET", stepsKey, stepId, stepValue)
+  return { "saved" }
+end
+if stepKind == "sleep" then
+  resumesAt = currentInstantInMilliseconds() + durationInMilliseconds
+end
+redis.call("HSET", stepsKey, stepId, string.format("%d", resumesAt))
+return { "saved", resumesAt }
+`;

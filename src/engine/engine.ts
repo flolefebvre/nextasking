@@ -25,7 +25,9 @@ import {
   PROMOTE_SCRIPT,
   promoteKeysOf,
 } from "./promote-script.js";
+import { READ_STEP_SCRIPT, readStepKeysOf } from "./read-step-script.js";
 import { RENEW_SCRIPT, renewKeysOf } from "./renew-script.js";
+import { SAVE_STEP_SCRIPT, saveStepKeysOf } from "./save-step-script.js";
 import { SETTLE_SCRIPT, settleKeysOf } from "./settle-script.js";
 import { defineScriptCommand } from "./script-commands.js";
 import type { ScriptArgument } from "./script-commands.js";
@@ -249,7 +251,7 @@ export type Engine = {
   makeDue: () => Promise<MakeDueReply>;
 };
 
-export type ImplementedEngine = Pick<Engine, "fetch" | "renew" | "settle" | "promote"> & {
+export type ImplementedEngine = Pick<Engine, "fetch" | "renew" | "settle" | "promote" | "saveStep" | "readStep"> & {
   enqueue: (request: DispatchOrEmitRequest) => Promise<EnqueueReply>;
 };
 
@@ -359,7 +361,7 @@ function fetchReplyOf(reply: unknown): FetchReply {
 }
 
 function lockRenewalOf(reply: unknown): LockRenewal | undefined {
-  if (Array.isArray(reply) && reply.length === 1 && reply[0] === "stale") {
+  if (isStaleReply(reply)) {
     return { kind: "stale" };
   }
   if (Array.isArray(reply) && reply.length === 2 && reply[0] === "renewed" && Number.isSafeInteger(reply[1])) {
@@ -469,6 +471,48 @@ function promoteReplyOf(reply: unknown): PromoteReply {
   throw unreadableReplyError("promote", reply);
 }
 
+function isStaleReply(reply: unknown): reply is ["stale"] {
+  return Array.isArray(reply) && reply.length === 1 && reply[0] === "stale";
+}
+
+function saveStepReplyOf(reply: unknown): SaveStepReply {
+  const unknownVersionReply = unknownVersionReplyOf(reply);
+  if (unknownVersionReply !== undefined) {
+    return unknownVersionReply;
+  }
+  if (isStaleReply(reply)) {
+    return { kind: "stale" };
+  }
+  if (Array.isArray(reply) && reply.length === 1 && reply[0] === "saved") {
+    return { kind: "saved", resumesAt: undefined };
+  }
+  if (Array.isArray(reply) && reply.length === 2 && reply[0] === "saved" && Number.isSafeInteger(reply[1])) {
+    return { kind: "saved", resumesAt: Number(reply[1]) };
+  }
+  throw unreadableReplyError("saveStep", reply);
+}
+
+function readStepReplyOf(reply: unknown): ReadStepReply {
+  const unknownVersionReply = unknownVersionReplyOf(reply);
+  if (unknownVersionReply !== undefined) {
+    return unknownVersionReply;
+  }
+  if (isStaleReply(reply)) {
+    return { kind: "stale" };
+  }
+  if (isStringList(reply) && reply[0] === "read" && reply.length <= 2) {
+    return { kind: "read", savedValue: reply[1] };
+  }
+  throw unreadableReplyError("readStep", reply);
+}
+
+function stepArgumentOf(step: StepToSave): ScriptArgument {
+  if (step.kind === "value") {
+    return step.value;
+  }
+  return step.kind === "sleep" ? step.durationInMilliseconds : step.resumesAt;
+}
+
 function enqueueReplyOf(reply: unknown): EnqueueReply {
   if (Array.isArray(reply) && reply.length === 1 && reply[0] === "duplicate") {
     return { kind: "duplicate" };
@@ -550,19 +594,42 @@ function settleArgumentsOf(outcome: SettleOutcome): ScriptArgument[] {
 
 type ScriptRunner = (scriptArguments: readonly ScriptArgument[]) => Promise<unknown>;
 
+type ScriptRunnerWithKeys = (
+  scriptKeys: readonly string[],
+  scriptArguments: readonly ScriptArgument[],
+) => Promise<unknown>;
+
 export function createEngine(client: Redis, prefix: string): ImplementedEngine {
   const keys = engineKeysOf(prefix);
   const sharedArguments: ScriptArgument[] = [hashTaggedPrefixOf(prefix), RECORD_VERSION];
+  const scriptRunnerWithKeysOf = (commandName: string, script: string, keyCount: number): ScriptRunnerWithKeys => {
+    const command = defineScriptCommand(client, commandName, `${LUA_LIBRARY}\n${script}`, keyCount);
+    return (scriptKeys, scriptArguments) => command.call(scriptKeys, [...sharedArguments, ...scriptArguments]);
+  };
   const scriptRunnerOf = (commandName: string, script: string, scriptKeys: readonly string[]): ScriptRunner => {
-    const command = defineScriptCommand(client, commandName, `${LUA_LIBRARY}\n${script}`, scriptKeys.length);
-    return (scriptArguments) => command.call(scriptKeys, [...sharedArguments, ...scriptArguments]);
+    const runScript = scriptRunnerWithKeysOf(commandName, script, scriptKeys.length);
+    return (scriptArguments) => runScript(scriptKeys, scriptArguments);
   };
   const runEnqueueScript = scriptRunnerOf("nextaskingEnqueue", ENQUEUE_SCRIPT, enqueueKeysOf(keys));
   const runFetchScript = scriptRunnerOf("nextaskingFetch", FETCH_SCRIPT, fetchKeysOf(keys));
   const runRenewScript = scriptRunnerOf("nextaskingRenew", RENEW_SCRIPT, renewKeysOf(keys));
   const runSettleScript = scriptRunnerOf("nextaskingSettle", SETTLE_SCRIPT, settleKeysOf(keys));
   const runPromoteScript = scriptRunnerOf("nextaskingPromote", PROMOTE_SCRIPT, promoteKeysOf(keys));
+  const runSaveStepScript = scriptRunnerWithKeysOf("nextaskingSaveStep", SAVE_STEP_SCRIPT, 1);
+  const runReadStepScript = scriptRunnerWithKeysOf("nextaskingReadStep", READ_STEP_SCRIPT, 1);
   return {
+    saveStep: async ({ runId, lockToken, stepId, step }) =>
+      saveStepReplyOf(
+        await runSaveStepScript(saveStepKeysOf(keys, runId), [
+          runId,
+          lockToken,
+          stepId,
+          step.kind,
+          stepArgumentOf(step),
+        ]),
+      ),
+    readStep: async ({ runId, lockToken, stepId }) =>
+      readStepReplyOf(await runReadStepScript(readStepKeysOf(keys, runId), [runId, lockToken, stepId])),
     promote: async () =>
       promoteReplyOf(
         await runPromoteScript([MOST_DUE_RUNS_PROMOTED_PER_PROMOTE, NEWER_VERSION_RECORDS_PASSED_OVER_PER_PROMOTE]),

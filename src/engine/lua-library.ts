@@ -112,12 +112,23 @@ local function unknownVersionRefusalOf(runId)
   return { "unknownVersion", storedVersion }
 end
 
-local function isCurrentLockOf(runId, lockToken)
-  if redis.call("EXISTS", runRecordKey(runId)) == 0 or unknownVersionRefusalOf(runId) then
-    return false
+local function fenceRefusalOf(runId, lockToken)
+  if redis.call("EXISTS", runRecordKey(runId)) == 0 then
+    return { "stale" }
+  end
+  local refusal = unknownVersionRefusalOf(runId)
+  if refusal then
+    return refusal
   end
   local record = redis.call("HMGET", runRecordKey(runId), "state", "lockToken")
-  return record[1] == "executing" and record[2] == lockToken
+  if record[1] ~= "executing" or record[2] ~= lockToken then
+    return { "stale" }
+  end
+  return nil
+end
+
+local function isCurrentLockOf(runId, lockToken)
+  return fenceRefusalOf(runId, lockToken) == nil
 end
 
 local function nonNegativeIntegerArgumentOf(value, argumentName)

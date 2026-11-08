@@ -140,6 +140,22 @@ engineTest(
   },
 );
 
+for (const outcome of [COMPLETE, YIELD]) {
+  engineTest(
+    `a ${outcome.kind} after a hand-back clears the instant the run was first found unknown`,
+    async (context) => {
+      const { engine, redis, keys } = context;
+      const handedBackLock = await lockedRunOf(context);
+      await engine.settle({ ...handedBackLock, outcome: HAND_BACK });
+      const [knownTaskLock] = await fetchedLockedRunsOf(context, 1);
+
+      await engine.settle({ ...knownTaskLock!, outcome });
+
+      expect(await redis.hexists(keys.runRecord(handedBackLock.runId), "firstFoundUnknownAt")).toBe(0);
+    },
+  );
+}
+
 for (const outcome of OUTCOMES) {
   engineTest(
     `a ${outcome.kind} with a token that is not the record's replies stale and writes nothing`,

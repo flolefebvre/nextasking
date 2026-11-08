@@ -41,6 +41,9 @@ end
 
 local now = currentInstantInMilliseconds()
 endLock(runId, task, concurrencyKey, lockToken, settleKind, concurrencyLimit)
+if settleKind ~= "handBack" then
+  redis.call("HDEL", recordKey, "firstFoundUnknownAt")
+end
 
 if settleKind == "complete" then
   redis.call("DEL", runStepsKey(runId))

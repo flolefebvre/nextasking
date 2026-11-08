@@ -18,6 +18,7 @@ import {
   MOST_RUNS_PARKED_PER_FETCH,
   NEWER_VERSION_RECORDS_PASSED_OVER_PER_FETCH,
 } from "./fetch-script.js";
+import { FIRE_SCRIPT, fireKeysOf } from "./fire-script.js";
 import { LUA_LIBRARY } from "./lua-library.js";
 import { MAKE_DUE_SCRIPT, makeDueKeysOf } from "./make-due-script.js";
 import {
@@ -258,7 +259,7 @@ export type Engine = {
 
 export type ImplementedEngine = Pick<
   Engine,
-  "enqueue" | "fetch" | "renew" | "settle" | "promote" | "saveStep" | "readStep" | "syncSchedules" | "makeDue"
+  "enqueue" | "fetch" | "renew" | "settle" | "promote" | "saveStep" | "readStep" | "fire" | "syncSchedules" | "makeDue"
 >;
 
 function unreadableReplyError(scriptName: string, reply: unknown): Error {
@@ -517,6 +518,35 @@ function stepArgumentOf(step: StepToSave): ScriptArgument {
   return step.kind === "sleep" ? step.durationInMilliseconds : step.resumesAt;
 }
 
+const FIRE_REFUSALS_BY_KIND: Readonly<Record<string, FireReply>> = {
+  already: { kind: "already" },
+  notDue: { kind: "notDue" },
+  noSchedule: { kind: "noSchedule" },
+};
+
+function fireReplyOf(reply: unknown): FireReply {
+  const unknownVersionReply = unknownVersionReplyOf(reply);
+  if (unknownVersionReply !== undefined) {
+    return unknownVersionReply;
+  }
+  if (Array.isArray(reply) && reply.length === 1 && typeof reply[0] === "string") {
+    const fireRefusal = FIRE_REFUSALS_BY_KIND[reply[0]];
+    if (fireRefusal !== undefined) {
+      return fireRefusal;
+    }
+  }
+  if (
+    Array.isArray(reply) &&
+    reply.length === 3 &&
+    reply[0] === "fired" &&
+    typeof reply[1] === "string" &&
+    (reply[2] === 0 || reply[2] === 1)
+  ) {
+    return { kind: "fired", runId: reply[1], isRunCreated: reply[2] === 1 };
+  }
+  throw unreadableReplyError("fire", reply);
+}
+
 function scheduleSummaryOf(reply: unknown): ScheduleSummary | undefined {
   if (!isStringList(reply) || reply.length !== 3) {
     return undefined;
@@ -670,7 +700,10 @@ export function createEngine(client: Redis, prefix: string): ImplementedEngine {
     SYNC_SCHEDULES_SCRIPT,
     syncSchedulesKeysOf(keys),
   );
+  const runFireScript = scriptRunnerOf("nextaskingFire", FIRE_SCRIPT, fireKeysOf(keys));
   return {
+    fire: async ({ task, instant, instantAfter, runId, retries }) =>
+      fireReplyOf(await runFireScript([task, instant, instantAfter, runId, retries])),
     syncSchedules: async ({ schedulesToSync }) =>
       syncSchedulesReplyOf(
         await runSyncSchedulesScript([

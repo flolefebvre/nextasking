@@ -3,12 +3,30 @@ import type { Redis } from "ioredis";
 
 import type { StoredRun } from "./run-queue.js";
 
+export type RefusedStepCall = "saved" | "read" | "sent";
+
+export type LockLoss = { kind: "lockTakenOver" } | { kind: "recordRewritten"; recordVersion: number | undefined };
+
 export class LostRunLockError extends Error {
   override readonly name = "LostRunLockError";
 
-  constructor(unsavedWrite: string) {
-    super(`${unsavedWrite} was not saved: this attempt no longer holds its lock, so another attempt owns it now.`);
+  constructor(
+    refusedSubject: string,
+    {
+      refusedCall = "saved",
+      lockLoss = { kind: "lockTakenOver" },
+    }: { refusedCall?: RefusedStepCall; lockLoss?: LockLoss } = {},
+  ) {
+    super(`${refusedSubject} was not ${refusedCall}: ${reasonOfLockLoss(lockLoss)}`);
   }
+}
+
+function reasonOfLockLoss(lockLoss: LockLoss): string {
+  if (lockLoss.kind === "lockTakenOver") {
+    return "this attempt no longer holds its lock, so another attempt owns it now.";
+  }
+  const shownVersion = lockLoss.recordVersion === undefined ? "a version" : `version ${lockLoss.recordVersion}`;
+  return `a newer release rewrote the run's record to ${shownVersion} this release cannot read, so this attempt no longer holds its lock.`;
 }
 
 export const RETURN_0_UNLESS_LOCK_IS_HELD = `

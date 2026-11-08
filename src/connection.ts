@@ -169,28 +169,35 @@ export function createRedisConnections(connection: ConnectionConfig, logger: Log
     instance: { commandTimeout: giveUpAfterInMilliseconds, socketTimeout: giveUpAfterInMilliseconds },
   };
 
-  const waitUntilReadyWithinGiveUpAfter = async (client: Redis) => {
+  const pendingReadyWaitByClient = new WeakMap<Redis, Promise<void>>();
+
+  const startReadyWait = (client: Redis): Promise<void> => {
+    const readyWait = new Promise<void>((resolve, reject) => {
+      const markReady = () => {
+        clearTimeout(giveUpTimer);
+        pendingReadyWaitByClient.delete(client);
+        resolve();
+      };
+      const giveUpTimer = setTimeout(() => {
+        client.removeListener("ready", markReady);
+        pendingReadyWaitByClient.delete(client);
+        reject(
+          new ConnectionNotReadyError(`Redis isn't ready, its status is "${client.status}"`, {
+            cause: lastErrorByClient.get(client),
+          }),
+        );
+      }, giveUpAfterInMilliseconds);
+      client.once("ready", markReady);
+    });
+    pendingReadyWaitByClient.set(client, readyWait);
+    return readyWait;
+  };
+
+  const waitUntilReadyWithinGiveUpAfter = (client: Redis): Promise<void> => {
     if (client.status === "ready") {
-      return;
+      return Promise.resolve();
     }
-    let timeoutTimer: NodeJS.Timeout | undefined;
-    let markReady = () => undefined as void;
-    try {
-      await new Promise<void>((resolve, reject) => {
-        markReady = resolve;
-        client.once("ready", markReady);
-        timeoutTimer = setTimeout(() => {
-          reject(
-            new ConnectionNotReadyError(`Redis isn't ready, its status is "${client.status}"`, {
-              cause: lastErrorByClient.get(client),
-            }),
-          );
-        }, giveUpAfterInMilliseconds);
-      });
-    } finally {
-      clearTimeout(timeoutTimer);
-      client.removeListener("ready", markReady);
-    }
+    return pendingReadyWaitByClient.get(client) ?? startReadyWait(client);
   };
 
   return {

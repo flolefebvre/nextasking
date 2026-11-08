@@ -1,19 +1,31 @@
 import { expect, test } from "vitest";
 
-import type { ImplementedSettleOutcome } from "./engine.js";
+import { CUT_ERROR_TEXT_MARKER, errorTextCutOf, MOST_ERROR_TEXT_CHARACTERS } from "./engine.js";
 
-const ERROR_RECORD = { attempt: 1, name: "Error", message: "boom", stack: "", failedAt: "" };
+test("an error text of 10,000 characters is cut to its first 4,000 followed by the marker", () => {
+  const longText = "abcdefghij".repeat(1000);
 
-test("the engine settles complete, yield and handBack, and refuses the other outcomes at compile time", () => {
-  const implementedOutcomes: ImplementedSettleOutcome[] = [
-    { kind: "complete" },
-    { kind: "yield" },
-    { kind: "handBack", error: ERROR_RECORD, failureNotice: undefined },
-  ];
-  // @ts-expect-error a retry is not settled by this engine yet
-  const retry: ImplementedSettleOutcome = { kind: "retry", error: ERROR_RECORD, backoffInMilliseconds: 1000 };
-  // @ts-expect-error a suspension is not settled by this engine yet
-  const suspension: ImplementedSettleOutcome = { kind: "suspend", resumesAt: 0 };
+  const cutText = errorTextCutOf(longText);
 
-  expect([...implementedOutcomes, retry, suspension]).toHaveLength(5);
+  expect(MOST_ERROR_TEXT_CHARACTERS).toBe(4000);
+  expect(cutText).toBe(`${longText.slice(0, 4000)}${CUT_ERROR_TEXT_MARKER}`);
+});
+
+test("the marker says the text was cut and at how many characters", () => {
+  expect(CUT_ERROR_TEXT_MARKER).toBe("… [cut at 4000 characters]");
+});
+
+test("an error text of 4,000 characters or fewer is kept whole", () => {
+  const textAtTheLimit = "a".repeat(4000);
+
+  expect(errorTextCutOf(textAtTheLimit)).toBe(textAtTheLimit);
+  expect(errorTextCutOf("")).toBe("");
+});
+
+test("an error text is cut on characters, never inside a character made of two code units", () => {
+  const textOfEmoji = "😀".repeat(4001);
+
+  const cutText = errorTextCutOf(textOfEmoji);
+
+  expect(cutText).toBe(`${"😀".repeat(4000)}${CUT_ERROR_TEXT_MARKER}`);
 });

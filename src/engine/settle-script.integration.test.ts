@@ -4,22 +4,32 @@ import { engineTest, storedValuesByKeyOf } from "../../tests/engine-test.js";
 import type { EngineTestContext } from "../../tests/engine-test.js";
 import { freshLockTokensOf } from "../../tests/lock-tokens.js";
 import { serverInstantInMillisecondsOf } from "../../tests/server-instant.js";
-import { DEDUP_WINDOW_IN_MILLISECONDS } from "./engine.js";
-import type { ImplementedSettleOutcome, LockedRun } from "./engine.js";
+import { CUT_ERROR_TEXT_MARKER, DEDUP_WINDOW_IN_MILLISECONDS } from "./engine.js";
+import type { LockedRun, SettleOutcome } from "./engine.js";
 
 const LOCK_DURATION_IN_MILLISECONDS = 120_000;
 
-const COMPLETE: ImplementedSettleOutcome = { kind: "complete" };
+const BACKOFF_IN_MILLISECONDS = 30_000;
 
-const YIELD: ImplementedSettleOutcome = { kind: "yield" };
+const RESUMES_AT = Date.UTC(2030, 0, 1);
 
-const HAND_BACK: ImplementedSettleOutcome = {
+const ATTEMPT_ERROR = { attempt: 1, name: "TypeError", message: "boom", stack: "TypeError: boom", failedAt: "" };
+
+const COMPLETE: SettleOutcome = { kind: "complete" };
+
+const YIELD: SettleOutcome = { kind: "yield" };
+
+const HAND_BACK: SettleOutcome = {
   kind: "handBack",
   error: { attempt: 1, name: "UnknownTaskError", message: "unknown task", stack: "", failedAt: "" },
   failureNotice: undefined,
 };
 
-const OUTCOMES = [COMPLETE, YIELD, HAND_BACK];
+const RETRY: SettleOutcome = { kind: "retry", error: ATTEMPT_ERROR, backoffInMilliseconds: BACKOFF_IN_MILLISECONDS };
+
+const SUSPEND: SettleOutcome = { kind: "suspend", resumesAt: RESUMES_AT };
+
+const OUTCOMES = [COMPLETE, YIELD, HAND_BACK, RETRY, SUSPEND];
 
 async function enqueueSendEmailRuns(
   { engine }: EngineTestContext,
@@ -140,7 +150,78 @@ engineTest(
   },
 );
 
-for (const outcome of [COMPLETE, YIELD]) {
+engineTest(
+  "a retry moves the run to backingOff at TIME plus the backoff, bumps attempt, resets stalls and appends the error",
+  async (context) => {
+    const { engine, redis, keys } = context;
+    const { runId, lockToken } = await lockedRunOf(context);
+    await redis.hset(keys.runRecord(runId), "stalls", 1);
+    const instantBefore = await serverInstantInMillisecondsOf(redis);
+
+    const reply = await engine.settle({ runId, lockToken, outcome: RETRY });
+
+    const instantAfter = await serverInstantInMillisecondsOf(redis);
+    const nextAttemptAt = reply.kind === "backingOff" ? reply.nextAttemptAt : Number.NaN;
+    expect(reply).toEqual({ kind: "backingOff", nextAttemptAt: expect.any(Number) });
+    expect(nextAttemptAt).toBeGreaterThanOrEqual(instantBefore + BACKOFF_IN_MILLISECONDS);
+    expect(nextAttemptAt).toBeLessThanOrEqual(instantAfter + BACKOFF_IN_MILLISECONDS);
+    expect(
+      await redis.hmget(keys.runRecord(runId), "state", "nextAttemptAt", "attempt", "stalls", "endedAs", "lockToken"),
+    ).toEqual(["backingOff", String(nextAttemptAt), "2", "0", "retry", null]);
+    expect(Number(await redis.zscore(keys.due, runId))).toBe(nextAttemptAt);
+    expect(Number(await redis.zscore(keys.runIndex("send-email", "backingOff"), runId))).toBe(nextAttemptAt);
+    expect((await redis.lrange(keys.runErrors(runId), 0, -1)).map((storedError) => JSON.parse(storedError))).toEqual([
+      { ...ATTEMPT_ERROR, failedAt: new Date(nextAttemptAt - BACKOFF_IN_MILLISECONDS).toISOString() },
+    ]);
+    expect(await redis.exists(keys.lock(lockToken))).toBe(0);
+    expect(await redis.scard(keys.slotSet("send-email", undefined))).toBe(0);
+  },
+);
+
+engineTest("a suspend moves the run to suspended at the instant sent and keeps attempt", async (context) => {
+  const { engine, redis, keys } = context;
+  const { runId, lockToken } = await lockedRunOf(context);
+
+  const reply = await engine.settle({ runId, lockToken, outcome: SUSPEND });
+
+  expect(reply).toEqual({ kind: "suspended", resumesAt: RESUMES_AT });
+  expect(await redis.hmget(keys.runRecord(runId), "state", "resumesAt", "attempt", "endedAs")).toEqual([
+    "suspended",
+    String(RESUMES_AT),
+    "1",
+    "suspend",
+  ]);
+  expect(Number(await redis.zscore(keys.due, runId))).toBe(RESUMES_AT);
+  expect(await redis.exists(keys.runErrors(runId))).toBe(0);
+  expect(await redis.scard(keys.slotSet("send-email", undefined))).toBe(0);
+});
+
+engineTest("an error of 10,000 characters is stored cut at 4,000 characters with the marker", async (context) => {
+  const { engine, redis, keys } = context;
+  const { runId, lockToken } = await lockedRunOf(context);
+  const longText = "0123456789".repeat(1000);
+  const error = { ...ATTEMPT_ERROR, message: longText, stack: longText };
+
+  await engine.settle({ runId, lockToken, outcome: { ...RETRY, error } });
+
+  const [storedError] = await redis.lrange(keys.runErrors(runId), 0, -1);
+  const { message, stack } = JSON.parse(storedError!) as { message: string; stack: string };
+  expect(message).toBe(`${longText.slice(0, 4000)}${CUT_ERROR_TEXT_MARKER}`);
+  expect(stack).toBe(message);
+});
+
+engineTest("an error whose text holds quotes and newlines is stored as the JSON of the error", async (context) => {
+  const { engine, redis, keys } = context;
+  const { runId, lockToken } = await lockedRunOf(context);
+  const error = { ...ATTEMPT_ERROR, message: 'a "quoted"\nline with "failedAt":"x"', stack: "at \\ path" };
+
+  await engine.settle({ runId, lockToken, outcome: { ...RETRY, error } });
+
+  const [storedError] = await redis.lrange(keys.runErrors(runId), 0, -1);
+  expect(JSON.parse(storedError!)).toEqual({ ...error, failedAt: expect.stringMatching(/^\d{4}-\d\d-\d\dT/) });
+});
+
+for (const outcome of [COMPLETE, YIELD, RETRY, SUSPEND]) {
   engineTest(
     `a ${outcome.kind} after a hand-back clears the instant the run was first found unknown`,
     async (context) => {
@@ -261,7 +342,7 @@ engineTest("a settle of an unknown kind is rejected and writes nothing", async (
   const settle = engine.settle({
     runId,
     lockToken,
-    outcome: { kind: "explode" } as unknown as ImplementedSettleOutcome,
+    outcome: { kind: "explode" } as unknown as SettleOutcome,
   });
 
   await expect(settle).rejects.toThrow("invalid argument: unknown settle kind explode");

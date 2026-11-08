@@ -15,7 +15,7 @@ import { createInMemoryEngine } from "../tests/in-memory-engine.js";
 import type { InMemoryEngine } from "../tests/in-memory-engine.js";
 import { freshLockTokensOf } from "../tests/lock-tokens.js";
 import { createRecordingLogger } from "../tests/recording-logger.js";
-import { workerDefinitionsOf } from "../tests/worker-definitions.js";
+import { brokenKeyRunFailedListener, workerDefinitionsOf } from "../tests/worker-definitions.js";
 
 const NO_SENDER: HandlerSender = {
   dispatch: () => Promise.reject(new Error("this attempt sends nothing")),
@@ -210,22 +210,12 @@ test("a handler running past its timeout retries with the timeout error", async 
 }, 10_000);
 
 test("a failing attempt built for a third stall carries the notice and the listeners left out", () => {
-  const brokenKeyListener = defineListener("broken-key-listener", {
-    on: runFailed,
-    concurrency: {
-      key: () => {
-        throw new Error("no tenant");
-      },
-      limit: 1,
-    },
-    handler: async () => undefined,
-  });
   const error = new Error("stalled");
 
   const { attemptOutcome, listenersLeftOut } = failingAttemptOf(
     { runId: "run-1", task: "send-email", attempt: 1, replays: 0 },
     { error, reason: "stalled" },
-    workerDefinitionsOf([alertOnCall, brokenKeyListener] as AnyTaskDefinition[]),
+    workerDefinitionsOf([alertOnCall, brokenKeyRunFailedListener] as AnyTaskDefinition[]),
   );
 
   expect(attemptOutcome).toMatchObject({ kind: "fail", reason: "stalled", error });

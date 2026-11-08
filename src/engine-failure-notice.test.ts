@@ -6,7 +6,7 @@ import { defineListener, defineTask } from "./definitions.js";
 import type { AnyTaskDefinition } from "./definitions.js";
 import { engineFailureNoticeOf } from "./engine-failure-notice.js";
 import { deriveFailureNoticeEventId, deriveListenerRunId } from "./ids.js";
-import { workerDefinitionsOf } from "../tests/worker-definitions.js";
+import { brokenKeyRunFailedListener, workerDefinitionsOf } from "../tests/worker-definitions.js";
 
 const sendEmail = defineTask("send-email", { schema: v.object({}), handler: async () => undefined });
 
@@ -18,17 +18,6 @@ const alertOnCall = defineListener("alert-on-call", {
 });
 
 const archiveFailure = defineListener("archive-failure", { on: runFailed, handler: async () => undefined });
-
-const brokenKeyListener = defineListener("broken-key-listener", {
-  on: runFailed,
-  concurrency: {
-    key: () => {
-      throw new Error("no tenant in this payload");
-    },
-    limit: 1,
-  },
-  handler: async () => undefined,
-});
 
 const FAILING_RUN = { runId: "run-1", task: "send-email", attempt: 3, replays: 1 };
 
@@ -76,7 +65,7 @@ test("a listener whose concurrency key throws is left out of the notice with its
   const { failureNotice, listenersLeftOut } = engineFailureNoticeOf(
     FAILING_RUN,
     { error: ERROR, reason: "retries exhausted" },
-    workerDefinitionsOf([sendEmail, brokenKeyListener, archiveFailure] as AnyTaskDefinition[]),
+    workerDefinitionsOf([sendEmail, brokenKeyRunFailedListener, archiveFailure] as AnyTaskDefinition[]),
   );
 
   expect(failureNotice.runs.map(({ task }) => task)).toEqual(["archive-failure"]);

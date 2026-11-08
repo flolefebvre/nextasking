@@ -152,6 +152,10 @@ _Avoid_: Promote, notify; not resume, which continues a suspended attempt (see *
 To return a run to pending without executing it, because the worker doesn't define its task, so that a worker of another release picks it up; a run no worker takes for long enough fails.
 _Avoid_: Requeue, reject, release; not yield, the shutdown hand-off at a step boundary (see **Yield**)
 
+**Pass over**:
+To leave a pending or due run in place, untouched, because its record is newer than the worker can read, so that a worker of a newer release takes it.
+_Avoid_: Skip, ignore; not hand back, which returns a run the worker already took (see **Hand back**)
+
 **Worker**:
 The role of a Next.js server process that executes attempts, started from the app's instrumentation.
 _Avoid_: Consumer, processor

@@ -74,14 +74,16 @@ describe("executeAttempt", () => {
 
     expect(executedAttempt.steps).toEqual([
       { id: "create-user", result: { userId: "user-of-ada@example.com" } },
+      { id: expect.any(String), result: executedAttempt.emits[0]?.eventId },
+      { id: expect.any(String), result: executedAttempt.dispatches[0]?.runId },
       { id: "mark-reminded", result: undefined },
     ]);
     expect(executedAttempt.sleeps).toEqual([
-      { id: "wait-a-day", wakeAt: expect.any(Date) },
-      { id: "wait-for-trial-end", wakeAt: new Date("2030-01-01T00:00:00Z") },
+      { id: "wait-a-day", resumesAt: expect.any(Date) },
+      { id: "wait-for-trial-end", resumesAt: new Date("2030-01-01T00:00:00Z") },
     ]);
-    expect(executedAttempt.sleeps[0]?.wakeAt.getTime()).toBeGreaterThanOrEqual(calledAt + ONE_DAY_IN_MILLISECONDS);
-    expect(executedAttempt.sleeps[0]?.wakeAt.getTime()).toBeLessThanOrEqual(Date.now() + ONE_DAY_IN_MILLISECONDS);
+    expect(executedAttempt.sleeps[0]?.resumesAt.getTime()).toBeGreaterThanOrEqual(calledAt + ONE_DAY_IN_MILLISECONDS);
+    expect(executedAttempt.sleeps[0]?.resumesAt.getTime()).toBeLessThanOrEqual(Date.now() + ONE_DAY_IN_MILLISECONDS);
     expect(executedAttempt.dispatches).toEqual([
       { task: "send-welcome-email", payload: { email: "ada@example.com" }, runId: expect.any(String) },
     ]);
@@ -251,6 +253,33 @@ describe("executeAttempt", () => {
     expect(secondAttempt.emits).toEqual(firstAttempt.emits);
   });
 
+  test("lists a handler's sends among its steps, so passing them back as savedSteps skips the sends with the same ids", async () => {
+    const sentIds: string[] = [];
+    const nextasking = createSignUpNextasking(async ({ dispatch, emit }) => {
+      sentIds.push((await emit("user.signed-up", { userId: "user-1" })).eventId);
+      sentIds.push((await dispatch("send-welcome-email", { email: "ada@example.com" })).runId);
+    });
+
+    const firstAttempt = await executeAttempt(
+      nextasking,
+      "sign-up-user",
+      { email: "ada@example.com" },
+      { runId: "sign-up-ada" },
+    );
+    const resumedAttempt = await executeAttempt(
+      nextasking,
+      "sign-up-user",
+      { email: "ada@example.com" },
+      { runId: "sign-up-ada", savedSteps: firstAttempt.steps },
+    );
+
+    expect(firstAttempt.steps.map(({ result }) => result)).toEqual(sentIds.slice(0, 2));
+    expect(resumedAttempt.emits).toEqual([]);
+    expect(resumedAttempt.dispatches).toEqual([]);
+    expect(sentIds.slice(2)).toEqual(sentIds.slice(0, 2));
+    expect(resumedAttempt.steps).toEqual(firstAttempt.steps);
+  });
+
   test("throws inside the handler on an unknown name or a refused payload, as production does", async () => {
     const errorsSeen: unknown[] = [];
     const nextasking = createSignUpNextasking(async ({ dispatch, emit }) => {
@@ -362,7 +391,7 @@ describe("executeAttempt", () => {
     }>();
     expectTypeOf<SignUpAttempt["steps"]>().toEqualTypeOf<readonly SavedStepResult[]>();
     expectTypeOf<SignUpAttempt["sleeps"]>().toEqualTypeOf<readonly RecordedSleep[]>();
-    expectTypeOf<RecordedSleep>().toEqualTypeOf<{ id: string; wakeAt: Date }>();
+    expectTypeOf<RecordedSleep>().toEqualTypeOf<{ id: string; resumesAt: Date }>();
     expectTypeOf<SignUpAttempt>().toEqualTypeOf<ExecutedAttempt<SignUpTask, SignUpEvent>>();
     const checkCalls = () => {
       void executeTheAttempt();

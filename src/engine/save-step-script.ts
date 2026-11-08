@@ -37,7 +37,8 @@ if savedValue then
   if not string.match(savedValue, "^%d+$") then
     error("invalid argument: step " .. stepId .. " is saved but is not a sleep")
   end
-  return { "saved", tonumber(savedValue) }
+  local savedResumesAt = tonumber(savedValue)
+  return { "saved", savedResumesAt, savedResumesAt <= currentInstantInMilliseconds() and 1 or 0 }
 end
 
 redis.call("HSET", runRecordKey(runId), "stalls", 0)
@@ -45,9 +46,10 @@ if stepKind == "value" then
   redis.call("HSET", stepsKey, stepId, stepValue)
   return { "saved" }
 end
+local now = currentInstantInMilliseconds()
 if stepKind == "sleep" then
-  resumesAt = currentInstantInMilliseconds() + durationInMilliseconds
+  resumesAt = now + durationInMilliseconds
 end
 redis.call("HSET", stepsKey, stepId, string.format("%d", resumesAt))
-return { "saved", resumesAt }
+return { "saved", resumesAt, resumesAt <= now and 1 or 0 }
 `;

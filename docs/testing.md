@@ -100,8 +100,8 @@ import { nextasking } from "@/nextasking";
 test("onboarding creates the account, waits a day, then sends the tips email", async () => {
   const attempt = await executeAttempt(nextasking, "onboard-user", { userId: "user-1" });
 
-  expect(attempt.steps).toEqual([{ id: "create-account", result: { accountId: "account-1" } }]);
-  expect(attempt.sleeps).toEqual([{ id: "wait-a-day", wakeAt: expect.any(Date) }]);
+  expect(attempt.steps).toContainEqual({ id: "create-account", result: { accountId: "account-1" } });
+  expect(attempt.sleeps).toEqual([{ id: "wait-a-day", resumesAt: expect.any(Date) }]);
   expect(attempt.dispatches).toEqual([
     { task: "send-tips-email", payload: { userId: "user-1" }, runId: expect.any(String) },
   ]);
@@ -113,16 +113,16 @@ test("onboarding creates the account, waits a day, then sends the tips email", a
 
 It resolves with:
 
-| Field        | What it holds                                                                                              |
-| ------------ | ---------------------------------------------------------------------------------------------------------- |
-| `steps`      | `{ id, result }` per saved step result: the `savedSteps` you passed, then the ones this attempt saved      |
-| `sleeps`     | `{ id, wakeAt }` per `step.sleep` or `step.sleepUntil` the handler reached, in call order; `wakeAt` a Date |
-| `dispatches` | The handler's `dispatch` calls, as a fake's `dispatches` records them                                      |
-| `emits`      | The handler's `emit` calls, as a fake's `emits` records them                                               |
+| Field        | What it holds                                                                                                                                                                |
+| ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `steps`      | `{ id, result }` per saved step: the `savedSteps` you passed, then the ones this attempt saved, each `dispatch` or `emit` as `{ id: <send id>, result: <runId or eventId> }` |
+| `sleeps`     | `{ id, resumesAt }` per `step.sleep` or `step.sleepUntil` the handler reached, in call order; `resumesAt` a Date                                                             |
+| `dispatches` | The handler's `dispatch` calls, as a fake's `dispatches` records them                                                                                                        |
+| `emits`      | The handler's `emit` calls, as a fake's `emits` records them                                                                                                                 |
 
 - The payload goes through the task's schema first, as `dispatch` does: a refused payload rejects with `InvalidPayloadError` before the handler runs, and the handler gets what the schema returned.
 - The step rules are the production ones: the 1 MiB and 10 MiB ceilings, unique step ids, the JSON round trip of each result, and the idempotency key derived from the task, the `runId` and the step id. A misuse rejects with `StepMisuseError`, even when the handler catches it.
-- The handler's `dispatch` and `emit` run every check for real (an unknown name or a refused payload throws inside the handler) and are recorded, never written. They never go through the instance's own `dispatch` and `emit`, so an active fake records none of them. Their `runId` and `eventId` are derived from the run as in production: two attempts with the same `runId` record the same ids.
+- The handler's `dispatch` and `emit` run every check for real (an unknown name or a refused payload throws inside the handler) and are recorded, never written. They never go through the instance's own `dispatch` and `emit`, so an active fake records none of them. Their `runId` and `eventId` are derived from the run as in production: two attempts with the same `runId` record the same ids. A send passed back among `savedSteps` is skipped: it is not recorded again, and resolves with the saved id.
 - Every type comes from the instance you pass, not from `Register`: `taskName` is one of its task names, `payload` that task's schema input, and a scheduled task takes no payload.
 - The task's `timeout` and `retries` are not enforced: they belong to the worker, not to the attempt.
 
@@ -130,14 +130,14 @@ It resolves with:
 
 Pass them as the fourth argument; a scheduled task takes `undefined` as its payload.
 
-| Option        | Default                  | What it does                                                                                 |
-| ------------- | ------------------------ | -------------------------------------------------------------------------------------------- |
-| `savedSteps`  | none                     | The step results an earlier attempt saved, as `{ id, result }[]`: their `fn` doesn't run     |
-| `attempt`     | `1`                      | The handler's `attempt`                                                                      |
-| `runId`       | a random id              | The handler's `runId`, which the idempotency keys and the send ids derive from               |
-| `abortSignal` | a signal never aborted   | The handler's `abortSignal`: abort it to make the next step throw                            |
-| `scheduledAt` | the time of the call     | A scheduled task's `scheduledAt`                                                             |
-| `logger`      | a logger writing nothing | The handler's `logger`, with `task`, `runId` and `attempt` added to each line, as production |
+| Option        | Default                  | What it does                                                                                                                         |
+| ------------- | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `savedSteps`  | none                     | The step results an earlier attempt saved, as `{ id, result }[]`: their `fn` doesn't run, and the sends among them aren't sent again |
+| `attempt`     | `1`                      | The handler's `attempt`                                                                                                              |
+| `runId`       | a random id              | The handler's `runId`, which the idempotency keys and the send ids derive from                                                       |
+| `abortSignal` | a signal never aborted   | The handler's `abortSignal`: abort it to make the next step throw                                                                    |
+| `scheduledAt` | the time of the call     | A scheduled task's `scheduledAt`                                                                                                     |
+| `logger`      | a logger writing nothing | The handler's `logger`, with `task`, `runId` and `attempt` added to each line, as production                                         |
 
 ### Assert on a failure
 
@@ -162,7 +162,7 @@ const retry = await executeAttempt(
 );
 ```
 
-When the first attempt rejects, build `savedSteps` yourself from the steps you expect it saved: `[{ id: "create-pdf", result: { pdfId: "pdf-1" } }]`. Only step results are carried: sleeps and sends are recorded again by the next attempt.
+When the first attempt rejects, build `savedSteps` yourself from the steps you expect it saved: `[{ id: "create-pdf", result: { pdfId: "pdf-1" } }]`. Results and sends are carried; sleeps are not, so the next attempt records them again. A send you leave out is sent again under the same id.
 
 ### Simulate a shutdown
 
@@ -236,7 +236,7 @@ It doesn't wait for a run `delayed`, `suspended` or `backingOff`, nor for a firi
 
 `makeRunsDueNow` starts at once the runs dispatched with a `delay`, the runs asleep in `step.sleep` or `step.sleepUntil`, and the runs waiting out a retry backoff. It resolves with `{ task, runId }` per run started.
 
-- A sleeping run resumes in the same attempt, past the sleep, as if its wake time had come: every sleep of that run still to come is moved to now.
+- A sleeping run resumes in the same attempt, past the sleep, as if its resume time had come: every sleep of that run still to come is moved to now.
 - A run in backoff starts its next attempt.
 - A run waiting for a concurrency slot and a firing still to come are left alone.
 
@@ -293,7 +293,7 @@ The `.mts` extension makes it an ES module, for the top-level `await`, whatever 
 | `executeAttempt`           | Runs one attempt of a handler in the test process and resolves with its `ExecutedAttempt`                        |
 | `ExecutedAttempt`          | The type `executeAttempt` resolves with: `steps`, `sleeps`, `dispatches` and `emits`                             |
 | `ExecuteAttemptOptions`    | The type of `executeAttempt`'s options: `savedSteps`, `attempt`, `runId`, `abortSignal`, `scheduledAt`, `logger` |
-| `RecordedSleep`            | The type of one entry of `sleeps`: `id` and `wakeAt`                                                             |
+| `RecordedSleep`            | The type of one entry of `sleeps`: `id` and `resumesAt`                                                          |
 | `fakeNextasking`           | Switches an instance to recording mode and returns its `NextaskingFake`                                          |
 | `NextaskingFake`           | The type `fakeNextasking` returns: `dispatches`, `emits`, `replays`, `restore` and `[Symbol.dispose]`            |
 | `RecordedDispatch`         | The type of one entry of `dispatches`                                                                            |

@@ -39,12 +39,12 @@ import type { RunId } from "./ids.js";
 import { LostRunLockError, runDataDescriptionOf, saveRunDataIfLockIsHeld } from "./job-lock.js";
 import { loggerWithFields } from "./logger.js";
 import type { Logger } from "./logger.js";
-import { createRedisStepStore, removeSavedSteps } from "./redis-step-store.js";
+import { createRedisStepStore, isJobResumingAfterSleep, removeSavedSteps } from "./redis-step-store.js";
 import type { DispatchByName, EmitByName } from "./enqueuer.js";
 import { FIRING_JOB_NAME, RUN_QUEUE_NAME, plannedInstantOfFiring, scheduledAtOf } from "./run-queue.js";
 import type { RunQueue, StoredDelayedRunState, StoredFanOut, StoredFiring, StoredRun } from "./run-queue.js";
 import { attemptOf } from "./run-states.js";
-import { executeTaskHandler, openStepEngine } from "./step-engine.js";
+import { executeTaskHandler, openStepEngine, sendThenSave } from "./step-engine.js";
 import type { HandlerOutcome } from "./step-engine.js";
 import { handBackStrandedJobs } from "./stranded-jobs.js";
 import type { ActiveJob } from "./stranded-jobs.js";
@@ -294,20 +294,22 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
         throw new DelayedError();
       }
       stretchStartedAt = Date.now();
-      const stepEngine = await openStepEngine({
+      const store = createRedisStepStore(client, job, attempt);
+      const stepEngine = openStepEngine({
         taskName: task.name,
         runId,
-        attempt,
-        store: createRedisStepStore(client, job, () => {
-          abortAttempt("lock lost");
-        }),
-        dispatch: config.dispatch,
-        emit: config.emit,
+        lockToken: token ?? "",
+        store,
+        sender: sendThenSave(store, { dispatch: config.dispatch, emit: config.emit }),
         abortSignal,
         isWorkerDraining: () => isDraining,
-        futureWakeTime: "suspend the run",
+        futureResumeTime: "suspend the run",
+        markLockLost: () => {
+          abortAttempt("lock lost");
+        },
       });
-      runLogger.debug({}, stepEngine.isResumingAfterSleep ? "run resumed" : "attempt started");
+      const isResuming = await isJobResumingAfterSleep(client, job, attempt);
+      runLogger.debug({}, isResuming ? "run resumed" : "attempt started");
       try {
         outcome = await settleWithinTimeout(
           task.name,
@@ -328,13 +330,13 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
         throw abortSignal.reason;
       }
       if (outcome.kind === "suspended") {
-        const { wakeAt } = outcome;
+        const { resumesAt } = outcome;
         await handOff(() =>
           moveRunToDelayed(
             client,
             job,
-            wakeAt,
-            { state: "suspended", resumesAt: new Date(wakeAt).toISOString() },
+            resumesAt,
+            { state: "suspended", resumesAt: new Date(resumesAt).toISOString() },
             token,
           ),
         );
@@ -369,7 +371,7 @@ export function startRunWorker(config: WorkerConfig): RunningWorker {
       throw error;
     }
     if (outcome.kind === "suspended") {
-      runLogger.debug({ wakeAt: new Date(outcome.wakeAt).toISOString() }, "run suspended");
+      runLogger.debug({ wakeAt: new Date(outcome.resumesAt).toISOString() }, "run suspended");
       throw new DelayedError();
     }
     if (outcome.kind === "yielded") {

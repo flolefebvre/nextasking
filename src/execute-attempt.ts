@@ -8,18 +8,19 @@ import type { RunId, StepId } from "./ids.js";
 import { loggerWithFields, silentLogger } from "./logger.js";
 import type { Logger } from "./logger.js";
 import type { Nextasking } from "./registry.js";
+import { createInMemoryStepStore } from "./in-memory-step-store.js";
 import {
   executeTaskHandler,
   openStepEngine,
   savedStepResultsOf,
+  sendThenSave,
   serializedStepResultOf,
-  wakeAtOfSavedSleep,
 } from "./step-engine.js";
-import type { SavedStepResult, SerializedSavedStep, StepStore } from "./step-engine.js";
+import type { SavedStepResult, StepStore } from "./step-engine.js";
 
 export type RecordedSleep = {
   id: StepId;
-  wakeAt: Date;
+  resumesAt: Date;
 };
 
 export type ExecuteAttemptOptions = {
@@ -62,33 +63,31 @@ export async function executeAttempt<
   const validatedPayload = await validatedTaskPayloadOf(task, payload);
   const { runWriter, dispatches, emits } = createRecordingRunWriter<Task, Event>();
   const { dispatch, emit } = controls.createEnqueuerWritingTo(runWriter);
-  const serializedSavedStepsByStepId = new Map<StepId, SerializedSavedStep>(
-    (options.savedSteps ?? []).map(({ id, result }) => [id, serializedStepResultOf(id, result)]),
+  const inMemoryStore = createInMemoryStepStore(
+    Object.fromEntries((options.savedSteps ?? []).map(({ id, result }) => [id, serializedStepResultOf(id, result)])),
   );
   const sleeps: RecordedSleep[] = [];
   const store: StepStore = {
-    load: async () => Object.fromEntries(serializedSavedStepsByStepId),
-    save: async (stepId, serializedSavedStep) => {
-      serializedSavedStepsByStepId.set(stepId, serializedSavedStep);
-      const wakeAt = wakeAtOfSavedSleep(serializedSavedStep);
-      if (wakeAt !== undefined) {
-        sleeps.push({ id: stepId, wakeAt: new Date(wakeAt) });
-      }
+    ...inMemoryStore,
+    saveSleep: async (stepId, sleep) => {
+      const resumeTime = await inMemoryStore.saveSleep(stepId, sleep);
+      sleeps.push({ id: stepId, resumesAt: new Date(resumeTime.resumesAt) });
+      return resumeTime;
     },
   };
   const runId = options.runId ?? createRandomId();
   const attempt = options.attempt ?? FIRST_ATTEMPT;
   const abortSignal = options.abortSignal ?? new AbortController().signal;
-  const stepEngine = await openStepEngine({
+  const stepEngine = openStepEngine({
     taskName: task.name,
     runId,
-    attempt,
+    lockToken: createRandomId(),
     store,
-    dispatch,
-    emit,
+    sender: sendThenSave(store, { dispatch, emit }),
     abortSignal,
     isWorkerDraining: () => false,
-    futureWakeTime: "continue at once",
+    futureResumeTime: "continue at once",
+    markLockLost: () => undefined,
   });
   try {
     await executeTaskHandler(stepEngine, task, {
@@ -103,7 +102,7 @@ export async function executeAttempt<
     stepEngine.throwRecordedMisuse();
   }
   return {
-    steps: savedStepResultsOf(Object.fromEntries(serializedSavedStepsByStepId)),
+    steps: savedStepResultsOf(inMemoryStore.savedSteps()),
     sleeps,
     dispatches,
     emits,

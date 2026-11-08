@@ -82,8 +82,27 @@ engineTest("a sleepUntil step is saved with the instant it was sent", async (con
 
   const { reply } = await savedSleepStepOf(context, lockedRun, { kind: "sleepUntil", resumesAt: NEW_YEAR_2030 });
 
-  expect(reply).toEqual({ kind: "saved", resumesAt: NEW_YEAR_2030 });
+  expect(reply).toEqual({ kind: "saved", resumesAt: NEW_YEAR_2030, isDue: false });
   expect(await redis.hget(keys.runSteps("run-1"), "wait-a-minute")).toBe(String(NEW_YEAR_2030));
+});
+
+engineTest("a sleep tells whether it is due by the server's TIME", async (context) => {
+  const lockedRun = await lockedRunOf(context);
+  vi.useFakeTimers({ toFake: ["Date"], now: new Date("2100-01-01T00:00:00Z") });
+  try {
+    const sleepOf = (stepId: string, step: StepToSave) => context.engine.saveStep({ ...lockedRun, stepId, step });
+
+    const pastSleepUntil = await sleepOf("wait-for-1970", { kind: "sleepUntil", resumesAt: 1000 });
+    const oneDaySleep = await sleepOf("wait-a-day", { kind: "sleep", durationInMilliseconds: 86_400_000 });
+    await context.redis.hset(context.keys.runSteps("run-1"), "wait-a-day", 1000);
+    const reachedAgainOnceDue = await sleepOf("wait-a-day", { kind: "sleep", durationInMilliseconds: 86_400_000 });
+
+    expect(pastSleepUntil).toEqual({ kind: "saved", resumesAt: 1000, isDue: true });
+    expect(oneDaySleep).toMatchObject({ kind: "saved", isDue: false });
+    expect(reachedAgainOnceDue).toEqual({ kind: "saved", resumesAt: 1000, isDue: true });
+  } finally {
+    vi.useRealTimers();
+  }
 });
 
 engineTest("a value step saved twice keeps the first value and writes nothing the second time", async (context) => {

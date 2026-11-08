@@ -119,6 +119,7 @@ export type LockedRun = {
   scheduledAt?: EpochMilliseconds;
   sourceEvent?: SourceEvent;
   concurrencyKey?: ConcurrencyKey;
+  sleepsWokenAt?: EpochMilliseconds;
 };
 
 export type ParkedRun = { runId: RunId; task: string; attempt: number };
@@ -197,8 +198,10 @@ export type SaveStepRequest = {
   step: StepToSave;
 };
 
+export type SavedSleepReply = { kind: "saved"; resumesAt: EpochMilliseconds; isDue: boolean };
+
 export type SaveStepReply =
-  { kind: "saved"; resumesAt: EpochMilliseconds | undefined } | StaleReply | UnknownVersionReply;
+  { kind: "saved"; resumesAt: undefined } | SavedSleepReply | StaleReply | UnknownVersionReply;
 
 export type ReadStepRequest = { runId: RunId; lockToken: LockToken; stepId: StepId };
 
@@ -302,17 +305,18 @@ function storedIntegersByFieldOf<Field extends string>(
 }
 
 function lockedRunOf(reply: unknown): LockedRun | undefined {
-  if (!isStoredValueList(reply) || reply.length !== 15) {
+  if (!isStoredValueList(reply) || reply.length !== 16) {
     return undefined;
   }
   const [lockToken, runId, task, payload, ...storedFields] = reply.map(nullIfAbsent);
   const [attempt, retries, replays, isResume, dispatchedAt, startedAt, lockedUntil] = storedFields;
-  const [scheduledAt, eventName, eventId, concurrencyKey] = storedFields.slice(7);
+  const [scheduledAt, eventName, eventId, concurrencyKey, sleepsWokenAt] = storedFields.slice(7);
   const integersByField = storedIntegersByFieldOf({ attempt, retries, replays, dispatchedAt, startedAt, lockedUntil });
   if (lockToken == null || runId == null || task == null || payload == null || integersByField === undefined) {
     return undefined;
   }
   const storedScheduledAt = storedIntegerOf(nullIfAbsent(scheduledAt));
+  const storedSleepsWokenAt = storedIntegerOf(nullIfAbsent(sleepsWokenAt));
   return {
     lockToken,
     runId,
@@ -323,6 +327,7 @@ function lockedRunOf(reply: unknown): LockedRun | undefined {
     ...(storedScheduledAt === undefined ? {} : { scheduledAt: storedScheduledAt }),
     ...(eventName == null || eventId == null ? {} : { sourceEvent: { eventName, eventId } }),
     ...(concurrencyKey == null ? {} : { concurrencyKey }),
+    ...(storedSleepsWokenAt === undefined ? {} : { sleepsWokenAt: storedSleepsWokenAt }),
   };
 }
 
@@ -494,8 +499,14 @@ function saveStepReplyOf(reply: unknown): SaveStepReply {
   if (Array.isArray(reply) && reply.length === 1 && reply[0] === "saved") {
     return { kind: "saved", resumesAt: undefined };
   }
-  if (Array.isArray(reply) && reply.length === 2 && reply[0] === "saved" && Number.isSafeInteger(reply[1])) {
-    return { kind: "saved", resumesAt: Number(reply[1]) };
+  if (
+    Array.isArray(reply) &&
+    reply.length === 3 &&
+    reply[0] === "saved" &&
+    Number.isSafeInteger(reply[1]) &&
+    (reply[2] === 0 || reply[2] === 1)
+  ) {
+    return { kind: "saved", resumesAt: Number(reply[1]), isDue: reply[2] === 1 };
   }
   throw unreadableReplyError("saveStep", reply);
 }

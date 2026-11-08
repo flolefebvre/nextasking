@@ -2,19 +2,48 @@ import { AsyncLocalStorage } from "node:async_hooks";
 
 import type { AnyTaskDefinition, ScheduledTaskContext, TaskContext } from "./definitions.js";
 import { parseDuration } from "./durations.js";
-import type { Duration } from "./durations.js";
+import type { Duration, DurationInMilliseconds, EpochMilliseconds } from "./durations.js";
+import type { LockToken } from "./engine/engine-keys.js";
+import type { SerializedStepValue, StepToSave } from "./engine/engine.js";
 import { StepMisuseError } from "./errors.js";
 import { deriveHandlerSendId, deriveStepIdempotencyKey } from "./ids.js";
-import type { HandlerSendId, IdempotencyKey, RunId, StepId } from "./ids.js";
+import type { EventId, HandlerSendId, IdempotencyKey, RunId, StepId } from "./ids.js";
+import { LostRunLockError } from "./job-lock.js";
 import type { JsonValue } from "./json.js";
 import type { Logger } from "./logger.js";
-import type { DispatchByName, DispatchedRun, EmitByName, EmittedEvent } from "./enqueuer.js";
+import type {
+  DispatchByName,
+  DispatchedRun,
+  DispatchOptions,
+  EmitByName,
+  EmitOptions,
+  EmittedEvent,
+} from "./enqueuer.js";
 
-export type SerializedSavedStep = string;
+export type { SerializedStepValue } from "./engine/engine.js";
+
+export type SleepToSave = Exclude<StepToSave, { kind: "value" }>;
 
 export type StepStore = {
-  load: () => Promise<Record<StepId, SerializedSavedStep>>;
-  save: (stepId: StepId, serializedSavedStep: SerializedSavedStep) => Promise<void>;
+  readStep: (stepId: StepId) => Promise<SerializedStepValue | undefined>;
+  saveStep: (stepId: StepId, value: SerializedStepValue) => Promise<void>;
+  saveSleep: (stepId: StepId, sleep: SleepToSave) => Promise<ResumeTime>;
+};
+
+export type ResumeTime = {
+  resumesAt: EpochMilliseconds;
+  isDue: boolean;
+};
+
+export type SendFence = {
+  parentRunId: RunId;
+  lockToken: LockToken;
+  stepId: HandlerSendId;
+};
+
+export type HandlerSender = {
+  dispatch: (fence: SendFence, name: string, payload: unknown, options: DispatchOptions) => Promise<DispatchedRun>;
+  emit: (fence: SendFence, name: string, payload: unknown, options: EmitOptions) => Promise<EmittedEvent>;
 };
 
 export type StepContext = {
@@ -30,52 +59,40 @@ export type StepTools = {
   sleepUntil: (stepId: StepId, time: Date | string) => Promise<void>;
 };
 
-export type WakeTimeInEpochMilliseconds = number;
-
 export type StepEngine = {
   step: StepTools;
   dispatch: DispatchByName;
   emit: EmitByName;
-  isResumingAfterSleep: boolean;
   executeHandler: (handlerExecution: () => Promise<void>) => Promise<HandlerOutcome>;
   throwRecordedMisuse: () => void;
 };
 
 export type HandlerOutcome =
-  { kind: "completed" } | { kind: "suspended"; wakeAt: WakeTimeInEpochMilliseconds } | { kind: "yielded" };
+  { kind: "completed" } | { kind: "suspended"; resumesAt: EpochMilliseconds } | { kind: "yielded" };
 
 export type StepEngineConfig = {
   taskName: string;
   runId: RunId;
-  attempt: number;
+  lockToken: LockToken;
   store: StepStore;
-  dispatch: DispatchByName;
-  emit: EmitByName;
+  sender: HandlerSender;
   abortSignal: AbortSignal;
   isWorkerDraining: () => boolean;
-  futureWakeTime: FutureWakeTimeHandling;
+  futureResumeTime: FutureResumeTimeHandling;
+  sleepsWokenAt?: EpochMilliseconds;
+  markLockLost: () => void;
 };
 
-export type FutureWakeTimeHandling = "suspend the run" | "continue at once";
+export type FutureResumeTimeHandling = "suspend the run" | "continue at once";
 
-type SavedSleep = {
-  kind: "sleep";
-  wakeAt: WakeTimeInEpochMilliseconds;
-  attempt: number;
-};
-
-type SavedDispatch = { kind: "dispatch" } & DispatchedRun;
-
-type SavedEmit = { kind: "emit" } & EmittedEvent;
-
-type SavedStep = { kind: "result"; result: unknown } | SavedSleep | SavedDispatch | SavedEmit;
+export type SavedStep = { kind: "value"; value: unknown } | { kind: "sleep"; resumesAt: EpochMilliseconds };
 
 class RunSuspension extends Error {
   override readonly name = "RunSuspension";
 
-  constructor(wakeAt: WakeTimeInEpochMilliseconds) {
+  constructor(resumesAt: EpochMilliseconds) {
     super(
-      `The run is suspended until ${new Date(wakeAt).toISOString()}. Let this error through: the run resumes at that time.`,
+      `The run is suspended until ${new Date(resumesAt).toISOString()}. Let this error through: the run resumes at that time.`,
     );
   }
 }
@@ -102,24 +119,16 @@ const LARGE_DATA_ADVICE = "Store large data elsewhere, such as your database, an
 
 const ISO_DATE_WITH_ZONE_PATTERN = /^\d{4}-\d{2}-\d{2}T[^Z+-]+(Z|[+-]\d{2}:\d{2})$/;
 
+const SAVED_SLEEP_PATTERN = /^\d+$/;
+
 const enclosingStepIdScope = new AsyncLocalStorage<StepId>();
 
-export async function openStepEngine(config: StepEngineConfig): Promise<StepEngine> {
-  const serializedSavedStepsByStepId = await config.store.load();
-  const savedStepsByStepId = new Map<StepId, SavedStep>(
-    Object.entries(serializedSavedStepsByStepId).map(([stepId, serializedSavedStep]) => [
-      stepId,
-      deserializeSavedStep(serializedSavedStep),
-    ]),
-  );
+export function openStepEngine(config: StepEngineConfig): StepEngine {
   const stepIdsStartedInThisAttempt = new Set<StepId>();
   const inFlightStepSettlements = new Set<Promise<void>>();
-  let savedStepsSizeInBytes = Object.values(serializedSavedStepsByStepId).reduce(
-    (sizeInBytes, serializedSavedStep) => sizeInBytes + sizeInBytesOf(serializedSavedStep),
-    0,
-  );
+  let savedStepsSizeInBytes: SizeInBytes = 0;
   let recordedMisuse: StepMisuseError | undefined;
-  let recordedWakeAt: WakeTimeInEpochMilliseconds | undefined;
+  let recordedResumesAt: EpochMilliseconds | undefined;
   let isYieldRecorded = false;
 
   const recordMisuse = (message: string): StepMisuseError => {
@@ -137,8 +146,8 @@ export async function openStepEngine(config: StepEngineConfig): Promise<StepEngi
   const throwIfStretchIsOver = () => {
     config.abortSignal.throwIfAborted();
     throwRecordedMisuse();
-    if (recordedWakeAt !== undefined) {
-      throw new RunSuspension(recordedWakeAt);
+    if (recordedResumesAt !== undefined) {
+      throw new RunSuspension(recordedResumesAt);
     }
     if (isYieldRecorded || config.isWorkerDraining()) {
       isYieldRecorded = true;
@@ -181,7 +190,22 @@ export async function openStepEngine(config: StepEngineConfig): Promise<StepEngi
     }
   };
 
-  const serializedResultWithinCeilings = (stepId: StepId, result: unknown): SerializedSavedStep => {
+  const countSavedStep = (serializedStep: string) => {
+    savedStepsSizeInBytes += sizeInBytesOf(serializedStep);
+  };
+
+  const noteLockLoss = async <Result>(storeCall: Promise<Result>): Promise<Result> => {
+    try {
+      return await storeCall;
+    } catch (error) {
+      if (error instanceof LostRunLockError) {
+        config.markLockLost();
+      }
+      throw error;
+    }
+  };
+
+  const serializedResultWithinCeilings = (stepId: StepId, result: unknown): SerializedStepValue => {
     const serializedResult = serializeStepResult(result);
     if (serializedResult === undefined) {
       throw recordMisuse(
@@ -203,62 +227,49 @@ export async function openStepEngine(config: StepEngineConfig): Promise<StepEngi
     return serializedResult;
   };
 
-  const saveStep = async (stepId: StepId, serializedSavedStep: SerializedSavedStep) => {
-    savedStepsSizeInBytes += sizeInBytesOf(serializedSavedStep);
-    await config.store.save(stepId, serializedSavedStep);
-  };
-
   const executeStep = async <Result extends JsonValue | void>(
     stepId: StepId,
     fn: (context: StepContext) => Result | Promise<Result>,
   ): Promise<Result> => {
-    const savedStep = savedStepsByStepId.get(stepId);
-    if (savedStep?.kind === "result") {
-      return savedStep.result as Result;
+    const savedValue = await noteLockLoss(config.store.readStep(stepId));
+    if (savedValue !== undefined) {
+      const savedStep = savedStepOf(stepId, savedValue);
+      if (savedStep.kind === "value") {
+        countSavedStep(savedValue);
+        return savedStep.value as Result;
+      }
     }
+    config.abortSignal.throwIfAborted();
     const idempotencyKey = deriveStepIdempotencyKey(config.taskName, config.runId, stepId);
     const result = await enclosingStepIdScope.run(stepId, () => fn({ idempotencyKey }));
     const serializedResult = serializedResultWithinCeilings(stepId, result);
-    await saveStep(stepId, serializedResult);
-    return deserializeStepResult(serializedResult) as Result;
+    await noteLockLoss(config.store.saveStep(stepId, serializedResult));
+    countSavedStep(serializedResult);
+    return deserializeStepValue(serializedResult) as Result;
   };
 
-  const sleepUntilWakeTime = async (stepId: StepId, wakeTimeOfNewSleep: () => WakeTimeInEpochMilliseconds) => {
-    const savedStep = savedStepsByStepId.get(stepId);
-    let wakeAt: WakeTimeInEpochMilliseconds;
-    if (savedStep?.kind === "sleep") {
-      wakeAt = savedStep.wakeAt;
-    } else {
-      wakeAt = wakeTimeOfNewSleep();
-      const savedSleep: SavedSleep = { kind: "sleep", wakeAt, attempt: config.attempt };
-      await saveStep(stepId, JSON.stringify(savedSleep));
-    }
-    if (wakeAt <= Date.now() || config.futureWakeTime === "continue at once") {
+  const sleepUntilResumeTime = async (stepId: StepId, sleep: SleepToSave) => {
+    const { resumesAt, isDue } = await noteLockLoss(config.store.saveSleep(stepId, sleep));
+    countSavedStep(serializedSleepOf(resumesAt));
+    if (isDue || config.futureResumeTime === "continue at once" || config.sleepsWokenAt !== undefined) {
       return;
     }
-    recordedWakeAt = Math.min(recordedWakeAt ?? wakeAt, wakeAt);
-    throw new RunSuspension(wakeAt);
+    recordedResumesAt = Math.min(recordedResumesAt ?? resumesAt, resumesAt);
+    throw new RunSuspension(resumesAt);
   };
 
   const sendCountsByEnclosingStepId = new Map<StepId | undefined, number>();
 
-  const sendOnce = async <Sent extends SavedDispatch | SavedEmit>(
-    kind: Sent["kind"],
-    send: (sendId: HandlerSendId) => Promise<Sent>,
-  ): Promise<Sent> => {
+  const sendOnce = async <Sent>(send: (fence: SendFence) => Promise<Sent>, sentIdOf: (sent: Sent) => string) => {
     throwIfStretchIsOver();
     const enclosingStepId = enclosingStepIdScope.getStore();
     const positionInScope = sendCountsByEnclosingStepId.get(enclosingStepId) ?? 0;
     sendCountsByEnclosingStepId.set(enclosingStepId, positionInScope + 1);
-    const sendId = deriveHandlerSendId(config.taskName, config.runId, enclosingStepId, positionInScope);
-    const savedSend = savedStepsByStepId.get(sendId);
-    if (savedSend?.kind === kind) {
-      return savedSend as Sent;
-    }
+    const stepId = deriveHandlerSendId(config.taskName, config.runId, enclosingStepId, positionInScope);
     return trackInFlight(
       (async () => {
-        const sent = await send(sendId);
-        await saveStep(sendId, JSON.stringify(sent));
+        const sent = await noteLockLoss(send({ parentRunId: config.runId, lockToken: config.lockToken, stepId }));
+        countSavedStep(serializeStepValue(sentIdOf(sent)));
         return sent;
       })(),
     );
@@ -271,46 +282,43 @@ export async function openStepEngine(config: StepEngineConfig): Promise<StepEngi
     },
     sleep: async (stepId, duration) => {
       checkStepCanStart(stepId);
-      let durationInMilliseconds: number;
+      let durationInMilliseconds: DurationInMilliseconds;
       try {
         durationInMilliseconds = parseDuration(duration);
       } catch (error) {
         throw recordMisuse(`The duration of step "${stepId}" is invalid: ${(error as Error).message}`);
       }
-      return trackInFlight(sleepUntilWakeTime(stepId, () => Date.now() + durationInMilliseconds));
+      return trackInFlight(sleepUntilResumeTime(stepId, { kind: "sleep", durationInMilliseconds }));
     },
     sleepUntil: async (stepId, time) => {
       checkStepCanStart(stepId);
-      const wakeAt = wakeTimeOf(time);
-      if (wakeAt === undefined) {
+      const resumesAt = resumeTimeOf(time);
+      if (resumesAt === undefined) {
         const shownTime = time instanceof Date ? String(time) : JSON.stringify(time);
         throw recordMisuse(
-          `The wake time of step "${stepId}" is not a Date or an ISO date string with Z or an offset: ${shownTime}`,
+          `The resume time of step "${stepId}" is not a Date or an ISO date string with Z or an offset: ${shownTime}`,
         );
       }
-      return trackInFlight(sleepUntilWakeTime(stepId, () => wakeAt));
+      return trackInFlight(sleepUntilResumeTime(stepId, { kind: "sleepUntil", resumesAt }));
     },
   };
 
   return {
     step,
     dispatch: async (name, payload, options = {}) => {
-      const { runId } = await sendOnce<SavedDispatch>("dispatch", async (sendId) => {
-        const dispatchedRun = await config.dispatch(name, payload, { ...options, runId: options.runId ?? sendId });
-        return { kind: "dispatch", runId: dispatchedRun.runId };
-      });
+      const { runId } = await sendOnce(
+        (fence) => config.sender.dispatch(fence, name, payload, { ...options, runId: options.runId ?? fence.stepId }),
+        (dispatchedRun) => dispatchedRun.runId,
+      );
       return { runId };
     },
     emit: async (name, payload, options = {}) => {
-      const { eventId } = await sendOnce<SavedEmit>("emit", async (sendId) => {
-        const emittedEvent = await config.emit(name, payload, { ...options, eventId: options.eventId ?? sendId });
-        return { kind: "emit", eventId: emittedEvent.eventId };
-      });
+      const { eventId } = await sendOnce(
+        (fence) => config.sender.emit(fence, name, payload, { ...options, eventId: options.eventId ?? fence.stepId }),
+        (emittedEvent) => emittedEvent.eventId,
+      );
       return { eventId };
     },
-    isResumingAfterSleep: [...savedStepsByStepId.values()].some(
-      (savedStep) => savedStep.kind === "sleep" && savedStep.attempt === config.attempt,
-    ),
     executeHandler: async (handlerExecution) => {
       let handlerFailure: { error: unknown } | undefined;
       try {
@@ -318,12 +326,12 @@ export async function openStepEngine(config: StepEngineConfig): Promise<StepEngi
       } catch (error) {
         handlerFailure = { error };
       }
-      if ((recordedWakeAt !== undefined || isYieldRecorded) && recordedMisuse === undefined) {
+      if ((recordedResumesAt !== undefined || isYieldRecorded) && recordedMisuse === undefined) {
         await waitForStepsInFlight();
       }
       throwRecordedMisuse();
-      if (recordedWakeAt !== undefined) {
-        return { kind: "suspended", wakeAt: recordedWakeAt };
+      if (recordedResumesAt !== undefined) {
+        return { kind: "suspended", resumesAt: recordedResumesAt };
       }
       if (isYieldRecorded) {
         return { kind: "yielded" };
@@ -334,6 +342,29 @@ export async function openStepEngine(config: StepEngineConfig): Promise<StepEngi
       return { kind: "completed" };
     },
     throwRecordedMisuse,
+  };
+}
+
+export function sendThenSave(
+  store: StepStore,
+  { dispatch, emit }: { dispatch: DispatchByName; emit: EmitByName },
+): HandlerSender {
+  const sendUnlessSaved = async (fence: SendFence, send: () => Promise<RunId | EventId>): Promise<string> => {
+    const savedValue = await store.readStep(fence.stepId);
+    if (savedValue !== undefined) {
+      return sentIdOf(fence.stepId, savedValue);
+    }
+    const sentId = await send();
+    await store.saveStep(fence.stepId, serializeStepValue(sentId));
+    return sentId;
+  };
+  return {
+    dispatch: async (fence, name, payload, options) => ({
+      runId: await sendUnlessSaved(fence, async () => (await dispatch(name, payload, options)).runId),
+    }),
+    emit: async (fence, name, payload, options) => ({
+      eventId: await sendUnlessSaved(fence, async () => (await emit(name, payload, options)).eventId),
+    }),
   };
 }
 
@@ -361,7 +392,7 @@ export function executeTaskHandler(
   );
 }
 
-export function serializedStepResultOf(stepId: StepId, result: unknown): SerializedSavedStep {
+export function serializedStepResultOf(stepId: StepId, result: unknown): SerializedStepValue {
   const serializedResult = serializeStepResult(result);
   if (serializedResult === undefined) {
     throw new Error(`The saved result of step "${stepId}" is not JSON`);
@@ -369,34 +400,65 @@ export function serializedStepResultOf(stepId: StepId, result: unknown): Seriali
   return serializedResult;
 }
 
-export function savedSleepWokenAt(
-  serializedSavedStep: SerializedSavedStep,
-  wakeAt: WakeTimeInEpochMilliseconds,
-): SerializedSavedStep | undefined {
-  const savedStep = deserializeSavedStep(serializedSavedStep);
-  if (savedStep.kind !== "sleep" || savedStep.wakeAt <= wakeAt) {
-    return undefined;
+export function serializeStepValue(value: RunId | EventId): SerializedStepValue {
+  return JSON.stringify([value]);
+}
+
+export function resumeTimeFromNowOf(sleep: SleepToSave): EpochMilliseconds {
+  return sleep.kind === "sleep" ? Date.now() + sleep.durationInMilliseconds : sleep.resumesAt;
+}
+
+export function resumeTimeByAppClockOf(resumesAt: EpochMilliseconds): ResumeTime {
+  return { resumesAt, isDue: resumesAt <= Date.now() };
+}
+
+export function serializedSleepOf(resumesAt: EpochMilliseconds): SerializedStepValue {
+  return String(resumesAt);
+}
+
+export function savedStepOf(stepId: StepId, serializedStep: SerializedStepValue): SavedStep {
+  if (serializedStep.startsWith("[")) {
+    return { kind: "value", value: deserializeStepValue(serializedStep) };
   }
-  const wokenSleep: SavedSleep = { ...savedStep, wakeAt };
-  return JSON.stringify(wokenSleep);
+  if (SAVED_SLEEP_PATTERN.test(serializedStep)) {
+    return { kind: "sleep", resumesAt: Number(serializedStep) };
+  }
+  throw new Error(
+    `Step "${stepId}" is saved as ${JSON.stringify(serializedStep)}, which is neither a value nor a sleep`,
+  );
 }
 
-export function wakeAtOfSavedSleep(serializedSavedStep: SerializedSavedStep): WakeTimeInEpochMilliseconds | undefined {
-  const savedStep = deserializeSavedStep(serializedSavedStep);
-  return savedStep.kind === "sleep" ? savedStep.wakeAt : undefined;
+export function sentIdOf(stepId: StepId, serializedStep: SerializedStepValue): RunId | EventId {
+  const savedStep = savedStepOf(stepId, serializedStep);
+  if (savedStep.kind !== "value" || typeof savedStep.value !== "string") {
+    throw new Error(`Step "${stepId}" is saved as ${JSON.stringify(serializedStep)}, which is not a sent id`);
+  }
+  return savedStep.value;
 }
 
-function wakeTimeOf(time: unknown): WakeTimeInEpochMilliseconds | undefined {
-  let wakeAt = Number.NaN;
+export type SavedStepResult = {
+  id: StepId;
+  result: unknown;
+};
+
+export function savedStepResultsOf(serializedStepsById: Record<StepId, SerializedStepValue>): SavedStepResult[] {
+  return Object.entries(serializedStepsById).flatMap(([id, serializedStep]) => {
+    const savedStep = savedStepOf(id, serializedStep);
+    return savedStep.kind === "value" ? [{ id, result: savedStep.value }] : [];
+  });
+}
+
+function resumeTimeOf(time: unknown): EpochMilliseconds | undefined {
+  let resumesAt = Number.NaN;
   if (time instanceof Date) {
-    wakeAt = time.getTime();
+    resumesAt = time.getTime();
   } else if (typeof time === "string" && ISO_DATE_WITH_ZONE_PATTERN.test(time)) {
-    wakeAt = Date.parse(time);
+    resumesAt = Date.parse(time);
   }
-  return Number.isFinite(wakeAt) ? wakeAt : undefined;
+  return Number.isFinite(resumesAt) ? resumesAt : undefined;
 }
 
-function serializeStepResult(result: unknown): SerializedSavedStep | undefined {
+function serializeStepResult(result: unknown): SerializedStepValue | undefined {
   if (result === undefined) {
     return "[]";
   }
@@ -409,31 +471,11 @@ function serializeStepResult(result: unknown): SerializedSavedStep | undefined {
   return serializedValue === undefined ? undefined : `[${serializedValue}]`;
 }
 
-function deserializeStepResult(serializedResult: SerializedSavedStep): unknown {
-  const wrappedResult = JSON.parse(serializedResult) as unknown[];
-  return wrappedResult[0];
+function deserializeStepValue(serializedValue: SerializedStepValue): unknown {
+  const wrappedValue = JSON.parse(serializedValue) as unknown[];
+  return wrappedValue[0];
 }
 
-export type SavedStepResult = {
-  id: StepId;
-  result: unknown;
-};
-
-export function savedStepResultsOf(serializedSavedStepsById: Record<StepId, SerializedSavedStep>): SavedStepResult[] {
-  return Object.entries(serializedSavedStepsById).flatMap(([id, serializedSavedStep]) => {
-    const savedStep = deserializeSavedStep(serializedSavedStep);
-    return savedStep.kind === "result" ? [{ id, result: savedStep.result }] : [];
-  });
-}
-
-function deserializeSavedStep(serializedSavedStep: SerializedSavedStep): SavedStep {
-  const savedValue = JSON.parse(serializedSavedStep) as unknown;
-  if (Array.isArray(savedValue)) {
-    return { kind: "result", result: savedValue[0] };
-  }
-  return savedValue as SavedStep;
-}
-
-function sizeInBytesOf(serializedSavedStep: SerializedSavedStep): SizeInBytes {
-  return Buffer.byteLength(serializedSavedStep, "utf8");
+function sizeInBytesOf(serializedStep: string): SizeInBytes {
+  return Buffer.byteLength(serializedStep, "utf8");
 }

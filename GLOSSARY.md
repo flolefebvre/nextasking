@@ -141,7 +141,7 @@ The ordered runs of one task or concurrency key that wait for a concurrency slot
 _Avoid_: Queue, backlog, line
 
 **Park**:
-To set a run aside on its waiting list when no concurrency slot is free, holding no worker until it is woken or a safety delay passes, using no retry and counting no stall.
+To set a run aside on its waiting list when no concurrency slot is free, holding no worker until it is woken, using no retry and counting no stall.
 _Avoid_: Block, throttle; not suspend, which waits for a set time (see **Suspend**)
 
 **Wake**:

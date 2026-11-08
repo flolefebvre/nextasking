@@ -15,11 +15,11 @@ A named fact, defined by a consumer or by the library, with a payload schema, th
 _Avoid_: Message, signal
 
 **Built-in event**:
-An event the library defines and emits itself when a run or a fan-out fails; a consumer can listen to it but not emit it.
+An event the library defines and emits itself when a run fails; a consumer can listen to it but not emit it.
 _Avoid_: System event, hook, notification
 
 **Failure notice**:
-One emission of a built-in event for one final failure of a run or a fan-out, under an event id derived from that failure, so a re-sent notice starts no listener twice.
+One emission of a built-in event for one final failure of a run, stored together with that failure under an event id derived from it.
 _Avoid_: Alert, failure event, notification
 
 **Listener**:
@@ -53,7 +53,7 @@ To announce an event, starting one run of each of its listeners, which may be no
 _Avoid_: Send, fire, publish, trigger
 
 **Fan-out**:
-The turning of one emitted event into one run per listener, done by a worker rather than by the emitter.
+The creation of one run per listener of an emitted event, done by the emit itself, all or nothing.
 _Avoid_: Broadcast, dispatch
 
 **Dedup window**:
@@ -61,7 +61,7 @@ How long a repeated dispatch or emit with the same id is dropped.
 _Avoid_: TTL, retention
 
 **Retention**:
-How long an ended run or fan-out stays readable and replayable before a worker removes it.
+How long an ended run stays readable and replayable before a worker removes it.
 _Avoid_: TTL, cleanup, history
 
 **Run**:
@@ -93,7 +93,7 @@ A run whose final outcome is failure: its last attempt failed with no retry left
 _Avoid_: Exhausted job, dead job, dead letter
 
 **Replay**:
-To start a failed run again under its own run id, with a fresh retry budget, reusing the steps it has already saved; or to start a failed fan-out again, skipping the listeners that already have a run.
+To start a failed run again under its own run id, with a fresh retry budget, reusing the steps it has already saved.
 _Avoid_: Retry, rerun, redrive
 
 **Suspend**:
@@ -117,7 +117,7 @@ Said of a run that is due and waits for a worker to start or continue its next a
 _Avoid_: Queued, waiting, ready
 
 **Idle**:
-Said of the queue when no run is pending, executing or waiting for a concurrency slot, and no fan-out is left; runs that wait for a set time don't count.
+Said of the queue when no run is pending, executing or waiting for a concurrency slot; runs that wait for a set time don't count.
 _Avoid_: Settled, empty; not drained, which describes a worker shutting down (see **Drain**)
 
 **Idempotency key**:
@@ -149,7 +149,7 @@ To make the oldest parked run of a waiting list pending again, when a concurrenc
 _Avoid_: Promote, notify; not resume, which continues a suspended attempt (see **Resume**)
 
 **Hand back**:
-To return a run, a fan-out or a firing to pending without executing it, because the worker doesn't define its task or event, so that a worker of another release picks it up; a run no worker takes for long enough fails.
+To return a run or a firing to pending without executing it, because the worker doesn't define its task, so that a worker of another release picks it up; a run no worker takes for long enough fails.
 _Avoid_: Requeue, reject, release; not yield, the shutdown hand-off at a step boundary (see **Yield**)
 
 **Worker**:

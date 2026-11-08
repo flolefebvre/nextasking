@@ -74,6 +74,8 @@ describe("executeAttempt", () => {
 
     expect(executedAttempt.steps).toEqual([
       { id: "create-user", result: { userId: "user-of-ada@example.com" } },
+      { id: expect.any(String), result: executedAttempt.emits[0]?.eventId },
+      { id: expect.any(String), result: executedAttempt.dispatches[0]?.runId },
       { id: "mark-reminded", result: undefined },
     ]);
     expect(executedAttempt.sleeps).toEqual([
@@ -249,6 +251,33 @@ describe("executeAttempt", () => {
 
     expect(secondAttempt.dispatches).toEqual(firstAttempt.dispatches);
     expect(secondAttempt.emits).toEqual(firstAttempt.emits);
+  });
+
+  test("lists a handler's sends among its steps, so passing them back as savedSteps skips the sends with the same ids", async () => {
+    const sentIds: string[] = [];
+    const nextasking = createSignUpNextasking(async ({ dispatch, emit }) => {
+      sentIds.push((await emit("user.signed-up", { userId: "user-1" })).eventId);
+      sentIds.push((await dispatch("send-welcome-email", { email: "ada@example.com" })).runId);
+    });
+
+    const firstAttempt = await executeAttempt(
+      nextasking,
+      "sign-up-user",
+      { email: "ada@example.com" },
+      { runId: "sign-up-ada" },
+    );
+    const resumedAttempt = await executeAttempt(
+      nextasking,
+      "sign-up-user",
+      { email: "ada@example.com" },
+      { runId: "sign-up-ada", savedSteps: firstAttempt.steps },
+    );
+
+    expect(firstAttempt.steps.map(({ result }) => result)).toEqual(sentIds.slice(0, 2));
+    expect(resumedAttempt.emits).toEqual([]);
+    expect(resumedAttempt.dispatches).toEqual([]);
+    expect(sentIds.slice(2)).toEqual(sentIds.slice(0, 2));
+    expect(resumedAttempt.steps).toEqual(firstAttempt.steps);
   });
 
   test("throws inside the handler on an unknown name or a refused payload, as production does", async () => {

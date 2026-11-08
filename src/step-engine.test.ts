@@ -5,20 +5,21 @@ import { StepMisuseError } from "./errors.js";
 import { deriveHandlerSendId } from "./ids.js";
 import type { JsonValue } from "./json.js";
 import type { DispatchByName, DispatchOptions, EmitByName, EmitOptions } from "./enqueuer.js";
-import { openStepEngine } from "./step-engine.js";
-import type { FutureWakeTimeHandling, HandlerOutcome, StepStore } from "./step-engine.js";
+import { createInMemoryStepStore } from "./in-memory-step-store.js";
+import { LostRunLockError } from "./job-lock.js";
+import { openStepEngine, sendThenSave } from "./step-engine.js";
+import type {
+  FutureResumeTimeHandling,
+  HandlerOutcome,
+  HandlerSender,
+  SendFence,
+  StepEngineConfig,
+  StepStore,
+} from "./step-engine.js";
 
 const ONE_MEBIBYTE = 1024 * 1024;
 
-function createInMemoryStepStore(serializedResultsByStepId: Record<string, string> = {}): StepStore {
-  const savedResultsByStepId = new Map(Object.entries(serializedResultsByStepId));
-  return {
-    load: async () => Object.fromEntries(savedResultsByStepId),
-    save: async (stepId, serializedResult) => {
-      savedResultsByStepId.set(stepId, serializedResult);
-    },
-  };
-}
+const LOCK_TOKEN = "lock-token-7";
 
 type RecordedSend = {
   kind: "dispatch" | "emit";
@@ -48,32 +49,35 @@ function createRecordingSends(): RecordingSends {
   };
 }
 
-type AttemptControls = {
-  abortSignal?: AbortSignal;
-  isWorkerDraining?: () => boolean;
-  futureWakeTime?: FutureWakeTimeHandling;
+type AttemptControls = Partial<
+  Pick<StepEngineConfig, "abortSignal" | "isWorkerDraining" | "sleepsWokenAt" | "markLockLost" | "sender">
+> & {
+  futureResumeTime?: FutureResumeTimeHandling;
 };
 
 function openAttempt(
   store: StepStore,
-  attempt = 1,
   recordingSends: RecordingSends = createRecordingSends(),
   {
     abortSignal = new AbortController().signal,
     isWorkerDraining = () => false,
-    futureWakeTime = "suspend the run",
+    futureResumeTime = "suspend the run",
+    sender = sendThenSave(store, recordingSends),
+    markLockLost = () => undefined,
+    ...otherControls
   }: AttemptControls = {},
 ) {
   return openStepEngine({
     taskName: "send-invoice",
     runId: "run-7",
-    attempt,
+    lockToken: LOCK_TOKEN,
     store,
-    dispatch: recordingSends.dispatch,
-    emit: recordingSends.emit,
+    sender,
     abortSignal,
     isWorkerDraining,
-    futureWakeTime,
+    futureResumeTime,
+    markLockLost,
+    ...otherControls,
   });
 }
 
@@ -83,7 +87,7 @@ function stringSerializedInBytes(sizeInBytes: number): string {
 
 describe("step.run", () => {
   test("runs fn and resolves with its JSON round-tripped result", async () => {
-    const { step } = await openAttempt(createInMemoryStepStore());
+    const { step } = openAttempt(createInMemoryStepStore());
 
     const invoice = await step.run("load-invoice", () => ({ invoiceId: "inv-1", note: undefined, total: Number.NaN }));
 
@@ -92,10 +96,10 @@ describe("step.run", () => {
 
   test("serves a later attempt the saved result without running fn again", async () => {
     const store = createInMemoryStepStore();
-    const firstAttempt = await openAttempt(store);
+    const firstAttempt = openAttempt(store);
     await firstAttempt.step.run("charge-card", async () => ({ chargeId: "ch-1" }));
     const chargeCard = vi.fn(async () => ({ chargeId: "ch-2" }));
-    const secondAttempt = await openAttempt(store);
+    const secondAttempt = openAttempt(store);
 
     const charge = await secondAttempt.step.run("charge-card", chargeCard);
 
@@ -105,10 +109,10 @@ describe("step.run", () => {
 
   test("saves an undefined result, so a later attempt gets undefined without running fn", async () => {
     const store = createInMemoryStepStore();
-    const firstAttempt = await openAttempt(store);
+    const firstAttempt = openAttempt(store);
     await firstAttempt.step.run("send-email", async () => undefined);
     const sendEmail = vi.fn(async () => undefined);
-    const secondAttempt = await openAttempt(store);
+    const secondAttempt = openAttempt(store);
 
     const sent = await secondAttempt.step.run("send-email", sendEmail);
 
@@ -118,9 +122,9 @@ describe("step.run", () => {
 
   test("ignores a saved step whose id no longer appears in the code", async () => {
     const store = createInMemoryStepStore();
-    const firstAttempt = await openAttempt(store);
+    const firstAttempt = openAttempt(store);
     await firstAttempt.step.run("old-step", () => "old result");
-    const { step, throwRecordedMisuse } = await openAttempt(store);
+    const { step, throwRecordedMisuse } = openAttempt(store);
 
     const result = await step.run("new-step", () => "new result");
 
@@ -130,9 +134,9 @@ describe("step.run", () => {
 
   test("does not save a step whose fn throws, and lets its error through", async () => {
     const store = createInMemoryStepStore();
-    const firstAttempt = await openAttempt(store);
+    const firstAttempt = openAttempt(store);
     const upstreamError = new Error("upstream unavailable");
-    const secondAttempt = await openAttempt(store);
+    const secondAttempt = openAttempt(store);
 
     await expect(
       firstAttempt.step.run("call-upstream", () => {
@@ -145,7 +149,7 @@ describe("step.run", () => {
 
   test("saves each of parallel steps as it settles", async () => {
     const store = createInMemoryStepStore();
-    const { step } = await openAttempt(store);
+    const { step } = openAttempt(store);
     let finishSlowStep: (value: string) => void = () => undefined;
     const slowStepResult = new Promise<string>((resolve) => {
       finishSlowStep = resolve;
@@ -156,22 +160,22 @@ describe("step.run", () => {
       step.run("slow-step", () => slowStepResult),
     ]);
     await vi.waitFor(async () => {
-      expect(await store.load()).toHaveProperty("fast-step");
+      expect(await store.savedSteps()).toHaveProperty("fast-step");
     });
-    const savedBeforeTheSlowStepSettles = await store.load();
+    const savedBeforeTheSlowStepSettles = await store.savedSteps();
     finishSlowStep("slow");
 
     expect(savedBeforeTheSlowStepSettles).not.toHaveProperty("slow-step");
     expect(await bothSteps).toEqual(["fast", "slow"]);
-    expect(await store.load()).toHaveProperty("slow-step");
+    expect(await store.savedSteps()).toHaveProperty("slow-step");
   });
 });
 
 describe("step.run idempotency key", () => {
   test("hands fn the same idempotency key on every attempt, and another key to another step", async () => {
     const store = createInMemoryStepStore();
-    const firstAttempt = await openAttempt(store);
-    const secondAttempt = await openAttempt(store);
+    const firstAttempt = openAttempt(store);
+    const secondAttempt = openAttempt(store);
     const keys: string[] = [];
 
     await firstAttempt.step
@@ -195,7 +199,7 @@ describe("step.run idempotency key", () => {
 
 describe("step.run misuse", () => {
   test("rejects a repeated step id, naming it, without running fn again", async () => {
-    const { step, throwRecordedMisuse } = await openAttempt(createInMemoryStepStore());
+    const { step, throwRecordedMisuse } = openAttempt(createInMemoryStepStore());
     await step.run("send-email", () => "sent");
     const sendEmailAgain = vi.fn(() => "sent again");
 
@@ -209,7 +213,7 @@ describe("step.run misuse", () => {
   });
 
   test("records a misuse the handler caught, so the run still fails with it", async () => {
-    const { step, throwRecordedMisuse } = await openAttempt(createInMemoryStepStore());
+    const { step, throwRecordedMisuse } = openAttempt(createInMemoryStepStore());
     await step.run("send-email", () => "sent");
 
     await step.run("send-email", () => "sent").catch(() => undefined);
@@ -219,8 +223,8 @@ describe("step.run misuse", () => {
 
   test("rejects a step started inside another step's fn", async () => {
     const store = createInMemoryStepStore();
-    const { step, throwRecordedMisuse } = await openAttempt(store);
-    const secondAttempt = await openAttempt(store);
+    const { step, throwRecordedMisuse } = openAttempt(store);
+    const secondAttempt = openAttempt(store);
 
     await expect(step.run("outer", () => step.run("inner", () => "inner result"))).rejects.toThrow(
       new StepMisuseError(
@@ -245,8 +249,8 @@ describe("step.run misuse", () => {
     ["a symbol", () => Symbol("result")],
   ])("rejects %s result as not JSON and does not save it", async (_resultKind, nonJsonResult) => {
     const store = createInMemoryStepStore();
-    const { step, throwRecordedMisuse } = await openAttempt(store);
-    const secondAttempt = await openAttempt(store);
+    const { step, throwRecordedMisuse } = openAttempt(store);
+    const secondAttempt = openAttempt(store);
 
     await expect(step.run("compute", nonJsonResult as () => JsonValue)).rejects.toThrow(
       /^The result of step "compute" is not JSON/,
@@ -256,7 +260,7 @@ describe("step.run misuse", () => {
   });
 
   test("accepts a result of exactly 1 MiB once serialized", async () => {
-    const { step } = await openAttempt(createInMemoryStepStore());
+    const { step } = openAttempt(createInMemoryStepStore());
 
     await expect(step.run("render", () => stringSerializedInBytes(ONE_MEBIBYTE))).resolves.toHaveLength(
       ONE_MEBIBYTE - 4,
@@ -265,8 +269,8 @@ describe("step.run misuse", () => {
 
   test("rejects a result over 1 MiB once serialized, and does not save it", async () => {
     const store = createInMemoryStepStore();
-    const { step, throwRecordedMisuse } = await openAttempt(store);
-    const secondAttempt = await openAttempt(store);
+    const { step, throwRecordedMisuse } = openAttempt(store);
+    const secondAttempt = openAttempt(store);
 
     await expect(step.run("render", () => stringSerializedInBytes(ONE_MEBIBYTE + 1))).rejects.toThrow(
       new StepMisuseError(
@@ -277,11 +281,15 @@ describe("step.run misuse", () => {
     expect(await secondAttempt.step.run("render", () => "small")).toBe("small");
   });
 
-  test("rejects a step that would bring the run's saved steps over 10 MiB, counting earlier attempts", async () => {
+  test("rejects a step that would bring the run's saved steps over 10 MiB, counting the earlier attempts' steps it reaches", async () => {
+    const pageIds = Array.from({ length: 9 }, (_unused, index) => `page-${index}`);
     const savedResultsByStepId = Object.fromEntries(
-      Array.from({ length: 9 }, (_unused, index) => [`page-${index}`, `["${stringSerializedInBytes(ONE_MEBIBYTE)}"]`]),
+      pageIds.map((pageId) => [pageId, `["${stringSerializedInBytes(ONE_MEBIBYTE)}"]`]),
     );
-    const { step, throwRecordedMisuse } = await openAttempt(createInMemoryStepStore(savedResultsByStepId));
+    const { step, throwRecordedMisuse } = openAttempt(createInMemoryStepStore(savedResultsByStepId));
+    for (const pageId of pageIds) {
+      await step.run(pageId, () => "not run again");
+    }
     await step.run("page-9", () => stringSerializedInBytes(ONE_MEBIBYTE));
 
     await expect(step.run("summary", () => "s")).rejects.toThrow(
@@ -293,7 +301,7 @@ describe("step.run misuse", () => {
   });
 
   test("rejects every later step with the recorded misuse, without running its fn", async () => {
-    const { step } = await openAttempt(createInMemoryStepStore());
+    const { step } = openAttempt(createInMemoryStepStore());
     await step.run("send-email", () => "sent");
     const repeatError = await step.run("send-email", () => "sent").catch((error: unknown) => error);
     const nextStep = vi.fn(() => "next");
@@ -305,7 +313,7 @@ describe("step.run misuse", () => {
 
 describe("step.run types", () => {
   test("resolves with the type fn returns, sync or async", async () => {
-    const { step } = await openAttempt(createInMemoryStepStore());
+    const { step } = openAttempt(createInMemoryStepStore());
 
     const charge = await step.run("charge-card", async () => ({ chargeId: "ch-1", amount: 10 }));
     const nothing = await step.run("log", () => undefined);
@@ -317,7 +325,7 @@ describe("step.run types", () => {
   });
 
   test("refuses a result that isn't JSON at compile time", async () => {
-    const { step } = await openAttempt(createInMemoryStepStore());
+    const { step } = openAttempt(createInMemoryStepStore());
 
     await expect(
       // @ts-expect-error a Date isn't JSON
@@ -332,38 +340,38 @@ describe("step.run types", () => {
 
 const ONE_HOUR_IN_MILLISECONDS = 60 * 60 * 1000;
 
-function wakeAtOf(outcome: HandlerOutcome): number | undefined {
-  return outcome.kind === "suspended" ? outcome.wakeAt : undefined;
+function resumesAtOf(outcome: HandlerOutcome): number | undefined {
+  return outcome.kind === "suspended" ? outcome.resumesAt : undefined;
 }
 
-function savedSleep(wakeAt: number, attempt = 1): string {
-  return JSON.stringify({ kind: "sleep", wakeAt, attempt });
+function savedSleep(resumesAt: number): string {
+  return String(resumesAt);
 }
 
 describe("step.sleep and step.sleepUntil", () => {
-  test("save the wake time, then suspend the run until it, even when the handler catches the suspension", async () => {
+  test("save the resume time, then suspend the run until it, even when the handler catches the suspension", async () => {
     const store = createInMemoryStepStore();
-    const { step, executeHandler } = await openAttempt(store, 2);
-    const wakeAt = Date.now() + ONE_HOUR_IN_MILLISECONDS;
+    const { step, executeHandler } = openAttempt(store);
+    const resumesAt = Date.now() + ONE_HOUR_IN_MILLISECONDS;
 
     const outcome = await executeHandler(async () => {
-      await step.sleepUntil("wait-for-trial-end", new Date(wakeAt)).catch(() => undefined);
+      await step.sleepUntil("wait-for-trial-end", new Date(resumesAt)).catch(() => undefined);
     });
 
-    expect(outcome).toEqual({ kind: "suspended", wakeAt: wakeAt });
-    expect(await store.load()).toStrictEqual({ "wait-for-trial-end": savedSleep(wakeAt, 2) });
+    expect(outcome).toEqual({ kind: "suspended", resumesAt });
+    expect(await store.savedSteps()).toStrictEqual({ "wait-for-trial-end": savedSleep(resumesAt) });
   });
 
-  test("save the wake time and let the handler go on when a future wake time continues at once", async () => {
+  test("save the resume time and let the handler go on when a future resume time continues at once", async () => {
     const store = createInMemoryStepStore();
-    const { step, executeHandler } = await openAttempt(store, 1, createRecordingSends(), {
-      futureWakeTime: "continue at once",
+    const { step, executeHandler } = openAttempt(store, createRecordingSends(), {
+      futureResumeTime: "continue at once",
     });
-    const wakeAt = Date.now() + ONE_HOUR_IN_MILLISECONDS;
+    const resumesAt = Date.now() + ONE_HOUR_IN_MILLISECONDS;
     const stepsReached: string[] = [];
 
     const outcome = await executeHandler(async () => {
-      await step.sleepUntil("wait-for-trial-end", new Date(wakeAt));
+      await step.sleepUntil("wait-for-trial-end", new Date(resumesAt));
       await step.run("send-reminder", () => {
         stepsReached.push("send-reminder");
       });
@@ -371,23 +379,26 @@ describe("step.sleep and step.sleepUntil", () => {
 
     expect(outcome).toEqual({ kind: "completed" });
     expect(stepsReached).toEqual(["send-reminder"]);
-    expect(await store.load()).toStrictEqual({ "wait-for-trial-end": savedSleep(wakeAt, 1), "send-reminder": "[]" });
+    expect(await store.savedSteps()).toStrictEqual({
+      "wait-for-trial-end": savedSleep(resumesAt),
+      "send-reminder": "[]",
+    });
   });
 
-  test("sleep saves a wake time its duration away from now", async () => {
-    const { step, executeHandler } = await openAttempt(createInMemoryStepStore());
+  test("sleep saves a resume time its duration away from now", async () => {
+    const { step, executeHandler } = openAttempt(createInMemoryStepStore());
     const threeDaysInMilliseconds = 3 * 24 * ONE_HOUR_IN_MILLISECONDS;
     const sleepReachedAt = Date.now();
 
     const outcome = await executeHandler(() => step.sleep("cool-down", "3d"));
 
-    expect(wakeAtOf(outcome)).toBeGreaterThanOrEqual(sleepReachedAt + threeDaysInMilliseconds);
-    expect(wakeAtOf(outcome)).toBeLessThanOrEqual(Date.now() + threeDaysInMilliseconds);
+    expect(resumesAtOf(outcome)).toBeGreaterThanOrEqual(sleepReachedAt + threeDaysInMilliseconds);
+    expect(resumesAtOf(outcome)).toBeLessThanOrEqual(Date.now() + threeDaysInMilliseconds);
   });
 
   test("returns at once for a time in the past, and still saves it", async () => {
     const store = createInMemoryStepStore();
-    const { step, executeHandler } = await openAttempt(store);
+    const { step, executeHandler } = openAttempt(store);
     const pastTime = Date.now() - 1000;
     const afterTheSleep = vi.fn();
 
@@ -398,11 +409,11 @@ describe("step.sleep and step.sleepUntil", () => {
 
     expect(outcome).toEqual({ kind: "completed" });
     expect(afterTheSleep).toHaveBeenCalledOnce();
-    expect(await store.load()).toStrictEqual({ wait: savedSleep(pastTime) });
+    expect(await store.savedSteps()).toStrictEqual({ wait: savedSleep(pastTime) });
   });
 
   test("takes an ISO date string with Z or an offset", async () => {
-    const { step, executeHandler } = await openAttempt(createInMemoryStepStore());
+    const { step, executeHandler } = openAttempt(createInMemoryStepStore());
 
     const outcome = await executeHandler(async () => {
       await Promise.all([
@@ -411,32 +422,32 @@ describe("step.sleep and step.sleepUntil", () => {
       ]);
     });
 
-    expect(outcome).toEqual({ kind: "suspended", wakeAt: Date.parse("2998-12-31T23:00:00.000Z") });
+    expect(outcome).toEqual({ kind: "suspended", resumesAt: Date.parse("2998-12-31T23:00:00.000Z") });
   });
 
-  test("returns at once on resume when the saved wake time has passed, whatever the duration says", async () => {
-    const pastWakeAt = Date.now() - 1000;
-    const store = createInMemoryStepStore({ "cool-down": savedSleep(pastWakeAt) });
-    const { step, executeHandler } = await openAttempt(store);
+  test("returns at once on resume when the saved resume time has passed, whatever the duration says", async () => {
+    const pastResumesAt = Date.now() - 1000;
+    const store = createInMemoryStepStore({ "cool-down": savedSleep(pastResumesAt) });
+    const { step, executeHandler } = openAttempt(store);
 
     const outcome = await executeHandler(() => step.sleep("cool-down", "3d"));
 
     expect(outcome).toEqual({ kind: "completed" });
-    expect(await store.load()).toStrictEqual({ "cool-down": savedSleep(pastWakeAt) });
+    expect(await store.savedSteps()).toStrictEqual({ "cool-down": savedSleep(pastResumesAt) });
   });
 
-  test("suspends again until the saved wake time when the run is picked up before it", async () => {
-    const savedWakeAt = Date.now() + ONE_HOUR_IN_MILLISECONDS;
-    const { step, executeHandler } = await openAttempt(createInMemoryStepStore({ wait: savedSleep(savedWakeAt) }));
+  test("suspends again until the saved resume time when the run is picked up before it", async () => {
+    const savedResumesAt = Date.now() + ONE_HOUR_IN_MILLISECONDS;
+    const { step, executeHandler } = openAttempt(createInMemoryStepStore({ wait: savedSleep(savedResumesAt) }));
 
     const outcome = await executeHandler(() => step.sleepUntil("wait", new Date(0)));
 
-    expect(outcome).toEqual({ kind: "suspended", wakeAt: savedWakeAt });
+    expect(outcome).toEqual({ kind: "suspended", resumesAt: savedResumesAt });
   });
 
   test("suspends once the steps in flight settle, so their results are saved", async () => {
     const store = createInMemoryStepStore();
-    const { step, executeHandler } = await openAttempt(store);
+    const { step, executeHandler } = openAttempt(store);
     let finishSlowStep: (value: string) => void = () => undefined;
     const slowStepResult = new Promise<string>((resolve) => {
       finishSlowStep = resolve;
@@ -450,43 +461,43 @@ describe("step.sleep and step.sleepUntil", () => {
       return outcome;
     });
     await vi.waitFor(async () => {
-      expect(await store.load()).toHaveProperty("wait");
+      expect(await store.savedSteps()).toHaveProperty("wait");
     });
     const isSuspendedBeforeTheSlowStepSettles = isSuspended;
     finishSlowStep("slow");
 
     expect(isSuspendedBeforeTheSlowStepSettles).toBe(false);
-    expect(wakeAtOf(await suspension)).toBeGreaterThan(Date.now());
-    expect(await store.load()).toHaveProperty("slow-step", '["slow"]');
+    expect(resumesAtOf(await suspension)).toBeGreaterThan(Date.now());
+    expect(await store.savedSteps()).toHaveProperty("slow-step", '["slow"]');
   });
 
   test("suspends until the earliest of two parallel sleeps", async () => {
-    const { step, executeHandler } = await openAttempt(createInMemoryStepStore());
-    const earliestWakeAt = Date.now() + ONE_HOUR_IN_MILLISECONDS;
+    const { step, executeHandler } = openAttempt(createInMemoryStepStore());
+    const earliestResumesAt = Date.now() + ONE_HOUR_IN_MILLISECONDS;
 
     const outcome = await executeHandler(async () => {
       await Promise.all([
-        step.sleepUntil("wait-long", new Date(earliestWakeAt + ONE_HOUR_IN_MILLISECONDS)),
-        step.sleepUntil("wait-short", new Date(earliestWakeAt)),
+        step.sleepUntil("wait-long", new Date(earliestResumesAt + ONE_HOUR_IN_MILLISECONDS)),
+        step.sleepUntil("wait-short", new Date(earliestResumesAt)),
       ]);
     });
 
-    expect(outcome).toEqual({ kind: "suspended", wakeAt: earliestWakeAt });
+    expect(outcome).toEqual({ kind: "suspended", resumesAt: earliestResumesAt });
   });
 
   test("suspends even when the handler goes on to throw another error", async () => {
-    const { step, executeHandler } = await openAttempt(createInMemoryStepStore());
+    const { step, executeHandler } = openAttempt(createInMemoryStepStore());
 
     const outcome = await executeHandler(async () => {
       await step.sleep("wait", "1h").catch(() => undefined);
       throw new Error("handler error after the sleep");
     });
 
-    expect(wakeAtOf(outcome)).toBeGreaterThan(Date.now());
+    expect(resumesAtOf(outcome)).toBeGreaterThan(Date.now());
   });
 
   test("lets the handler's own error through when no sleep suspends the run", async () => {
-    const { executeHandler } = await openAttempt(createInMemoryStepStore());
+    const { executeHandler } = openAttempt(createInMemoryStepStore());
     const handlerError = new Error("upstream unavailable");
 
     await expect(
@@ -497,7 +508,7 @@ describe("step.sleep and step.sleepUntil", () => {
   });
 
   test("rejects every later step of the stretch without running it", async () => {
-    const { step, executeHandler } = await openAttempt(createInMemoryStepStore());
+    const { step, executeHandler } = openAttempt(createInMemoryStepStore());
     const laterStep = vi.fn(() => "later");
     let laterStepError: unknown;
 
@@ -512,7 +523,7 @@ describe("step.sleep and step.sleepUntil", () => {
   });
 
   test("fails the run with a misuse of the same stretch rather than suspending it", async () => {
-    const { step, executeHandler } = await openAttempt(createInMemoryStepStore());
+    const { step, executeHandler } = openAttempt(createInMemoryStepStore());
 
     await expect(
       executeHandler(async () => {
@@ -524,7 +535,7 @@ describe("step.sleep and step.sleepUntil", () => {
   });
 
   test("shares the step id namespace, so a sleep reusing a step's id is a misuse", async () => {
-    const { step, executeHandler } = await openAttempt(createInMemoryStepStore());
+    const { step, executeHandler } = openAttempt(createInMemoryStepStore());
 
     await expect(
       executeHandler(async () => {
@@ -537,7 +548,7 @@ describe("step.sleep and step.sleepUntil", () => {
   });
 
   test("rejects a sleep started inside a step's fn", async () => {
-    const { step, executeHandler } = await openAttempt(createInMemoryStepStore());
+    const { step, executeHandler } = openAttempt(createInMemoryStepStore());
 
     await expect(
       executeHandler(async () => {
@@ -557,18 +568,18 @@ describe("step.sleep and step.sleepUntil", () => {
     ["a string that isn't a date", () => "next tuesday"],
     ["an ISO string without Z or an offset", () => "2999-01-01T00:00:00"],
     ["a number", () => Date.now() as unknown as Date],
-  ])("rejects %s as a wake time", async (_timeKind, invalidTime) => {
+  ])("rejects %s as a resume time", async (_timeKind, invalidTime) => {
     const store = createInMemoryStepStore();
-    const { step, executeHandler } = await openAttempt(store);
+    const { step, executeHandler } = openAttempt(store);
 
     await expect(executeHandler(() => step.sleepUntil("wait", invalidTime()))).rejects.toThrow(
-      /^The wake time of step "wait" is not a Date or an ISO date string with Z or an offset/,
+      /^The resume time of step "wait" is not a Date or an ISO date string with Z or an offset/,
     );
-    expect(await store.load()).toStrictEqual({});
+    expect(await store.savedSteps()).toStrictEqual({});
   });
 
   test("rejects an invalid duration that slipped past the types", async () => {
-    const { step, executeHandler } = await openAttempt(createInMemoryStepStore());
+    const { step, executeHandler } = openAttempt(createInMemoryStepStore());
 
     await expect(executeHandler(() => step.sleep("wait", "0.5h" as Duration))).rejects.toThrow(
       new StepMisuseError(
@@ -578,17 +589,70 @@ describe("step.sleep and step.sleepUntil", () => {
   });
 });
 
-describe("resuming after a sleep", () => {
-  test("is told apart from a retry by the attempt that saved the sleep", async () => {
-    const savedSteps = { wait: savedSleep(Date.now() - 1000, 2) };
+describe("an attempt whose sleeps were woken", () => {
+  test("returns from every sleep at once, the saved one and those still to come, and saves the new ones", async () => {
+    const savedResumesAt = Date.now() + ONE_HOUR_IN_MILLISECONDS;
+    const store = createInMemoryStepStore({ "wait-for-trial-end": savedSleep(savedResumesAt) });
+    const { step, executeHandler } = openAttempt(store, createRecordingSends(), { sleepsWokenAt: Date.now() });
+    const sendFollowUp = vi.fn(() => "sent");
 
-    const resumedAttempt = await openAttempt(createInMemoryStepStore(savedSteps), 2);
-    const retryAttempt = await openAttempt(createInMemoryStepStore(savedSteps), 3);
-    const firstAttempt = await openAttempt(createInMemoryStepStore(), 1);
+    const outcome = await executeHandler(async () => {
+      await step.sleepUntil("wait-for-trial-end", new Date(savedResumesAt));
+      await step.sleep("cool-down", "3d");
+      await step.run("send-follow-up", sendFollowUp);
+    });
 
-    expect(resumedAttempt.isResumingAfterSleep).toBe(true);
-    expect(retryAttempt.isResumingAfterSleep).toBe(false);
-    expect(firstAttempt.isResumingAfterSleep).toBe(false);
+    expect(outcome).toEqual({ kind: "completed" });
+    expect(sendFollowUp).toHaveBeenCalledOnce();
+    expect(Object.keys(store.savedSteps())).toEqual(["wait-for-trial-end", "cool-down", "send-follow-up"]);
+  });
+});
+
+describe("an attempt that lost its lock", () => {
+  const lockLosingStore = (): StepStore => ({
+    readStep: async (stepId) => {
+      throw new LostRunLockError(`Step "${stepId}" of run "run-7"`);
+    },
+    saveStep: async (stepId) => {
+      throw new LostRunLockError(`Step "${stepId}" of run "run-7"`);
+    },
+    saveSleep: async (stepId) => {
+      throw new LostRunLockError(`Step "${stepId}" of run "run-7"`);
+    },
+  });
+
+  test("throws LostRunLockError from a step, a sleep and a send, and marks the lock lost each time", async () => {
+    const markLockLost = vi.fn();
+    const recordingSends = createRecordingSends();
+    const { step, dispatch } = openAttempt(lockLosingStore(), recordingSends, { markLockLost });
+    const loadInvoice = vi.fn(() => "inv-1");
+    const thrownBy = (stepCall: Promise<unknown>) =>
+      stepCall.then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+
+    const thrownValues = await Promise.all([
+      thrownBy(step.run("load-invoice", loadInvoice)),
+      thrownBy(step.sleepUntil("wait", new Date(0))),
+      thrownBy(dispatch("send-receipt", {})),
+    ]);
+
+    expect(thrownValues.map((thrownValue) => thrownValue instanceof LostRunLockError)).toEqual([true, true, true]);
+    expect(markLockLost).toHaveBeenCalledTimes(3);
+    expect(loadInvoice).not.toHaveBeenCalled();
+    expect(recordingSends.sends).toStrictEqual([]);
+  });
+
+  test("does not mark the lock lost on any other error", async () => {
+    const markLockLost = vi.fn();
+    const store = createInMemoryStepStore();
+    const { step } = openAttempt({ ...store, saveStep: () => Promise.reject(new Error("boom")) }, undefined, {
+      markLockLost,
+    });
+
+    await expect(step.run("charge-card", () => "charged")).rejects.toThrow("boom");
+    expect(markLockLost).not.toHaveBeenCalled();
   });
 });
 
@@ -597,10 +661,39 @@ function topLevelSendId(positionInScope: number): string {
 }
 
 describe("handler dispatch and emit", () => {
+  test("hand the sender the parent's fence: the run, its lock token and the derived send id", async () => {
+    const fences: SendFence[] = [];
+    const sender: HandlerSender = {
+      dispatch: async (fence, _name, _payload, options) => {
+        fences.push(fence);
+        return { runId: options.runId ?? "" };
+      },
+      emit: async (fence, _name, _payload, options) => {
+        fences.push(fence);
+        return { eventId: options.eventId ?? "" };
+      },
+    };
+    const { step, dispatch, emit } = openAttempt(createInMemoryStepStore(), undefined, { sender });
+
+    await dispatch("send-receipt", {});
+    await step.run("notify", async () => {
+      await emit("invoice.sent", {});
+    });
+
+    expect(fences).toStrictEqual([
+      { parentRunId: "run-7", lockToken: LOCK_TOKEN, stepId: topLevelSendId(0) },
+      {
+        parentRunId: "run-7",
+        lockToken: LOCK_TOKEN,
+        stepId: deriveHandlerSendId("send-invoice", "run-7", "notify", 0),
+      },
+    ]);
+  });
+
   test("send under ids derived from the run and their position, and save a marker for each", async () => {
     const store = createInMemoryStepStore();
     const recordingSends = createRecordingSends();
-    const { dispatch, emit } = await openAttempt(store, 1, recordingSends);
+    const { dispatch, emit } = openAttempt(store, recordingSends);
 
     const dispatchedRun = await dispatch("send-receipt", { invoiceId: "inv-1" });
     const emittedEvent = await emit("invoice.sent", { invoiceId: "inv-1" });
@@ -616,19 +709,19 @@ describe("handler dispatch and emit", () => {
       },
       { kind: "emit", name: "invoice.sent", payload: { invoiceId: "inv-1" }, options: { eventId: topLevelSendId(1) } },
     ]);
-    expect(await store.load()).toStrictEqual({
-      [topLevelSendId(0)]: JSON.stringify({ kind: "dispatch", runId: topLevelSendId(0) }),
-      [topLevelSendId(1)]: JSON.stringify({ kind: "emit", eventId: topLevelSendId(1) }),
+    expect(await store.savedSteps()).toStrictEqual({
+      [topLevelSendId(0)]: JSON.stringify([topLevelSendId(0)]),
+      [topLevelSendId(1)]: JSON.stringify([topLevelSendId(1)]),
     });
   });
 
   test("skip a send a previous attempt made, and resolve with what it sent", async () => {
     const store = createInMemoryStepStore();
-    const firstAttempt = await openAttempt(store, 1);
+    const firstAttempt = openAttempt(store);
     const firstDispatchedRun = await firstAttempt.dispatch("send-receipt", { invoiceId: "inv-1" });
     const firstEmittedEvent = await firstAttempt.emit("invoice.sent", { invoiceId: "inv-1" });
     const recordingSends = createRecordingSends();
-    const secondAttempt = await openAttempt(store, 2, recordingSends);
+    const secondAttempt = openAttempt(store, recordingSends);
 
     const secondDispatchedRun = await secondAttempt.dispatch("send-receipt", { invoiceId: "inv-1" });
     const secondEmittedEvent = await secondAttempt.emit("invoice.sent", { invoiceId: "inv-1" });
@@ -641,10 +734,10 @@ describe("handler dispatch and emit", () => {
   test("let an explicit runId or eventId win, keyed by position all the same", async () => {
     const store = createInMemoryStepStore();
     const recordingSends = createRecordingSends();
-    const firstAttempt = await openAttempt(store, 1, recordingSends);
+    const firstAttempt = openAttempt(store, recordingSends);
     await firstAttempt.dispatch("ship-order", { orderId: "ord-1" }, { runId: "ship-order-ord-1", delay: "5m" });
     await firstAttempt.emit("order.shipped", { orderId: "ord-1" }, { eventId: "order-shipped-ord-1" });
-    const secondAttempt = await openAttempt(store, 2, recordingSends);
+    const secondAttempt = openAttempt(store, recordingSends);
 
     const repeatedDispatch = await secondAttempt.dispatch("ship-order", { orderId: "ord-1" }, { runId: "other" });
     const repeatedEmit = await secondAttempt.emit("order.shipped", { orderId: "ord-1" });
@@ -655,15 +748,15 @@ describe("handler dispatch and emit", () => {
     ]);
     expect(repeatedDispatch).toStrictEqual({ runId: "ship-order-ord-1" });
     expect(repeatedEmit).toStrictEqual({ eventId: "order-shipped-ord-1" });
-    expect(await store.load()).toStrictEqual({
-      [topLevelSendId(0)]: JSON.stringify({ kind: "dispatch", runId: "ship-order-ord-1" }),
-      [topLevelSendId(1)]: JSON.stringify({ kind: "emit", eventId: "order-shipped-ord-1" }),
+    expect(await store.savedSteps()).toStrictEqual({
+      [topLevelSendId(0)]: JSON.stringify(["ship-order-ord-1"]),
+      [topLevelSendId(1)]: JSON.stringify(["order-shipped-ord-1"]),
     });
   });
 
   test("number the sends inside a step's fn apart from the top level", async () => {
     const recordingSends = createRecordingSends();
-    const { step, emit } = await openAttempt(createInMemoryStepStore(), 1, recordingSends);
+    const { step, emit } = openAttempt(createInMemoryStepStore(), recordingSends);
 
     await step.run("notify", async () => {
       await emit("invoice.sent", { invoiceId: "inv-1" });
@@ -682,10 +775,10 @@ describe("handler dispatch and emit", () => {
     failingSends.emit = async () => {
       throw new Error("Redis unavailable");
     };
-    const firstAttempt = await openAttempt(store, 1, failingSends);
+    const firstAttempt = openAttempt(store, failingSends);
     await firstAttempt.emit("invoice.sent", {}).catch(() => undefined);
     const recordingSends = createRecordingSends();
-    const secondAttempt = await openAttempt(store, 2, recordingSends);
+    const secondAttempt = openAttempt(store, recordingSends);
 
     await secondAttempt.emit("invoice.sent", {});
 
@@ -694,7 +787,7 @@ describe("handler dispatch and emit", () => {
 
   test("throw without sending once a sleep suspended the stretch", async () => {
     const recordingSends = createRecordingSends();
-    const { step, emit, executeHandler } = await openAttempt(createInMemoryStepStore(), 1, recordingSends);
+    const { step, emit, executeHandler } = openAttempt(createInMemoryStepStore(), recordingSends);
     let emitError: unknown;
 
     await executeHandler(async () => {
@@ -716,18 +809,18 @@ describe("handler dispatch and emit", () => {
       });
       return { eventId: "evt-1" };
     };
-    const { step, emit, executeHandler } = await openAttempt(store, 1, slowSends);
+    const { step, emit, executeHandler } = openAttempt(store, slowSends);
 
     const suspension = executeHandler(async () => {
       await Promise.all([emit("invoice.sent", {}), step.sleep("wait", "1h")]);
     });
     await vi.waitFor(async () => {
-      expect(await store.load()).toHaveProperty("wait");
+      expect(await store.savedSteps()).toHaveProperty("wait");
     });
     finishEmit();
 
-    expect(wakeAtOf(await suspension)).toBeGreaterThan(Date.now());
-    expect(await store.load()).toHaveProperty([topLevelSendId(0)], JSON.stringify({ kind: "emit", eventId: "evt-1" }));
+    expect(resumesAtOf(await suspension)).toBeGreaterThan(Date.now());
+    expect(await store.savedSteps()).toHaveProperty([topLevelSendId(0)], JSON.stringify(["evt-1"]));
   });
 });
 
@@ -737,7 +830,7 @@ describe("an aborted attempt", () => {
     const recordingSends = createRecordingSends();
     const abortController = new AbortController();
     const abortReason = new Error("the attempt lost its lock");
-    const { step, emit, dispatch } = await openAttempt(store, 1, recordingSends, {
+    const { step, emit, dispatch } = openAttempt(store, recordingSends, {
       abortSignal: abortController.signal,
     });
     const chargeCard = vi.fn(() => "charged");
@@ -754,13 +847,13 @@ describe("an aborted attempt", () => {
     expect(thrownValues).toStrictEqual([abortReason, abortReason, abortReason, abortReason, abortReason]);
     expect(chargeCard).not.toHaveBeenCalled();
     expect(recordingSends.sends).toStrictEqual([]);
-    expect(await store.load()).toStrictEqual({});
+    expect(await store.savedSteps()).toStrictEqual({});
   });
 
   test("still serves no saved result once aborted, so a replayed step throws too", async () => {
     const abortController = new AbortController();
     const abortReason = new Error("the worker reached its shutdown deadline");
-    const { step } = await openAttempt(createInMemoryStepStore({ "charge-card": '["charged"]' }), 2, undefined, {
+    const { step } = openAttempt(createInMemoryStepStore({ "charge-card": '["charged"]' }), undefined, {
       abortSignal: abortController.signal,
     });
     abortController.abort(abortReason);
@@ -773,7 +866,7 @@ describe("an attempt in a draining worker", () => {
   test("yields at its next step once the steps in flight have settled and saved", async () => {
     const store = createInMemoryStepStore();
     let isWorkerDraining = false;
-    const { step, executeHandler } = await openAttempt(store, 1, undefined, {
+    const { step, executeHandler } = openAttempt(store, undefined, {
       isWorkerDraining: () => isWorkerDraining,
     });
     let finishSlowStep: (value: string) => void = () => undefined;
@@ -803,12 +896,12 @@ describe("an attempt in a draining worker", () => {
     expect(isOutcomeSettledBeforeTheSlowStep).toBe(false);
     expect(yieldError).toMatchObject({ name: "RunYield" });
     expect(sendInvoice).not.toHaveBeenCalled();
-    expect(await store.load()).toStrictEqual({ "render-pdf": '["rendered"]' });
+    expect(await store.savedSteps()).toStrictEqual({ "render-pdf": '["rendered"]' });
   });
 
   test("yields at an emit or a dispatch without sending it, even when the handler catches the yield", async () => {
     const recordingSends = createRecordingSends();
-    const { emit, dispatch, executeHandler } = await openAttempt(createInMemoryStepStore(), 1, recordingSends, {
+    const { emit, dispatch, executeHandler } = openAttempt(createInMemoryStepStore(), recordingSends, {
       isWorkerDraining: () => true,
     });
 
@@ -822,7 +915,7 @@ describe("an attempt in a draining worker", () => {
   });
 
   test("completes when the handler reaches no step boundary", async () => {
-    const { executeHandler } = await openAttempt(createInMemoryStepStore(), 1, undefined, {
+    const { executeHandler } = openAttempt(createInMemoryStepStore(), undefined, {
       isWorkerDraining: () => true,
     });
 
@@ -831,7 +924,7 @@ describe("an attempt in a draining worker", () => {
 
   test("suspends rather than yields when a sleep came first", async () => {
     let isWorkerDraining = false;
-    const { step, executeHandler } = await openAttempt(createInMemoryStepStore(), 1, undefined, {
+    const { step, executeHandler } = openAttempt(createInMemoryStepStore(), undefined, {
       isWorkerDraining: () => isWorkerDraining,
     });
 

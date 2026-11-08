@@ -3,7 +3,7 @@ import type { DurationInMilliseconds, EpochMilliseconds } from "./durations.js";
 import { UnknownEventError, UnknownTaskError } from "./errors.js";
 import { deriveFiringRunId, deriveJobId, deriveListenerRunId } from "./ids.js";
 import type { EventId, JobId, RunId } from "./ids.js";
-import { loadSavedSteps } from "./redis-step-store.js";
+import { loadSavedStepResults } from "./redis-step-store.js";
 import { decodeRunListCursor, encodeRunListCursor } from "./run-list-cursor.js";
 import type { RunListCursor, RunListPosition } from "./run-list-cursor.js";
 import type { ErrorRecord, RunQueue, StoredRun } from "./run-queue.js";
@@ -18,7 +18,6 @@ import {
 import type { BullmqJobSet, BullmqJobState, RunState, RunStateFields } from "./run-states.js";
 import { previousFiringInstantBefore } from "./schedules.js";
 import type { CronExpression, DeclaredSchedule, IanaTimeZone } from "./schedules.js";
-import { savedStepResultsOf } from "./step-engine.js";
 import type { SavedStepResult } from "./step-engine.js";
 
 export type RunError = {
@@ -297,7 +296,7 @@ export function createQueueReader(config: QueueReaderConfig): QueueReader {
       ...runSummary,
       payload: record.data.payload,
       errors: record.data.errors.map(runErrorOf),
-      steps: savedStepResultsOf(await loadSavedSteps(client, record.jobKey)),
+      steps: await loadSavedStepResults(client, record.jobKey),
     } as RunOfTask<AnyTaskDefinition>;
   };
 

@@ -1,0 +1,250 @@
+import type { Redis } from "ioredis";
+import { expect, vi } from "vitest";
+
+import { integrationTest } from "../../tests/integration-test.js";
+import { expectNoInvariantViolations } from "../../tests/invariant-violations.js";
+import { serverInstantInMillisecondsOf } from "../../tests/server-instant.js";
+import { withRedis } from "../../tests/with-redis.js";
+import type { EpochMilliseconds } from "../durations.js";
+import { engineKeysOf } from "./engine-keys.js";
+import type { EngineKeys } from "./engine-keys.js";
+import { createEngine, DEDUP_WINDOW_IN_MILLISECONDS, RECORD_VERSION } from "./engine.js";
+import type { DispatchOrEmitRequest, EnqueueReply, ImplementedEngine, RunToCreate } from "./engine.js";
+
+type EngineTestContext = { engine: ImplementedEngine; redis: Redis; keys: EngineKeys; keyPrefix: string };
+
+function engineTest(name: string, body: (context: EngineTestContext) => Promise<void>): void {
+  integrationTest(name, async ({ redisUrl, keyPrefix }) => {
+    await withRedis(redisUrl, async (redis) => {
+      await body({ engine: createEngine(redis, keyPrefix), redis, keys: engineKeysOf(keyPrefix), keyPrefix });
+      await expectNoInvariantViolations(redis, keyPrefix);
+    });
+  });
+}
+
+async function enqueueTimedByTheServer(
+  { engine, redis }: EngineTestContext,
+  request: DispatchOrEmitRequest,
+): Promise<{ reply: EnqueueReply; instantBefore: EpochMilliseconds; instantAfter: EpochMilliseconds }> {
+  const instantBefore = await serverInstantInMillisecondsOf(redis);
+  const reply = await engine.enqueue(request);
+  return { reply, instantBefore, instantAfter: await serverInstantInMillisecondsOf(redis) };
+}
+
+async function storedValuesByKeyOf(redis: Redis, keyPrefix: string): Promise<Map<string, Buffer | null>> {
+  const storedKeys = (await redis.keys(`{${keyPrefix}}:*`)).sort();
+  const storedValuesByKey = new Map<string, Buffer | null>();
+  for (const storedKey of storedKeys) {
+    storedValuesByKey.set(storedKey, await redis.dumpBuffer(storedKey));
+  }
+  return storedValuesByKey;
+}
+
+const SEND_EMAIL_RUN: RunToCreate = {
+  runId: "run-1",
+  task: "send-email",
+  payload: '{"to":"ada@example.com"}',
+  retries: 3,
+};
+
+const USER_SIGNED_UP = { eventName: "user.signed-up", eventId: "event-1" };
+
+function listenerRunsOf(sourceEvent: { eventName: string; eventId: string }, runIdSuffix = ""): RunToCreate[] {
+  return [
+    {
+      runId: `welcome${runIdSuffix}`,
+      task: "send-welcome-email",
+      payload: '{"userId":"u-1"}',
+      retries: 5,
+      sourceEvent,
+    },
+    {
+      runId: `crm${runIdSuffix}`,
+      task: "sync-crm",
+      payload: '{"userId":"u-1"}',
+      retries: 2,
+      concurrencyKey: "account-7",
+      sourceEvent,
+    },
+    { runId: `audit${runIdSuffix}`, task: "write-audit-log", payload: '{"userId":"u-1"}', retries: 0, sourceEvent },
+  ];
+}
+
+engineTest(
+  "a dispatch stores one pending run with its record, payload, indexes and wake-up marker",
+  async (context) => {
+    const { redis, keys } = context;
+
+    const { reply, instantBefore, instantAfter } = await enqueueTimedByTheServer(context, { runs: [SEND_EMAIL_RUN] });
+
+    expect(reply).toEqual({ kind: "enqueued", createdRunIds: ["run-1"], skippedRunIds: [] });
+    const record = await redis.hgetall(keys.runRecord("run-1"));
+    expect(record).toEqual({
+      version: String(RECORD_VERSION),
+      state: "pending",
+      task: "send-email",
+      attempt: "1",
+      retries: "3",
+      replays: "0",
+      stalls: "0",
+      order: expect.any(String),
+      dispatchedAt: expect.any(String),
+    });
+    expect(Number(record["dispatchedAt"])).toBeGreaterThanOrEqual(instantBefore);
+    expect(Number(record["dispatchedAt"])).toBeLessThanOrEqual(instantAfter);
+    expect(await redis.get(keys.runPayload("run-1"))).toBe('{"to":"ada@example.com"}');
+    expect(await redis.zrange(keys.pending, 0, -1)).toEqual(["run-1"]);
+    expect(await redis.zrange(keys.runIndex("send-email", "pending"), 0, -1)).toEqual(["run-1"]);
+    expect(await redis.smembers(keys.tasks)).toEqual(["send-email"]);
+    expect(await redis.zcard(keys.wakeUpMarker)).toBe(1);
+  },
+);
+
+engineTest("runs dispatched one after another are pending in that order", async ({ engine, redis, keys }) => {
+  await engine.enqueue({
+    runs: [
+      { ...SEND_EMAIL_RUN, runId: "run-1" },
+      { ...SEND_EMAIL_RUN, runId: "run-2" },
+    ],
+  });
+
+  await engine.enqueue({ runs: [{ ...SEND_EMAIL_RUN, runId: "run-3" }] });
+
+  expect(await redis.zrange(keys.pending, 0, -1)).toEqual(["run-1", "run-2", "run-3"]);
+});
+
+engineTest("a run created with a delay sits in delayed, due at the server's TIME plus the delay", async (context) => {
+  const { redis, keys } = context;
+  const delayInMilliseconds = 90_000;
+  vi.useFakeTimers({ toFake: ["Date"], now: new Date("2000-01-01T00:00:00Z") });
+  try {
+    const { instantBefore, instantAfter } = await enqueueTimedByTheServer(context, {
+      runs: [{ ...SEND_EMAIL_RUN, delayInMilliseconds }],
+    });
+
+    const startsAt = Number(await redis.hget(keys.runRecord("run-1"), "startsAt"));
+    expect(startsAt).toBeGreaterThanOrEqual(instantBefore + delayInMilliseconds);
+    expect(startsAt).toBeLessThanOrEqual(instantAfter + delayInMilliseconds);
+    expect(await redis.hget(keys.runRecord("run-1"), "state")).toBe("delayed");
+    expect(Number(await redis.zscore(keys.due, "run-1"))).toBe(startsAt);
+    expect(Number(await redis.zscore(keys.runIndex("send-email", "delayed"), "run-1"))).toBe(startsAt);
+    expect(await redis.zcard(keys.pending)).toBe(0);
+    expect(await redis.zcard(keys.wakeUpMarker)).toBe(0);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+engineTest(
+  "an emit stores every listener run with its source event, and the event's dedup entry for 24 hours",
+  async (context) => {
+    const { redis, keys } = context;
+
+    const { reply, instantBefore, instantAfter } = await enqueueTimedByTheServer(context, {
+      runs: listenerRunsOf(USER_SIGNED_UP),
+      eventDedup: USER_SIGNED_UP,
+    });
+
+    expect(reply).toEqual({ kind: "enqueued", createdRunIds: ["welcome", "crm", "audit"], skippedRunIds: [] });
+    expect(await redis.hmget(keys.runRecord("crm"), "eventName", "eventId", "concurrencyKey", "retries")).toEqual([
+      "user.signed-up",
+      "event-1",
+      "account-7",
+      "2",
+    ]);
+    expect(await redis.hget(keys.runRecord("welcome"), "concurrencyKey")).toBeNull();
+    expect(await redis.zcard(keys.pending)).toBe(3);
+    const eventDedupExpiresAt = Number(await redis.zscore(keys.eventDedup("user.signed-up"), "event-1"));
+    expect(eventDedupExpiresAt).toBeGreaterThanOrEqual(instantBefore + DEDUP_WINDOW_IN_MILLISECONDS);
+    expect(eventDedupExpiresAt).toBeLessThanOrEqual(instantAfter + DEDUP_WINDOW_IN_MILLISECONDS);
+  },
+);
+
+engineTest(
+  "a repeat of an event id within its window replies duplicate and writes nothing",
+  async ({ engine, redis, keyPrefix }) => {
+    await engine.enqueue({ runs: listenerRunsOf(USER_SIGNED_UP), eventDedup: USER_SIGNED_UP });
+    const storedValuesBefore = await storedValuesByKeyOf(redis, keyPrefix);
+
+    const reply = await engine.enqueue({
+      runs: listenerRunsOf(USER_SIGNED_UP, "-repeat"),
+      eventDedup: USER_SIGNED_UP,
+    });
+
+    expect(reply).toEqual({ kind: "duplicate" });
+    expect(await storedValuesByKeyOf(redis, keyPrefix)).toEqual(storedValuesBefore);
+  },
+);
+
+engineTest("an emit with one run the script rejects writes none of the runs", async ({ engine, redis, keyPrefix }) => {
+  const [welcomeRun, crmRun, auditRun] = listenerRunsOf(USER_SIGNED_UP);
+
+  const enqueue = engine.enqueue({
+    runs: [welcomeRun!, crmRun!, { ...auditRun!, delayInMilliseconds: -1 }],
+    eventDedup: USER_SIGNED_UP,
+  });
+
+  await expect(enqueue).rejects.toThrow("invalid argument: delayInMilliseconds must be a non-negative integer");
+  expect(await redis.keys(`{${keyPrefix}}:*`)).toEqual([]);
+});
+
+engineTest("an enqueue of no run is rejected and writes nothing", async ({ engine, redis, keyPrefix }) => {
+  const enqueue = engine.enqueue({ runs: [], eventDedup: USER_SIGNED_UP });
+
+  await expect(enqueue).rejects.toThrow("invalid argument: an enqueue creates at least one run");
+  expect(await redis.keys(`{${keyPrefix}}:*`)).toEqual([]);
+});
+
+engineTest(
+  "a repeat of an event id after its window creates only the listener runs that are gone",
+  async ({ engine, redis, keys }) => {
+    const [welcomeRun] = listenerRunsOf(USER_SIGNED_UP);
+    await engine.enqueue({ runs: [welcomeRun!] });
+    await redis.zadd(keys.eventDedup("user.signed-up"), 1, "event-1");
+
+    const reply = await engine.enqueue({ runs: listenerRunsOf(USER_SIGNED_UP), eventDedup: USER_SIGNED_UP });
+
+    expect(reply).toEqual({ kind: "enqueued", createdRunIds: ["crm", "audit"], skippedRunIds: ["welcome"] });
+    expect(Number(await redis.zscore(keys.eventDedup("user.signed-up"), "event-1"))).toBeGreaterThan(
+      await serverInstantInMillisecondsOf(redis),
+    );
+  },
+);
+
+engineTest(
+  "a repeat of a run id whose record exists is skipped and reported, its record untouched",
+  async ({ engine, redis, keys }) => {
+    await engine.enqueue({ runs: [SEND_EMAIL_RUN] });
+    const recordBefore = await redis.hgetall(keys.runRecord("run-1"));
+
+    const reply = await engine.enqueue({ runs: [{ ...SEND_EMAIL_RUN, payload: '{"to":"bob@example.com"}' }] });
+
+    expect(reply).toEqual({ kind: "enqueued", createdRunIds: [], skippedRunIds: ["run-1"] });
+    expect(await redis.hgetall(keys.runRecord("run-1"))).toEqual(recordBefore);
+    expect(await redis.get(keys.runPayload("run-1"))).toBe('{"to":"ada@example.com"}');
+  },
+);
+
+engineTest(
+  "a repeat of a run id whose dedup entry is live is skipped and reported",
+  async ({ engine, redis, keys }) => {
+    await redis.zadd(keys.runDedup("send-email"), (await serverInstantInMillisecondsOf(redis)) + 60_000, "run-1");
+
+    const reply = await engine.enqueue({ runs: [SEND_EMAIL_RUN] });
+
+    expect(reply).toEqual({ kind: "enqueued", createdRunIds: [], skippedRunIds: ["run-1"] });
+    expect(await redis.exists(keys.runRecord("run-1"))).toBe(0);
+  },
+);
+
+engineTest(
+  "a run id whose dedup entry has expired starts a new run, and the expired entry is trimmed",
+  async ({ engine, redis, keys }) => {
+    await redis.zadd(keys.runDedup("send-email"), 1, "run-1", 2, "older-run");
+
+    const reply = await engine.enqueue({ runs: [SEND_EMAIL_RUN] });
+
+    expect(reply).toEqual({ kind: "enqueued", createdRunIds: ["run-1"], skippedRunIds: [] });
+    expect(await redis.zcard(keys.runDedup("send-email"))).toBe(0);
+  },
+);

@@ -15,6 +15,18 @@
 - The test opens its own client on `redisUrl`, with an `error` listener attached before it connects, and closes it in a `finally`, so a failed assertion leaves no open handle.
 - Cut the connection with `startTcpProxy(redisUrl)` from `tests/tcp-proxy.ts`: point the instance at its `url`; `cut()` resets the live sockets and refuses new connections as a down server does, `restore()` accepts them again, `cutFor(milliseconds)` does both around a wait, and `stop()` goes in the `finally`. An integration or e2e test that needs a server with an evicting `maxmemory-policy` starts its own container with `startEvictingServer` from `tests/evicting-server.ts` (`isConfigDisabled` renames `CONFIG` away, as a managed service blocks it), which hands back its direct `url`, a `proxy` in front of it, and `stop()`; it is skipped with `skipIf(providedRedisUrl() !== undefined)`, so `NEXTASKING_TEST_REDIS_URL` still means no Docker.
 
+## Engine scripts
+
+- The engine lives in `src/engine/`: each Lua script is a TypeScript module exporting its source as a string (`enqueue-script.ts`), never a `.lua` file, because Next bundles the library and a file read at runtime would not ship. The engine prepends the shared library (`lua-library.ts`) and loads the result with `defineScriptCommand` (`script-commands.ts`).
+- Test each script in one collocated integration file named after its module (`enqueue-script.integration.test.ts`), through the engine method that runs it, against the shared server. Assert on the method's typed reply and on the record and indexes, built with `engineKeysOf` from `src/engine/engine-keys.ts`; never write a key by hand as a string.
+- Test a library function no script calls yet with a probe: a script made of `LUA_LIBRARY` and a small body, run with `EVAL` in `lua-library.integration.test.ts`. `engine-keys.integration.test.ts` runs the library's key builders the same way and compares them with `engineKeysOf`; a key shape changes in both or the test fails.
+- Read the server's clock with `serverInstantInMillisecondsOf` from `tests/server-instant.ts`, and bound a stored instant between a reading before and after the call. Fake only `Date` (`vi.useFakeTimers({ toFake: ["Date"] })`) to prove an instant does not come from the app's clock.
+
+## Invariant checker
+
+- `invariantViolationsOf(redis, keyPrefix)` from `tests/invariant-violations.ts` lists, as sentences, every way the engine's keys under the prefix disagree. The checks: each member of an index (`runs:<task>:<state>`, `pending`, `due`, `locks`, a waiting list) has a record in that state, of that task and key, with the score the record gives. Each slot set holds only executing runs of its key. Each record sits in the read index and the engine structure of its state and nowhere else, and its task is in `tasks`. `schedules` matches the schedule records and their `nextFiringAt`. Dedup entries are not checked.
+- End every engine test with `await expectNoInvariantViolations(redis, keyPrefix)`, after the body, so a test fails with the list. A test that corrupts the keys on purpose asserts on `invariantViolationsOf` instead.
+
 ## Worker processes
 
 - Run a worker in a child process, with `startWorkerProcess` from `tests/worker-process.ts`, when the test must signal, SIGKILL or block it, or needs several workers. Never install signal handlers in the Vitest process: the child sets `NEXT_MANUAL_SIG_HANDLE`, the in-process workers don't.

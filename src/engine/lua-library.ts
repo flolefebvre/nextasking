@@ -103,13 +103,17 @@ local function textWithIsoTimestampOf(textBefore, instantInMilliseconds, textAft
   return textBefore .. isoTimestampOf(instantInMilliseconds) .. textAfter
 end
 
-local function unknownVersionRefusalOf(runId)
-  local storedVersion = redis.call("HGET", runRecordKey(runId), "version")
+local function unknownVersionRefusalOfRecord(recordKey)
+  local storedVersion = redis.call("HGET", recordKey, "version")
   local storedVersionNumber = tonumber(storedVersion)
   if storedVersionNumber and storedVersionNumber <= supportedRecordVersion then
     return nil
   end
   return { "unknownVersion", storedVersion }
+end
+
+local function unknownVersionRefusalOf(runId)
+  return unknownVersionRefusalOfRecord(runRecordKey(runId))
 end
 
 local function fenceRefusalOf(runId, lockToken)

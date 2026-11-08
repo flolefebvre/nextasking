@@ -29,6 +29,7 @@ import {
 import { READ_STEP_SCRIPT, readStepKeysOf } from "./read-step-script.js";
 import { RENEW_SCRIPT, renewKeysOf } from "./renew-script.js";
 import { SAVE_STEP_SCRIPT, saveStepKeysOf } from "./save-step-script.js";
+import { SYNC_SCHEDULES_SCRIPT, syncSchedulesKeysOf } from "./sync-schedules-script.js";
 import { SETTLE_SCRIPT, settleKeysOf } from "./settle-script.js";
 import { defineScriptCommand } from "./script-commands.js";
 import type { ScriptArgument } from "./script-commands.js";
@@ -257,7 +258,7 @@ export type Engine = {
 
 export type ImplementedEngine = Pick<
   Engine,
-  "enqueue" | "fetch" | "renew" | "settle" | "promote" | "saveStep" | "readStep" | "makeDue"
+  "enqueue" | "fetch" | "renew" | "settle" | "promote" | "saveStep" | "readStep" | "syncSchedules" | "makeDue"
 >;
 
 function unreadableReplyError(scriptName: string, reply: unknown): Error {
@@ -516,6 +517,35 @@ function stepArgumentOf(step: StepToSave): ScriptArgument {
   return step.kind === "sleep" ? step.durationInMilliseconds : step.resumesAt;
 }
 
+function scheduleSummaryOf(reply: unknown): ScheduleSummary | undefined {
+  if (!isStringList(reply) || reply.length !== 3) {
+    return undefined;
+  }
+  const [task, cron, timezone] = reply as [string, string, string];
+  return { task, cron, timezone };
+}
+
+function scheduleSummariesOf(reply: unknown): ScheduleSummary[] | undefined {
+  return Array.isArray(reply) ? definedElementsOf(reply.map(scheduleSummaryOf)) : undefined;
+}
+
+function syncSchedulesReplyOf(reply: unknown): SyncSchedulesReply {
+  const unknownVersionReply = unknownVersionReplyOf(reply);
+  if (unknownVersionReply !== undefined) {
+    return unknownVersionReply;
+  }
+  if (Array.isArray(reply) && reply.length === 4 && reply[0] === "synced") {
+    const [, addedReplies, changedReplies, removedReplies]: unknown[] = reply;
+    const added = scheduleSummariesOf(addedReplies);
+    const changed = scheduleSummariesOf(changedReplies);
+    const removed = scheduleSummariesOf(removedReplies);
+    if (added !== undefined && changed !== undefined && removed !== undefined) {
+      return { kind: "synced", added, changed, removed };
+    }
+  }
+  throw unreadableReplyError("syncSchedules", reply);
+}
+
 function makeDueReplyOf(reply: unknown): MakeDueReply {
   if (Array.isArray(reply) && reply.length === 2 && reply[0] === "madeDue" && Number.isSafeInteger(reply[1])) {
     return { kind: "madeDue", madeDueRunCount: Number(reply[1]) };
@@ -635,7 +665,19 @@ export function createEngine(client: Redis, prefix: string): ImplementedEngine {
   const runSaveStepScript = scriptRunnerWithKeysOf("nextaskingSaveStep", SAVE_STEP_SCRIPT, 1);
   const runReadStepScript = scriptRunnerWithKeysOf("nextaskingReadStep", READ_STEP_SCRIPT, 1);
   const runMakeDueScript = scriptRunnerOf("nextaskingMakeDue", MAKE_DUE_SCRIPT, makeDueKeysOf(keys));
+  const runSyncSchedulesScript = scriptRunnerOf(
+    "nextaskingSyncSchedules",
+    SYNC_SCHEDULES_SCRIPT,
+    syncSchedulesKeysOf(keys),
+  );
   return {
+    syncSchedules: async ({ schedulesToSync }) =>
+      syncSchedulesReplyOf(
+        await runSyncSchedulesScript([
+          schedulesToSync.length,
+          ...schedulesToSync.flatMap(({ task, cron, timezone, nextFiringAt }) => [task, cron, timezone, nextFiringAt]),
+        ]),
+      ),
     makeDue: async () =>
       makeDueReplyOf(
         await runMakeDueScript([MOST_DUE_RUNS_PROMOTED_PER_PROMOTE, NEWER_VERSION_RECORDS_PASSED_OVER_PER_PROMOTE]),

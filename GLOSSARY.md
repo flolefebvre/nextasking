@@ -161,5 +161,5 @@ The role of a Next.js server process that executes attempts, started from the ap
 _Avoid_: Consumer, processor
 
 **Lifecycle log**:
-A line the library writes through the app's logger when a run or an attempt changes state.
+A line the library writes through the app's logger when a run, an attempt or the worker changes state.
 _Avoid_: Event, hook, notification

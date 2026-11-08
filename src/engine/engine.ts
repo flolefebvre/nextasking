@@ -122,7 +122,13 @@ export type LockedRun = {
   sleepsWokenAt?: EpochMilliseconds;
 };
 
-export type ParkedRun = { runId: RunId; task: string; attempt: number };
+export type ParkedRun = {
+  runId: RunId;
+  task: string;
+  attempt: number;
+  scheduledAt?: EpochMilliseconds;
+  sourceEvent?: SourceEvent;
+};
 
 export type FetchedReply = {
   kind: "fetched";
@@ -348,12 +354,22 @@ function lockedRunOf(reply: unknown): LockedRun | undefined {
 }
 
 function parkedRunOf(reply: unknown): ParkedRun | undefined {
-  if (!isStoredValueList(reply) || reply.length !== 3) {
+  if (!isStoredValueList(reply) || reply.length !== 6) {
     return undefined;
   }
-  const [runId, task, storedAttempt] = reply;
+  const [runId, task, storedAttempt, storedScheduledAt, eventName, eventId] = reply.map(nullIfAbsent);
   const attempt = storedIntegerOf(nullIfAbsent(storedAttempt));
-  return runId == null || task == null || attempt === undefined ? undefined : { runId, task, attempt };
+  if (runId == null || task == null || attempt === undefined) {
+    return undefined;
+  }
+  const scheduledAt = storedIntegerOf(nullIfAbsent(storedScheduledAt));
+  return {
+    runId,
+    task,
+    attempt,
+    ...(scheduledAt === undefined ? {} : { scheduledAt }),
+    ...(eventName == null || eventId == null ? {} : { sourceEvent: { eventName, eventId } }),
+  };
 }
 
 function definedElementsOf<Element>(elements: readonly (Element | undefined)[]): Element[] | undefined {

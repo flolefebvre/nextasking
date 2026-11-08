@@ -159,6 +159,54 @@ engineTest(
   },
 );
 
+engineTest(
+  "a parked run carries the source event of its emit and the planned instant of its firing",
+  async ({ engine, redis }) => {
+    const limitsByTask = { "build-report": 1, "sync-crm": 1 };
+    await engine.enqueue({
+      runs: [
+        { runId: "report-running", task: "build-report", payload: "", retries: 0 },
+        { runId: "crm-running", task: "sync-crm", payload: "{}", retries: 0 },
+      ],
+    });
+    await engine.fetch(fetchRequestOf(2, limitsByTask));
+    const plannedInstant = (await serverInstantInMillisecondsOf(redis)) - 60_000;
+    await engine.syncSchedules({
+      schedulesToSync: [{ task: "build-report", cron: "0 * * * *", timezone: "UTC", nextFiringAt: plannedInstant }],
+    });
+    await engine.fire({
+      task: "build-report",
+      instant: plannedInstant,
+      instantAfter: plannedInstant + 3_600_000,
+      runId: "report-fired",
+      retries: 0,
+    });
+    await engine.enqueue({
+      runs: [
+        {
+          runId: "crm-listener",
+          task: "sync-crm",
+          payload: "{}",
+          retries: 0,
+          sourceEvent: { eventName: "user.signed-up", eventId: "event-1" },
+        },
+      ],
+    });
+
+    const reply = fetchedReplyOf(await engine.fetch(fetchRequestOf(2, limitsByTask)));
+
+    expect(reply.parkedRuns).toEqual([
+      { runId: "report-fired", task: "build-report", attempt: 1, scheduledAt: plannedInstant },
+      {
+        runId: "crm-listener",
+        task: "sync-crm",
+        attempt: 1,
+        sourceEvent: { eventName: "user.signed-up", eventId: "event-1" },
+      },
+    ]);
+  },
+);
+
 engineTest("a run of a task without a limit is never parked", async ({ engine, redis, keys }) => {
   await engine.enqueue({ runs: sendEmailRunsOf(3) });
 

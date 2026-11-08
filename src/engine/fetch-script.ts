@@ -97,7 +97,8 @@ local function parkRun(runId, task, concurrencyKey, order)
   redis.call("HSET", runRecordKey(runId), "state", "waitingForConcurrencySlot")
   redis.call("ZADD", runIndexKey(task, "waitingForConcurrencySlot"), order, runId)
   redis.call("ZADD", waitingListKey(task, concurrencyKey), order, runId)
-  table.insert(parkedRuns, { runId, task, redis.call("HGET", runRecordKey(runId), "attempt") })
+  local record = redis.call("HMGET", runRecordKey(runId), "attempt", "scheduledAt", "eventName", "eventId")
+  table.insert(parkedRuns, { runId, task, record[1], record[2], record[3], record[4] })
 end
 
 local firstUnknownVersion = nil

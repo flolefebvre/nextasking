@@ -14,8 +14,13 @@ export const ENQUEUE_SCRIPT = `${ENQUEUE_KEYS_ASSIGNMENT}
 local dedupWindowInMilliseconds = nonNegativeIntegerArgumentOf(ARGV[3], "dedupWindowInMilliseconds")
 local expiredDedupEntriesTrimmedPerSet = nonNegativeIntegerArgumentOf(ARGV[4], "expiredDedupEntriesTrimmedPerSet")
 local dedupEventName, dedupEventId = ARGV[5], ARGV[6]
-local runCount = nonNegativeIntegerArgumentOf(ARGV[7], "runCount")
-local firstRunArgument = 8
+local parentRunId, parentLockToken, parentStepId, parentStepValue = ARGV[7], ARGV[8], ARGV[9], ARGV[10]
+local runCount = nonNegativeIntegerArgumentOf(ARGV[11], "runCount")
+local firstRunArgument = 12
+
+if parentRunId ~= "" and (parentLockToken == "" or parentStepId == "") then
+  error("invalid argument: a parent fence carries the parent's lock token and step id")
+end
 
 if runCount == 0 then
   error("invalid argument: an enqueue creates at least one run")
@@ -28,6 +33,17 @@ local runsToCreate = runsToCreateOf(firstRunArgument, runCount)
 local isTaskTouchedByName = {}
 for _, run in ipairs(runsToCreate) do
   isTaskTouchedByName[run.task] = true
+end
+
+if parentRunId ~= "" then
+  local refusal = fenceRefusalOf(parentRunId, parentLockToken)
+  if refusal then
+    return refusal
+  end
+  local savedValue = redis.call("HGET", runStepsKey(parentRunId), parentStepId)
+  if savedValue then
+    return { "alreadySent", savedValue }
+  end
 end
 
 local now = currentInstantInMilliseconds()
@@ -44,6 +60,10 @@ for task in pairs(isTaskTouchedByName) do
 end
 
 local createdRunIds, skippedRunIds = enqueueRuns(runsToCreate, dedupEventName, dedupEventId, now, dedupWindowInMilliseconds)
+if parentRunId ~= "" then
+  redis.call("HSET", runStepsKey(parentRunId), parentStepId, parentStepValue)
+  redis.call("HSET", runRecordKey(parentRunId), "stalls", 0)
+end
 
 return { "enqueued", createdRunIds, skippedRunIds }
 `;

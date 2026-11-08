@@ -62,6 +62,7 @@ export type ParentFence = {
   parentRunId: RunId;
   lockToken: LockToken;
   stepId: StepId;
+  stepValue: SerializedStepValue;
 };
 
 export type EnqueueRequest = {
@@ -90,7 +91,9 @@ export type NotDueReply = { kind: "notDue" };
 
 export type EnqueuedReply = { kind: "enqueued"; createdRunIds: RunId[]; skippedRunIds: RunId[] };
 
-export type EnqueueReply = EnqueuedReply | DuplicateReply | StaleReply | UnknownVersionReply;
+export type AlreadySentReply = { kind: "alreadySent"; savedValue: SerializedStepValue };
+
+export type EnqueueReply = EnqueuedReply | AlreadySentReply | DuplicateReply | StaleReply | UnknownVersionReply;
 
 export type FetchRequest = {
   lockTokens: readonly LockToken[];
@@ -251,9 +254,10 @@ export type Engine = {
   makeDue: () => Promise<MakeDueReply>;
 };
 
-export type ImplementedEngine = Pick<Engine, "fetch" | "renew" | "settle" | "promote" | "saveStep" | "readStep"> & {
-  enqueue: (request: DispatchOrEmitRequest) => Promise<EnqueueReply>;
-};
+export type ImplementedEngine = Pick<
+  Engine,
+  "enqueue" | "fetch" | "renew" | "settle" | "promote" | "saveStep" | "readStep"
+>;
 
 function unreadableReplyError(scriptName: string, reply: unknown): Error {
   return new Error(`The ${scriptName} script sent a reply the engine cannot read: ${JSON.stringify(reply)}`);
@@ -475,13 +479,14 @@ function isStaleReply(reply: unknown): reply is ["stale"] {
   return Array.isArray(reply) && reply.length === 1 && reply[0] === "stale";
 }
 
+function fenceRefusalReplyOf(reply: unknown): StaleReply | UnknownVersionReply | undefined {
+  return isStaleReply(reply) ? { kind: "stale" } : unknownVersionReplyOf(reply);
+}
+
 function saveStepReplyOf(reply: unknown): SaveStepReply {
-  const unknownVersionReply = unknownVersionReplyOf(reply);
-  if (unknownVersionReply !== undefined) {
-    return unknownVersionReply;
-  }
-  if (isStaleReply(reply)) {
-    return { kind: "stale" };
+  const fenceRefusalReply = fenceRefusalReplyOf(reply);
+  if (fenceRefusalReply !== undefined) {
+    return fenceRefusalReply;
   }
   if (Array.isArray(reply) && reply.length === 1 && reply[0] === "saved") {
     return { kind: "saved", resumesAt: undefined };
@@ -493,12 +498,9 @@ function saveStepReplyOf(reply: unknown): SaveStepReply {
 }
 
 function readStepReplyOf(reply: unknown): ReadStepReply {
-  const unknownVersionReply = unknownVersionReplyOf(reply);
-  if (unknownVersionReply !== undefined) {
-    return unknownVersionReply;
-  }
-  if (isStaleReply(reply)) {
-    return { kind: "stale" };
+  const fenceRefusalReply = fenceRefusalReplyOf(reply);
+  if (fenceRefusalReply !== undefined) {
+    return fenceRefusalReply;
   }
   if (isStringList(reply) && reply[0] === "read" && reply.length <= 2) {
     return { kind: "read", savedValue: reply[1] };
@@ -514,8 +516,15 @@ function stepArgumentOf(step: StepToSave): ScriptArgument {
 }
 
 function enqueueReplyOf(reply: unknown): EnqueueReply {
+  const fenceRefusalReply = fenceRefusalReplyOf(reply);
+  if (fenceRefusalReply !== undefined) {
+    return fenceRefusalReply;
+  }
   if (Array.isArray(reply) && reply.length === 1 && reply[0] === "duplicate") {
     return { kind: "duplicate" };
+  }
+  if (isStringList(reply) && reply.length === 2 && reply[0] === "alreadySent") {
+    return { kind: "alreadySent", savedValue: reply[1]! };
   }
   if (Array.isArray(reply) && reply.length === 3 && reply[0] === "enqueued") {
     const [, createdRunIds, skippedRunIds]: unknown[] = reply;
@@ -668,13 +677,17 @@ export function createEngine(client: Redis, prefix: string): ImplementedEngine {
         ]),
       );
     },
-    enqueue: async ({ runs, eventDedup }) =>
+    enqueue: async ({ runs, eventDedup, parentFence }) =>
       enqueueReplyOf(
         await runEnqueueScript([
           DEDUP_WINDOW_IN_MILLISECONDS,
           EXPIRED_DEDUP_ENTRIES_TRIMMED_PER_SET,
           eventDedup?.eventName ?? "",
           eventDedup?.eventId ?? "",
+          parentFence?.parentRunId ?? "",
+          parentFence?.lockToken ?? "",
+          parentFence?.stepId ?? "",
+          parentFence?.stepValue ?? "",
           runs.length,
           ...runs.flatMap(runArgumentsOf),
         ]),

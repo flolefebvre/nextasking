@@ -101,6 +101,12 @@ const CORRUPTIONS = [
     expectedViolation: `run "executing-run" holds a slot`,
   },
   {
+    name: "an executing run missing from the slot set of its key",
+    corrupt: (redis: Redis, keys: EngineKeys) =>
+      redis.srem(keys.slotSet("rebuild-index", "account-7"), "executing-run"),
+    expectedViolation: `run "executing-run" is executing but holds no slot in`,
+  },
+  {
     name: "a record of a task missing from the tasks set",
     corrupt: (redis: Redis, keys: EngineKeys) => redis.srem(keys.tasks, "send-email"),
     expectedViolation: `is of task "send-email", missing from`,

@@ -148,6 +148,13 @@ export async function invariantViolationsOf(redis: Redis, keyPrefix: string): Pr
     }
   }
 
+  for (const [runId, record] of recordsByRunId) {
+    const slotSetKey = keys.slotSet(record["task"] ?? "", record["concurrencyKey"]);
+    if (record["state"] === "executing" && (await redis.sismember(slotSetKey, runId)) === 0) {
+      violations.push(`run "${runId}" is executing but holds no slot in ${slotSetKey}`);
+    }
+  }
+
   for (const slotSetKey of slotSetKeys) {
     for (const runId of await redis.smembers(slotSetKey)) {
       const record = recordsByRunId.get(runId);

@@ -4,6 +4,7 @@ import { expect, vi } from "vitest";
 import type { EpochMilliseconds } from "../src/durations.js";
 import { integrationTest } from "./integration-test.js";
 import { concurrencyViolationsIn, limitedExecutionsOf } from "./limited-executions.js";
+import { seededRandomnessOfThisRun } from "./seeded-random.js";
 import { startWorkerProcess } from "./worker-process.js";
 import type { WorkerProcess } from "./worker-process.js";
 import { createWorkerProcessNextasking } from "./worker-process-nextasking.js";
@@ -30,30 +31,11 @@ const FAST_TIMING = {
   concurrencySlotSafetyDelayInMilliseconds: 3000,
 };
 
-function seedOfThisRun(): number {
-  const seedVariable = process.env.NEXTASKING_TEST_SEED;
-  return seedVariable === undefined || seedVariable === "" ? Math.floor(Math.random() * 2 ** 32) : Number(seedVariable);
-}
-
-function seededRandom(seed: number): () => number {
-  let state = seed >>> 0;
-  return () => {
-    state = (state + 0x6d2b79f5) >>> 0;
-    let mixed = state;
-    mixed = Math.imul(mixed ^ (mixed >>> 15), mixed | 1);
-    mixed ^= mixed + Math.imul(mixed ^ (mixed >>> 7), mixed | 61);
-    return ((mixed ^ (mixed >>> 14)) >>> 0) / 2 ** 32;
-  };
-}
-
 integrationTest(
   "a concurrency limit is never exceeded under randomized load with SIGKILLed workers, and every run completes",
   { timeout: 60_000 },
   async ({ redisUrl, keyPrefix }) => {
-    const seed = seedOfThisRun();
-    const random = seededRandom(seed);
-    const pick = <Item>(items: readonly Item[]): Item => items[Math.floor(random() * items.length)] as Item;
-    const seedMessage = `replay with NEXTASKING_TEST_SEED=${String(seed)}`;
+    const { random, pick, seedMessage } = seededRandomnessOfThisRun();
     const nextasking = createWorkerProcessNextasking(redisUrl, keyPrefix);
     const startWorker = () =>
       startWorkerProcess({ redisUrl, keyPrefix, timing: FAST_TIMING, startWorkerOptions: { concurrency: 5 } });

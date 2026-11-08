@@ -143,9 +143,40 @@ local function leaveState(runId, task, state)
   redis.call("ZREM", runIndexKey(task, state), runId)
   if state == "pending" then
     redis.call("ZREM", engineKeys.pending, runId)
+  elseif state == "executing" then
+    redis.call("ZREM", engineKeys.locks, runId)
   elseif dueInstantFieldByState[state] then
     redis.call("ZREM", engineKeys.due, runId)
   end
+end
+
+local function releaseSlotAndWakeParkedRuns(runId, task, concurrencyKey, concurrencyLimit)
+  local slotsKey = slotSetKey(task, concurrencyKey)
+  redis.call("SREM", slotsKey, runId)
+  local lastWokenRank = -1
+  if concurrencyLimit then
+    local freeSlotCount = concurrencyLimit - redis.call("SCARD", slotsKey)
+    if freeSlotCount <= 0 then
+      return
+    end
+    lastWokenRank = freeSlotCount - 1
+  end
+  local waitingKey = waitingListKey(task, concurrencyKey)
+  local wokenRunsWithOrders = redis.call("ZRANGE", waitingKey, 0, lastWokenRank, "WITHSCORES")
+  for position = 1, #wokenRunsWithOrders, 2 do
+    local wokenRunId, order = wokenRunsWithOrders[position], wokenRunsWithOrders[position + 1]
+    redis.call("ZREM", waitingKey, wokenRunId)
+    leaveState(wokenRunId, task, "waitingForConcurrencySlot")
+    enterPending(wokenRunId, task, order)
+  end
+end
+
+local function endLock(runId, task, concurrencyKey, lockToken, endedAs, concurrencyLimit)
+  redis.call("DEL", lockKey(lockToken))
+  leaveState(runId, task, "executing")
+  redis.call("HDEL", runRecordKey(runId), "lockToken", "lockedUntil")
+  redis.call("HSET", runRecordKey(runId), "endedLockToken", lockToken, "endedAs", endedAs)
+  releaseSlotAndWakeParkedRuns(runId, task, concurrencyKey, concurrencyLimit)
 end
 
 local function createRun(run, now)

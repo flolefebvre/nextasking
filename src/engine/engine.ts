@@ -17,6 +17,7 @@ import {
 } from "./fetch-script.js";
 import { LUA_LIBRARY } from "./lua-library.js";
 import { RENEW_SCRIPT, renewKeysOf } from "./renew-script.js";
+import { SETTLE_SCRIPT, settleKeysOf } from "./settle-script.js";
 import { defineScriptCommand } from "./script-commands.js";
 import type { ScriptArgument } from "./script-commands.js";
 
@@ -134,7 +135,12 @@ export type SettleRequest = {
   runId: RunId;
   lockToken: LockToken;
   outcome: SettleOutcome;
+  concurrencyLimit?: number;
 };
+
+export type ImplementedSettleOutcome = Extract<SettleOutcome, { kind: "complete" | "yield" | "handBack" }>;
+
+export type ImplementedSettleRequest = Omit<SettleRequest, "outcome"> & { outcome: ImplementedSettleOutcome };
 
 export type SettledReply =
   | { kind: "completed"; finishedAt: EpochMilliseconds }
@@ -235,6 +241,7 @@ export type ImplementedEngine = {
   enqueue: (request: DispatchOrEmitRequest) => Promise<EnqueueReply>;
   fetch: (request: FetchRequest) => Promise<FetchReply>;
   renew: (request: RenewRequest) => Promise<LockRenewal[]>;
+  settle: (request: ImplementedSettleRequest) => Promise<SettleReply>;
 };
 
 function unreadableReplyError(scriptName: string, reply: unknown): Error {
@@ -360,6 +367,30 @@ function renewalsOf(reply: unknown): LockRenewal[] {
   return renewals;
 }
 
+const SETTLE_REPLIES_BY_KIND: Readonly<Record<string, SettleReply>> = {
+  yielded: { kind: "yielded" },
+  handedBack: { kind: "handedBack" },
+  stale: { kind: "stale" },
+  already: { kind: "already" },
+};
+
+function settleReplyOf(reply: unknown): SettleReply {
+  const unknownVersionReply = unknownVersionReplyOf(reply);
+  if (unknownVersionReply !== undefined) {
+    return unknownVersionReply;
+  }
+  if (Array.isArray(reply) && reply.length === 1 && typeof reply[0] === "string") {
+    const settleReply = SETTLE_REPLIES_BY_KIND[reply[0]];
+    if (settleReply !== undefined) {
+      return settleReply;
+    }
+  }
+  if (Array.isArray(reply) && reply.length === 2 && reply[0] === "completed" && Number.isSafeInteger(reply[1])) {
+    return { kind: "completed", finishedAt: Number(reply[1]) };
+  }
+  throw unreadableReplyError("settle", reply);
+}
+
 function enqueueReplyOf(reply: unknown): EnqueueReply {
   if (Array.isArray(reply) && reply.length === 1 && reply[0] === "duplicate") {
     return { kind: "duplicate" };
@@ -398,7 +429,12 @@ export function createEngine(client: Redis, prefix: string): ImplementedEngine {
   const runEnqueueScript = scriptRunnerOf("nextaskingEnqueue", ENQUEUE_SCRIPT, enqueueKeysOf(keys));
   const runFetchScript = scriptRunnerOf("nextaskingFetch", FETCH_SCRIPT, fetchKeysOf(keys));
   const runRenewScript = scriptRunnerOf("nextaskingRenew", RENEW_SCRIPT, renewKeysOf(keys));
+  const runSettleScript = scriptRunnerOf("nextaskingSettle", SETTLE_SCRIPT, settleKeysOf(keys));
   return {
+    settle: async ({ runId, lockToken, outcome, concurrencyLimit }) =>
+      settleReplyOf(
+        await runSettleScript([runId, lockToken, outcome.kind, DEDUP_WINDOW_IN_MILLISECONDS, concurrencyLimit ?? ""]),
+      ),
     renew: async ({ heldLocks, lockDurationInMilliseconds }) =>
       renewalsOf(
         await runRenewScript([

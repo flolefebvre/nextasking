@@ -1,8 +1,15 @@
-export const ENQUEUE_KEY_COUNT = 5;
+import type { EngineKeys } from "./engine-keys.js";
 
-export const ENQUEUE_SCRIPT = `
+export function enqueueKeysOf(keys: EngineKeys): string[] {
+  return [keys.pending, keys.due, keys.tasks, keys.wakeUpMarker, keys.order];
+}
+
+export const ENQUEUE_KEYS_ASSIGNMENT = `
 engineKeys.pending, engineKeys.due, engineKeys.tasks, engineKeys.wakeUpMarker, engineKeys.order =
   KEYS[1], KEYS[2], KEYS[3], KEYS[4], KEYS[5]
+`;
+
+export const ENQUEUE_SCRIPT = `${ENQUEUE_KEYS_ASSIGNMENT}
 
 local dedupWindowInMilliseconds = nonNegativeIntegerArgumentOf(ARGV[3], "dedupWindowInMilliseconds")
 local expiredDedupEntriesTrimmedPerSet = nonNegativeIntegerArgumentOf(ARGV[4], "expiredDedupEntriesTrimmedPerSet")

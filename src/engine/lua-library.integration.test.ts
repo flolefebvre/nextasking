@@ -7,11 +7,11 @@ import { serverInstantInMillisecondsOf } from "../../tests/server-instant.js";
 import { withRedis } from "../../tests/with-redis.js";
 import { engineKeysOf, hashTaggedPrefixOf } from "./engine-keys.js";
 import { RECORD_VERSION } from "./engine.js";
+import { ENQUEUE_KEYS_ASSIGNMENT, enqueueKeysOf } from "./enqueue-script.js";
 import { LUA_LIBRARY } from "./lua-library.js";
 
 const PROBE_SCRIPT = `${LUA_LIBRARY}
-engineKeys.pending, engineKeys.due, engineKeys.tasks, engineKeys.wakeUpMarker, engineKeys.order =
-  KEYS[1], KEYS[2], KEYS[3], KEYS[4], KEYS[5]
+${ENQUEUE_KEYS_ASSIGNMENT}
 local probe, runId = ARGV[3], ARGV[4]
 if probe == "write after the version check" then
   local refusal = unknownVersionRefusalOf(runId)
@@ -42,15 +42,11 @@ end
 `;
 
 function runProbe(redis: Redis, keyPrefix: string, probe: string, runId = "run-1", supportedVersion = RECORD_VERSION) {
-  const keys = engineKeysOf(keyPrefix);
+  const probeKeys = enqueueKeysOf(engineKeysOf(keyPrefix));
   return redis.eval(
     PROBE_SCRIPT,
-    5,
-    keys.pending,
-    keys.due,
-    keys.tasks,
-    keys.wakeUpMarker,
-    keys.order,
+    probeKeys.length,
+    ...probeKeys,
     hashTaggedPrefixOf(keyPrefix),
     supportedVersion,
     probe,
@@ -85,6 +81,19 @@ for (const { name, storedVersion, reportedVersion } of UNKNOWN_VERSIONS) {
     },
   );
 }
+
+integrationTest(
+  "a missing record reads as an unknown version, so a script replying notFound or stale checks the record or the lock token before the version",
+  async ({ redisUrl, keyPrefix }) => {
+    await withRedis(redisUrl, async (redis) => {
+      const reply = await runProbe(redis, keyPrefix, "write after the version check", "missing-run");
+
+      expect(reply).toEqual(["unknownVersion", null]);
+      expect(await redis.exists(engineKeysOf(keyPrefix).runRecord("missing-run"))).toBe(0);
+      await expectNoInvariantViolations(redis, keyPrefix);
+    });
+  },
+);
 
 integrationTest(
   "a record of the supported version or an older one passes the version check",

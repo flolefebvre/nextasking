@@ -5,7 +5,7 @@ import type { DurationInMilliseconds, EpochMilliseconds } from "../durations.js"
 import type { RunId, StepId } from "../ids.js";
 import type { ErrorRecord, FailureReason, SourceEvent } from "../run-queue.js";
 import type { RunState } from "../run-states.js";
-import { ENQUEUE_KEY_COUNT, ENQUEUE_SCRIPT } from "./enqueue-script.js";
+import { ENQUEUE_SCRIPT, enqueueKeysOf } from "./enqueue-script.js";
 import { engineKeysOf, hashTaggedPrefixOf } from "./engine-keys.js";
 import type { LockToken } from "./engine-keys.js";
 import { LUA_LIBRARY } from "./lua-library.js";
@@ -262,29 +262,26 @@ function runArgumentsOf(run: RunToCreate): ScriptArgument[] {
 }
 
 export function createEngine(client: Redis, prefix: string): ImplementedEngine {
-  const keys = engineKeysOf(prefix);
+  const enqueueKeys = enqueueKeysOf(engineKeysOf(prefix));
   const sharedArguments: ScriptArgument[] = [hashTaggedPrefixOf(prefix), RECORD_VERSION];
   const enqueueCommand = defineScriptCommand(
     client,
     "nextaskingEnqueue",
     `${LUA_LIBRARY}\n${ENQUEUE_SCRIPT}`,
-    ENQUEUE_KEY_COUNT,
+    enqueueKeys.length,
   );
   return {
     enqueue: async ({ runs, eventDedup }) =>
       enqueueReplyOf(
-        await enqueueCommand.call(
-          [keys.pending, keys.due, keys.tasks, keys.wakeUpMarker, keys.order],
-          [
-            ...sharedArguments,
-            DEDUP_WINDOW_IN_MILLISECONDS,
-            EXPIRED_DEDUP_ENTRIES_TRIMMED_PER_SET,
-            eventDedup?.eventName ?? "",
-            eventDedup?.eventId ?? "",
-            runs.length,
-            ...runs.flatMap(runArgumentsOf),
-          ],
-        ),
+        await enqueueCommand.call(enqueueKeys, [
+          ...sharedArguments,
+          DEDUP_WINDOW_IN_MILLISECONDS,
+          EXPIRED_DEDUP_ENTRIES_TRIMMED_PER_SET,
+          eventDedup?.eventName ?? "",
+          eventDedup?.eventId ?? "",
+          runs.length,
+          ...runs.flatMap(runArgumentsOf),
+        ]),
       ),
   };
 }

@@ -129,7 +129,7 @@ describe("waitUntilReadyWithinGiveUpAfter", () => {
       const pendingWait = connections.waitUntilReadyWithinGiveUpAfter(client);
       client.status = "ready";
 
-      const waitsWithOnePending = waitsOfConcurrentCallers(connections, client);
+      const resultsWithOnePending = await waitsOfConcurrentCallers(connections, client);
       const readyListenerCountWithOnePending = client.listenerCount("ready");
       const timerCountWithOnePending = vi.getTimerCount();
       client.emit("ready");
@@ -140,7 +140,7 @@ describe("waitUntilReadyWithinGiveUpAfter", () => {
       expect(timerCountWithOnePending).toBe(1);
       expect(client.listenerCount("ready")).toBe(readyListenerCountBefore);
       expect(vi.getTimerCount()).toBe(0);
-      expect(await waitsWithOnePending).toEqual(fulfilledResultsOfAllCallers());
+      expect(resultsWithOnePending).toEqual(fulfilledResultsOfAllCallers());
       expect(await waitsWithNonePending).toEqual(fulfilledResultsOfAllCallers());
     });
   });

@@ -17,22 +17,38 @@ local concurrencyLimit = nil
 if ARGV[7] ~= "" then
   concurrencyLimit = positiveIntegerArgumentOf(ARGV[7], "concurrencyLimit")
 end
-local isSettleKindByName = { complete = true, retry = true, suspend = true, yield = true, handBack = true }
+local isSettleKindByName = { complete = true, fail = true, retry = true, suspend = true, yield = true, handBack = true }
 if not isSettleKindByName[settleKind] then
   error("invalid argument: unknown settle kind " .. tostring(settleKind))
 end
 
 local errorTextBefore, errorTextAfter = ARGV[8], ARGV[9]
-local isErrorCarriedBySettleKind = { retry = true, handBack = true }
+local isErrorCarriedBySettleKind = { fail = true, retry = true, handBack = true }
 if isErrorCarriedBySettleKind[settleKind] and errorTextBefore == "" then
   error("invalid argument: a " .. settleKind .. " carries the error of the attempt")
 end
-local backoffInMilliseconds, resumesAt = nil, nil
+local backoffInMilliseconds, resumesAt, failureReason, unknownTaskFailureDelayInMilliseconds = nil, nil, nil, nil
 if settleKind == "retry" then
   backoffInMilliseconds = nonNegativeIntegerArgumentOf(ARGV[10], "backoffInMilliseconds")
 elseif settleKind == "suspend" then
   resumesAt = nonNegativeIntegerArgumentOf(ARGV[11], "resumesAt")
+elseif settleKind == "fail" then
+  failureReason = ARGV[12]
+  if failureReason == nil or failureReason == "" then
+    error("invalid argument: a fail carries its reason")
+  end
+elseif settleKind == "handBack" then
+  unknownTaskFailureDelayInMilliseconds = nonNegativeIntegerArgumentOf(ARGV[13], "unknownTaskFailureDelayInMilliseconds")
 end
+
+local noticePayloadBefore, noticePayloadAfter = ARGV[14], ARGV[15]
+local noticeEventName, noticeEventId = ARGV[16], ARGV[17]
+local noticeRunCount = nonNegativeIntegerArgumentOf(ARGV[18], "noticeRunCount")
+local firstNoticeRunArgument = 19
+if #ARGV ~= firstNoticeRunArgument - 1 + noticeRunCount * argumentsPerRunToCreate then
+  error("invalid argument: " .. tostring(noticeRunCount) .. " notice runs need " .. tostring(noticeRunCount * argumentsPerRunToCreate) .. " run arguments")
+end
+local noticeRuns = runsToCreateOf(firstNoticeRunArgument, noticeRunCount)
 
 local recordKey = runRecordKey(runId)
 if redis.call("EXISTS", recordKey) == 0 then
@@ -42,9 +58,10 @@ local refusal = unknownVersionRefusalOf(runId)
 if refusal then
   return refusal
 end
-local record = redis.call("HMGET", recordKey, "state", "lockToken", "endedLockToken", "endedAs", "task", "concurrencyKey", "order")
+local record = redis.call("HMGET", recordKey,
+  "state", "lockToken", "endedLockToken", "endedAs", "task", "concurrencyKey", "order", "firstFoundUnknownAt")
 local state, currentLockToken, endedLockToken, endedAs = record[1], record[2], record[3], record[4]
-local task, concurrencyKey, order = record[5], record[6] or "", record[7]
+local task, concurrencyKey, order, firstFoundUnknownAt = record[5], record[6] or "", record[7], tonumber(record[8])
 if state ~= "executing" or currentLockToken ~= lockToken then
   if endedLockToken == lockToken and endedAs == settleKind then
     return { "already" }
@@ -62,12 +79,32 @@ local function appendError()
   redis.call("RPUSH", runErrorsKey(runId), textWithIsoTimestampOf(errorTextBefore, now, errorTextAfter))
 end
 
+local function endRun(finalState)
+  redis.call("ZADD", runDedupKey(task), now + dedupWindowInMilliseconds, runId)
+  redis.call("HSET", recordKey, "state", finalState, "finishedAt", now)
+  redis.call("ZADD", runIndexKey(task, finalState), now, runId)
+end
+
+local function failRun(reason)
+  endRun("failed")
+  redis.call("HSET", recordKey, "reason", reason)
+  appendError()
+  local noticePayload = textWithIsoTimestampOf(noticePayloadBefore, now, noticePayloadAfter)
+  for _, noticeRun in ipairs(noticeRuns) do
+    noticeRun.payload = noticePayload
+  end
+  enqueueRuns(noticeRuns, noticeEventName, noticeEventId, now, dedupWindowInMilliseconds)
+  return { "failed", reason, now }
+end
+
 if settleKind == "complete" then
   redis.call("DEL", runStepsKey(runId))
-  redis.call("ZADD", runDedupKey(task), now + dedupWindowInMilliseconds, runId)
-  redis.call("HSET", recordKey, "state", "completed", "finishedAt", now)
-  redis.call("ZADD", runIndexKey(task, "completed"), now, runId)
+  endRun("completed")
   return { "completed", now }
+end
+
+if settleKind == "fail" then
+  return failRun(failureReason)
 end
 
 if settleKind == "retry" then
@@ -85,6 +122,9 @@ if settleKind == "suspend" then
 end
 
 if settleKind == "handBack" then
+  if firstFoundUnknownAt and now - firstFoundUnknownAt >= unknownTaskFailureDelayInMilliseconds then
+    return failRun("unknown task")
+  end
   redis.call("HSETNX", recordKey, "firstFoundUnknownAt", now)
   enterPending(runId, task, order)
   return { "handedBack" }

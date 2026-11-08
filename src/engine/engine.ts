@@ -19,6 +19,12 @@ import {
   NEWER_VERSION_RECORDS_PASSED_OVER_PER_FETCH,
 } from "./fetch-script.js";
 import { LUA_LIBRARY } from "./lua-library.js";
+import {
+  MOST_DUE_RUNS_PROMOTED_PER_PROMOTE,
+  NEWER_VERSION_RECORDS_PASSED_OVER_PER_PROMOTE,
+  PROMOTE_SCRIPT,
+  promoteKeysOf,
+} from "./promote-script.js";
 import { RENEW_SCRIPT, renewKeysOf } from "./renew-script.js";
 import { SETTLE_SCRIPT, settleKeysOf } from "./settle-script.js";
 import { defineScriptCommand } from "./script-commands.js";
@@ -243,11 +249,8 @@ export type Engine = {
   makeDue: () => Promise<MakeDueReply>;
 };
 
-export type ImplementedEngine = {
+export type ImplementedEngine = Pick<Engine, "fetch" | "renew" | "settle" | "promote"> & {
   enqueue: (request: DispatchOrEmitRequest) => Promise<EnqueueReply>;
-  fetch: (request: FetchRequest) => Promise<FetchReply>;
-  renew: (request: RenewRequest) => Promise<LockRenewal[]>;
-  settle: (request: SettleRequest) => Promise<SettleReply>;
 };
 
 function unreadableReplyError(scriptName: string, reply: unknown): Error {
@@ -426,6 +429,46 @@ function settleReplyOf(reply: unknown): SettleReply {
   throw unreadableReplyError("settle", reply);
 }
 
+function stalledRunOf(reply: unknown): StalledRun | undefined {
+  if (!isStringList(reply) || reply.length !== 4) {
+    return undefined;
+  }
+  const [runId, task, storedAttempt, storedStalls] = reply;
+  const integersByField = storedIntegersByFieldOf({ attempt: storedAttempt, stalls: storedStalls });
+  return runId === undefined || task === undefined || integersByField === undefined
+    ? undefined
+    : { runId, task, ...integersByField };
+}
+
+function thirdStallOf(reply: unknown): ThirdStall | undefined {
+  if (!isStringList(reply) || reply.length !== 4) {
+    return undefined;
+  }
+  const [runId, task, storedAttempt, expiredLockToken] = reply;
+  const attempt = storedIntegerOf(nullIfAbsent(storedAttempt));
+  return runId === undefined || task === undefined || attempt === undefined || expiredLockToken === undefined
+    ? undefined
+    : { runId, task, attempt, expiredLockToken };
+}
+
+function promoteReplyOf(reply: unknown): PromoteReply {
+  const unknownVersionReply = unknownVersionReplyOf(reply);
+  if (unknownVersionReply !== undefined) {
+    return unknownVersionReply;
+  }
+  if (Array.isArray(reply) && reply.length === 4 && reply[0] === "promoted" && Number.isSafeInteger(reply[1])) {
+    const [, promotedRunCount, stalledRunReplies, thirdStallReplies]: unknown[] = reply;
+    if (Array.isArray(stalledRunReplies) && Array.isArray(thirdStallReplies)) {
+      const stalledRuns = definedElementsOf(stalledRunReplies.map(stalledRunOf));
+      const thirdStalls = definedElementsOf(thirdStallReplies.map(thirdStallOf));
+      if (stalledRuns !== undefined && thirdStalls !== undefined) {
+        return { kind: "promoted", promotedRunCount: Number(promotedRunCount), stalledRuns, thirdStalls };
+      }
+    }
+  }
+  throw unreadableReplyError("promote", reply);
+}
+
 function enqueueReplyOf(reply: unknown): EnqueueReply {
   if (Array.isArray(reply) && reply.length === 1 && reply[0] === "duplicate") {
     return { kind: "duplicate" };
@@ -518,7 +561,12 @@ export function createEngine(client: Redis, prefix: string): ImplementedEngine {
   const runFetchScript = scriptRunnerOf("nextaskingFetch", FETCH_SCRIPT, fetchKeysOf(keys));
   const runRenewScript = scriptRunnerOf("nextaskingRenew", RENEW_SCRIPT, renewKeysOf(keys));
   const runSettleScript = scriptRunnerOf("nextaskingSettle", SETTLE_SCRIPT, settleKeysOf(keys));
+  const runPromoteScript = scriptRunnerOf("nextaskingPromote", PROMOTE_SCRIPT, promoteKeysOf(keys));
   return {
+    promote: async () =>
+      promoteReplyOf(
+        await runPromoteScript([MOST_DUE_RUNS_PROMOTED_PER_PROMOTE, NEWER_VERSION_RECORDS_PASSED_OVER_PER_PROMOTE]),
+      ),
     settle: async ({ runId, lockToken, outcome, concurrencyLimit }) =>
       settleReplyOf(
         await runSettleScript([

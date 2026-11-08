@@ -1,8 +1,7 @@
 import { expect } from "vitest";
 
-import { engineTest, storedValuesByKeyOf } from "../../tests/engine-test.js";
+import { engineTest, fetchedLockedRunsOf, storedValuesByKeyOf } from "../../tests/engine-test.js";
 import type { EngineTestContext } from "../../tests/engine-test.js";
-import { freshLockTokensOf } from "../../tests/lock-tokens.js";
 import { serverInstantInMillisecondsOf } from "../../tests/server-instant.js";
 import type { DurationInMilliseconds, EpochMilliseconds } from "../durations.js";
 import {
@@ -11,8 +10,6 @@ import {
   UNKNOWN_TASK_FAILURE_DELAY_IN_MILLISECONDS,
 } from "./engine.js";
 import type { FailureNotice, LockedRun, SettleOutcome, SettleReply } from "./engine.js";
-
-const LOCK_DURATION_IN_MILLISECONDS = 120_000;
 
 const BACKOFF_IN_MILLISECONDS = 30_000;
 
@@ -72,22 +69,6 @@ async function enqueueSendEmailRuns(
       ...(concurrencyKey === undefined ? {} : { concurrencyKey }),
     })),
   });
-}
-
-async function fetchedLockedRunsOf(
-  { engine }: EngineTestContext,
-  lockTokenCount: number,
-  concurrencyLimitsByTask: Record<string, number> = {},
-): Promise<LockedRun[]> {
-  const reply = await engine.fetch({
-    lockTokens: freshLockTokensOf(lockTokenCount),
-    concurrencyLimitsByTask,
-    lockDurationInMilliseconds: LOCK_DURATION_IN_MILLISECONDS,
-  });
-  if (reply.kind !== "fetched") {
-    throw new Error(`expected a fetched reply, got ${JSON.stringify(reply)}`);
-  }
-  return reply.lockedRuns;
 }
 
 async function lockedRunOf(context: EngineTestContext): Promise<LockedRun> {

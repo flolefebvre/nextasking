@@ -60,6 +60,10 @@ _Avoid_: Broadcast, dispatch
 How long a repeated dispatch or emit with the same id is dropped.
 _Avoid_: TTL, retention
 
+**Retention**:
+How long an ended run or fan-out stays readable and replayable before a worker removes it.
+_Avoid_: TTL, cleanup, history
+
 **Run**:
 One execution of a task, from its dispatch to its final outcome, across all its attempts.
 _Avoid_: Job, execution
@@ -79,10 +83,6 @@ _Avoid_: Lease, claim, mutex
 **Stall**:
 An attempt that lost its lock because its process crashed, was killed, or blocked its event loop past the lock duration; the run goes back to pending, and the third stall with no step saved in between fails it.
 _Avoid_: Crash, timeout, zombie
-
-**Stranded job**:
-The queue's unit (a run, a fan-out or a firing) held by a worker's lock that no attempt of that worker executes, because the reply that started it was lost in an outage; it is handed back right after the reconnect, counting no stall.
-_Avoid_: Orphan, lost job; not stall, which is an attempt that lost its lock (see **Stall**)
 
 **Backoff**:
 The wait between a failed attempt and the next attempt of the same run.
@@ -149,7 +149,7 @@ To make the oldest parked run of a waiting list pending again, when a concurrenc
 _Avoid_: Promote, notify; not resume, which continues a suspended attempt (see **Resume**)
 
 **Hand back**:
-To return a run, a fan-out or a firing to pending without executing it: because the worker doesn't define its task or event, so that a worker of another release picks it up (a run no worker takes for long enough fails), or because it is stranded (see **Stranded job**).
+To return a run, a fan-out or a firing to pending without executing it, because the worker doesn't define its task or event, so that a worker of another release picks it up; a run no worker takes for long enough fails.
 _Avoid_: Requeue, reject, release; not yield, the shutdown hand-off at a step boundary (see **Yield**)
 
 **Worker**:

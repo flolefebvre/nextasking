@@ -48,7 +48,7 @@ export type AttemptHoldsStepsAndSleeps = Expect<
   >
 >;
 
-export type RecordedSleepHoldsItsIdAndWakeTime = Expect<IsEqual<RecordedSleep, { id: string; wakeAt: Date }>>;
+export type RecordedSleepHoldsItsIdAndResumeTime = Expect<IsEqual<RecordedSleep, { id: string; resumesAt: Date }>>;
 
 export type AttemptDispatchesAreDiscriminatedByTask = Expect<
   IsEqual<WelcomeEmailAttempt["dispatches"][number]["task"], RegisteredTaskName>

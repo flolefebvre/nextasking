@@ -20,7 +20,7 @@ import type { SavedStepResult, StepStore } from "./step-engine.js";
 
 export type RecordedSleep = {
   id: StepId;
-  wakeAt: Date;
+  resumesAt: Date;
 };
 
 export type ExecuteAttemptOptions = {
@@ -71,7 +71,7 @@ export async function executeAttempt<
     ...inMemoryStore,
     saveSleep: async (stepId, sleep) => {
       const resumesAt = await inMemoryStore.saveSleep(stepId, sleep);
-      sleeps.push({ id: stepId, wakeAt: new Date(resumesAt) });
+      sleeps.push({ id: stepId, resumesAt: new Date(resumesAt) });
       return resumesAt;
     },
   };

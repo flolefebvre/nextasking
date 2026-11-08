@@ -79,11 +79,11 @@ describe("executeAttempt", () => {
       { id: "mark-reminded", result: undefined },
     ]);
     expect(executedAttempt.sleeps).toEqual([
-      { id: "wait-a-day", wakeAt: expect.any(Date) },
-      { id: "wait-for-trial-end", wakeAt: new Date("2030-01-01T00:00:00Z") },
+      { id: "wait-a-day", resumesAt: expect.any(Date) },
+      { id: "wait-for-trial-end", resumesAt: new Date("2030-01-01T00:00:00Z") },
     ]);
-    expect(executedAttempt.sleeps[0]?.wakeAt.getTime()).toBeGreaterThanOrEqual(calledAt + ONE_DAY_IN_MILLISECONDS);
-    expect(executedAttempt.sleeps[0]?.wakeAt.getTime()).toBeLessThanOrEqual(Date.now() + ONE_DAY_IN_MILLISECONDS);
+    expect(executedAttempt.sleeps[0]?.resumesAt.getTime()).toBeGreaterThanOrEqual(calledAt + ONE_DAY_IN_MILLISECONDS);
+    expect(executedAttempt.sleeps[0]?.resumesAt.getTime()).toBeLessThanOrEqual(Date.now() + ONE_DAY_IN_MILLISECONDS);
     expect(executedAttempt.dispatches).toEqual([
       { task: "send-welcome-email", payload: { email: "ada@example.com" }, runId: expect.any(String) },
     ]);
@@ -391,7 +391,7 @@ describe("executeAttempt", () => {
     }>();
     expectTypeOf<SignUpAttempt["steps"]>().toEqualTypeOf<readonly SavedStepResult[]>();
     expectTypeOf<SignUpAttempt["sleeps"]>().toEqualTypeOf<readonly RecordedSleep[]>();
-    expectTypeOf<RecordedSleep>().toEqualTypeOf<{ id: string; wakeAt: Date }>();
+    expectTypeOf<RecordedSleep>().toEqualTypeOf<{ id: string; resumesAt: Date }>();
     expectTypeOf<SignUpAttempt>().toEqualTypeOf<ExecutedAttempt<SignUpTask, SignUpEvent>>();
     const checkCalls = () => {
       void executeTheAttempt();

@@ -218,7 +218,7 @@ import type {
 | `InvalidPayloadError`      | Thrown by `dispatch` and `emit` for a payload the schema refuses                                                                     |
 | `NonRetriableError`        | Thrown by a handler to fail its run at once, skipping the retries left                                                               |
 | `RedisUnavailableError`    | Thrown by every call on the instance when Redis doesn't answer within `giveUpAfter`; carries `runId` or `eventId`                    |
-| `StepMisuseError`          | Thrown by a step on a bug: a repeated id, a nested step, a bad result, duration or wake time                                         |
+| `StepMisuseError`          | Thrown by a step on a bug: a repeated id, a nested step, a bad result, duration or resume time                                       |
 | `ConnectionConfig`         | The type of `createNextasking`'s `connection`: `url` and `giveUpAfter` (default `"5s"`)                                              |
 | `CronExpression`           | The type of a schedule's `cron`: a string                                                                                            |
 | `DispatchedRun`            | The type `dispatch` resolves with: `runId`                                                                                           |
@@ -280,7 +280,7 @@ import type {
 | `executeAttempt`           | From `./testing`: runs one attempt of a handler in a test, with recorded sleeps and sends                                            |
 | `ExecutedAttempt`          | From `./testing`: the type `executeAttempt` resolves with: `steps`, `sleeps`, `dispatches` and `emits`                               |
 | `ExecuteAttemptOptions`    | From `./testing`: the type of `executeAttempt`'s options: `savedSteps`, `attempt`, `runId`, `abortSignal`, `scheduledAt`, `logger`   |
-| `RecordedSleep`            | From `./testing`: the type of one entry of an attempt's `sleeps`: `id` and `wakeAt`                                                  |
+| `RecordedSleep`            | From `./testing`: the type of one entry of an attempt's `sleeps`: `id` and `resumesAt`                                               |
 | `fakeNextasking`           | From `./testing`: switches an instance to recording mode in a test and returns its `NextaskingFake`                                  |
 | `NextaskingFake`           | From `./testing`: the type `fakeNextasking` returns: `dispatches`, `emits`, `replays` and `restore`                                  |
 | `RecordedDispatch`         | From `./testing`: the type of one entry of a fake's `dispatches`: `task`, `payload`, `runId` and `delay`                             |

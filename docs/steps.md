@@ -72,7 +72,7 @@ const [plan, orderCount] = await Promise.all([
 
 ## Sleep for minutes or days
 
-`step.sleep(id, duration)` and `step.sleepUntil(id, time)` suspend the run. It holds no worker while it waits, and resumes at the wake time.
+`step.sleep(id, duration)` and `step.sleepUntil(id, time)` suspend the run. It holds no worker while it waits, and resumes at its resume time.
 
 ```ts
 // src/nextasking/tasks/onboard-user.ts
@@ -91,7 +91,7 @@ export const onboardUser = defineTask("onboard-user", {
 ```
 
 - `sleep` takes a [duration](tasks-and-events.md#durations). `sleepUntil` takes a `Date`, or an ISO date string with `Z` or an offset (`"2026-12-01T09:00:00Z"`, `"2026-12-01T10:00:00+01:00"`).
-- The wake time is saved first, under the sleep's id. On resume the handler re-enters from the top: saved steps return their results, the sleep returns at once, and the code after it runs.
+- The resume time is fixed and saved the first time the sleep is reached, under the sleep's id: a resume or a crash keeps it. On resume the handler re-enters from the top: saved steps return their results, the sleep returns at once, and the code after it runs.
 - A resume keeps the same `attempt` and uses no retry.
 - A `sleepUntil` time already past returns at once, without suspending. It is still saved.
 - A sleep reached while other steps, `emit` or `dispatch` calls run in parallel suspends once they settle, so they are saved.
@@ -147,7 +147,7 @@ export const signUpUser = defineTask("sign-up-user", {
 ```
 
 - They take the same names, payloads and options as the instance's, typed through the `Register` augmentation. Without it, no name compiles. See [Register the tasks and events](tasks-and-events.md#register-the-tasks-and-events).
-- Each call that succeeds is saved. A retry or a resume that reaches it again sends nothing, and resolves with the same `{ runId }` or `{ eventId }`.
+- Each call that succeeds is saved like a step, with the `runId` or `eventId` it sent. A retry, a resume or a replay that reaches it again sends nothing, and resolves with the same `{ runId }` or `{ eventId }`.
 - A call is recognised by its position: the run, the enclosing step (or the top level), and how many `emit` and `dispatch` calls came before it in that scope during the attempt. Keep their order stable, and put a call that depends on data in its own step.
 - Without your own id, the run or event gets an id derived from that position, the same on every attempt. A `runId` or `eventId` you pass wins over it.
 - A call that throws is not saved: the next attempt sends it again.
@@ -178,15 +178,15 @@ await step.run("create-charge", async ({ idempotencyKey }) => {
 
 These are bugs in the handler, so they fail the run at once with a `StepMisuseError`, skipping the retries left (`reason: "non-retriable"`):
 
-| Misuse                                                   | Error message starts with                     |
-| -------------------------------------------------------- | --------------------------------------------- |
-| Two steps or sleeps with the same id                     | `Step id "<id>" is used twice`                |
-| A `step.run` or a sleep called inside another step       | `Step "<inner>" was started inside the fn of` |
-| A result that can't be stored as JSON                    | `The result of step "<id>" is not JSON`       |
-| A result over 1 MiB                                      | `The result of step "<id>" is <n> bytes`      |
-| A result that brings the run's steps over 10 MiB         | `Saving step "<id>" would bring`              |
-| A `sleep` duration that isn't a duration                 | `The duration of step "<id>" is invalid`      |
-| A `sleepUntil` time that isn't a `Date` or an ISO string | `The wake time of step "<id>" is not a Date`  |
+| Misuse                                                   | Error message starts with                      |
+| -------------------------------------------------------- | ---------------------------------------------- |
+| Two steps or sleeps with the same id                     | `Step id "<id>" is used twice`                 |
+| A `step.run` or a sleep called inside another step       | `Step "<inner>" was started inside the fn of`  |
+| A result that can't be stored as JSON                    | `The result of step "<id>" is not JSON`        |
+| A result over 1 MiB                                      | `The result of step "<id>" is <n> bytes`       |
+| A result that brings the run's steps over 10 MiB         | `Saving step "<id>" would bring`               |
+| A `sleep` duration that isn't a duration                 | `The duration of step "<id>" is invalid`       |
+| A `sleepUntil` time that isn't a `Date` or an ISO string | `The resume time of step "<id>" is not a Date` |
 
 - The step the error came from is not saved.
 - The run fails with the `StepMisuseError` even if the handler catches it, and even if the handler goes on to throw another error or to return.
@@ -200,7 +200,7 @@ import { StepMisuseError } from "@flefebvre/nextasking";
 
 ## Where steps are kept
 
-- Saved steps, wake times and sent calls live in Redis next to the run, under the instance's `prefix`.
+- Saved steps, resume times and sent calls live in Redis next to the run, under the instance's `prefix`.
 - They are removed when the run completes.
 - A run that fails for good keeps its saved steps for as long as the run is kept: 14 days. See [Retries and failures](retries-and-failures.md#what-a-failed-run-keeps).
 - Only the attempt that currently owns the run can save a step. If another attempt has taken the run over, the next `step.run` of the old attempt throws and saves nothing, and its `abortSignal` aborts. See [Worker](worker.md#stop-a-handler-cleanly-with-abortsignal).

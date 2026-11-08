@@ -67,6 +67,10 @@ export function enqueueLinesOf(request: DispatchOrEmitRequest, reply: EnqueueRep
   ];
 }
 
+export function workerErrorLineOf(error: Error): LifecycleLine {
+  return { level: "error", message: "worker error", fields: { err: error } };
+}
+
 export function pickupLineOf(lockedRun: LockedRun): LifecycleLine {
   return {
     level: "debug",

@@ -1,7 +1,14 @@
 import { describe, expect, test } from "vitest";
 
 import type { LockedRun, SettleReply } from "./engine/engine.js";
-import { enqueueLinesOf, parkLineOf, pickupLineOf, settleLinesOf, writeLifecycleLines } from "./lifecycle-logs.js";
+import {
+  enqueueLinesOf,
+  parkLineOf,
+  pickupLineOf,
+  settleLinesOf,
+  workerErrorLineOf,
+  writeLifecycleLines,
+} from "./lifecycle-logs.js";
 import type { AttemptOutcome } from "./locked-run-attempt.js";
 import { createRecordingLogger } from "../tests/recording-logger.js";
 
@@ -239,6 +246,14 @@ describe("the lines of a settle", () => {
       expect(JSON.stringify(fields)).not.toContain("token-1");
       expect(JSON.stringify(fields)).not.toContain("ada@example.com");
     }
+  });
+});
+
+test("a worker error writes worker error at error with the error as err", () => {
+  expect(workerErrorLineOf(ATTEMPT_ERROR)).toEqual({
+    level: "error",
+    message: "worker error",
+    fields: { err: ATTEMPT_ERROR },
   });
 });
 

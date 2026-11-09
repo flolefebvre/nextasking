@@ -2,13 +2,13 @@ import { describe, expect, test } from "vitest";
 
 import { violationOfCapturedOutputLine } from "./captured-process.js";
 
-const NEXT_START_WARNING_LINE = "(node:26181) Warning: warned inside next start";
+const NEXT_START_WARNING_LINE = "(node:66076) Warning: warned inside next start";
 
 const NEXT_START_UNHANDLED_REJECTION_LINE = " ⨯ unhandledRejection:  Error: rejected inside next start";
 
 const FIXTURE_WORKER_ERROR_LINE = '{"level":"error","message":"worker error","err":{}}';
 
-describe("the output lines of a captured Next server, as next start 16.0.0 writes them", () => {
+describe("the output lines of a captured Next server, as next start 16.0.10 writes them", () => {
   test("a process warning is a process warning violation named by its name and message", () => {
     const violation = violationOfCapturedOutputLine(NEXT_START_WARNING_LINE);
 
@@ -31,9 +31,9 @@ describe("the output lines of a captured Next server, as next start 16.0.0 write
     const otherLines = [
       "(Use `node --trace-warnings ...` to show where the warning was created)",
       "Error: rejected inside next start",
-      "    at Timeout._onTimeout (../../nextasking-164/provoke-in-next.cjs:3:18)",
+      "    at Timeout._onTimeout (../../nextasking-77/provoke-in-next.cjs:3:18)",
       '{"level":"error","message":"connection error","err":{}}',
-      " ✓ Ready in 317ms",
+      " ✓ Ready in 346ms",
     ];
 
     const violations = otherLines.map(violationOfCapturedOutputLine);

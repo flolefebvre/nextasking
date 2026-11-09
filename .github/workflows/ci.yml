@@ -104,7 +104,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        next-version: [16.0.0, latest]
+        next-version: [16.0.10, latest]
 
     steps:
       - name: Checkout repository

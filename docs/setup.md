@@ -9,7 +9,7 @@ pnpm add @flefebvre/nextasking zod
 ```
 
 - Add one [Standard Schema](https://standardschema.dev) library for payload schemas: Zod, Valibot, ArkType or another. This manual's examples use Zod.
-- nextasking needs Next.js 16 or later and Node `^22.22`, `^24.5` or 26 and later. Run the worker on long-running Node hosting; a serverless function can only dispatch and emit.
+- nextasking needs Next.js 16.0.10 or later and Node `^22.22`, `^24.5` or 26 and later. Run the worker on long-running Node hosting; a serverless function can only dispatch and emit.
 - TypeScript is optional; with it, use 5.9 or later.
 
 ## Run Valkey or Redis

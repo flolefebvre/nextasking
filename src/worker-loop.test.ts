@@ -1627,6 +1627,35 @@ test("the shutdown deadline aborts an attempt still in its handler, which yields
   expect(engine.storedRunOf("send-email-1")?.state).toBe("pending");
 });
 
+test("an attempt whose handler ignores the shutdown deadline abort and returns keeps its completion", async () => {
+  const { loop, engine, lines, handlerGate } = await scenarioOfAnAttemptInItsHandler(gatedWithNoStep);
+
+  loop.abortAttemptsAtShutdownDeadline();
+  await vi.advanceTimersByTimeAsync(200);
+  handlerGate.release(1);
+  await vi.advanceTimersByTimeAsync(0);
+  await loop.waitForAttemptsInFlight();
+
+  expect(settleOutcomeKindsOf(engine)).toEqual(["complete"]);
+  expect(messagesOf(lines)).toEqual(["attempt started", "run completed"]);
+  expect(engine.storedRunOf("send-email-1")?.state).toBe("completed");
+});
+
+test("an attempt whose handler throws after the shutdown deadline abort yields instead of retrying", async () => {
+  const { loop, engine, handlerGate } = await scenarioOfAnAttemptInItsHandler((gate) => async () => {
+    await gate.enter();
+    throw new Error("provider down");
+  });
+
+  loop.abortAttemptsAtShutdownDeadline();
+  handlerGate.release(1);
+  await vi.advanceTimersByTimeAsync(0);
+  await loop.waitForAttemptsInFlight();
+
+  expect(settleOutcomeKindsOf(engine)).toEqual(["yield"]);
+  expect(engine.storedRunOf("send-email-1")?.state).toBe("pending");
+});
+
 test("an attempt a fetch starts after the shutdown deadline is aborted at once and yields", async () => {
   let isHandlerAbortedAtItsStart = false;
   const sendEmail = defineTask("send-email", {

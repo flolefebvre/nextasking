@@ -60,6 +60,8 @@ type AttemptInFlight = {
   settlement: Promise<void>;
 };
 
+const OUTCOME_KINDS_KEPT_AT_SHUTDOWN = new Set<AttemptResult["attemptOutcome"]["kind"]>(["complete", "suspend"]);
+
 function failedCommandErrorsOf({ promote, renewals, taskNames, prune, dueSchedules }: TickReply): Error[] {
   return [promote, renewals, taskNames, prune, dueSchedules].flatMap((commandReply) =>
     commandReply?.kind === "failed" ? [commandReply.error] : [],
@@ -220,7 +222,7 @@ export function startWorkerLoop(config: WorkerLoopConfig): WorkerLoop {
     if (abortCause === "lock lost") {
       return undefined;
     }
-    return abortCause === "shutdown deadline"
+    return abortCause === "shutdown deadline" && !OUTCOME_KINDS_KEPT_AT_SHUTDOWN.has(attemptResult.attemptOutcome.kind)
       ? { attemptOutcome: { kind: "yield" }, listenersLeftOut: [] }
       : attemptResult;
   };

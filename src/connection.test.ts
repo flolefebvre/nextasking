@@ -477,7 +477,7 @@ describe("a write answered READONLY, as during a failover", () => {
     ]);
   });
 
-  test("an instance write is answered when the stretch is shorter than giveUpAfter, and rejects as unanswered at giveUpAfter otherwise", async () => {
+  test("an instance write is answered when the stretch is shorter than giveUpAfter, and rejects with the last READONLY reply at giveUpAfter otherwise", async () => {
     const shortStretch = demotedPrimaryScenarioOf(GIVE_UP_AFTER_IN_MILLISECONDS / 2);
     const longStretch = demotedPrimaryScenarioOf(10 * GIVE_UP_AFTER_IN_MILLISECONDS);
 
@@ -486,7 +486,36 @@ describe("a write answered READONLY, as during a failover", () => {
     await vi.advanceTimersByTimeAsync(GIVE_UP_AFTER_IN_MILLISECONDS);
 
     expect(await shortReply).toBe("OK");
-    expect(isUnansweredError(await longOutcome)).toBe(true);
+    expect(longStretch.readOnlyReplies.length).toBeGreaterThan(1);
+    expect(await longOutcome).toBe(longStretch.readOnlyReplies.at(-1));
+  });
+
+  test("an instance write whose resend after a READONLY reply is rejected unanswered rejects with that READONLY reply at giveUpAfter", async () => {
+    const { connection, driver, write, readOnlyReplies } = demotedPrimaryScenarioOf(10 * GIVE_UP_AFTER_IN_MILLISECONDS);
+    const outcome = connection.instanceCalls.send(write()).catch((error: unknown) => error);
+    await vi.advanceTimersByTimeAsync(0);
+    driver.isAnswering = false;
+    await vi.advanceTimersByTimeAsync(GIVE_UP_AFTER_IN_MILLISECONDS / 2);
+
+    driver.onForceReconnect = () => undefined;
+    driver.forceReconnect();
+    await vi.advanceTimersByTimeAsync(GIVE_UP_AFTER_IN_MILLISECONDS / 2);
+
+    expect(readOnlyReplies).toHaveLength(1);
+    expect(await outcome).toBe(readOnlyReplies[0]);
+  });
+
+  test("an instance write answered READONLY on a connection then dropped rejects with the drop's error at giveUpAfter", async () => {
+    const { connection, driver, write } = demotedPrimaryScenarioOf(10 * GIVE_UP_AFTER_IN_MILLISECONDS);
+    const connectionRefused = networkError("ECONNREFUSED");
+    const outcome = connection.instanceCalls.send(write()).catch((error: unknown) => error);
+    await vi.advanceTimersByTimeAsync(GIVE_UP_AFTER_IN_MILLISECONDS / 2);
+
+    driver.onForceReconnect = () => undefined;
+    driver.loseConnection(connectionRefused);
+    await vi.advanceTimersByTimeAsync(GIVE_UP_AFTER_IN_MILLISECONDS / 2);
+
+    expect(await outcome).toBe(connectionRefused);
   });
 });
 
@@ -832,6 +861,21 @@ describe("callOnRedis", () => {
         message: "Redis refused the command: it is out of memory",
         cause: outOfMemoryReply,
         eventId: "invoice-42-paid",
+      }),
+    );
+  });
+
+  test("turns a READONLY reply into RedisUnavailableError naming giveUpAfter, with the reply as its cause", async () => {
+    const readOnlyReply = new ErrorReply("READONLY You can't write against a read only replica.");
+
+    const call = connections.callOnRedis({ runId: "welcome-ada" }, () => Promise.reject(readOnlyReply));
+
+    await expect(call).rejects.toThrow(
+      expect.objectContaining({
+        name: "RedisUnavailableError",
+        message: "Redis didn't answer within 1s",
+        cause: readOnlyReply,
+        runId: "welcome-ada",
       }),
     );
   });

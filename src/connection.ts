@@ -319,10 +319,10 @@ export function createRedisConnections(
     });
   };
 
-  const unansweredErrorAtTheDeadline = (state: ConnectionState): Error =>
+  const unansweredErrorAtTheDeadline = (state: ConnectionState, lastReadOnlyReply: Error | undefined): Error =>
     !state.driver.isReady && isUnansweredCommandError(state.errorWhileDown)
       ? (state.errorWhileDown as Error)
-      : unansweredWithinDeadlineError();
+      : (lastReadOnlyReply ?? unansweredWithinDeadlineError());
 
   const reconnectedAfterReadOnly = (state: ConnectionState): Promise<void> => {
     if (state.readOnlyReconnect === undefined) {
@@ -349,9 +349,10 @@ export function createRedisConnections(
     retryErrorOf: (reply: Reply) => Error | undefined,
   ): Promise<Reply> => {
     const deadlineController = new AbortController();
+    let lastReadOnlyReply: Error | undefined;
     const deadlineTimer = unrefTimer(
       setTimeout(() => {
-        deadlineController.abort(unansweredErrorAtTheDeadline(state));
+        deadlineController.abort(unansweredErrorAtTheDeadline(state, lastReadOnlyReply));
       }, giveUpAfterInMilliseconds),
     );
     const deadlineSignal = deadlineController.signal;
@@ -376,6 +377,9 @@ export function createRedisConnections(
         }
         if (isClosed(state)) {
           throw retryError;
+        }
+        if (isReadOnlyReply(retryError)) {
+          lastReadOnlyReply = retryError;
         }
         await untilAborted(
           isReadOnlyReply(retryError) ? reconnectedAfterReadOnly(state) : readyWaitOf(state),
@@ -548,7 +552,7 @@ export function createRedisConnections(
       try {
         return await call();
       } catch (error) {
-        if (isUnansweredError(error)) {
+        if (isUnansweredError(error) || isReadOnlyReply(error)) {
           throw new RedisUnavailableError({ kind: "unanswered", giveUpAfterInMilliseconds }, callIds, error);
         }
         if (isOutOfMemoryReply(error)) {

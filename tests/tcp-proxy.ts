@@ -15,6 +15,8 @@ export type TcpProxy = {
   stopAnswering: () => void;
   answerAgain: () => void;
   acceptedConnectionCount: () => number;
+  resetConnectionCount: () => number;
+  liveConnectionCount: () => number;
   silencedConnectionCount: () => number;
   recordRequestChunks: () => () => string[];
   stop: () => Promise<void>;
@@ -101,6 +103,7 @@ export async function startTcpProxy(targetUrl: string): Promise<TcpProxy> {
   let isAnswering = true;
   let isCut = false;
   let acceptedConnectionCount = 0;
+  let resetConnectionCount = 0;
   let recordedRequestChunks: string[] | undefined;
   let armedReplyCut: ArmedReplyCut | undefined;
   let armedRequestHold: ArmedRequestHold | undefined;
@@ -130,6 +133,7 @@ export async function startTcpProxy(targetUrl: string): Promise<TcpProxy> {
 
   const server = createServer((clientSocket) => {
     if (isCut) {
+      resetConnectionCount += 1;
       clientSocket.on("error", () => undefined);
       reset(clientSocket);
       return;
@@ -268,6 +272,8 @@ export async function startTcpProxy(targetUrl: string): Promise<TcpProxy> {
       switchesAcceptedWhileNotAnswering.clear();
     },
     acceptedConnectionCount: () => acceptedConnectionCount,
+    resetConnectionCount: () => resetConnectionCount,
+    liveConnectionCount: () => liveForwardingSwitches.size,
     silencedConnectionCount: () => silencedSwitches.size,
     recordRequestChunks: () => {
       const requestChunks: string[] = [];

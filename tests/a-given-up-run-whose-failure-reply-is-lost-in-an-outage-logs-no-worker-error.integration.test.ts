@@ -32,7 +32,7 @@ integrationTest(
       ],
     });
     const olderReleaseNextasking = createNextasking({
-      connection: { url: proxy.url, giveUpAfter: "2s" },
+      connection: { url: proxy.url, giveUpAfter: "5s" },
       prefix: keyPrefix,
       logger,
       tasks: [

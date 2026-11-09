@@ -64,6 +64,18 @@ export async function backdateEndedRun(
   }
 }
 
+export async function backdateFirstFoundUnknownAt(
+  { redis, keys }: EngineTestContext,
+  runId: string,
+  durationInMilliseconds: DurationInMilliseconds,
+): Promise<void> {
+  const firstFoundUnknownAt = await redis.hget(keys.runRecord(runId), "firstFoundUnknownAt");
+  if (firstFoundUnknownAt === null) {
+    throw new Error(`run "${runId}" was never found unknown`);
+  }
+  await redis.hset(keys.runRecord(runId), "firstFoundUnknownAt", Number(firstFoundUnknownAt) - durationInMilliseconds);
+}
+
 export async function storedValuesByKeyOf(redis: Redis, keyPrefix: string): Promise<Map<string, Buffer | null>> {
   const storedKeys = (await redis.keys(`{${keyPrefix}}:*`)).sort();
   const storedValuesByKey = new Map<string, Buffer | null>();

@@ -10,6 +10,7 @@ import type { HandlerSender } from "./step-engine.js";
 import { startWorkerLoop } from "./worker-loop.js";
 import type { WaitForWakeUp, WorkerLoop, WorkerLoopEngine } from "./worker-loop.js";
 import { DEFAULT_WORKER_TIMING } from "./worker-timing.js";
+import type { WorkerTiming } from "./worker-timing.js";
 import { createInMemoryEngine } from "../tests/in-memory-engine.js";
 import type { InMemoryEngine } from "../tests/in-memory-engine.js";
 import { freshLockTokensOf } from "../tests/lock-tokens.js";
@@ -63,18 +64,20 @@ function startedLoopOf(
     engine = createInMemoryEngine(),
     loopEngine = engine,
     waitForWakeUp = engine.waitForWakeUp,
+    timing = DEFAULT_WORKER_TIMING,
   }: {
     concurrency?: number;
     engine?: InMemoryEngine;
     loopEngine?: WorkerLoopEngine;
     waitForWakeUp?: WaitForWakeUp;
+    timing?: WorkerTiming;
   } = {},
 ): LoopScenario {
   const { logger, lines } = createRecordingLogger();
   const loop = startWorkerLoop({
     engine: loopEngine,
     definitions: workerDefinitionsOf(tasks),
-    timing: DEFAULT_WORKER_TIMING,
+    timing,
     logger,
     concurrency,
     sender: NO_SENDER,
@@ -588,6 +591,89 @@ test("two loops ticking on the same reported third stall end with one failed run
       },
     },
   ]);
+});
+
+test("a run of an unknown task is held 10 seconds against the concurrency, then handed back to the front of pending with its order", async () => {
+  const sendEmail = defineTask("send-email", { schema: v.object({}), handler: async () => undefined });
+  const engine = createInMemoryEngine();
+  await engine.enqueue({ runs: [...runsOf("resize-image", 1), ...runsOf("send-email", 1)] });
+  const orderBefore = engine.storedRunOf("resize-image-1")?.order;
+  const { lines } = startedLoopOf([sendEmail] as AnyTaskDefinition[], { engine, concurrency: 1 });
+
+  await vi.advanceTimersByTimeAsync(10_000 - 1);
+  const settlesDuringTheHold = requestsOf<SettleRequest>(engine, "settle");
+  const sendEmailStateDuringTheHold = engine.storedRunOf("send-email-1")?.state;
+  await vi.advanceTimersByTimeAsync(1);
+
+  expect(settlesDuringTheHold).toEqual([]);
+  expect(sendEmailStateDuringTheHold).toBe("pending");
+  expect(requestsOf<SettleRequest>(engine, "settle").map(({ runId, outcome }) => [runId, outcome.kind])).toEqual([
+    ["resize-image-1", "handBack"],
+  ]);
+  expect(engine.storedRunOf("resize-image-1")).toMatchObject({ state: "executing", order: orderBefore, attempt: 1 });
+  expect(engine.storedRunOf("send-email-1")?.state).toBe("pending");
+  expect(lines).toEqual([
+    {
+      level: "debug",
+      message: "run handed back: unknown task",
+      fields: { task: "resize-image", runId: "resize-image-1", attempt: 1 },
+    },
+  ]);
+});
+
+test("a run of an unknown task first found 30 minutes ago fails unknown task with its notice", async () => {
+  const alertOnCall = defineListener("alert-on-call", { on: runFailed, handler: async () => undefined });
+  const engine = createInMemoryEngine();
+  await engine.enqueue({ runs: runsOf("resize-image", 1) });
+  const { lines } = startedLoopOf([alertOnCall] as AnyTaskDefinition[], { engine });
+
+  await vi.advanceTimersByTimeAsync(30 * MINUTE_IN_MILLISECONDS + 10_000);
+
+  const noticeRunId = deriveListenerRunId(
+    deriveFailureNoticeEventId("resize-image", "resize-image-1", 0),
+    "alert-on-call",
+  );
+  expect(engine.storedRunOf("resize-image-1")).toMatchObject({ state: "failed", reason: "unknown task" });
+  expect(engine.storedRunOf(noticeRunId)?.state).toBe("completed");
+  expect(linesWithMessage(lines, "run failed")).toEqual([
+    {
+      level: "error",
+      message: "run failed",
+      fields: {
+        task: "resize-image",
+        runId: "resize-image-1",
+        attempt: 1,
+        err: expect.objectContaining({ name: "UnknownTaskRunError" }),
+        reason: "unknown task",
+        runDurationInMilliseconds: 30 * MINUTE_IN_MILLISECONDS + 10_000,
+        executionDurationInMilliseconds: 10_000,
+      },
+    },
+  ]);
+  expect(linesWithMessage(lines, "attempt started").filter(({ fields }) => fields.task === "resize-image")).toEqual([]);
+});
+
+test("an unknown task's hold stopped by the local stop sends no hand back", async () => {
+  const engine = createInMemoryEngine();
+  await engine.enqueue({ runs: runsOf("resize-image", 1) });
+  const heldTicks = engine.holdCalls("tick");
+  const { lines } = startedLoopOf([], {
+    engine,
+    timing: { ...DEFAULT_WORKER_TIMING, unknownNameHandBackDelayInMilliseconds: 3 * MINUTE_IN_MILLISECONDS },
+  });
+
+  await vi.advanceTimersByTimeAsync(3 * MINUTE_IN_MILLISECONDS);
+  heldTicks.release();
+  await vi.advanceTimersByTimeAsync(0);
+
+  expect(linesWithMessage(lines, "attempt aborted: lock lost")).toEqual([
+    {
+      level: "debug",
+      message: "attempt aborted: lock lost",
+      fields: { task: "resize-image", runId: "resize-image-1", attempt: 1 },
+    },
+  ]);
+  expect(requestsOf(engine, "settle")).toEqual([]);
 });
 
 test("a pickup after a suspend writes run resumed, and a pickup after a stall writes attempt started with the same attempt", async () => {

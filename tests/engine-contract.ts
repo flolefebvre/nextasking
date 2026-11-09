@@ -3,7 +3,15 @@ import { expect } from "vitest";
 import { runFailed } from "../src/built-in-events.js";
 import type { DurationInMilliseconds, EpochMilliseconds } from "../src/durations.js";
 import { MOST_RUNS_PRUNED_PER_PRUNE } from "../src/engine/engine.js";
-import type { Engine, FailureNotice, FetchedReply, LockedRun, RunToCreate } from "../src/engine/engine.js";
+import type {
+  Engine,
+  FailureNotice,
+  FetchedReply,
+  LockedRun,
+  RunToCreate,
+  SettleOutcome,
+  SettleReply,
+} from "../src/engine/engine.js";
 import type { RunId } from "../src/ids.js";
 import type { ErrorRecord } from "../src/run-queue.js";
 import type { RunState } from "../src/run-states.js";
@@ -26,6 +34,7 @@ export type EngineContractHarness = {
   engine: ContractEngine;
   expireLock: (runId: RunId) => Promise<void>;
   backdateEndedRun: (runId: RunId, durationInMilliseconds: DurationInMilliseconds) => Promise<void>;
+  backdateFirstFoundUnknownAt: (runId: RunId, durationInMilliseconds: DurationInMilliseconds) => Promise<void>;
   pastInstant: () => Promise<EpochMilliseconds>;
   stateOf: (runId: RunId) => Promise<RunState | undefined>;
   isWakeUpMarkerArmed: () => Promise<boolean>;
@@ -259,17 +268,50 @@ export function defineEngineContractTests(contractTest: EngineContractTest): voi
     expect((await lockedRunsOf(engine, 2)).map(({ runId }) => runId)).toEqual(["run-2"]);
   });
 
-  contractTest("a yield puts the run back at the front of pending", async (harness) => {
-    const { engine } = harness;
-    await engine.enqueue({ runs: sendEmailRunsOf(["run-1", "run-2"]) });
-    const [lockedRun] = await lockedRunsOf(engine, 1);
+  const outcomesBackAtTheFront: [SettleOutcome, SettleReply][] = [
+    [{ kind: "yield" }, { kind: "yielded" }],
+    [{ kind: "handBack", error: ATTEMPT_ERROR, failureNotice: undefined }, { kind: "handedBack" }],
+  ];
+  for (const [outcome, expectedReply] of outcomesBackAtTheFront) {
+    contractTest(
+      `a ${outcome.kind} puts the run back at the front of pending with the same attempt`,
+      async (harness) => {
+        const { engine } = harness;
+        await engine.enqueue({ runs: sendEmailRunsOf(["run-1", "run-2"]) });
+        const [lockedRun] = await lockedRunsOf(engine, 1);
 
-    const reply = await engine.settle({ ...lockedRun!, outcome: { kind: "yield" } });
-    const [nextLockedRun] = await lockedRunsOf(engine, 1);
+        const reply = await engine.settle({ ...lockedRun!, outcome });
+        const [nextLockedRun] = await lockedRunsOf(engine, 1);
 
-    expect(reply).toEqual({ kind: "yielded" });
-    expect(nextLockedRun).toMatchObject({ runId: "run-1", attempt: 1, isResume: false });
-  });
+        expect(reply).toEqual(expectedReply);
+        expect(nextLockedRun).toMatchObject({ runId: "run-1", attempt: 1, isResume: false });
+      },
+    );
+  }
+
+  contractTest(
+    "a hand back of a run first found unknown 30 minutes ago fails it unknown task and stores its notice",
+    async (harness) => {
+      const { engine } = harness;
+      const handBack = (lockedRun: LockedRun) =>
+        engine.settle({
+          ...lockedRun,
+          outcome: {
+            kind: "handBack",
+            error: ATTEMPT_ERROR,
+            failureNotice: failureNoticeOf("run-1", ["listener-run-1"]),
+          },
+        });
+      await handBack(await onlyLockedRunOf(engine, "run-1"));
+      await harness.backdateFirstFoundUnknownAt("run-1", 30 * MINUTE_IN_MILLISECONDS);
+      const [lockedRun] = await lockedRunsOf(engine, 1);
+
+      const reply = await handBack(lockedRun!);
+
+      expect(reply).toEqual({ kind: "failed", reason: "unknown task", finishedAt: expect.any(Number) });
+      expect(await statesOf(harness, ["run-1", "listener-run-1"])).toEqual(["failed", "pending"]);
+    },
+  );
 
   contractTest("a renew of a held lock renews it, and of a lock its settle ended replies stale", async (harness) => {
     const { engine } = harness;

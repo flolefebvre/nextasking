@@ -94,6 +94,7 @@ export type InMemoryEngine = Pick<
   runIdsInState: (state: RunState) => RunId[];
   expireLock: (runId: RunId) => void;
   backdateEndedRun: (runId: RunId, durationInMilliseconds: DurationInMilliseconds) => void;
+  backdateFirstFoundUnknownAt: (runId: RunId, durationInMilliseconds: DurationInMilliseconds) => void;
 };
 
 export type InMemoryEngineOptions = { now?: () => EpochMilliseconds };
@@ -762,6 +763,13 @@ export function createInMemoryEngine({ now = () => Date.now() }: InMemoryEngineO
         throw new Error(`run "${runId}" holds no lock to expire`);
       }
       storedRun.lockedUntil = now() - 1;
+    },
+    backdateFirstFoundUnknownAt: (runId, durationInMilliseconds) => {
+      const storedRun = runsById.get(runId);
+      if (storedRun?.firstFoundUnknownAt === undefined) {
+        throw new Error(`run "${runId}" was never found unknown`);
+      }
+      storedRun.firstFoundUnknownAt -= durationInMilliseconds;
     },
     backdateEndedRun: (runId, durationInMilliseconds) => {
       const storedRun = runsById.get(runId);

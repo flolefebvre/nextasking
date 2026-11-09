@@ -17,7 +17,8 @@ import {
   workerErrorLineOf,
   writeLifecycleLines,
 } from "./lifecycle-logs.js";
-import { executeLockedRunAttempt, failingAttemptOf, settleRequestOf } from "./locked-run-attempt.js";
+import { executeLockedRunAttempt, failingAttemptOf, handBackAttemptOf, settleRequestOf } from "./locked-run-attempt.js";
+import type { AttemptResult } from "./locked-run-attempt.js";
 import type { Logger } from "./logger.js";
 import type { HandlerSender } from "./step-engine.js";
 import type { WorkerTiming } from "./worker-timing.js";
@@ -49,6 +50,18 @@ type AttemptInFlight = {
   isExecuting: boolean;
   settlement: Promise<void>;
 };
+
+function delayUnlessAborted(delayInMilliseconds: DurationInMilliseconds, abortSignal: AbortSignal): Promise<void> {
+  return new Promise<void>((resolve) => {
+    const endDelay = () => {
+      clearTimeout(delayTimer);
+      abortSignal.removeEventListener("abort", endDelay);
+      resolve();
+    };
+    const delayTimer = setTimeout(endDelay, delayInMilliseconds);
+    abortSignal.addEventListener("abort", endDelay);
+  });
+}
 
 function freshLockTokenOf(): LockToken {
   return randomBytes(16).toString("hex");
@@ -135,13 +148,16 @@ export function startWorkerLoop(config: WorkerLoopConfig): WorkerLoop {
     }
   };
 
-  const executeAttempt = async (
-    task: AnyTaskDefinition,
+  const attemptResultOf = async (
+    task: AnyTaskDefinition | undefined,
     attemptInFlight: AttemptInFlight,
-    fetchRepliedAt: EpochMilliseconds,
-  ) => {
+  ): Promise<AttemptResult> => {
     const { lockedRun, abortController } = attemptInFlight;
-    const { attemptOutcome, listenersLeftOut } = await executeLockedRunAttempt({
+    if (task === undefined) {
+      await delayUnlessAborted(timing.unknownNameHandBackDelayInMilliseconds, abortController.signal);
+      return handBackAttemptOf(lockedRun, definitions);
+    }
+    return executeLockedRunAttempt({
       engine,
       task,
       lockedRun,
@@ -154,6 +170,15 @@ export function startWorkerLoop(config: WorkerLoopConfig): WorkerLoop {
       },
       isWorkerDraining: () => false,
     });
+  };
+
+  const executeAttempt = async (
+    task: AnyTaskDefinition | undefined,
+    attemptInFlight: AttemptInFlight,
+    fetchRepliedAt: EpochMilliseconds,
+  ) => {
+    const { lockedRun, abortController } = attemptInFlight;
+    const { attemptOutcome, listenersLeftOut } = await attemptResultOf(task, attemptInFlight);
     attemptInFlight.isExecuting = false;
     if (abortController.signal.aborted) {
       return;
@@ -173,10 +198,9 @@ export function startWorkerLoop(config: WorkerLoopConfig): WorkerLoop {
 
   const startAttempt = (lockedRun: LockedRun, fetchSentAt: EpochMilliseconds, fetchRepliedAt: EpochMilliseconds) => {
     const task = definitions.tasksByName.get(lockedRun.task);
-    if (task === undefined) {
-      return;
+    if (task !== undefined) {
+      writeLifecycleLines(logger, [pickupLineOf(lockedRun)]);
     }
-    writeLifecycleLines(logger, [pickupLineOf(lockedRun)]);
     const attemptInFlight: AttemptInFlight = {
       lockedRun,
       lockExpiresAtByWorkerClock: fetchSentAt + lockDurationInMilliseconds,

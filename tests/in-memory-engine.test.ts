@@ -14,6 +14,9 @@ defineEngineContractTests((name, body) => {
       backdateEndedRun: async (runId, durationInMilliseconds) => {
         engine.backdateEndedRun(runId, durationInMilliseconds);
       },
+      backdateFirstFoundUnknownAt: async (runId, durationInMilliseconds) => {
+        engine.backdateFirstFoundUnknownAt(runId, durationInMilliseconds);
+      },
       pastInstant: async () => Date.now() - 1000,
       stateOf: async (runId) => engine.storedRunOf(runId)?.state,
       isWakeUpMarkerArmed: async () => engine.isWakeUpMarkerArmed(),

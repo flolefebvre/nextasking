@@ -1,11 +1,12 @@
 import type { AttemptAbortCause } from "./attempt-abort.js";
-import { errorFromThrownValue, errorRecordFor, failureReasonFor } from "./attempt-errors.js";
+import { errorFromThrownValue, errorRecordFor, failureReasonFor, UnknownTaskRunError } from "./attempt-errors.js";
 import { settleWithinTimeout } from "./attempt-timeout.js";
 import { backoffInMillisecondsFor } from "./backoff.js";
 import { backoffOf } from "./definitions.js";
 import type { AnyTaskDefinition } from "./definitions.js";
-import { parseDuration } from "./durations.js";
+import { parseDuration, shownDurationOf } from "./durations.js";
 import type { DurationInMilliseconds, EpochMilliseconds } from "./durations.js";
+import { UNKNOWN_TASK_FAILURE_DELAY_IN_MILLISECONDS } from "./engine/engine.js";
 import type { Engine, FailureNotice, LockedRun, SettleOutcome, SettleRequest } from "./engine/engine.js";
 import { engineFailureNoticeOf } from "./engine-failure-notice.js";
 import type { FailingRun, ListenerLeftOut, RunFailure, WorkerDefinitions } from "./engine-failure-notice.js";
@@ -58,6 +59,20 @@ export function failingAttemptOf(
 ): AttemptResult {
   const { failureNotice, listenersLeftOut } = engineFailureNoticeOf(failingRun, failure, definitions);
   return { attemptOutcome: { kind: "fail", ...failure, failureNotice }, listenersLeftOut };
+}
+
+export function handBackAttemptOf(lockedRun: LockedRun, definitions: WorkerDefinitions): AttemptResult {
+  const error = new UnknownTaskRunError(
+    lockedRun.task,
+    lockedRun.runId,
+    shownDurationOf(UNKNOWN_TASK_FAILURE_DELAY_IN_MILLISECONDS),
+  );
+  const { failureNotice, listenersLeftOut } = engineFailureNoticeOf(
+    lockedRun,
+    { error, reason: "unknown task" },
+    definitions,
+  );
+  return { attemptOutcome: { kind: "handBack", error, failureNotice }, listenersLeftOut };
 }
 
 function failedAttemptOf(

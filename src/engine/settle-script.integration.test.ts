@@ -406,9 +406,9 @@ async function lockedRunFirstFoundUnknownOf(
 }
 
 engineTest(
-  "a hand-back of a run first found unknown 30 minutes ago fails it unknown task with its error and notice",
+  "a hand-back of a run first found unknown 30 minutes ago fails it unknown task with its error and notice, and its resend hears that failure and writes nothing",
   async (context) => {
-    const { engine, redis, keys } = context;
+    const { engine, redis, keys, keyPrefix } = context;
     const { task, runId, lockToken } = await lockedRunFirstFoundUnknownOf(
       context,
       UNKNOWN_TASK_FAILURE_DELAY_IN_MILLISECONDS,
@@ -420,11 +420,18 @@ engineTest(
       lockToken,
       outcome: { ...HAND_BACK, failureNotice: FAILURE_NOTICE },
     });
-    const resentReply = await engine.settle({ task, runId, lockToken, outcome: HAND_BACK });
+    const storedValuesAfterTheFailure = await storedValuesByKeyOf(redis, keyPrefix);
+    const resentReply = await engine.settle({
+      task,
+      runId,
+      lockToken,
+      outcome: { ...HAND_BACK, failureNotice: FAILURE_NOTICE },
+    });
 
     const finishedAt = finishedAtOf(reply);
     expect(reply).toEqual({ kind: "failed", reason: "unknown task", finishedAt: expect.any(Number) });
-    expect(resentReply).toEqual({ kind: "already" });
+    expect(resentReply).toEqual(reply);
+    expect(await storedValuesByKeyOf(redis, keyPrefix)).toEqual(storedValuesAfterTheFailure);
     expect(await redis.hmget(keys.runRecord(task, runId), "state", "reason", "endedAs")).toEqual([
       "failed",
       "unknown task",

@@ -64,6 +64,10 @@ local state, currentLockToken, endedLockToken, endedAs = record[1], record[2], r
 local task, concurrencyKey, order, firstFoundUnknownAt = record[5], record[6] or "", record[7], tonumber(record[8])
 if state ~= "executing" or currentLockToken ~= lockToken then
   if endedLockToken == lockToken and endedAs == settleKind then
+    if settleKind == "handBack" and state == "failed" then
+      local failure = redis.call("HMGET", recordKey, "reason", "finishedAt")
+      return { "failed", failure[1], tonumber(failure[2]) }
+    end
     return { "already" }
   end
   return { "stale" }

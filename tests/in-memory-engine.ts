@@ -556,9 +556,15 @@ export function createInMemoryEngine({ now = () => Date.now() }: InMemoryEngineO
       return { kind: "stale" };
     }
     if (storedRun.state !== "executing" || storedRun.lockToken !== lockToken) {
-      return storedRun.endedLockToken === lockToken && storedRun.endedAs === outcome.kind
-        ? { kind: "already" }
-        : { kind: "stale" };
+      if (storedRun.endedLockToken !== lockToken || storedRun.endedAs !== outcome.kind) {
+        return { kind: "stale" };
+      }
+      return outcome.kind === "handBack" &&
+        storedRun.state === "failed" &&
+        storedRun.reason !== undefined &&
+        storedRun.finishedAt !== undefined
+        ? { kind: "failed", reason: storedRun.reason, finishedAt: storedRun.finishedAt }
+        : { kind: "already" };
     }
     const instant = now();
     endLock(storedRun, outcome.kind, concurrencyLimit);

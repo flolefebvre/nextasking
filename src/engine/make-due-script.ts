@@ -12,8 +12,14 @@ export const MAKE_DUE_SCRIPT = `${MAKE_DUE_KEYS_ASSIGNMENT}
 
 local mostDueRunsMadeDue = positiveIntegerArgumentOf(ARGV[3], "mostDueRunsMadeDue")
 local mostRecordsPassedOver = positiveIntegerArgumentOf(ARGV[4], "mostRecordsPassedOver")
-if #ARGV ~= 4 then
-  error("invalid argument: a makeDue takes 4 arguments, got " .. tostring(#ARGV))
+local task = ARGV[5]
+if #ARGV ~= 5 then
+  error("invalid argument: a makeDue takes 5 arguments, got " .. tostring(#ARGV))
+end
+
+local dueIndexKeys = { engineKeys.due }
+if task ~= "" then
+  dueIndexKeys = { runIndexKey(task, "delayed"), runIndexKey(task, "suspended"), runIndexKey(task, "backingOff") }
 end
 
 local now = currentInstantInMilliseconds()
@@ -30,7 +36,8 @@ local function wakeSleepsOf(runId)
   redis.call("HSET", recordKey, "resumesAt", now, "sleepsWokenAt", now)
 end
 
-local madeDueRunCount = promoteDueRuns("+inf", mostDueRunsMadeDue, mostRecordsPassedOver, wakeSleepsOf)
+local madeDueRuns = promoteDueRuns(dueRunWalkOf(dueIndexKeys, "+inf"), mostDueRunsMadeDue, mostRecordsPassedOver,
+  wakeSleepsOf)
 
-return { "madeDue", madeDueRunCount }
+return { "madeDue", madeDueRuns }
 `;

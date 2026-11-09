@@ -14,6 +14,7 @@ import type {
   SettleOutcome,
   SettleReply,
 } from "../src/engine/engine.js";
+import { MOST_DUE_RUNS_PROMOTED_PER_PROMOTE } from "../src/engine/promote-script.js";
 import { deriveFiringRunId } from "../src/ids.js";
 import type { RunId } from "../src/ids.js";
 import type { ErrorRecord } from "../src/run-queue.js";
@@ -758,19 +759,55 @@ export function defineEngineContractTests(contractTest: EngineContractTest): voi
     async (harness) => {
       const { engine } = harness;
       await suspendedOnANapOf(engine, await onlyLockedRunOf(engine, "sleeping-run"));
-      await engine.enqueue({ runs: sendEmailRunsOf(["delayed-run"], { delayInMilliseconds: HOUR_IN_MILLISECONDS }) });
+      await engine.enqueue({
+        runs: sendEmailRunsOf(["delayed-run"], { delayInMilliseconds: 2 * HOUR_IN_MILLISECONDS }),
+      });
 
       const reply = await engine.makeDue();
       const states = await statesOf(harness, ["sleeping-run", "delayed-run"]);
       const wokenRun = (await lockedRunsOf(engine, 2)).find(({ runId }) => runId === "sleeping-run");
 
-      expect(reply).toEqual({ kind: "madeDue", madeDueRunCount: 2 });
+      expect(reply).toEqual({
+        kind: "madeDue",
+        madeDueRuns: [
+          { task: "send-email", runId: "sleeping-run" },
+          { task: "send-email", runId: "delayed-run" },
+        ],
+      });
       expect(states).toEqual(["pending", "pending"]);
       expect(wokenRun).toMatchObject({ isResume: true, sleepsWokenAt: expect.any(Number) });
       expect(await engine.readStep({ ...wokenRun!, stepId: "nap" })).toEqual({
         kind: "read",
         savedValue: String(wokenRun!.sleepsWokenAt),
       });
+    },
+  );
+
+  contractTest(
+    `a makeDue given a task moves only its runs, even behind more than ${String(MOST_DUE_RUNS_PROMOTED_PER_PROMOTE)} timed runs of another task`,
+    async (harness) => {
+      const { engine } = harness;
+      const emailRunIds = Array.from(
+        { length: MOST_DUE_RUNS_PROMOTED_PER_PROMOTE + 1 },
+        (_, position) => `email-run-${String(position)}`,
+      );
+      await engine.enqueue({ runs: sendEmailRunsOf(emailRunIds, { delayInMilliseconds: MINUTE_IN_MILLISECONDS }) });
+      await engine.enqueue({
+        runs: [
+          {
+            runId: "report-run",
+            task: "build-report",
+            payload: "{}",
+            retries: 2,
+            delayInMilliseconds: HOUR_IN_MILLISECONDS,
+          },
+        ],
+      });
+
+      const reply = await engine.makeDue({ task: "build-report" });
+
+      expect(reply).toEqual({ kind: "madeDue", madeDueRuns: [{ task: "build-report", runId: "report-run" }] });
+      expect(await statesOf(harness, ["report-run", "email-run-0"])).toEqual(["pending", "delayed"]);
     },
   );
 

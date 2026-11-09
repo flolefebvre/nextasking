@@ -264,7 +264,11 @@ export type ReplayRequest = { runId: RunId };
 
 export type ReplayReply = { kind: "replayed"; task: string } | NotFoundReply | WrongStateReply | UnknownVersionReply;
 
-export type MakeDueReply = { kind: "madeDue"; madeDueRunCount: number };
+export type MakeDueRequest = { task?: string };
+
+export type MadeDueRun = { task: string; runId: RunId };
+
+export type MakeDueReply = { kind: "madeDue"; madeDueRuns: MadeDueRun[] };
 
 export type DueSchedule = ScheduleSummary & { nextFiringAt: EpochMilliseconds };
 
@@ -301,7 +305,7 @@ export type Engine = {
   syncSchedules: (request: SyncSchedulesRequest) => Promise<SyncSchedulesReply>;
   prune: (request: PruneRequest) => Promise<PruneReply>;
   replay: (request: ReplayRequest) => Promise<ReplayReply>;
-  makeDue: () => Promise<MakeDueReply>;
+  makeDue: (request?: MakeDueRequest) => Promise<MakeDueReply>;
   serverInstant: () => Promise<EpochMilliseconds>;
 };
 
@@ -676,9 +680,20 @@ function pruneArgumentsOf({ completedRetention, failedRetention }: PruneRequest)
   ];
 }
 
+function madeDueRunOf(reply: unknown): MadeDueRun | undefined {
+  if (!isStringList(reply) || reply.length !== 2) {
+    return undefined;
+  }
+  const [task, runId] = reply as [string, RunId];
+  return { task, runId };
+}
+
 function makeDueReplyOf(reply: unknown): MakeDueReply {
-  if (Array.isArray(reply) && reply.length === 2 && reply[0] === "madeDue" && Number.isSafeInteger(reply[1])) {
-    return { kind: "madeDue", madeDueRunCount: Number(reply[1]) };
+  if (Array.isArray(reply) && reply.length === 2 && reply[0] === "madeDue" && Array.isArray(reply[1])) {
+    const madeDueRuns = definedElementsOf((reply[1] as unknown[]).map(madeDueRunOf));
+    if (madeDueRuns !== undefined) {
+      return { kind: "madeDue", madeDueRuns };
+    }
   }
   throw unreadableReplyError("makeDue", reply);
 }
@@ -965,9 +980,13 @@ export function createEngine(client: Redis, prefix: string): Engine {
           ...schedulesToSync.flatMap(({ task, cron, timezone, nextFiringAt }) => [task, cron, timezone, nextFiringAt]),
         ]),
       ),
-    makeDue: async () =>
+    makeDue: async ({ task } = {}) =>
       makeDueReplyOf(
-        await runMakeDueScript([MOST_DUE_RUNS_PROMOTED_PER_PROMOTE, NEWER_VERSION_RECORDS_PASSED_OVER_PER_PROMOTE]),
+        await runMakeDueScript([
+          MOST_DUE_RUNS_PROMOTED_PER_PROMOTE,
+          NEWER_VERSION_RECORDS_PASSED_OVER_PER_PROMOTE,
+          task ?? "",
+        ]),
       ),
     saveStep: async ({ runId, lockToken, stepId, step }) =>
       saveStepReplyOf(

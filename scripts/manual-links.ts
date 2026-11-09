@@ -2,7 +2,13 @@ import { posix } from "node:path";
 
 export type ManualPage = { path: string; text: string };
 
-export type BrokenLink = { pagePath: string; line: number; target: string; missing: "page" | "anchor" };
+export type BrokenLink = {
+  pagePath: string;
+  line: number;
+  target: string;
+  resolvedTargetPath: string;
+  missing: "page" | "anchor";
+};
 
 export type ManualLinkCheck = { checkedLinkCount: number; brokenLinks: BrokenLink[] };
 
@@ -12,7 +18,7 @@ const LINK = /\[((?:[^[\]]|\[[^\]]*\])*)\]\(\s*([^\s)]+)[^)]*\)/g;
 
 const HEADING = /^ {0,3}#{1,6}\s+(.*?)(?:\s+#+)?\s*$/;
 
-const FENCE = /^ {0,3}(`{3,}|~{3,})/;
+const FENCE = /^\s*(`{3,}|~{3,})/;
 
 const CODE_SPAN_DELIMITERS = /`+/g;
 
@@ -90,17 +96,14 @@ const isMarkdownPath = (path: string) => path.endsWith(".md");
 export const checkManualLinks = (pages: readonly ManualPage[], shippedPaths: readonly string[]): ManualLinkCheck => {
   const slugsByPagePath = new Map(pages.map((page) => [page.path, headingSlugsOf(page.text)]));
   const links = pages.flatMap(linksOf);
-  const missingPartOf = (link: ManualLink): BrokenLink["missing"] | undefined => {
+  const brokenLinks = links.flatMap((link): BrokenLink[] => {
     const [targetPathAndQuery = "", anchor] = link.target.split("#");
     const [targetPath = ""] = targetPathAndQuery.split("?");
-    const resolvedPath = resolvedPathOf(link.pagePath, decodeURI(targetPath));
-    if (!shippedPaths.includes(resolvedPath)) return "page";
-    if (anchor === undefined || !isMarkdownPath(resolvedPath)) return undefined;
-    return slugsByPagePath.get(resolvedPath)?.includes(decodeURIComponent(anchor)) ? undefined : "anchor";
-  };
-  const brokenLinks = links.flatMap((link): BrokenLink[] => {
-    const missing = missingPartOf(link);
-    return missing === undefined ? [] : [{ ...link, missing }];
+    const resolvedTargetPath = resolvedPathOf(link.pagePath, decodeURI(targetPath));
+    if (!shippedPaths.includes(resolvedTargetPath)) return [{ ...link, resolvedTargetPath, missing: "page" }];
+    if (anchor === undefined || !isMarkdownPath(resolvedTargetPath)) return [];
+    const isAnchorAHeading = slugsByPagePath.get(resolvedTargetPath)?.includes(decodeURIComponent(anchor)) === true;
+    return isAnchorAHeading ? [] : [{ ...link, resolvedTargetPath, missing: "anchor" }];
   });
   return { checkedLinkCount: links.length, brokenLinks };
 };

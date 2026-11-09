@@ -51,6 +51,9 @@ jobs:
       - name: Typecheck
         run: pnpm typecheck
 
+      - name: Manual links
+        run: pnpm manual-links:check
+
   test:
     name: test (${{ matrix.image }})
     runs-on: ubuntu-latest

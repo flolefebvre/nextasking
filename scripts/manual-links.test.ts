@@ -34,13 +34,25 @@ test("a line starting with # inside a fenced code block is not a heading", () =>
   expect(slugs).toEqual(["setup", "configure"]);
 });
 
+test("a fenced code block nested in a list item holds no heading and no link", () => {
+  const pageText =
+    "# Setup\n\n1. Add the route:\n\n        ```md\n        # Not a heading\n        [x](x.md)\n        ```\n";
+
+  const { checkedLinkCount } = checkManualLinks([{ path: "docs/setup.md", text: pageText }], ["docs/setup.md"]);
+
+  expect(headingSlugsOf(pageText)).toEqual(["setup"]);
+  expect(checkedLinkCount).toBe(0);
+});
+
 test("a link to a page that does not ship is broken, named by its page, line and target", () => {
   const pages = [{ path: "docs/setup.md", text: "# Setup\n\nRead [the worker](worker.md) first.\n" }];
 
   const { checkedLinkCount, brokenLinks } = checkManualLinks(pages, ["docs/setup.md"]);
 
   expect(checkedLinkCount).toBe(1);
-  expect(brokenLinks).toEqual([{ pagePath: "docs/setup.md", line: 3, target: "worker.md", missing: "page" }]);
+  expect(brokenLinks).toEqual([
+    { pagePath: "docs/setup.md", line: 3, target: "worker.md", resolvedTargetPath: "docs/worker.md", missing: "page" },
+  ]);
 });
 
 test("a link with only an anchor targets a heading of its own page", () => {
@@ -51,7 +63,9 @@ test("a link with only an anchor targets a heading of its own page", () => {
   const { checkedLinkCount, brokenLinks } = checkManualLinks(pages, ["docs/worker.md"]);
 
   expect(checkedLinkCount).toBe(2);
-  expect(brokenLinks).toEqual([{ pagePath: "docs/worker.md", line: 3, target: "#drains", missing: "anchor" }]);
+  expect(brokenLinks).toEqual([
+    { pagePath: "docs/worker.md", line: 3, target: "#drains", resolvedTargetPath: "docs/worker.md", missing: "anchor" },
+  ]);
 });
 
 test("a link in a table cell is checked", () => {
@@ -62,7 +76,15 @@ test("a link in a table cell is checked", () => {
   const { checkedLinkCount, brokenLinks } = checkManualLinks(pages, ["docs/index.md"]);
 
   expect(checkedLinkCount).toBe(1);
-  expect(brokenLinks).toEqual([{ pagePath: "docs/index.md", line: 3, target: "setup.md#install", missing: "page" }]);
+  expect(brokenLinks).toEqual([
+    {
+      pagePath: "docs/index.md",
+      line: 3,
+      target: "setup.md#install",
+      resolvedTargetPath: "docs/setup.md",
+      missing: "page",
+    },
+  ]);
 });
 
 test("a link-shaped text in a fenced code block or an inline code span is not a link", () => {
@@ -104,10 +126,10 @@ test("a link to a file that does not ship, or to a directory, is broken", () => 
 
   const { brokenLinks } = checkManualLinks([{ path: "docs/setup.md", text: pageText }], ["docs/setup.md"]);
 
-  expect(brokenLinks.map(({ target, missing }) => `${target} ${missing}`)).toEqual([
-    "adr/0001-x.md page",
-    "../AGENTS.md page",
-    "./ page",
+  expect(brokenLinks.map(({ resolvedTargetPath, missing }) => `${resolvedTargetPath} ${missing}`)).toEqual([
+    "docs/adr/0001-x.md page",
+    "AGENTS.md page",
+    "docs/ page",
   ]);
 });
 
@@ -120,5 +142,13 @@ test("a link to a heading the target page does not have is broken, and one to a 
   const { checkedLinkCount, brokenLinks } = checkManualLinks(pages, ["docs/setup.md", "docs/worker.md"]);
 
   expect(checkedLinkCount).toBe(2);
-  expect(brokenLinks).toEqual([{ pagePath: "docs/setup.md", line: 4, target: "worker.md#drains", missing: "anchor" }]);
+  expect(brokenLinks).toEqual([
+    {
+      pagePath: "docs/setup.md",
+      line: 4,
+      target: "worker.md#drains",
+      resolvedTargetPath: "docs/worker.md",
+      missing: "anchor",
+    },
+  ]);
 });

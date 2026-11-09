@@ -129,6 +129,11 @@ export function workerProcessTasks(writeRecord: WriteRecord) {
     },
   });
 
+  const completeAtOnce = defineTask("complete-at-once", {
+    schema: z.object({}),
+    handler: async () => undefined,
+  });
+
   const runIdsAbortedOnce = new Set<string>();
   const waitForAbortOnce = defineTask("wait-for-abort-once", {
     schema: z.object({}),
@@ -190,6 +195,7 @@ export function workerProcessTasks(writeRecord: WriteRecord) {
     waitThenRecord,
     waitForAbortTask,
     waitForAbortOnce,
+    completeAtOnce,
     blockEventLoopOnSchedule,
   ] as const;
 }

@@ -16,6 +16,7 @@ export function createWorkerProcessNextasking(redisUrl: string, keyPrefix: strin
   const nextasking = createDispatchingNextasking(redisUrl, keyPrefix);
   return {
     dispatch: nextasking.dispatch,
+    countRuns: nextasking.countRuns,
     close: () => closeNextaskingAndCheckItsDuration(nextasking),
   };
 }

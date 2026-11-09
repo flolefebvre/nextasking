@@ -1,13 +1,13 @@
 import type { Redis } from "ioredis";
 import { expect, vi } from "vitest";
 
-import { fetchedLockedRunsOf } from "../tests/engine-test.js";
+import { engineTestContextOf, fetchedLockedRunsOf } from "../tests/engine-test.js";
 import type { EngineTestContext } from "../tests/engine-test.js";
 import { integrationTest } from "../tests/integration-test.js";
 import { serverInstantInMillisecondsOf } from "../tests/server-instant.js";
-import { redisClientOf, withRedis } from "../tests/with-redis.js";
+import { withRedis } from "../tests/with-redis.js";
 import { engineKeysOf, hashTaggedPrefixOf } from "./engine/engine-keys.js";
-import { createEngine, RECORD_VERSION } from "./engine/engine.js";
+import { RECORD_VERSION } from "./engine/engine.js";
 import type { RunToCreate } from "./engine/engine.js";
 import { createNextaskingControl } from "./nextasking-control.js";
 import { deriveFiringRunId } from "./ids.js";
@@ -19,15 +19,9 @@ const ONE_HOUR_IN_MILLISECONDS = 3_600_000;
 
 function controlTest(name: string, body: (context: ControlTestContext) => Promise<void>): void {
   integrationTest(name, async ({ redisUrl, keyPrefix }) => {
-    await withRedis(redisUrl, async (redis) => {
+    await withRedis(redisUrl, async (redis, client) => {
       await using control = createNextaskingControl({ connection: { url: redisUrl }, prefix: keyPrefix });
-      await body({
-        engine: createEngine(redisClientOf(redis), keyPrefix),
-        redis,
-        keys: engineKeysOf(keyPrefix),
-        keyPrefix,
-        control,
-      });
+      await body({ ...engineTestContextOf(redis, client, keyPrefix), control });
     });
   });
 }

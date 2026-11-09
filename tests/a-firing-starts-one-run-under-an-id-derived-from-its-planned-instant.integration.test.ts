@@ -9,7 +9,7 @@ import { createRecordingLogger } from "./recording-logger.js";
 import { storedRunIdentities } from "./stored-run-identities.js";
 import { storedRun } from "./stored-run.js";
 import { moveNextFiringTo } from "./stored-schedules.js";
-import { redisClientOf, withRedis } from "./with-redis.js";
+import { withRedis } from "./with-redis.js";
 
 type RecordedFiringRun = { runId: string; scheduledAt: Date | undefined; attempt: number };
 
@@ -41,8 +41,8 @@ integrationTest(
         },
         { timeout: 10_000 },
       );
-      const repeatedFiring = await withRedis(redisUrl, (redis) =>
-        createEngine(redisClientOf(redis), keyPrefix).fire({
+      const repeatedFiring = await withRedis(redisUrl, (_redis, client) =>
+        createEngine(client, keyPrefix).fire({
           task: "purge-expired-sessions",
           instant: plannedInstant,
           instantAfter: Date.parse("2026-12-31T23:00:00.000Z"),

@@ -3,14 +3,13 @@ import { z } from "zod";
 
 import { createNextasking, defineEvent, defineListener, defineTask } from "../src/index.js";
 import { engineKeysOf } from "../src/engine/engine-keys.js";
-import { createEngine } from "../src/engine/engine.js";
 import { closeNextaskingAndCheckItsDuration } from "./close-nextasking-and-check-its-duration.js";
 import { integrationTest } from "./integration-test.js";
 import { createRecordingLogger, waitForLogMessage } from "./recording-logger.js";
 import type { RecordedLogLine } from "./recording-logger.js";
 import { storedRun } from "./stored-run.js";
-import { redisClientOf, withRedis } from "./with-redis.js";
-import { backdateFirstFoundUnknownAt } from "./engine-test.js";
+import { withRedis } from "./with-redis.js";
+import { backdateFirstFoundUnknownAt, engineTestContextOf } from "./engine-test.js";
 import { startWorkerProcess } from "./worker-process.js";
 import type { WorkerProcess } from "./worker-process.js";
 import { workerProcessTasks } from "./worker-process-tasks.js";
@@ -143,9 +142,9 @@ integrationTest(
     await withNextReleaseAndOlderReleaseWorker(redisUrl, keyPrefix, async ({ nextasking, olderReleaseWorker }) => {
       const { runId } = await nextasking.dispatch("archive-account", { accountId: "account-7" });
       await waitForLogMessage(olderReleaseWorker.logLines, "run handed back: unknown task");
-      await withRedis(redisUrl, (redis) =>
+      await withRedis(redisUrl, (redis, client) =>
         backdateFirstFoundUnknownAt(
-          { engine: createEngine(redisClientOf(redis), keyPrefix), redis, keys: engineKeysOf(keyPrefix), keyPrefix },
+          engineTestContextOf(redis, client, keyPrefix),
           "archive-account",
           runId,
           GIVE_UP_DELAY_IN_MILLISECONDS,

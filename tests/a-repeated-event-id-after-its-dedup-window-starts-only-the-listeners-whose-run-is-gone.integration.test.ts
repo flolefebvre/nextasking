@@ -2,18 +2,17 @@ import { expect, vi } from "vitest";
 import { z } from "zod";
 
 import { engineKeysOf } from "../src/engine/engine-keys.js";
-import { createEngine } from "../src/engine/engine.js";
 import { deriveListenerRunId } from "../src/ids.js";
 import { createNextasking, defineEvent, defineListener } from "../src/index.js";
 import { closeNextaskingAndCheckItsDuration } from "./close-nextasking-and-check-its-duration.js";
 import { DAY_IN_MILLISECONDS } from "./ended-runs.js";
-import { backdateEndedRun } from "./engine-test.js";
+import { backdateEndedRun, engineTestContextOf } from "./engine-test.js";
 import { integrationTest } from "./integration-test.js";
 import { createRecordingLogger } from "./recording-logger.js";
 import { serverInstantInMillisecondsOf } from "./server-instant.js";
 import { storedRunIdentities } from "./stored-run-identities.js";
 import { storedRun } from "./stored-run.js";
-import { redisClientOf, withRedis } from "./with-redis.js";
+import { withRedis } from "./with-redis.js";
 
 integrationTest(
   "a repeated event id emits nothing within its 24-hour dedup window, and after it starts only the listeners whose run is gone",
@@ -52,7 +51,7 @@ integrationTest(
       );
       await nextasking.emit("invoice.paid", { invoiceId: "inv-7" }, { eventId });
       const runsWithinTheWindow = await storedRunIdentities(redisUrl, keyPrefix);
-      await withRedis(redisUrl, async (redis) => {
+      await withRedis(redisUrl, async (redis, client) => {
         await redis.zadd(
           keys.eventDedup("invoice.paid"),
           "XX",
@@ -60,7 +59,7 @@ integrationTest(
           eventId,
         );
         await backdateEndedRun(
-          { engine: createEngine(redisClientOf(redis), keyPrefix), redis, keys, keyPrefix },
+          engineTestContextOf(redis, client, keyPrefix),
           "record-payment",
           recordPaymentRunId,
           2 * DAY_IN_MILLISECONDS,

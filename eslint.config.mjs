@@ -13,6 +13,12 @@ const CLOSE_NEXTASKING_RESTRICTION = {
     "Close an instance in a test with closeNextaskingAndCheckItsDuration (tests/close-nextasking-and-check-its-duration.ts): it checks the close against its bound.",
 };
 
+const NODE_REDIS_RESTRICTION = {
+  group: ["@redis/client", "@redis/client/*"],
+  message:
+    "Only the driver (src/node-redis-driver.ts) imports @redis/client: the rest of the library reaches Redis through it.",
+};
+
 export default defineConfig([
   includeIgnoreFile(gitignorePath, "Ignore what git ignores"),
   globalIgnores([".agents/skills/**"], "Ignore the agent skills"),
@@ -25,6 +31,13 @@ export default defineConfig([
         "error",
         { allow: ["eslint", "global", "@ts-", "prettier-ignore", "/ <reference "] },
       ],
+    },
+  },
+  {
+    files: ["src/**/*.ts"],
+    ignores: ["src/**/*.test.ts", "src/node-redis-driver.ts"],
+    rules: {
+      "no-restricted-imports": ["error", { patterns: [NODE_REDIS_RESTRICTION] }],
     },
   },
   {

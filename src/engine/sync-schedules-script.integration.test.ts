@@ -6,7 +6,7 @@ import type { EngineTestContext } from "../../tests/engine-test.js";
 import type { EngineKeys } from "./engine-keys.js";
 import { createEngine, RECORD_VERSION } from "./engine.js";
 import type { ScheduleToSync } from "./engine.js";
-import { redisClientOf } from "../../tests/with-redis.js";
+import { withRedisClient } from "../../tests/with-redis.js";
 
 const NIGHTLY_REPORT: ScheduleToSync = {
   task: "build-report",
@@ -141,11 +141,9 @@ engineTest("a sync removes the schedule of a task absent from the list and repor
 });
 
 engineTest("two interleaved syncs of different lists end with exactly one list stored", async (context) => {
-  const { engine, redis, keys, keyPrefix } = context;
-  const otherRedis = redis.duplicate();
-  otherRedis.on("error", () => undefined);
-  try {
-    const otherEngine = createEngine(redisClientOf(otherRedis), keyPrefix);
+  const { engine, redis, keys, keyPrefix, redisUrl } = context;
+  await withRedisClient(redisUrl, async (otherClient) => {
+    const otherEngine = createEngine(otherClient, keyPrefix);
     const firstList = [NIGHTLY_REPORT, HOURLY_RATES];
     const secondList = [{ ...NIGHTLY_REPORT, cron: "0 4 * * *" }];
 
@@ -158,9 +156,7 @@ engineTest("two interleaved syncs of different lists end with exactly one list s
     );
 
     expect([[HOURLY_RATES, NIGHTLY_REPORT], secondList]).toContainEqual(await storedSchedulesOf(redis, keys));
-  } finally {
-    otherRedis.disconnect();
-  }
+  });
 });
 
 engineTest(

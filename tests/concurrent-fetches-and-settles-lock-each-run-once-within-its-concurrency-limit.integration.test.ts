@@ -9,7 +9,7 @@ import { RUN_STATES } from "../src/run-states.js";
 import { integrationTest } from "./integration-test.js";
 import { freshLockTokensOf } from "./lock-tokens.js";
 import { seededRandomnessOfThisRun } from "./seeded-random.js";
-import { redisClientOf, withRedis } from "./with-redis.js";
+import { withRedis, withRedisClient } from "./with-redis.js";
 
 const CONCURRENCY_LIMITS_BY_TASK: Readonly<Record<string, number>> = { "one-per-key": 1, "two-in-all": 2 };
 
@@ -62,8 +62,8 @@ integrationTest(
     let slotSampleCount = 0;
     let isLoadOver = false;
 
-    await withRedis(redisUrl, async (redis) => {
-      await createEngine(redisClientOf(redis), keyPrefix).enqueue({ runs: runsToCreate });
+    await withRedis(redisUrl, async (redis, client) => {
+      await createEngine(client, keyPrefix).enqueue({ runs: runsToCreate });
 
       const settleOne = async (engine: ReturnType<typeof createEngine>, lockedRun: LockedRun) => {
         await sleep(Math.floor(random() * 3));
@@ -86,8 +86,8 @@ integrationTest(
       };
 
       const runFetcher = (fetcher: number) =>
-        withRedis(redisUrl, async (fetcherRedis) => {
-          const engine = createEngine(redisClientOf(fetcherRedis), keyPrefix);
+        withRedisClient(redisUrl, async (fetcherClient) => {
+          const engine = createEngine(fetcherClient, keyPrefix);
           while (!isLoadOver) {
             const lockTokens = freshLockTokensOf(1 + Math.floor(random() * MOST_LOCK_TOKENS_PER_TEST_FETCH));
             const reply = await engine.fetch({

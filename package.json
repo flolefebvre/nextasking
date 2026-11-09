@@ -88,6 +88,7 @@
     "zod": "^4.6.7"
   },
   "dependencies": {
+    "@redis/client": "6.3.1",
     "cron-parser": "5.10.2",
     "ioredis": "~5.11.1"
   },

@@ -1,15 +1,11 @@
 import { expect } from "vitest";
 
 import { integrationTest } from "../tests/integration-test.js";
-import { redisClientOf, withRedis } from "../tests/with-redis.js";
+import { withRedisClient } from "../tests/with-redis.js";
 import { builtInCommandOf, scriptCommandOf } from "./redis-client.js";
 import type { RedisClient, RedisScript } from "./redis-client.js";
 
 const ECHO_SCRIPT: RedisScript = { name: "nextaskingTestEcho", lua: "return { KEYS[1], ARGV[1] }", keyCount: 1 };
-
-async function withRedisClient(redisUrl: string, use: (client: RedisClient) => Promise<void>): Promise<void> {
-  await withRedis(redisUrl, (redis) => use(redisClientOf(redis)));
-}
 
 function pairsOf(flatReply: unknown): [unknown, unknown][] {
   if (!Array.isArray(flatReply)) {

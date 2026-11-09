@@ -1,4 +1,3 @@
-import type { Redis } from "ioredis";
 import { expect, vi } from "vitest";
 
 import { DAY_IN_MILLISECONDS, SEND_EMAIL_PRUNE_REQUEST } from "../../tests/ended-runs.js";
@@ -7,7 +6,7 @@ import { integrationTest } from "../../tests/integration-test.js";
 import { storedKeyViolationsOf } from "../../tests/stored-key-violations.js";
 import { freshLockTokensOf } from "../../tests/lock-tokens.js";
 import { serverInstantInMillisecondsOf } from "../../tests/server-instant.js";
-import { redisClientOf, withRedis } from "../../tests/with-redis.js";
+import { withRedis, withRedisClient } from "../../tests/with-redis.js";
 import { REPLIED_EMPTY_PROMOTE, REPLIED_ONE_RENEWAL, repliedOf } from "../../tests/tick-replies.js";
 import { engineKeysOf, storedRunIdOf } from "./engine-keys.js";
 import { createEngine, RECORD_VERSION, wakeUpWaitOf } from "./engine.js";
@@ -17,7 +16,7 @@ const LOCK_DURATION_IN_MILLISECONDS = 120_000;
 engineTest(
   "a tick promotes, renews the held locks and reads the task names in one pipelined round trip",
   async (context) => {
-    const { engine, redis, keys } = context;
+    const { engine, client, redis, keys } = context;
     await engine.enqueue({
       runs: [
         { runId: "held-run", task: "send-email", payload: "{}", retries: 0 },
@@ -27,7 +26,7 @@ engineTest(
     const lockedRuns = await fetchedLockedRunsOf(context, 2);
     const heldRun = lockedRuns.find(({ runId }) => runId === "held-run")!;
     await expireLock(context, "resize-image", "stalled-run");
-    const pipelineSpy = vi.spyOn(redis, "pipeline");
+    const batchSpy = vi.spyOn(client, "sendBatch");
     const instantBefore = await serverInstantInMillisecondsOf(redis);
 
     const reply = await engine.tick({
@@ -35,7 +34,7 @@ engineTest(
       lockDurationInMilliseconds: LOCK_DURATION_IN_MILLISECONDS,
     });
 
-    expect(pipelineSpy).toHaveBeenCalledTimes(1);
+    expect(batchSpy).toHaveBeenCalledTimes(1);
     expect(reply).toEqual({
       promote: repliedOf({
         kind: "promoted",
@@ -57,12 +56,12 @@ engineTest(
 );
 
 engineTest("a tick carrying a prune sends it in the same pipelined round trip", async (context) => {
-  const { engine, redis, keys } = context;
+  const { engine, client, redis, keys } = context;
   await engine.enqueue({ runs: [{ runId: "aged-run", task: "send-email", payload: "{}", retries: 0 }] });
   const [lockedRun] = await fetchedLockedRunsOf(context, 1);
   await engine.settle({ ...lockedRun!, outcome: { kind: "complete" } });
   await backdateEndedRun(context, "send-email", "aged-run", DAY_IN_MILLISECONDS);
-  const pipelineSpy = vi.spyOn(redis, "pipeline");
+  const batchSpy = vi.spyOn(client, "sendBatch");
 
   const reply = await engine.tick({
     heldLocks: [],
@@ -70,8 +69,8 @@ engineTest("a tick carrying a prune sends it in the same pipelined round trip", 
     prune: SEND_EMAIL_PRUNE_REQUEST,
   });
 
-  expect(pipelineSpy).toHaveBeenCalledTimes(1);
-  expect(pipelineSpy.mock.results[0]?.value).toHaveLength(4);
+  expect(batchSpy).toHaveBeenCalledTimes(1);
+  expect(batchSpy.mock.calls[0]?.[0]).toHaveLength(4);
   expect(reply.prune).toEqual({ kind: "replied", reply: { kind: "pruned", prunedRunCount: 1 } });
   expect(await redis.exists(keys.runRecord("send-email", "aged-run"))).toBe(0);
 });
@@ -115,7 +114,7 @@ const HOURLY_REPORT = { task: "build-report", cron: "0 * * * *", timezone: "UTC"
 engineTest(
   "a tick reads the due schedules in the same pipelined round trip, leaving out a record of a newer version",
   async (context) => {
-    const { engine, redis, keys } = context;
+    const { engine, client, redis, keys } = context;
     const instantBefore = await serverInstantInMillisecondsOf(redis);
     await engine.syncSchedules({
       schedulesToSync: [
@@ -124,7 +123,7 @@ engineTest(
       ],
     });
     await redis.hset(keys.schedule("newer-report"), "version", RECORD_VERSION + 1);
-    const pipelineSpy = vi.spyOn(redis, "pipeline");
+    const batchSpy = vi.spyOn(client, "sendBatch");
 
     const reply = await engine.tick({
       heldLocks: [],
@@ -132,8 +131,8 @@ engineTest(
       scheduledTaskNames: ["build-report", "newer-report"],
     });
 
-    expect(pipelineSpy).toHaveBeenCalledTimes(1);
-    expect(pipelineSpy.mock.results[0]?.value).toHaveLength(6);
+    expect(batchSpy).toHaveBeenCalledTimes(1);
+    expect(batchSpy.mock.calls[0]?.[0]).toHaveLength(6);
     expect(reply.dueSchedules).toEqual(
       repliedOf({
         serverInstant: expect.any(Number),
@@ -182,8 +181,8 @@ engineTest("the server instant is the server's TIME", async ({ engine, redis }) 
 });
 
 engineTest("a tick leaving the promote out sends three commands", async (context) => {
-  const { engine, redis } = context;
-  const pipelineSpy = vi.spyOn(redis, "pipeline");
+  const { engine, client } = context;
+  const batchSpy = vi.spyOn(client, "sendBatch");
 
   const reply = await engine.tick({
     heldLocks: [],
@@ -192,32 +191,21 @@ engineTest("a tick leaving the promote out sends three commands", async (context
     isPromoteIncluded: false,
   });
 
-  expect(pipelineSpy.mock.results[0]?.value).toHaveLength(3);
+  expect(batchSpy.mock.calls[0]?.[0]).toHaveLength(3);
   expect(reply.promote).toBeUndefined();
   expect(reply.prune).toEqual({ kind: "replied", reply: { kind: "pruned", prunedRunCount: 0 } });
 });
-
-async function withBlockingClient(redis: Redis, use: (blockingClient: Redis) => Promise<void>): Promise<void> {
-  const blockingClient = redis.duplicate();
-  blockingClient.on("error", () => undefined);
-  try {
-    await blockingClient.connect();
-    await use(blockingClient);
-  } finally {
-    blockingClient.disconnect();
-  }
-}
 
 const LONG_WAKE_UP_TIMEOUT_IN_MILLISECONDS = 5000;
 
 engineTest(
   "a wake-up wait returns at once on an armed marker, and takes it",
-  async ({ engine, redis, keys, keyPrefix }) => {
+  async ({ engine, redis, redisUrl, keys, keyPrefix }) => {
     await engine.enqueue({ runs: [{ runId: "welcome-ada", task: "send-email", payload: "{}", retries: 0 }] });
 
-    await withBlockingClient(redis, async (blockingClient) => {
+    await withRedisClient(redisUrl, async (blockingClient) => {
       const waitStartedAt = Date.now();
-      await wakeUpWaitOf(redisClientOf(blockingClient), keyPrefix)(LONG_WAKE_UP_TIMEOUT_IN_MILLISECONDS);
+      await wakeUpWaitOf(blockingClient, keyPrefix)(LONG_WAKE_UP_TIMEOUT_IN_MILLISECONDS);
 
       expect(Date.now() - waitStartedAt).toBeLessThan(LONG_WAKE_UP_TIMEOUT_IN_MILLISECONDS);
       expect(await redis.exists(keys.wakeUpMarker)).toBe(0);
@@ -227,10 +215,10 @@ engineTest(
 
 engineTest(
   "a wake-up wait returns once an enqueue arms the marker while it blocks",
-  async ({ engine, redis, keyPrefix }) => {
-    await withBlockingClient(redis, async (blockingClient) => {
+  async ({ engine, redisUrl, keyPrefix }) => {
+    await withRedisClient(redisUrl, async (blockingClient) => {
       const waitStartedAt = Date.now();
-      const wakeUpWait = wakeUpWaitOf(redisClientOf(blockingClient), keyPrefix)(LONG_WAKE_UP_TIMEOUT_IN_MILLISECONDS);
+      const wakeUpWait = wakeUpWaitOf(blockingClient, keyPrefix)(LONG_WAKE_UP_TIMEOUT_IN_MILLISECONDS);
       await engine.enqueue({ runs: [{ runId: "welcome-ada", task: "send-email", payload: "{}", retries: 0 }] });
       await wakeUpWait;
 
@@ -239,10 +227,10 @@ engineTest(
   },
 );
 
-engineTest("a wake-up wait on no marker returns at its fractional timeout", async ({ redis, keyPrefix }) => {
-  await withBlockingClient(redis, async (blockingClient) => {
+engineTest("a wake-up wait on no marker returns at its fractional timeout", async ({ redisUrl, keyPrefix }) => {
+  await withRedisClient(redisUrl, async (blockingClient) => {
     const waitStartedAt = Date.now();
-    await wakeUpWaitOf(redisClientOf(blockingClient), keyPrefix)(300);
+    await wakeUpWaitOf(blockingClient, keyPrefix)(300);
 
     expect(Date.now() - waitStartedAt).toBeGreaterThanOrEqual(250);
   });
@@ -251,8 +239,8 @@ engineTest("a wake-up wait on no marker returns at its fractional timeout", asyn
 integrationTest(
   "a fetch of a record whose task is not the task of its stored run id throws an unreadable reply",
   async ({ redisUrl, keyPrefix, expectInvariantViolation }) => {
-    await withRedis(redisUrl, async (redis) => {
-      const engine = createEngine(redisClientOf(redis), keyPrefix);
+    await withRedis(redisUrl, async (redis, client) => {
+      const engine = createEngine(client, keyPrefix);
       const keys = engineKeysOf(keyPrefix);
       const storedRunId = storedRunIdOf("send-receipt", "order-1");
       const corruptions = [
@@ -281,8 +269,7 @@ integrationTest(
 integrationTest(
   "an enqueue whose reply holds a member that is not a stored run id throws an unreadable reply",
   async ({ redisUrl, keyPrefix }) => {
-    await withRedis(redisUrl, async (redis) => {
-      const client = redisClientOf(redis);
+    await withRedisClient(redisUrl, async (client) => {
       const engine = createEngine(
         {
           ...client,

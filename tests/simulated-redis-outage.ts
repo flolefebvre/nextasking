@@ -13,9 +13,10 @@ export const OUT_OF_MEMORY_REPLY = new ReplyError("OOM command not allowed when 
 export type SimulatedRedisOutage = {
   redisOutage: RedisOutage;
   isRedisAway: () => boolean;
-  outageEnded: () => Promise<void>;
+  unansweredCallsRejected: () => Promise<void>;
   startOutage: () => void;
   endOutage: () => void;
+  rejectUnansweredCalls: () => void;
 };
 
 export function createSimulatedRedisOutage(logger: Logger): SimulatedRedisOutage {
@@ -23,6 +24,10 @@ export function createSimulatedRedisOutage(logger: Logger): SimulatedRedisOutage
   const simulatedClient = {};
   let redisBack: Promise<void> = Promise.resolve();
   let markRedisBack: (() => void) | undefined;
+  let markUnansweredCallsRejected = () => undefined as void;
+  const unansweredCallsRejected = new Promise<void>((resolve) => {
+    markUnansweredCallsRejected = resolve;
+  });
   return {
     redisOutage: createRedisOutage({
       outageTracker,
@@ -30,7 +35,7 @@ export function createSimulatedRedisOutage(logger: Logger): SimulatedRedisOutage
       outOfMemoryRetryDelayInMilliseconds: 1000,
     }),
     isRedisAway: () => markRedisBack !== undefined,
-    outageEnded: () => redisBack,
+    unansweredCallsRejected: () => Promise.race([redisBack, unansweredCallsRejected]),
     startOutage: () => {
       redisBack = new Promise<void>((resolve) => {
         markRedisBack = resolve;
@@ -41,6 +46,9 @@ export function createSimulatedRedisOutage(logger: Logger): SimulatedRedisOutage
       markRedisBack?.();
       markRedisBack = undefined;
       outageTracker.reportClientReady(simulatedClient);
+    },
+    rejectUnansweredCalls: () => {
+      markUnansweredCallsRejected();
     },
   };
 }
@@ -61,7 +69,7 @@ export function engineAwayDuringOutage(
       if (awayEngineCalls === "rejected") {
         return Promise.reject(UNANSWERED_COMMAND_ERROR);
       }
-      return simulatedRedisOutage.outageEnded().then(() => Promise.reject(UNANSWERED_COMMAND_ERROR));
+      return simulatedRedisOutage.unansweredCallsRejected().then(() => Promise.reject(UNANSWERED_COMMAND_ERROR));
     };
   return {
     fetch: awayDuringOutage(engine.fetch),

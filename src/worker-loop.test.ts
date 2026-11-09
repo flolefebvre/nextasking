@@ -12,7 +12,7 @@ import type { WaitForWakeUp, WorkerLoop, WorkerLoopEngine } from "./worker-loop.
 import { DEFAULT_WORKER_TIMING } from "./worker-timing.js";
 import type { WorkerTiming } from "./worker-timing.js";
 import { createInMemoryEngine } from "../tests/in-memory-engine.js";
-import type { InMemoryEngine } from "../tests/in-memory-engine.js";
+import type { HeldCalls, InMemoryEngine } from "../tests/in-memory-engine.js";
 import { freshLockTokensOf } from "../tests/lock-tokens.js";
 import { createRecordingLogger } from "../tests/recording-logger.js";
 import {
@@ -996,27 +996,85 @@ test("an out-of-memory reply lasting several ticks, with answered reads in betwe
   expect(lines[0]?.fields).toEqual({ err: OUT_OF_MEMORY_REPLY });
 });
 
-test("stopFetching and stopTicking resolve while Redis is away", async () => {
+type StoppedLoopParts = { stoppedParts: () => string[] };
+
+function stoppedPartsOf(loop: WorkerLoop): StoppedLoopParts {
+  const stoppedParts: string[] = [];
+  void loop.stopFetching().then(() => stoppedParts.push("fetching"));
+  void loop.stopTicking().then(() => stoppedParts.push("ticking"));
+  return { stoppedParts: () => [...stoppedParts].sort() };
+}
+
+async function scenarioOfALoopStartedDuringAnOutage(awayEngineCalls: AwayEngineCalls): Promise<LoopScenario> {
   const engine = createInMemoryEngine();
   const recordingLogger = createRecordingLogger();
   const simulatedRedisOutage = createSimulatedRedisOutage(recordingLogger.logger);
   simulatedRedisOutage.startOutage();
-  const { loop } = startedLoopOf([], {
+  const scenario = startedLoopOf([], {
     engine,
-    loopEngine: engineAwayDuringOutage(engine, simulatedRedisOutage, "pending until the outage ends"),
+    loopEngine: engineAwayDuringOutage(engine, simulatedRedisOutage, awayEngineCalls),
     recordingLogger,
     simulatedRedisOutage,
   });
   await vi.advanceTimersByTimeAsync(3_000);
-  const stoppedParts: string[] = [];
+  return scenario;
+}
 
-  void loop.stopFetching().then(() => stoppedParts.push("fetching"));
-  void loop.stopTicking().then(() => stoppedParts.push("ticking"));
+test("stopFetching and stopTicking end their wait for Redis at the stop when their call was rejected as away", async () => {
+  const { loop, lines, engine, simulatedRedisOutage } = await scenarioOfALoopStartedDuringAnOutage("rejected");
+
+  const { stoppedParts } = stoppedPartsOf(loop);
   await vi.advanceTimersByTimeAsync(0);
-
-  expect(stoppedParts.sort()).toEqual(["fetching", "ticking"]);
-  expect(messagesOf(recordingLogger.lines)).toEqual(["connection error"]);
+  const stoppedPartsAtTheStop = stoppedParts();
   simulatedRedisOutage.endOutage();
+  await vi.advanceTimersByTimeAsync(5_000);
+
+  expect(stoppedPartsAtTheStop).toEqual(["fetching", "ticking"]);
+  expect(engine.calls).toEqual([]);
+  expect(messagesOf(lines)).toEqual(["connection error", "connection restored"]);
+});
+
+test("stopFetching and stopTicking wait for a call the client holds unanswered, and end without a resend or a line once it is rejected", async () => {
+  const { loop, lines, engine, simulatedRedisOutage } = await scenarioOfALoopStartedDuringAnOutage(
+    "pending until the outage ends",
+  );
+
+  const { stoppedParts } = stoppedPartsOf(loop);
+  await vi.advanceTimersByTimeAsync(0);
+  const stoppedPartsBeforeTheRejection = stoppedParts();
+  simulatedRedisOutage.rejectUnansweredCalls();
+  await vi.advanceTimersByTimeAsync(0);
+  const stoppedPartsAfterTheRejection = stoppedParts();
+  simulatedRedisOutage.endOutage();
+  await vi.advanceTimersByTimeAsync(5_000);
+
+  expect(stoppedPartsBeforeTheRejection).toEqual([]);
+  expect(stoppedPartsAfterTheRejection).toEqual(["fetching", "ticking"]);
+  expect(engine.calls).toEqual([]);
+  expect(messagesOf(lines)).toEqual(["connection error", "connection restored"]);
+});
+
+test("stopFetching with a fetch in flight resolves once the fetch answers, and the batch's attempt runs", async () => {
+  const sendEmail = defineTask("send-email", { schema: v.object({}), handler: async () => undefined });
+  const engine = createInMemoryEngine();
+  await engine.enqueue({ runs: runsOf("send-email", 1) });
+  const heldFetches = engine.holdCalls("fetch");
+  const { loop } = startedLoopOf([sendEmail] as AnyTaskDefinition[], { engine });
+  await vi.advanceTimersByTimeAsync(0);
+  let isStopped = false;
+
+  void loop.stopFetching().then(() => {
+    isStopped = true;
+  });
+  await vi.advanceTimersByTimeAsync(0);
+  const isStoppedBeforeTheAnswer = isStopped;
+  heldFetches.release();
+  await vi.advanceTimersByTimeAsync(0);
+  await loop.waitForAttemptsInFlight();
+
+  expect(isStoppedBeforeTheAnswer).toBe(false);
+  expect(isStopped).toBe(true);
+  expect(engine.storedRunOf("send-email-1")?.state).toBe("completed");
 });
 
 test("stopFetching ends a pass-over wait at once", async () => {
@@ -1036,7 +1094,7 @@ test("stopFetching ends a pass-over wait at once", async () => {
   expect(isStopped).toBe(true);
 });
 
-test("stopTicking ends a third stall's settle still in flight, and writes no line for it", async () => {
+test("stopTicking with a third stall's settle in flight resolves once the settle answers, and its run failed line is written", async () => {
   const sendEmail = defineTask("send-email", { schema: v.object({}), handler: async () => undefined });
   const engine = createInMemoryEngine();
   await engine.enqueue({ runs: runsOf("send-email", 1) });
@@ -1050,17 +1108,22 @@ test("stopTicking ends a third stall's settle still in flight, and writes no lin
     isStopped = true;
   });
   await vi.advanceTimersByTimeAsync(0);
-
-  expect(isStopped).toBe(true);
-  expect(requestsOf(engine, "settle")).toHaveLength(1);
-  expect(lines).toEqual([]);
+  const isStoppedBeforeTheAnswer = isStopped;
   heldSettles.release();
+  await vi.advanceTimersByTimeAsync(0);
+
+  expect(isStoppedBeforeTheAnswer).toBe(false);
+  expect(isStopped).toBe(true);
+  expect(engine.storedRunOf("send-email-1")).toMatchObject({ state: "failed", reason: "stalled" });
+  expect(messagesOf(lines)).toEqual(["run failed"]);
 });
 
-async function scenarioOfAFetchAnsweredAfterAnOutageOf(outageInMilliseconds: number): Promise<LoopScenario> {
+async function scenarioOfAFetchAnsweredAfterAnOutageOf(
+  outageInMilliseconds: number,
+): Promise<LoopScenario & { heldTicks: HeldCalls }> {
   const engine = createInMemoryEngine();
   await engine.enqueue({ runs: runsOf("send-email", 1) });
-  engine.holdCalls("tick");
+  const heldTicks = engine.holdCalls("tick");
   const recordingLogger = createRecordingLogger();
   const simulatedRedisOutage = createSimulatedRedisOutage(recordingLogger.logger);
   simulatedRedisOutage.startOutage();
@@ -1073,11 +1136,11 @@ async function scenarioOfAFetchAnsweredAfterAnOutageOf(outageInMilliseconds: num
   await vi.advanceTimersByTimeAsync(outageInMilliseconds);
   simulatedRedisOutage.endOutage();
   await vi.advanceTimersByTimeAsync(0);
-  return scenario;
+  return { ...scenario, heldTicks };
 }
 
 test("a fetch answered after a resend within the lock duration starts its attempts with the lock deadline of its first send", async () => {
-  const { lines } = await scenarioOfAFetchAnsweredAfterAnOutageOf(30_000);
+  const { lines, heldTicks } = await scenarioOfAFetchAnsweredAfterAnOutageOf(30_000);
 
   await vi.advanceTimersByTimeAsync(2 * MINUTE_IN_MILLISECONDS - 30_000 - 1);
   const linesBeforeTheFirstSendDeadline = messagesOf(lines);
@@ -1085,13 +1148,17 @@ test("a fetch answered after a resend within the lock duration starts its attemp
 
   expect(linesBeforeTheFirstSendDeadline).toEqual(["connection error", "connection restored", "attempt started"]);
   expect(linesWithMessage(lines, "attempt aborted: lock lost")).toEqual([LOCK_LOST_ABORT_LINE]);
+  heldTicks.release();
 });
 
 test("a fetch answered past its first send time plus the lock duration starts no attempt", async () => {
-  const { engine, lines } = await scenarioOfAFetchAnsweredAfterAnOutageOf(2 * MINUTE_IN_MILLISECONDS + 1_000);
+  const { engine, lines, heldTicks } = await scenarioOfAFetchAnsweredAfterAnOutageOf(
+    2 * MINUTE_IN_MILLISECONDS + 1_000,
+  );
 
   expect(messagesOf(lines)).toEqual(["connection error", "connection restored"]);
   expect(engine.storedRunOf("send-email-1")?.state).toBe("executing");
+  heldTicks.release();
 });
 
 test("an unreadable reply is logged once as worker error, and the loop goes on at its next cue", async () => {

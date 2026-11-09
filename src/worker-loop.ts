@@ -255,7 +255,7 @@ export function startWorkerLoop(config: WorkerLoopConfig): WorkerLoop {
     const reply = await answeredDespiteOutage(
       redisOutage,
       () => engine.fetch({ lockTokens, concurrencyLimitsByTask, lockDurationInMilliseconds }),
-      { stopSignal: fetchStopController.signal },
+      { resendStopSignal: fetchStopController.signal },
     );
     if (reply.kind === "unknownVersion") {
       fetchPassOverEndsAt = Date.now() + timing.passOverWaitInMilliseconds;
@@ -315,7 +315,7 @@ export function startWorkerLoop(config: WorkerLoopConfig): WorkerLoop {
     );
     try {
       const settleReply = await answeredDespiteOutage(redisOutage, () => engine.settle(settleRequest), {
-        stopSignal: tickStopController.signal,
+        resendStopSignal: tickStopController.signal,
       });
       if (settleReply.kind === "failed" || settleReply.kind === "unknownVersion") {
         writeLifecycleLines(
@@ -351,7 +351,7 @@ export function startWorkerLoop(config: WorkerLoopConfig): WorkerLoop {
     const awayErrorOf = (reply: TickReply): Error | undefined =>
       failedCommandErrorsOf(reply).find((error) => redisOutage.isRedisAway(error));
     const reply = await answeredDespiteOutage(redisOutage, () => engine.tick(tickRequest), {
-      stopSignal: tickStopController.signal,
+      resendStopSignal: tickStopController.signal,
       isAnswerComplete: (answeredReply) => awayErrorOf(answeredReply) === undefined,
     });
     lastPrunedTaskName = prune?.task;

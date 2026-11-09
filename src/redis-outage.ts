@@ -7,7 +7,8 @@ export type RedisOutage = {
 };
 
 export type OutageWaitOptions<Answer> = {
-  stopSignal?: AbortSignal;
+  callAbortSignal?: AbortSignal;
+  resendStopSignal?: AbortSignal;
   isAnswerComplete?: (answer: Answer) => boolean;
 };
 
@@ -57,17 +58,19 @@ export function delayUnlessAborted(
 export async function answeredDespiteOutage<Answer>(
   redisOutage: RedisOutage,
   call: () => Promise<Answer>,
-  { stopSignal, isAnswerComplete = () => true }: OutageWaitOptions<Answer> = {},
+  { callAbortSignal, resendStopSignal, isAnswerComplete = () => true }: OutageWaitOptions<Answer> = {},
 ): Promise<Answer> {
+  const waitEndSignals = [callAbortSignal, resendStopSignal].filter((signal) => signal !== undefined);
+  const waitEndSignal = waitEndSignals.length === 0 ? undefined : AbortSignal.any(waitEndSignals);
   for (;;) {
     let answer: Answer;
     try {
-      answer = await untilAborted(call(), stopSignal);
+      answer = await untilAborted(call(), callAbortSignal);
     } catch (error) {
-      if (stopSignal?.aborted === true || !redisOutage.isRedisAway(error)) {
+      if (waitEndSignal?.aborted === true || !redisOutage.isRedisAway(error)) {
         throw error;
       }
-      await untilAborted(redisOutage.waitForRedis(error, stopSignal), stopSignal);
+      await untilAborted(redisOutage.waitForRedis(error, waitEndSignal), waitEndSignal);
       continue;
     }
     if (isAnswerComplete(answer)) {

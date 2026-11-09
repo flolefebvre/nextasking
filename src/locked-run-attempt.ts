@@ -45,7 +45,7 @@ export type LockedRunAttempt = {
 
 function callsWaitingOutOutagesOf({ engine, sender, redisOutage, abortSignal }: LockedRunAttempt) {
   const untilAnswered = <Answer>(call: () => Promise<Answer>) =>
-    answeredDespiteOutage(redisOutage, call, { stopSignal: abortSignal });
+    answeredDespiteOutage(redisOutage, call, { callAbortSignal: abortSignal });
   const stepCalls: Pick<Engine, "saveStep" | "readStep"> = {
     saveStep: (request) => untilAnswered(() => engine.saveStep(request)),
     readStep: (request) => untilAnswered(() => engine.readStep(request)),

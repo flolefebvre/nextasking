@@ -152,19 +152,69 @@ describe("answeredDespiteOutage", () => {
     expect(redisOutage.answeredCount()).toBe(0);
   });
 
-  test("ends a wait for Redis when its stop signal is aborted", async () => {
+  for (const signalName of ["callAbortSignal", "resendStopSignal"] as const) {
+    test(`ends a wait for Redis when its ${signalName} is aborted, without a resend`, async () => {
+      const redisOutage = recordingRedisOutage();
+      const signalController = new AbortController();
+      const signalReason = new Error("stopped");
+      const call = vi.fn(() => Promise.reject(REDIS_AWAY));
+
+      const answer = answeredDespiteOutage(redisOutage, call, { [signalName]: signalController.signal });
+      await vi.waitFor(() => {
+        expect(redisOutage.awayErrors).toHaveLength(1);
+      });
+      signalController.abort(signalReason);
+
+      await expect(answer).rejects.toBe(signalReason);
+      expect(call).toHaveBeenCalledTimes(1);
+    });
+  }
+
+  test("abandons a call in flight on its callAbortSignal", async () => {
     const redisOutage = recordingRedisOutage();
-    const stopController = new AbortController();
-    const stopReason = new Error("stopped");
+    const callAbortController = new AbortController();
+    const abortReason = new Error("lock lost");
 
-    const answer = answeredDespiteOutage(redisOutage, () => Promise.reject(REDIS_AWAY), {
-      stopSignal: stopController.signal,
+    const answer = answeredDespiteOutage(redisOutage, () => new Promise<string>(() => undefined), {
+      callAbortSignal: callAbortController.signal,
     });
-    await vi.waitFor(() => {
-      expect(redisOutage.awayErrors).toHaveLength(1);
-    });
-    stopController.abort(stopReason);
+    callAbortController.abort(abortReason);
 
-    await expect(answer).rejects.toBe(stopReason);
+    await expect(answer).rejects.toBe(abortReason);
+  });
+
+  test("awaits a call in flight past its resendStopSignal and returns its answer", async () => {
+    const redisOutage = recordingRedisOutage();
+    const resendStopController = new AbortController();
+    let answerCall: (answer: string) => void = () => undefined;
+    const call = new Promise<string>((resolve) => {
+      answerCall = resolve;
+    });
+
+    const answer = answeredDespiteOutage(redisOutage, () => call, { resendStopSignal: resendStopController.signal });
+    resendStopController.abort();
+    answerCall("locked");
+
+    expect(await answer).toBe("locked");
+  });
+
+  test("does not resend a call rejected as away after its resendStopSignal, and rethrows the rejection", async () => {
+    const redisOutage = recordingRedisOutage();
+    const resendStopController = new AbortController();
+    let rejectCall: (error: Error) => void = () => undefined;
+    const call = vi.fn(
+      () =>
+        new Promise<string>((_resolve, reject) => {
+          rejectCall = reject;
+        }),
+    );
+
+    const answer = answeredDespiteOutage(redisOutage, call, { resendStopSignal: resendStopController.signal });
+    resendStopController.abort();
+    rejectCall(REDIS_AWAY);
+
+    await expect(answer).rejects.toBe(REDIS_AWAY);
+    expect(call).toHaveBeenCalledTimes(1);
+    expect(redisOutage.awayErrors).toEqual([]);
   });
 });

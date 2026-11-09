@@ -22,11 +22,15 @@ integrationTest(
       await waitForLogMessage(workerProcesses.stallCheckingProcess.logLines, "run failed", { timeout: 40_000 });
       const runId = deriveFiringRunId("block-event-loop-on-schedule", plannedInstant);
       const scheduledAt = new Date(plannedInstant).toISOString();
-      const stallLines = [
+      const stallLinesOfAnyRun = [
         ...workerProcesses.stallCheckingProcess.logLines,
         ...workerProcesses.blockingProcess.logLines,
       ].filter((line) => line.message === "attempt stalled");
-      const failureLine = workerProcesses.stallCheckingProcess.logLines.find((line) => line.message === "run failed");
+      const stallLines = stallLinesOfAnyRun.filter((line) => line.fields.runId === runId);
+      const failureLine = [
+        ...workerProcesses.stallCheckingProcess.logLines,
+        ...workerProcesses.blockingProcess.logLines,
+      ].find((line) => line.message === "run failed" && line.fields.runId === runId);
 
       const runFields = { task: "block-event-loop-on-schedule", runId, attempt: 1 };
       expect(stallLines.map((line) => line.fields.stalls)).toEqual([1, 2]);

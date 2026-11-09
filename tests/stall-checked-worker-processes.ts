@@ -5,7 +5,11 @@ import { startWorkerProcess } from "./worker-process.js";
 import type { WorkerProcess } from "./worker-process.js";
 import { createWorkerProcessNextasking } from "./worker-process-nextasking.js";
 
-const FAST_STALLS = { lockDurationInMilliseconds: 2000, lockTimeLeftThatTriggersRenewalInMilliseconds: 1500 };
+const FAST_STALLS = {
+  lockDurationInMilliseconds: 2000,
+  lockTimeLeftThatTriggersRenewalInMilliseconds: 1500,
+  tickIntervalInMilliseconds: 500,
+};
 
 export type StallCheckedWorkerProcesses = {
   nextasking: ReturnType<typeof createWorkerProcessNextasking>;

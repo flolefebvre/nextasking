@@ -93,3 +93,50 @@ integrationTest(
     }
   },
 );
+
+async function errorCodeOnceClosedOf(socket: Socket): Promise<string | undefined> {
+  let errorCode: string | undefined;
+  socket.on("error", (error: NodeJS.ErrnoException) => {
+    errorCode = error.code;
+  });
+  await new Promise<void>((resolve) => socket.once("close", () => resolve()));
+  return errorCode;
+}
+
+async function replyToPingThrough(socket: Socket): Promise<string> {
+  const reply = new Promise<string>((resolve) => socket.once("data", (chunk: Buffer) => resolve(chunk.toString())));
+  socket.write("*1\r\n$4\r\nPING\r\n");
+  return reply;
+}
+
+integrationTest(
+  "a retarget resets the connections live through the proxy and sends every later connection to the new target",
+  { timeout: 15_000 },
+  async ({ redisUrl }) => {
+    const retargetedProxy = await startTcpProxy(redisUrl);
+    const newTargetProxy = await startTcpProxy(redisUrl);
+    const sockets: Socket[] = [];
+    try {
+      const liveSocket = await connectedSocketOf(retargetedProxy.url);
+      sockets.push(liveSocket);
+      const liveSocketErrorCode = errorCodeOnceClosedOf(liveSocket);
+      await vi.waitFor(() => expect(retargetedProxy.acceptedConnectionCount()).toBe(1), { timeout: 5_000 });
+
+      retargetedProxy.retarget(newTargetProxy.url);
+      const laterSocket = await connectedSocketOf(retargetedProxy.url);
+      sockets.push(laterSocket);
+      const laterReply = await replyToPingThrough(laterSocket);
+
+      expect(await liveSocketErrorCode).toBe("ECONNRESET");
+      expect(laterReply).toBe("+PONG\r\n");
+      expect(newTargetProxy.acceptedConnectionCount()).toBe(1);
+      expect(retargetedProxy.targetUrl()).toBe(newTargetProxy.url);
+    } finally {
+      for (const socket of sockets) {
+        socket.destroy();
+      }
+      await retargetedProxy.stop();
+      await newTargetProxy.stop();
+    }
+  },
+);

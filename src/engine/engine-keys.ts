@@ -21,6 +21,7 @@ export type EngineKeys = {
   eventDedup: (eventName: string) => string;
   schedules: string;
   schedule: (task: string) => string;
+  isScheduleKey: (key: string) => boolean;
   tasks: string;
   wakeUpMarker: string;
   order: string;
@@ -39,6 +40,8 @@ function concurrencyScopeOf(task: string, concurrencyKey: ConcurrencyKey | undef
 export function engineKeysOf(prefix: string): EngineKeys {
   const keyOf = (...segments: string[]) => [hashTaggedPrefixOf(prefix), ...segments].join(":");
   const runRecord = (runId: RunId) => keyOf("run", encodeURIComponent(runId));
+  const schedules = keyOf("schedules");
+  const scheduleRecordKeyStart = `${keyOf("schedule")}:`;
   return {
     runRecord,
     runPayload: (runId) => `${runRecord(runId)}:payload`,
@@ -52,8 +55,9 @@ export function engineKeysOf(prefix: string): EngineKeys {
     slotSet: (task, concurrencyKey) => keyOf("slots", concurrencyScopeOf(task, concurrencyKey)),
     runDedup: (task) => keyOf("dedup", encodeURIComponent(task)),
     eventDedup: (eventName) => keyOf("event-dedup", encodeURIComponent(eventName)),
-    schedules: keyOf("schedules"),
-    schedule: (task) => keyOf("schedule", encodeURIComponent(task)),
+    schedules,
+    schedule: (task) => `${scheduleRecordKeyStart}${encodeURIComponent(task)}`,
+    isScheduleKey: (key) => key === schedules || key.startsWith(scheduleRecordKeyStart),
     tasks: keyOf("tasks"),
     wakeUpMarker: keyOf("wake-up"),
     order: keyOf("order"),

@@ -2,20 +2,22 @@ import { randomBytes } from "node:crypto";
 
 import { AttemptAbortedError } from "./attempt-abort.js";
 import type { AttemptAbortCause } from "./attempt-abort.js";
+import { errorFromThrownValue, StalledRunError } from "./attempt-errors.js";
 import type { AnyTaskDefinition } from "./definitions.js";
 import type { DurationInMilliseconds, EpochMilliseconds } from "./durations.js";
 import type { LockToken } from "./engine/engine-keys.js";
-import type { Engine, LockedRun, PruneRequest } from "./engine/engine.js";
+import type { Engine, LockedRun, PruneRequest, ThirdStall } from "./engine/engine.js";
 import type { WorkerDefinitions } from "./engine-failure-notice.js";
 import {
   lockLostAbortLineOf,
   parkLineOf,
   pickupLineOf,
   settleLinesOf,
+  stallLineOf,
   workerErrorLineOf,
   writeLifecycleLines,
 } from "./lifecycle-logs.js";
-import { executeLockedRunAttempt, settleRequestOf } from "./locked-run-attempt.js";
+import { executeLockedRunAttempt, failingAttemptOf, settleRequestOf } from "./locked-run-attempt.js";
 import type { Logger } from "./logger.js";
 import type { HandlerSender } from "./step-engine.js";
 import type { WorkerTiming } from "./worker-timing.js";
@@ -156,18 +158,15 @@ export function startWorkerLoop(config: WorkerLoopConfig): WorkerLoop {
     if (abortController.signal.aborted) {
       return;
     }
-    writeLifecycleLines(
-      logger,
-      listenersLeftOut.map(({ error }) => workerErrorLineOf(error)),
-    );
     const settleReply = await engine.settle(settleRequestOf(task, lockedRun, attemptOutcome));
     writeLifecycleLines(
       logger,
       settleLinesOf({
-        lockedRun,
+        settledRun: lockedRun,
         attemptOutcome,
         settleReply,
         elapsedSinceFetchInMilliseconds: Date.now() - fetchRepliedAt,
+        listenersLeftOut,
       }),
     );
   };
@@ -235,6 +234,38 @@ export function startWorkerLoop(config: WorkerLoopConfig): WorkerLoop {
         };
   };
 
+  const failThirdStall = async (thirdStall: ThirdStall) => {
+    const { runId, expiredLockToken, attempt } = thirdStall;
+    const { attemptOutcome, listenersLeftOut } = failingAttemptOf(
+      thirdStall,
+      { error: new StalledRunError(runId, timing.stallCountThatFailsARun), reason: "stalled" },
+      definitions,
+    );
+    try {
+      const settleReply = await engine.settle(
+        settleRequestOf(
+          definitions.tasksByName.get(thirdStall.task),
+          { runId, lockToken: expiredLockToken, attempt },
+          attemptOutcome,
+        ),
+      );
+      if (settleReply.kind === "failed" || settleReply.kind === "unknownVersion") {
+        writeLifecycleLines(
+          logger,
+          settleLinesOf({
+            settledRun: thirdStall,
+            attemptOutcome,
+            settleReply,
+            elapsedSinceFetchInMilliseconds: 0,
+            listenersLeftOut,
+          }),
+        );
+      }
+    } catch (error) {
+      writeLifecycleLines(logger, [workerErrorLineOf(errorFromThrownValue(error))]);
+    }
+  };
+
   const tickOnce = async () => {
     const tickSentAt = Date.now();
     const lockRenewalDeadline = tickSentAt + timing.lockTimeLeftThatTriggersRenewalInMilliseconds;
@@ -271,6 +302,11 @@ export function startWorkerLoop(config: WorkerLoopConfig): WorkerLoop {
         commandReply?.kind === "failed" ? [workerErrorLineOf(commandReply.error)] : [],
       ),
     );
+    if (reply.promote?.kind === "replied" && reply.promote.reply.kind === "promoted") {
+      const { stalledRuns, thirdStalls } = reply.promote.reply;
+      writeLifecycleLines(logger, stalledRuns.map(stallLineOf));
+      await Promise.all(thirdStalls.map(failThirdStall));
+    }
   };
 
   const tickTimer = setInterval(() => {

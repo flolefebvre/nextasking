@@ -6,7 +6,9 @@ import type {
   ParkedRun,
   SettleOutcome,
   SettleReply,
+  StalledRun,
 } from "./engine/engine.js";
+import type { ListenerLeftOut } from "./engine-failure-notice.js";
 import type { AttemptOutcome } from "./locked-run-attempt.js";
 import type { Logger } from "./logger.js";
 
@@ -18,11 +20,14 @@ export type LifecycleLine = {
 
 export type RunLineSubject = Pick<LockedRun, "task" | "runId" | "attempt" | "sourceEvent" | "scheduledAt">;
 
+export type SettledRun = RunLineSubject & Pick<LockedRun, "dispatchedAt" | "startedAt">;
+
 export type SettledAttempt = {
-  lockedRun: LockedRun;
+  settledRun: SettledRun;
   attemptOutcome: AttemptOutcome;
   settleReply: SettleReply;
   elapsedSinceFetchInMilliseconds: DurationInMilliseconds;
+  listenersLeftOut: readonly ListenerLeftOut[];
 };
 
 export function writeLifecycleLines(logger: Logger, lines: readonly LifecycleLine[]): void {
@@ -87,6 +92,14 @@ export function parkLineOf(parkedRun: ParkedRun): LifecycleLine {
   return { level: "debug", message: "run waiting for a concurrency slot", fields: runFieldsOf(parkedRun) };
 }
 
+export function stallLineOf(stalledRun: StalledRun): LifecycleLine {
+  return {
+    level: "warn",
+    message: "attempt stalled",
+    fields: { ...runFieldsOf(stalledRun), stalls: stalledRun.stalls },
+  };
+}
+
 type SettleLineContext = {
   runFields: ReturnType<typeof runFieldsOf>;
   durationFields: { runDurationInMilliseconds: number; executionDurationInMilliseconds: number };
@@ -136,15 +149,15 @@ const SETTLE_LINE_BY_OUTCOME_KIND: SettleLineByOutcomeKind = {
       : { level: "debug", message: "run handed back: unknown task", fields: runFields },
 };
 
-function finishedAtOf({ lockedRun, settleReply, elapsedSinceFetchInMilliseconds }: SettledAttempt): EpochMilliseconds {
+function finishedAtOf({ settledRun, settleReply, elapsedSinceFetchInMilliseconds }: SettledAttempt): EpochMilliseconds {
   return settleReply.kind === "completed" || settleReply.kind === "failed"
     ? settleReply.finishedAt
-    : lockedRun.startedAt + elapsedSinceFetchInMilliseconds;
+    : settledRun.startedAt + elapsedSinceFetchInMilliseconds;
 }
 
 export function settleLinesOf(settledAttempt: SettledAttempt): LifecycleLine[] {
-  const { lockedRun, attemptOutcome, settleReply } = settledAttempt;
-  const runFields = runFieldsOf(lockedRun);
+  const { settledRun, attemptOutcome, settleReply, listenersLeftOut } = settledAttempt;
+  const runFields = runFieldsOf(settledRun);
   if (settleReply.kind === "stale") {
     return [
       {
@@ -159,19 +172,21 @@ export function settleLinesOf(settledAttempt: SettledAttempt): LifecycleLine[] {
     return [
       workerErrorLineOf(
         new Error(
-          `The ${attemptOutcome.kind} settle of run "${lockedRun.runId}" was refused: a newer release rewrote its record to ${shownVersion} this release cannot read.`,
+          `The ${attemptOutcome.kind} settle of run "${settledRun.runId}" was refused: a newer release rewrote its record to ${shownVersion} this release cannot read.`,
         ),
       ),
     ];
   }
   const finishedAt = finishedAtOf(settledAttempt);
   const durationFields = {
-    runDurationInMilliseconds: finishedAt - lockedRun.dispatchedAt,
-    executionDurationInMilliseconds: finishedAt - lockedRun.startedAt,
+    runDurationInMilliseconds: finishedAt - settledRun.dispatchedAt,
+    executionDurationInMilliseconds: finishedAt - settledRun.startedAt,
   };
   const settleLineOf = SETTLE_LINE_BY_OUTCOME_KIND[attemptOutcome.kind] as (
     attemptOutcome: AttemptOutcome,
     context: SettleLineContext,
   ) => LifecycleLine;
-  return [settleLineOf(attemptOutcome, { runFields, durationFields, settleReply })];
+  const leftOutListenerLines =
+    settleReply.kind === "failed" ? listenersLeftOut.map(({ error }) => workerErrorLineOf(error)) : [];
+  return [...leftOutListenerLines, settleLineOf(attemptOutcome, { runFields, durationFields, settleReply })];
 }

@@ -145,7 +145,7 @@ function settleOutcomeOf(attemptOutcome: AttemptOutcome, attempt: number): Settl
 
 export function settleRequestOf(
   task: AnyTaskDefinition | undefined,
-  { runId, lockToken, attempt }: LockedRun,
+  { runId, lockToken, attempt }: Pick<LockedRun, "runId" | "lockToken" | "attempt">,
   attemptOutcome: AttemptOutcome,
 ): SettleRequest {
   const concurrencyLimit = task?.concurrency?.limit;

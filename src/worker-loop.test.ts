@@ -12,6 +12,7 @@ import type { WaitForWakeUp, WorkerLoop, WorkerLoopEngine } from "./worker-loop.
 import { DEFAULT_WORKER_TIMING } from "./worker-timing.js";
 import { createInMemoryEngine } from "../tests/in-memory-engine.js";
 import type { InMemoryEngine } from "../tests/in-memory-engine.js";
+import { freshLockTokensOf } from "../tests/lock-tokens.js";
 import { createRecordingLogger } from "../tests/recording-logger.js";
 import type { RecordedLogLine } from "../tests/recording-logger.js";
 import { brokenKeyRunFailedListener, workerDefinitionsOf } from "../tests/worker-definitions.js";
@@ -501,6 +502,92 @@ test("a tick whose prune fails still applies its renewals, writes one worker err
     },
   ]);
   expect(engine.storedRunOf("send-email-1")?.state).toBe("executing");
+});
+
+const SIGNED_UP = { eventName: "user.signed-up", eventId: "event-1" };
+
+async function expireTheLockOfAFetchedRun(engine: InMemoryEngine, stallsBefore: number): Promise<void> {
+  for (let stallCount = 0; stallCount <= stallsBefore; stallCount += 1) {
+    if (stallCount > 0) {
+      await engine.promote();
+    }
+    await engine.fetch({
+      lockTokens: freshLockTokensOf(1),
+      concurrencyLimitsByTask: {},
+      lockDurationInMilliseconds: DEFAULT_WORKER_TIMING.lockDurationInMilliseconds,
+    });
+    engine.expireLock("send-email-1");
+  }
+}
+
+test("an expired lock found by the tick writes attempt stalled with its stalls and its run's source event", async () => {
+  const handlerGate = createHandlerGate();
+  const sendEmail = defineTask("send-email", { schema: v.object({}), handler: handlerGate.enter });
+  const engine = createInMemoryEngine();
+  await engine.enqueue({ runs: runsOf("send-email", 1, { sourceEvent: SIGNED_UP }) });
+  await expireTheLockOfAFetchedRun(engine, 0);
+
+  const { lines } = startedLoopOf([sendEmail] as AnyTaskDefinition[], { engine });
+  await vi.advanceTimersByTimeAsync(1_000);
+
+  expect(linesWithMessage(lines, "attempt stalled")).toEqual([
+    {
+      level: "warn",
+      message: "attempt stalled",
+      fields: { task: "send-email", runId: "send-email-1", attempt: 1, ...SIGNED_UP, stalls: 1 },
+    },
+  ]);
+});
+
+test("two loops ticking on the same reported third stall end with one failed run, one notice and one run failed line", async () => {
+  const alertOnCall = defineListener("alert-on-call", { on: runFailed, handler: async () => undefined });
+  const sendEmail = defineTask("send-email", { schema: v.object({}), handler: async () => undefined });
+  const tasks = [sendEmail, alertOnCall, brokenKeyRunFailedListener] as AnyTaskDefinition[];
+  const engine = createInMemoryEngine();
+  await engine.enqueue({ runs: runsOf("send-email", 1, { sourceEvent: SIGNED_UP }) });
+  await expireTheLockOfAFetchedRun(engine, 2);
+  const heldSettles = engine.holdCalls("settle");
+  const firstLoop = startedLoopOf(tasks, { engine });
+  const secondLoop = startedLoopOf(tasks, { engine });
+  await vi.advanceTimersByTimeAsync(1_000);
+
+  heldSettles.release();
+  await vi.advanceTimersByTimeAsync(0);
+
+  const noticeRunId = deriveListenerRunId(deriveFailureNoticeEventId("send-email", "send-email-1", 0), "alert-on-call");
+  const lines = [...firstLoop.lines, ...secondLoop.lines];
+  expect(requestsOf<SettleRequest>(engine, "settle").filter(({ runId }) => runId === "send-email-1")).toHaveLength(2);
+  expect(engine.storedRunOf("send-email-1")).toMatchObject({
+    state: "failed",
+    reason: "stalled",
+    errors: [expect.any(String)],
+  });
+  expect(engine.storedRunOf(noticeRunId)?.state).toBe("completed");
+  expect(linesWithMessage(lines, "run failed")).toEqual([
+    {
+      level: "error",
+      message: "run failed",
+      fields: {
+        task: "send-email",
+        runId: "send-email-1",
+        attempt: 1,
+        ...SIGNED_UP,
+        err: expect.objectContaining({ name: "StalledRunError" }),
+        reason: "stalled",
+        runDurationInMilliseconds: expect.any(Number),
+        executionDurationInMilliseconds: expect.any(Number),
+      },
+    },
+  ]);
+  expect(linesWithMessage(lines, "worker error")).toEqual([
+    {
+      level: "error",
+      message: "worker error",
+      fields: {
+        err: expect.objectContaining({ cause: expect.objectContaining({ message: "no tenant in this payload" }) }),
+      },
+    },
+  ]);
 });
 
 test("a pickup after a suspend writes run resumed, and a pickup after a stall writes attempt started with the same attempt", async () => {

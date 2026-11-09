@@ -6,9 +6,11 @@ import {
   parkLineOf,
   pickupLineOf,
   settleLinesOf,
+  stallLineOf,
   workerErrorLineOf,
   writeLifecycleLines,
 } from "./lifecycle-logs.js";
+import type { ListenerLeftOut } from "./engine-failure-notice.js";
 import type { AttemptOutcome } from "./locked-run-attempt.js";
 import { createRecordingLogger } from "../tests/recording-logger.js";
 
@@ -34,14 +36,63 @@ const RUN_FIELDS = { task: "send-email", runId: "run-1", attempt: 2 };
 
 const ATTEMPT_ERROR = new Error("provider down");
 
-function settleLinesFor(attemptOutcome: AttemptOutcome, settleReply: SettleReply, elapsed = 0) {
+function settleLinesFor(
+  attemptOutcome: AttemptOutcome,
+  settleReply: SettleReply,
+  elapsed = 0,
+  listenersLeftOut: readonly ListenerLeftOut[] = [],
+) {
   return settleLinesOf({
-    lockedRun: LOCKED_RUN,
+    settledRun: LOCKED_RUN,
     attemptOutcome,
     settleReply,
     elapsedSinceFetchInMilliseconds: elapsed,
+    listenersLeftOut,
   });
 }
+
+describe("the lines of a stall and of the listeners left out of a notice", () => {
+  test("a stalled run writes attempt stalled with its stalls, its source event and its planned instant", () => {
+    const scheduledAt = Date.UTC(2030, 0, 1);
+    const sourceEvent = { eventName: "user.signed-up", eventId: "event-1" };
+
+    expect(
+      stallLineOf({ runId: "run-1", task: "send-email", attempt: 2, stalls: 1, scheduledAt, sourceEvent }),
+    ).toEqual({
+      level: "warn",
+      message: "attempt stalled",
+      fields: { ...RUN_FIELDS, ...sourceEvent, scheduledAt: "2030-01-01T00:00:00.000Z", stalls: 1 },
+    });
+  });
+
+  const keyError = new Error("no tenant in this payload");
+  const failOutcome: AttemptOutcome = {
+    kind: "fail",
+    reason: "stalled",
+    error: ATTEMPT_ERROR,
+    failureNotice: undefined,
+  };
+
+  test("a failure that stored its notice writes a worker error per listener left out, then run failed", () => {
+    const lines = settleLinesFor(failOutcome, { kind: "failed", reason: "stalled", finishedAt: STARTED_AT }, 0, [
+      { listenerName: "broken-key-listener", error: keyError },
+    ]);
+
+    expect(lines.map(({ message }) => message)).toEqual(["worker error", "run failed"]);
+    expect(lines[0]?.fields).toEqual({ err: keyError });
+  });
+
+  test.each<SettleReply>([{ kind: "stale" }, { kind: "already" }, { kind: "unknownVersion", recordVersion: 2 }])(
+    "a $kind reply to a failure writes no line for the listeners left out",
+    (settleReply) => {
+      const lines = settleLinesFor(failOutcome, settleReply, 0, [
+        { listenerName: "broken-key-listener", error: keyError },
+      ]);
+
+      expect(lines.filter(({ fields }) => fields["err"] === keyError)).toEqual([]);
+    },
+  );
+});
 
 describe("the lines of a dispatch and an emit", () => {
   const dispatchRequest = { runs: [{ runId: "run-1", task: "send-email", payload: "{}", retries: 3 }] };

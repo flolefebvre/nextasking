@@ -94,6 +94,7 @@ export function createInstanceLifecycle(config: InstanceLifecycleConfig): Instan
     rejectIfClosed();
     const opened = openCommandClient();
     await untilAborted(connections.waitUntilReadyWithinGiveUpAfter(opened.commandClient), closeController.signal);
+    rejectIfClosed();
     try {
       return await untilAborted(call(opened), commandClientClosedController.signal);
     } catch (error) {

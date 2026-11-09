@@ -292,6 +292,7 @@ export type Engine = {
   prune: (request: PruneRequest) => Promise<PruneReply>;
   replay: (request: ReplayRequest) => Promise<ReplayReply>;
   makeDue: () => Promise<MakeDueReply>;
+  serverInstant: () => Promise<EpochMilliseconds>;
 };
 
 function unreadableReplyError(scriptName: string, reply: unknown): Error {
@@ -795,6 +796,16 @@ function taskNamesOf(reply: unknown): string[] {
   return reply;
 }
 
+function serverInstantOf(reply: unknown): EpochMilliseconds {
+  if (Array.isArray(reply) && reply.length === 2) {
+    const [seconds, microseconds] = reply.map(Number);
+    if (Number.isSafeInteger(seconds) && Number.isSafeInteger(microseconds)) {
+      return seconds! * 1000 + Math.floor(microseconds! / 1000);
+    }
+  }
+  throw new Error(`The TIME of the server sent a reply the engine cannot read: ${JSON.stringify(reply)}`);
+}
+
 type PipelineResult = [error: Error | null, reply: unknown];
 
 function tickCommandReplyOf<Reply>(
@@ -882,6 +893,7 @@ export function createEngine(client: Redis, prefix: string): Engine {
   const runReplayScript = scriptRunnerOf("nextaskingReplay", REPLAY_SCRIPT, replayKeysOf(keys));
   const runPruneScript = scriptRunnerWithKeysOf("nextaskingPrune", PRUNE_SCRIPT, 3);
   return {
+    serverInstant: async () => serverInstantOf(await client.time()),
     replay: async ({ runId }) => replayReplyOf(await runReplayScript([runId])),
     prune: async (request) =>
       pruneReplyOf(await runPruneScript(pruneKeysOf(keys, request.task), pruneArgumentsOf(request))),

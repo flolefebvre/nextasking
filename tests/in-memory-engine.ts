@@ -16,6 +16,8 @@ import type {
   FailureNotice,
   FetchReply,
   FetchRequest,
+  FireReply,
+  FireRequest,
   LockedRun,
   LockRenewal,
   ParkedRun,
@@ -30,11 +32,14 @@ import type {
   RunToCreate,
   SaveStepReply,
   SaveStepRequest,
+  ScheduleSummary,
   SerializedPayload,
   SerializedStepValue,
   SettleReply,
   SettleRequest,
   StalledRun,
+  SyncSchedulesReply,
+  SyncSchedulesRequest,
   ThirdStall,
   TickCommandReply,
   TickReply,
@@ -47,7 +52,18 @@ import type { ErrorRecord, FailureReason, SourceEvent } from "../src/run-queue.j
 import type { RunState } from "../src/run-states.js";
 
 export type InMemoryEngineMethod =
-  "enqueue" | "fetch" | "renew" | "settle" | "promote" | "saveStep" | "readStep" | "prune" | "tick";
+  | "enqueue"
+  | "fetch"
+  | "renew"
+  | "settle"
+  | "promote"
+  | "saveStep"
+  | "readStep"
+  | "prune"
+  | "tick"
+  | "fire"
+  | "syncSchedules"
+  | "serverInstant";
 
 export type InMemoryEngineCall = { method: InMemoryEngineMethod; request: unknown };
 
@@ -82,15 +98,18 @@ export type InMemoryStoredRun = {
 
 export type HeldCalls = { release: () => void };
 
-export type InMemoryEngine = Pick<
-  Engine,
-  "enqueue" | "fetch" | "renew" | "settle" | "promote" | "saveStep" | "readStep" | "prune" | "tick"
-> & {
+export type InMemoryStoredSchedule = ScheduleSummary & {
+  nextFiringAt: EpochMilliseconds;
+  previousFiringAt: EpochMilliseconds | undefined;
+};
+
+export type InMemoryEngine = Pick<Engine, InMemoryEngineMethod> & {
   calls: readonly InMemoryEngineCall[];
   holdCalls: (method: InMemoryEngineMethod) => HeldCalls;
   waitForWakeUp: (timeoutInMilliseconds: DurationInMilliseconds) => Promise<void>;
   isWakeUpMarkerArmed: () => boolean;
   storedRunOf: (runId: RunId) => Readonly<InMemoryStoredRun> | undefined;
+  storedScheduleOf: (task: string) => Readonly<InMemoryStoredSchedule> | undefined;
   runIdsInState: (state: RunState) => RunId[];
   expireLock: (runId: RunId) => void;
   backdateEndedRun: (runId: RunId, durationInMilliseconds: DurationInMilliseconds) => void;
@@ -146,6 +165,7 @@ export function createInMemoryEngine({ now = () => Date.now() }: InMemoryEngineO
   const dedupExpiryByRunIdByTask = new Map<string, Map<RunId, EpochMilliseconds>>();
   const dedupExpiryByEventIdByEventName = new Map<string, Map<string, EpochMilliseconds>>();
   const taskNames = new Set<string>();
+  const schedulesByTask = new Map<string, InMemoryStoredSchedule>();
   const calls: InMemoryEngineCall[] = [];
   const heldCallReleasesByMethod = new Map<InMemoryEngineMethod, Promise<void>>();
   const wakeUpWaiters: (() => void)[] = [];
@@ -689,6 +709,74 @@ export function createInMemoryEngine({ now = () => Date.now() }: InMemoryEngineO
     return { kind: "pruned", prunedRunCount: prunedRunIds.size };
   };
 
+  const fire = async ({ task, instant, instantAfter, runId, retries }: FireRequest): Promise<FireReply> => {
+    if (task === "" || runId === "") {
+      throw invalidArgumentError("a fire carries its task and run id");
+    }
+    if (instantAfter <= instant) {
+      throw invalidArgumentError("instantAfter must come after instant");
+    }
+    const storedSchedule = schedulesByTask.get(task);
+    if (storedSchedule === undefined) {
+      return { kind: "noSchedule" };
+    }
+    if (storedSchedule.nextFiringAt !== instant) {
+      return { kind: "already" };
+    }
+    const firedAt = now();
+    if (instant > firedAt) {
+      return { kind: "notDue" };
+    }
+    const { createdRunIds } = enqueueRuns([{ runId, task, payload: "", retries }], undefined, firedAt);
+    const isRunCreated = createdRunIds.length === 1;
+    if (isRunCreated) {
+      runsById.get(runId)!.scheduledAt = instant;
+    }
+    storedSchedule.nextFiringAt = instantAfter;
+    storedSchedule.previousFiringAt = instant;
+    return { kind: "fired", runId, isRunCreated };
+  };
+
+  const syncSchedules = async ({ schedulesToSync }: SyncSchedulesRequest): Promise<SyncSchedulesReply> => {
+    const listedTasks = new Set<string>();
+    for (const { task, cron, timezone } of schedulesToSync) {
+      if (task === "" || cron === "" || timezone === "") {
+        throw invalidArgumentError("a schedule carries its task, cron and timezone");
+      }
+      if (listedTasks.has(task)) {
+        throw invalidArgumentError(`task ${task} is listed twice`);
+      }
+      listedTasks.add(task);
+    }
+    const storedSchedules = [...schedulesByTask.values()]
+      .map((storedSchedule) => ({ runId: storedSchedule.task, score: storedSchedule.nextFiringAt, storedSchedule }))
+      .sort(byScoreThenRunId)
+      .map(({ storedSchedule }) => storedSchedule);
+    const added: ScheduleSummary[] = [];
+    const changed: ScheduleSummary[] = [];
+    for (const { task, cron, timezone, nextFiringAt } of schedulesToSync) {
+      const storedSchedule = schedulesByTask.get(task);
+      if (storedSchedule !== undefined && storedSchedule.cron === cron && storedSchedule.timezone === timezone) {
+        continue;
+      }
+      (storedSchedule === undefined ? added : changed).push({ task, cron, timezone });
+      schedulesByTask.set(task, {
+        task,
+        cron,
+        timezone,
+        nextFiringAt,
+        previousFiringAt: storedSchedule?.previousFiringAt,
+      });
+    }
+    const removed = storedSchedules
+      .filter(({ task }) => !listedTasks.has(task))
+      .map(({ task, cron, timezone }) => ({ task, cron, timezone }));
+    for (const { task } of removed) {
+      schedulesByTask.delete(task);
+    }
+    return { kind: "synced", added, changed, removed };
+  };
+
   const replied = <Reply>(reply: Reply): TickCommandReply<Reply> => ({ kind: "replied", reply });
 
   const tick = async ({
@@ -721,6 +809,9 @@ export function createInMemoryEngine({ now = () => Date.now() }: InMemoryEngineO
     readStep: recorded("readStep", readStep),
     prune: recorded("prune", prune),
     tick: recorded("tick", tick),
+    fire: recorded("fire", fire),
+    syncSchedules: recorded("syncSchedules", syncSchedules),
+    serverInstant: () => recorded("serverInstant", async () => now())(undefined),
     calls,
     holdCalls: (method) => {
       let release = () => undefined as void;
@@ -756,6 +847,7 @@ export function createInMemoryEngine({ now = () => Date.now() }: InMemoryEngineO
       }),
     isWakeUpMarkerArmed: () => isWakeUpMarkerArmed,
     storedRunOf: (runId) => runsById.get(runId),
+    storedScheduleOf: (task) => schedulesByTask.get(task),
     runIdsInState: (state) => runEntriesInState(state, ({ order }) => order).map(({ runId }) => runId),
     expireLock: (runId) => {
       const storedRun = runsById.get(runId);

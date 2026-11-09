@@ -7,11 +7,14 @@ import type {
   Engine,
   FailureNotice,
   FetchedReply,
+  FireRequest,
   LockedRun,
   RunToCreate,
+  ScheduleToSync,
   SettleOutcome,
   SettleReply,
 } from "../src/engine/engine.js";
+import { deriveFiringRunId } from "../src/ids.js";
 import type { RunId } from "../src/ids.js";
 import type { ErrorRecord } from "../src/run-queue.js";
 import type { RunState } from "../src/run-states.js";
@@ -27,7 +30,18 @@ import { REPLIED_EMPTY_PROMOTE, REPLIED_ONE_RENEWAL, repliedOf } from "./tick-re
 
 export type ContractEngine = Pick<
   Engine,
-  "enqueue" | "fetch" | "renew" | "settle" | "promote" | "saveStep" | "readStep" | "prune" | "tick"
+  | "enqueue"
+  | "fetch"
+  | "renew"
+  | "settle"
+  | "promote"
+  | "saveStep"
+  | "readStep"
+  | "prune"
+  | "tick"
+  | "fire"
+  | "syncSchedules"
+  | "serverInstant"
 >;
 
 export type EngineContractHarness = {
@@ -108,6 +122,22 @@ async function statesOf(harness: EngineContractHarness, runIds: readonly RunId[]
     states.push(await harness.stateOf(runId));
   }
   return states;
+}
+
+const HOUR_IN_MILLISECONDS = 60 * MINUTE_IN_MILLISECONDS;
+
+function hourlyReportOf(nextFiringAt: EpochMilliseconds, task = "build-report"): ScheduleToSync {
+  return { task, cron: "0 * * * *", timezone: "UTC", nextFiringAt };
+}
+
+function firingOf({ task, nextFiringAt }: ScheduleToSync): FireRequest {
+  return {
+    task,
+    instant: nextFiringAt,
+    instantAfter: nextFiringAt + HOUR_IN_MILLISECONDS,
+    runId: deriveFiringRunId(task, nextFiringAt),
+    retries: 2,
+  };
 }
 
 async function backdateEndedRuns(
@@ -615,6 +645,82 @@ export function defineEngineContractTests(contractTest: EngineContractTest): voi
       });
     },
   );
+
+  contractTest(
+    "a firing of the planned instant creates the run under its id with scheduledAt, and a second firing of it hears already",
+    async (harness) => {
+      const { engine } = harness;
+      const schedule = hourlyReportOf(await harness.pastInstant());
+      await engine.syncSchedules({ schedulesToSync: [schedule] });
+      const firing = firingOf(schedule);
+
+      const reply = await engine.fire(firing);
+      const secondReply = await engine.fire(firing);
+      const [firedRun] = await lockedRunsOf(engine, 2);
+
+      expect(reply).toEqual({ kind: "fired", runId: firing.runId, isRunCreated: true });
+      expect(secondReply).toEqual({ kind: "already" });
+      expect(firedRun).toMatchObject({
+        runId: firing.runId,
+        task: "build-report",
+        retries: 2,
+        payload: "",
+        scheduledAt: firing.instant,
+      });
+    },
+  );
+
+  contractTest(
+    "a firing of an instant still to come hears notDue and of a task with no schedule noSchedule, creating no run",
+    async (harness) => {
+      const { engine } = harness;
+      const schedule = hourlyReportOf((await harness.pastInstant()) + HOUR_IN_MILLISECONDS);
+      await engine.syncSchedules({ schedulesToSync: [schedule] });
+
+      const notDueReply = await engine.fire(firingOf(schedule));
+      const noScheduleReply = await engine.fire(firingOf({ ...schedule, task: "send-digest" }));
+
+      expect(notDueReply).toEqual({ kind: "notDue" });
+      expect(noScheduleReply).toEqual({ kind: "noSchedule" });
+      expect(await lockedRunsOf(engine, 1)).toEqual([]);
+    },
+  );
+
+  contractTest(
+    "a sync adds, changes and removes schedules, keeps an unchanged one's planned firing and drops a changed one's",
+    async (harness) => {
+      const { engine } = harness;
+      const plannedInstant = await harness.pastInstant();
+      const [unchanged, changed, removed, added] = ["unchanged", "changed", "removed", "added"].map((task) =>
+        hourlyReportOf(plannedInstant, task),
+      ) as [ScheduleToSync, ScheduleToSync, ScheduleToSync, ScheduleToSync];
+      await engine.syncSchedules({ schedulesToSync: [unchanged, changed, removed] });
+      const rewritten = { ...changed, cron: "30 * * * *", nextFiringAt: plannedInstant + HOUR_IN_MILLISECONDS };
+
+      const reply = await engine.syncSchedules({ schedulesToSync: [unchanged, rewritten, added] });
+      const fireReplies = [];
+      for (const schedule of [unchanged, changed, removed]) {
+        fireReplies.push((await engine.fire(firingOf(schedule))).kind);
+      }
+
+      expect(reply).toEqual({
+        kind: "synced",
+        added: [{ task: "added", cron: "0 * * * *", timezone: "UTC" }],
+        changed: [{ task: "changed", cron: "30 * * * *", timezone: "UTC" }],
+        removed: [{ task: "removed", cron: "0 * * * *", timezone: "UTC" }],
+      });
+      expect(fireReplies).toEqual(["fired", "already", "noSchedule"]);
+    },
+  );
+
+  contractTest("the server instant is the engine's clock, after an instant already past", async (harness) => {
+    const pastInstant = await harness.pastInstant();
+
+    const serverInstant = await harness.engine.serverInstant();
+
+    expect(serverInstant).toBeGreaterThan(pastInstant);
+    expect(serverInstant).toBeLessThan(pastInstant + MINUTE_IN_MILLISECONDS);
+  });
 
   contractTest("a tick carrying a prune prunes its task and returns the prune's reply", async (harness) => {
     const { engine } = harness;

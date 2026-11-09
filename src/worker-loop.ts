@@ -21,6 +21,7 @@ import {
 import { executeLockedRunAttempt, failingAttemptOf, handBackAttemptOf, settleRequestOf } from "./locked-run-attempt.js";
 import type { AttemptResult } from "./locked-run-attempt.js";
 import type { Logger } from "./logger.js";
+import { delayUnlessAborted } from "./redis-outage.js";
 import type { HandlerSender } from "./step-engine.js";
 import type { WorkerTiming } from "./worker-timing.js";
 
@@ -51,18 +52,6 @@ type AttemptInFlight = {
   isExecuting: boolean;
   settlement: Promise<void>;
 };
-
-function delayUnlessAborted(delayInMilliseconds: DurationInMilliseconds, abortSignal: AbortSignal): Promise<void> {
-  return new Promise<void>((resolve) => {
-    const endDelay = () => {
-      clearTimeout(delayTimer);
-      abortSignal.removeEventListener("abort", endDelay);
-      resolve();
-    };
-    const delayTimer = setTimeout(endDelay, delayInMilliseconds);
-    abortSignal.addEventListener("abort", endDelay);
-  });
-}
 
 function freshLockTokenOf(): LockToken {
   return randomBytes(16).toString("hex");

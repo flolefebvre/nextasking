@@ -7,6 +7,8 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import {
   createConnectionOutageTracker,
   createRedisConnections,
+  createRedisOutage,
+  isRedisAwayError,
   isUnansweredError,
   reconnectDecisionOn,
 } from "./connection.js";
@@ -265,5 +267,148 @@ describe("isUnansweredError", () => {
     ["a value that isn't an error", "Command timed out"],
   ])("is false for %s", (_case, error) => {
     expect(isUnansweredError(error)).toBe(false);
+  });
+});
+
+const OUT_OF_MEMORY_MESSAGE = "OOM command not allowed when used memory > 'maxmemory'.";
+
+describe("isRedisAwayError", () => {
+  test.each([
+    ["an unanswered command", new Error("Connection is closed.")],
+    ["the server's out-of-memory reply to a command", new ReplyError(OUT_OF_MEMORY_MESSAGE)],
+    [
+      "the out-of-memory error a script's redis.call raises, as Redis 7.2 and later and Valkey wrap it",
+      new ReplyError(
+        `ERR Error running script (call to 71e6319f97b0fe8bdfa1c5df3ce4489946dda479): @user_script:1: ${OUT_OF_MEMORY_MESSAGE}`,
+      ),
+    ],
+    [
+      "the out-of-memory error a script's redis.call raises, as Redis 7.0 wraps it",
+      new ReplyError(
+        `ERR Error running script (call to 71e6319f97b0fe8bdfa1c5df3ce4489946dda479): @user_script:1: @user_script: 1: -${OUT_OF_MEMORY_MESSAGE}`,
+      ),
+    ],
+  ])("is true for %s", (_case, error) => {
+    expect(isRedisAwayError(error)).toBe(true);
+  });
+
+  test.each([
+    ["a server still loading its dataset", new ReplyError("LOADING Redis is loading the dataset in memory")],
+    ["a busy script", new ReplyError("BUSY Redis is busy running a script.")],
+    ["a key of the wrong type", new ReplyError("WRONGTYPE Operation against a key holding the wrong kind of value")],
+    ["an error that is not a reply and only quotes the message", new Error(`handler saw: ${OUT_OF_MEMORY_MESSAGE}`)],
+  ])("is false for %s", (_case, error) => {
+    expect(isRedisAwayError(error)).toBe(false);
+  });
+});
+
+describe("the worker's Redis outage", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function outageOfRecordedLines(waitUntilReady = () => Promise.resolve()) {
+    const { logger, lines } = createRecordingLogger();
+    const redisOutage = createRedisOutage({
+      outageTracker: createConnectionOutageTracker(logger),
+      waitUntilReady,
+      outOfMemoryRetryDelayInMilliseconds: 1000,
+    });
+    return { redisOutage, lines };
+  }
+
+  test("an out-of-memory reply lasting several waits opens one connection error, closed by the first answer", async () => {
+    vi.useFakeTimers();
+    const { redisOutage, lines } = outageOfRecordedLines();
+    const outOfMemoryReply = new ReplyError(OUT_OF_MEMORY_MESSAGE);
+
+    for (let waitCount = 0; waitCount < 3; waitCount += 1) {
+      const wait = redisOutage.waitForRedis(outOfMemoryReply);
+      await vi.advanceTimersByTimeAsync(1000);
+      await wait;
+    }
+    redisOutage.noteRedisAnswered();
+    redisOutage.noteRedisAnswered();
+
+    expect(lines.map(({ message }) => message)).toEqual(["connection error", "connection restored"]);
+    expect(lines[0]?.fields).toEqual({ err: outOfMemoryReply });
+  });
+
+  test("an out-of-memory wait lasts the retry delay, or ends on its stop signal", async () => {
+    vi.useFakeTimers();
+    const { redisOutage } = outageOfRecordedLines();
+    const stopController = new AbortController();
+    let isWaitOver = false;
+    void redisOutage.waitForRedis(new ReplyError(OUT_OF_MEMORY_MESSAGE)).then(() => {
+      isWaitOver = true;
+    });
+    const stoppedWait = redisOutage.waitForRedis(new ReplyError(OUT_OF_MEMORY_MESSAGE), stopController.signal);
+
+    stopController.abort();
+    await stoppedWait;
+    await vi.advanceTimersByTimeAsync(999);
+    const isWaitOverBefore = isWaitOver;
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(isWaitOverBefore).toBe(false);
+    expect(isWaitOver).toBe(true);
+  });
+
+  test("an unanswered command waits for the client to be ready and writes no line itself", async () => {
+    const waitUntilReady = vi.fn(() => Promise.resolve());
+    const { redisOutage, lines } = outageOfRecordedLines(waitUntilReady);
+
+    await redisOutage.waitForRedis(new Error("Connection is closed."));
+    redisOutage.noteRedisAnswered();
+
+    expect(waitUntilReady).toHaveBeenCalledTimes(1);
+    expect(lines).toEqual([]);
+  });
+});
+
+describe("waitUntilReadyWithoutDeadline", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  test("keeps waiting past giveUpAfter with one shared ready listener, and resolves on the ready event", async () => {
+    await withNeverConnectingClient(async (connections, client) => {
+      vi.useFakeTimers();
+      const readyListenerCountBefore = client.listenerCount("ready");
+      let isReady = false;
+      const waits = Array.from({ length: CONCURRENT_CALLER_COUNT }, () =>
+        connections.waitUntilReadyWithoutDeadline(client).then(() => {
+          isReady = true;
+        }),
+      );
+
+      await vi.advanceTimersByTimeAsync(3 * connections.giveUpAfterInMilliseconds);
+      const isReadyAfterThreeGiveUps = isReady;
+      const readyListenerCountWhileWaiting = client.listenerCount("ready");
+      client.emit("ready");
+      await Promise.all(waits);
+
+      expect(isReadyAfterThreeGiveUps).toBe(false);
+      expect(readyListenerCountWhileWaiting).toBe(readyListenerCountBefore + 1);
+      expect(client.listenerCount("ready")).toBe(readyListenerCountBefore);
+    });
+  });
+
+  test("ends on its stop signal, and its listener goes at the next giveUpAfter", async () => {
+    await withNeverConnectingClient(async (connections, client) => {
+      vi.useFakeTimers();
+      const readyListenerCountBefore = client.listenerCount("ready");
+      const stopController = new AbortController();
+      const stopReason = new Error("stopped");
+
+      const wait = connections.waitUntilReadyWithoutDeadline(client, stopController.signal);
+      stopController.abort(stopReason);
+      const outcome = await wait.catch((error: unknown) => error);
+      await vi.advanceTimersByTimeAsync(connections.giveUpAfterInMilliseconds);
+
+      expect(outcome).toBe(stopReason);
+      expect(client.listenerCount("ready")).toBe(readyListenerCountBefore);
+      expect(vi.getTimerCount()).toBe(0);
+    });
   });
 });

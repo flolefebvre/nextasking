@@ -6,6 +6,8 @@ import type { Duration, DurationInMilliseconds } from "./durations.js";
 import { RedisUnavailableError } from "./errors.js";
 import type { RedisCallIds } from "./errors.js";
 import type { Logger } from "./logger.js";
+import { delayUnlessAborted, untilAborted } from "./redis-outage.js";
+import type { RedisOutage } from "./redis-outage.js";
 
 export type ConnectionConfig = {
   url: string;
@@ -65,6 +67,44 @@ export function isUnansweredError(error: unknown): boolean {
     UNANSWERED_ERROR_NAMES.has(error.name) ||
     (typeof code === "string" && NETWORK_ERROR_CODES.has(code))
   );
+}
+
+const OUT_OF_MEMORY_REPLY_PATTERN = /(?:^|[\s:-])OOM command not allowed\b/;
+
+export function isOutOfMemoryReply(error: unknown): boolean {
+  return error instanceof Error && error.name === "ReplyError" && OUT_OF_MEMORY_REPLY_PATTERN.test(error.message);
+}
+
+export function isRedisAwayError(error: unknown): boolean {
+  return isUnansweredError(error) || isOutOfMemoryReply(error);
+}
+
+export type RedisOutageSources = {
+  outageTracker: ConnectionOutageTracker;
+  waitUntilReady: (stopSignal?: AbortSignal) => Promise<void>;
+  outOfMemoryRetryDelayInMilliseconds: DurationInMilliseconds;
+};
+
+export function createRedisOutage({
+  outageTracker,
+  waitUntilReady,
+  outOfMemoryRetryDelayInMilliseconds,
+}: RedisOutageSources): RedisOutage {
+  const outOfMemorySubject = {};
+  return {
+    isRedisAway: isRedisAwayError,
+    waitForRedis: async (awayError, stopSignal) => {
+      if (!isOutOfMemoryReply(awayError)) {
+        await waitUntilReady(stopSignal);
+        return;
+      }
+      outageTracker.reportClientError(outOfMemorySubject, awayError);
+      await delayUnlessAborted(outOfMemoryRetryDelayInMilliseconds, stopSignal);
+    },
+    noteRedisAnswered: () => {
+      outageTracker.reportClientReady(outOfMemorySubject);
+    },
+  };
 }
 
 export function listenerLoggingAnsweredErrors(logger: Logger, message: string): (error: unknown) => void {
@@ -141,6 +181,8 @@ export type RedisConnections = {
   readonly giveUpAfterInMilliseconds: DurationInMilliseconds;
   createClient: (role: RedisClientRole) => Redis;
   waitUntilReadyWithinGiveUpAfter: (client: Redis) => Promise<void>;
+  waitUntilReadyWithoutDeadline: (client: Redis, stopSignal?: AbortSignal) => Promise<void>;
+  workerRedisOutageOf: (client: Redis, outOfMemoryRetryDelayInMilliseconds: DurationInMilliseconds) => RedisOutage;
   callOnRedis: <Result>(callIds: RedisCallIds, call: () => Promise<Result>) => Promise<Result>;
   onConnectionRestored: (listener: () => void) => () => void;
 };
@@ -200,8 +242,28 @@ export function createRedisConnections(connection: ConnectionConfig, logger: Log
     return pendingReadyWaitByClient.get(client) ?? startReadyWait(client);
   };
 
+  const waitUntilReadyWithoutDeadline = async (client: Redis, stopSignal?: AbortSignal): Promise<void> => {
+    for (;;) {
+      try {
+        await untilAborted(waitUntilReadyWithinGiveUpAfter(client), stopSignal);
+        return;
+      } catch (error) {
+        if (!(error instanceof ConnectionNotReadyError)) {
+          throw error;
+        }
+      }
+    }
+  };
+
   return {
     giveUpAfterInMilliseconds,
+    waitUntilReadyWithoutDeadline,
+    workerRedisOutageOf: (client, outOfMemoryRetryDelayInMilliseconds) =>
+      createRedisOutage({
+        outageTracker,
+        waitUntilReady: (stopSignal) => waitUntilReadyWithoutDeadline(client, stopSignal),
+        outOfMemoryRetryDelayInMilliseconds,
+      }),
     createClient: (role) =>
       new OwnedRedisClient(
         connection.url,

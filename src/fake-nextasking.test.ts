@@ -228,6 +228,16 @@ describe("fakeNextasking", () => {
     }
   });
 
+  test("fakes an instance whose startWorker rejected, since no worker runs", async () => {
+    const nextasking = createShopNextasking();
+    await expect(nextasking.startWorker({ concurrency: 0 })).rejects.toThrow("Invalid startWorker concurrency");
+
+    using fake = fakeNextasking(nextasking);
+    await nextasking.dispatch("close-books");
+
+    expect(fake.dispatches).toHaveLength(1);
+  });
+
   test("takes its record types from the instance passed, not from Register", () => {
     const nextasking = createShopNextasking();
     using fake = fakeNextasking(nextasking);

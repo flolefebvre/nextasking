@@ -5,7 +5,6 @@ import { expect, vi } from "vitest";
 import { integrationTest } from "../tests/integration-test.js";
 import { createRecordingLogger } from "../tests/recording-logger.js";
 import { startTcpProxy } from "../tests/tcp-proxy.js";
-import { withRedis } from "../tests/with-redis.js";
 import { createRedisConnections } from "./connection.js";
 
 const GIVE_UP_AFTER_IN_MILLISECONDS = 1000;
@@ -33,10 +32,9 @@ integrationTest(
       const errorsAfterTheReconnect = clientErrors.length;
       const statusAfterTheWait = client.status;
 
-      const unansweredCommand = withRedis(redisUrl, async (directClient) => {
-        await directClient.call("CLIENT", "PAUSE", String(3 * GIVE_UP_AFTER_IN_MILLISECONDS), "ALL");
-        return client.get(`${keyPrefix}unanswered`).catch((error: unknown) => error);
-      });
+      const unansweredCommand = client
+        .blpop(`${keyPrefix}unanswered`, (3 * GIVE_UP_AFTER_IN_MILLISECONDS) / 1000)
+        .catch((error: unknown) => error);
       await vi.waitFor(() => expect(clientErrors.length).toBeGreaterThan(errorsAfterTheReconnect), { timeout: 5_000 });
       await unansweredCommand;
 
@@ -46,7 +44,6 @@ integrationTest(
         `Socket timeout. Expecting data, but didn't receive any in ${String(GIVE_UP_AFTER_IN_MILLISECONDS)}ms.`,
       );
     } finally {
-      await withRedis(redisUrl, (directClient) => directClient.call("CLIENT", "UNPAUSE"));
       await connections.closeClient(client);
       await proxy.stop();
     }

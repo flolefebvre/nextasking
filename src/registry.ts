@@ -251,7 +251,12 @@ export function createNextasking<
         throw fakedInstanceError("startWorker");
       }
       isWorkerStarted = true;
-      await lifecycle.startWorker(options);
+      try {
+        await lifecycle.startWorker(options);
+      } catch (error) {
+        isWorkerStarted = false;
+        throw error;
+      }
     },
   };
 

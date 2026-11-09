@@ -58,7 +58,7 @@ integrationTest(
         lines.filter((line) => line.fields.task === "wait-for-trial-end" && line.fields.attempt !== undefined),
       ).toEqual([
         { level: "debug", fields: sleepingRunFields, message: "attempt started" },
-        { level: "debug", fields: { ...sleepingRunFields, wakeAt: trialEndsAt }, message: "run suspended" },
+        { level: "debug", fields: { ...sleepingRunFields, resumesAt: trialEndsAt }, message: "run suspended" },
         { level: "debug", fields: sleepingRunFields, message: "run resumed" },
         {
           level: "info",

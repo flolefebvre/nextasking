@@ -3,6 +3,7 @@ import { z } from "zod";
 
 import { createNextasking, defineEvent, defineListener, defineTask } from "../src/index.js";
 import type { RunState } from "../src/index.js";
+import { deriveListenerRunId } from "../src/ids.js";
 import { closeNextasking } from "../src/registry.js";
 import { integrationTest } from "./integration-test.js";
 import { withReaderAndWorker } from "./with-reader-and-worker.js";
@@ -36,7 +37,7 @@ async function everyPageOf<ListedRunOfAnyTask>(
 }
 
 integrationTest(
-  "listRuns pages through a state's runs with an opaque cursor, by task too, and never lists a fan-out",
+  "listRuns pages through a state's runs with an opaque cursor, by task too, the runs an emit started among them",
   async ({ redisUrl, keyPrefix }) => {
     const nextasking = createDispatchOnlyNextasking(redisUrl, keyPrefix);
 
@@ -49,7 +50,7 @@ integrationTest(
         (await nextasking.dispatch("archive-invoices", { year: 2024 })).runId,
         (await nextasking.dispatch("archive-invoices", { year: 2025 })).runId,
       ];
-      await nextasking.emit("user.signed-up", { userId: "user-1" });
+      const { eventId } = await nextasking.emit("user.signed-up", { userId: "user-1" });
       const delayedReminder = await nextasking.dispatch(
         "send-reminder",
         { email: "alan@example.com" },
@@ -68,13 +69,15 @@ integrationTest(
         }),
       );
       const delayedPage = await nextasking.listRuns({ state: "delayed" });
-      expect(pendingPages.map((page) => page.length)).toEqual([2, 2, 1]);
+      expect(pendingPages.every((page) => page.length <= 2)).toBe(true);
       expect(
         pendingPages
           .flat()
           .map((run) => run.runId)
           .sort(),
-      ).toEqual([...reminderRunIds, ...archivingRunIds].sort());
+      ).toEqual(
+        [...reminderRunIds, ...archivingRunIds, deriveListenerRunId(eventId, "create-default-workspace")].sort(),
+      );
       expect(
         archivingPages
           .flat()

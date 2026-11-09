@@ -84,16 +84,10 @@ integrationTest(
         expect(messagesOfRun(lines, runId)).toEqual([
           "run dispatched",
           "run waiting for a concurrency slot",
-          "run got a concurrency slot",
           "attempt started",
           "run completed",
         ]);
       }
-      expect(lines.find((line) => line.message === "run got a concurrency slot")).toEqual({
-        level: "debug",
-        fields: { task: "rebuild-index", runId: waitingRunIds[0], attempt: 1 },
-        message: "run got a concurrency slot",
-      });
       expect(lines.find((line) => line.message === "run waiting for a concurrency slot")).toEqual({
         level: "debug",
         fields: { task: "rebuild-index", runId: waitingRunIds[0], attempt: 1 },

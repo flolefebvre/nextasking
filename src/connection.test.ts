@@ -15,6 +15,7 @@ import {
   createRedisOutage,
   isRedisAwayError,
   isUnansweredError,
+  READ_ONLY_RECONNECT_PAUSE_IN_MILLISECONDS,
 } from "./connection.js";
 import type { RedisConnection, RedisConnections } from "./connection.js";
 import { createFakeRedisDrivers, fakeReplyCommandOf } from "../tests/fake-redis-drivers.js";
@@ -333,6 +334,71 @@ describe("a connection that stops answering without closing", () => {
     expect(timers.length).toBeGreaterThanOrEqual(3);
     expect(timers.map((timer) => timer.hasRef())).toEqual(timers.map(() => false));
     expect(vi.getTimerCount()).toBe(0);
+  });
+});
+
+describe("a write answered READONLY, as during a failover", () => {
+  const READ_ONLY_STRETCH_IN_MILLISECONDS = 2000;
+
+  function demotedPrimaryScenarioOf(readOnlyStretchInMilliseconds: number) {
+    const scenario = connectionScenarioOf((fakeRedisDriver) => {
+      fakeRedisDriver.becomeReady();
+      fakeRedisDriver.onForceReconnect = () => {
+        setTimeout(() => {
+          fakeRedisDriver.becomeReady();
+        }, 5);
+      };
+    });
+    let isReadOnly = true;
+    setTimeout(() => {
+      isReadOnly = false;
+    }, readOnlyStretchInMilliseconds);
+    const write = () =>
+      fakeReplyCommandOf("SET", async () => {
+        if (isReadOnly) {
+          throw new ErrorReply("READONLY You can't write against a read only replica.");
+        }
+        return "OK";
+      });
+    return { ...scenario, write };
+  }
+
+  test("a worker write is answered once the server accepts writes again, the caller seeing no error, through a bounded number of reconnects", async () => {
+    const { connection, driver, lines, write } = demotedPrimaryScenarioOf(READ_ONLY_STRETCH_IN_MILLISECONDS);
+
+    const reply = connection.workerCalls.send(write());
+    await vi.advanceTimersByTimeAsync(READ_ONLY_STRETCH_IN_MILLISECONDS + READ_ONLY_RECONNECT_PAUSE_IN_MILLISECONDS);
+
+    expect(await reply).toBe("OK");
+    expect(driver.forceReconnectCount).toBeGreaterThan(0);
+    expect(driver.forceReconnectCount).toBeLessThanOrEqual(
+      READ_ONLY_STRETCH_IN_MILLISECONDS / READ_ONLY_RECONNECT_PAUSE_IN_MILLISECONDS + 1,
+    );
+    expect(lines).toEqual([]);
+  });
+
+  test("a worker batch with a write answered READONLY is resent whole once the server accepts writes again", async () => {
+    const { connection, write } = demotedPrimaryScenarioOf(READ_ONLY_STRETCH_IN_MILLISECONDS / 4);
+
+    const results = connection.workerCalls.sendBatch([answered("read"), write()]);
+    await vi.advanceTimersByTimeAsync(READ_ONLY_STRETCH_IN_MILLISECONDS);
+
+    expect(await results).toEqual([
+      { kind: "replied", reply: "read" },
+      { kind: "replied", reply: "OK" },
+    ]);
+  });
+
+  test("an instance write is answered when the stretch is shorter than giveUpAfter, and rejects as unanswered at giveUpAfter otherwise", async () => {
+    const shortStretch = demotedPrimaryScenarioOf(GIVE_UP_AFTER_IN_MILLISECONDS / 2);
+    const longStretch = demotedPrimaryScenarioOf(10 * GIVE_UP_AFTER_IN_MILLISECONDS);
+
+    const shortReply = shortStretch.connection.instanceCalls.send(shortStretch.write());
+    const longOutcome = longStretch.connection.instanceCalls.send(longStretch.write()).catch((error: unknown) => error);
+    await vi.advanceTimersByTimeAsync(GIVE_UP_AFTER_IN_MILLISECONDS);
+
+    expect(await shortReply).toBe("OK");
+    expect(isUnansweredError(await longOutcome)).toBe(true);
   });
 });
 

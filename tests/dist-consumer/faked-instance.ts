@@ -49,13 +49,7 @@ export type EmitsHoldOnlyAppEvents = Expect<
   IsEqual<InstanceEmit, { event: "user.signed-up"; payload: { userId: string }; eventId: EventId }>
 >;
 
-export type ReplaysHoldRunsAndFanOuts = Expect<
-  IsEqual<
-    InstanceReplay,
-    | { task: RegisteredTaskName; runId: RunId }
-    | { event: "user.signed-up" | "nextasking/run.failed" | "nextasking/fan-out.failed"; eventId: EventId }
-  >
->;
+export type ReplaysHoldRuns = Expect<IsEqual<InstanceReplay, { task: RegisteredTaskName; runId: RunId }>>;
 
 export type RecordTypesAreExported = Expect<
   IsEqual<
@@ -63,7 +57,7 @@ export type RecordTypesAreExported = Expect<
     [
       RecordedDispatch<InstanceTaskDefinition>,
       RecordedEmit<InstanceEmittableEventDefinition>,
-      RecordedReplay<InstanceTaskDefinition, InstanceEventDefinition>,
+      RecordedReplay<InstanceTaskDefinition>,
     ]
   >
 >;

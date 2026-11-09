@@ -5,20 +5,20 @@ import { createNextasking, defineTask } from "../src/index.js";
 import { closeNextasking } from "../src/registry.js";
 import { integrationTest } from "./integration-test.js";
 import { createRecordingLogger, waitForLogMessage } from "./recording-logger.js";
-import { runJobKey } from "./run-job-key.js";
+import { engineKeysOf } from "../src/engine/engine-keys.js";
 import { withRedis } from "./with-redis.js";
 
 integrationTest(
-  "a saved step resets BullMQ's stall counter, the stc field of the job hash <prefix>:runs:<jobId>",
+  "a saved step resets the stall counter, the stalls field of the run's record",
   async ({ redisUrl, keyPrefix }) => {
     const { logger, lines } = createRecordingLogger();
     const stallCountsBeforeEachStep: (string | null)[] = [];
     const syncCalendar = defineTask("sync-calendar", {
       schema: z.object({ calendarId: z.string() }),
       handler: async ({ step, runId }) => {
-        const jobKey = runJobKey(keyPrefix, "sync-calendar", runId);
-        await withRedis(redisUrl, (redis) => redis.hset(jobKey, "stc", 2));
-        stallCountsBeforeEachStep.push(await withRedis(redisUrl, (redis) => redis.hget(jobKey, "stc")));
+        const recordKey = engineKeysOf(keyPrefix).runRecord("sync-calendar", runId);
+        await withRedis(redisUrl, (redis) => redis.hset(recordKey, "stalls", 2));
+        stallCountsBeforeEachStep.push(await withRedis(redisUrl, (redis) => redis.hget(recordKey, "stalls")));
         await step.run("fetch-events", () => [{ eventId: "event-1" }]);
       },
     });
@@ -34,7 +34,7 @@ integrationTest(
       const { runId } = await nextasking.dispatch("sync-calendar", { calendarId: "calendar-1" });
       await waitForLogMessage(lines, "run completed");
       const stallCountAfterTheStep = await withRedis(redisUrl, (redis) =>
-        redis.hget(runJobKey(keyPrefix, "sync-calendar", runId), "stc"),
+        redis.hget(engineKeysOf(keyPrefix).runRecord("sync-calendar", runId), "stalls"),
       );
 
       expect(stallCountsBeforeEachStep).toEqual(["2"]);

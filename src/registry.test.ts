@@ -3,19 +3,13 @@ import * as v from "valibot";
 import { describe, expect, expectTypeOf, test, vi } from "vitest";
 import { z } from "zod";
 
-import { fanOutFailed, runFailed } from "./built-in-events.js";
-import type { FanOutFailedPayload, RunFailedPayload } from "./built-in-events.js";
+import { runFailed } from "./built-in-events.js";
+import type { RunFailedPayload } from "./built-in-events.js";
 import { defineEvent, defineListener, defineScheduledTask, defineTask } from "./definitions.js";
 import { InvalidPayloadError, UnknownEventError, UnknownTaskError } from "./errors.js";
 import type { Duration } from "./durations.js";
 import type { Logger } from "./logger.js";
-import { closeNextasking, createNextasking } from "./registry.js";
-import { bootWorker } from "./worker-boot.js";
-
-vi.mock(import("./worker-boot.js"), async (importOriginal) => {
-  const workerBoot = await importOriginal();
-  return { ...workerBoot, bootWorker: vi.fn(workerBoot.bootWorker) };
-});
+import { createNextasking } from "./registry.js";
 
 const UNREACHABLE_URL = "redis://nextasking.invalid:6379";
 
@@ -66,10 +60,6 @@ const RANDOM_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-
 
 function networkResources(): string[] {
   return process.getActiveResourcesInfo().filter((resource) => /TCP|GetAddrInfo|Pipe/.test(resource));
-}
-
-async function expectNetworkResourcesBackTo(networkResourcesBefore: string[]): Promise<void> {
-  await vi.waitFor(() => expect(networkResources()).toEqual(networkResourcesBefore), { timeout: 4_000 });
 }
 
 describe("createNextasking", () => {
@@ -123,7 +113,7 @@ describe("createNextasking", () => {
     );
   });
 
-  test.each([runFailed, fanOutFailed])("rejects the built-in event $name listed in events", (builtInEvent) => {
+  test.each([runFailed])("rejects the built-in event $name listed in events", (builtInEvent) => {
     expect(() => createNextasking({ connection: { url: UNREACHABLE_URL }, events: [builtInEvent], tasks: [] })).toThrow(
       `Event "${builtInEvent.name}" is built in and added automatically: remove it from events, and listen to it as it is`,
     );
@@ -624,45 +614,6 @@ describe("startWorker", () => {
     expect(process.exitCode).toBe(exitCodeBefore);
   });
 
-  test("closes its run queue and frees the process for another worker when its boot throws", async () => {
-    const nextasking = createTestNextasking();
-    const networkResourcesBefore = networkResources();
-    vi.mocked(bootWorker)
-      .mockRejectedValueOnce(new Error("boot threw"))
-      .mockRejectedValueOnce(new Error("boot threw again"));
-
-    try {
-      await expect(nextasking.startWorker()).rejects.toThrow("boot threw");
-
-      await expect(nextasking.startWorker()).rejects.toThrow("boot threw again");
-      await expectNetworkResourcesBackTo(networkResourcesBefore);
-    } finally {
-      await closeNextasking(nextasking);
-    }
-  });
-
-  test("starts no worker, and resolves, when the instance is closed while its boot completes in the foreground", async () => {
-    const logger = createSpyLogger();
-    const nextasking = createTestNextasking(logger);
-    const networkResourcesBefore = networkResources();
-    let completeTheBoot = () => {};
-    vi.mocked(bootWorker).mockResolvedValueOnce({
-      isFirstRoundTripAnswered: true,
-      completion: new Promise<void>((resolve) => {
-        completeTheBoot = resolve;
-      }),
-    });
-
-    const starting = nextasking.startWorker();
-    await setImmediate();
-    await closeNextasking(nextasking);
-    completeTheBoot();
-
-    await expect(starting).resolves.toBeUndefined();
-    expect(logger.info).not.toHaveBeenCalledWith({}, "worker started");
-    await expectNetworkResourcesBackTo(networkResourcesBefore);
-  });
-
   test.each([
     [0, "0"],
     [-2, "-2"],
@@ -744,30 +695,6 @@ describe("replay", () => {
   });
 });
 
-describe("replayEvent", () => {
-  test("rejects an unknown event name, listing the valid names, before opening any connection", async () => {
-    const nextasking = createTestNextasking();
-    const networkResourcesBefore = networkResources();
-
-    // @ts-expect-error an unknown event name doesn't compile
-    const replaying = nextasking.replayEvent("invoice.payed", "event-7");
-
-    await expect(replaying).rejects.toThrow(UnknownEventError);
-    await expect(replaying).rejects.toThrow(
-      'Unknown event "invoice.payed". Valid event names: "invoice.paid", "user.signed-up", "nextasking/run.failed", "nextasking/fan-out.failed".',
-    );
-    await setImmediate();
-    expect(networkResources()).toEqual(networkResourcesBefore);
-  });
-
-  test("takes an event name and an event id and resolves with the event id", () => {
-    const nextasking = createTestNextasking();
-
-    expectTypeOf(nextasking.replayEvent<"invoice.paid">).parameters.toEqualTypeOf<["invoice.paid", string]>();
-    expectTypeOf(nextasking.replayEvent).returns.resolves.toEqualTypeOf<{ eventId: string }>();
-  });
-});
-
 describe("built-in events", () => {
   const alertOnRunFailed = defineListener("alert-on-run-failed", {
     on: runFailed,
@@ -776,18 +703,11 @@ describe("built-in events", () => {
     },
   });
 
-  const alertOnFanOutFailed = defineListener("alert-on-fan-out-failed", {
-    on: fanOutFailed,
-    handler: async ({ payload }) => {
-      expectTypeOf(payload).toEqualTypeOf<FanOutFailedPayload>();
-    },
-  });
-
   function createAlertingNextasking() {
     return createNextasking({
       connection: { url: UNREACHABLE_URL },
       events: [invoicePaid],
-      tasks: [recordInvoicePayment, alertOnRunFailed, alertOnFanOutFailed],
+      tasks: [recordInvoicePayment, alertOnRunFailed],
     });
   }
 
@@ -797,13 +717,11 @@ describe("built-in events", () => {
     expect(nextasking.eventDefinitions).toEqual([
       { name: "invoice.paid", listenerNames: ["record-invoice-payment"] },
       { name: "nextasking/run.failed", listenerNames: ["alert-on-run-failed"] },
-      { name: "nextasking/fan-out.failed", listenerNames: ["alert-on-fan-out-failed"] },
     ]);
     expect(nextasking.isEventName("nextasking/run.failed")).toBe(false);
-    expect(nextasking.isEventName("nextasking/fan-out.failed")).toBe(false);
   });
 
-  test.each(["nextasking/run.failed", "nextasking/fan-out.failed"])(
+  test.each(["nextasking/run.failed"])(
     "can't be emitted: emit rejects %s before opening any connection",
     async (builtInEventName) => {
       const nextasking = createAlertingNextasking();

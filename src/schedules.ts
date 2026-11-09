@@ -1,7 +1,5 @@
 import { CronExpressionParser } from "cron-parser";
 
-import type { EpochMilliseconds } from "./durations.js";
-
 export type CronExpression = string;
 
 export type IanaTimeZone = string;
@@ -15,47 +13,6 @@ const DEFAULT_TIMEZONE: IanaTimeZone = "UTC";
 
 export function timezoneOf(schedule: Schedule): IanaTimeZone {
   return schedule.timezone ?? DEFAULT_TIMEZONE;
-}
-
-export type DeclaredSchedule = {
-  taskName: string;
-  cron: CronExpression;
-  timezone: IanaTimeZone;
-};
-
-export function previousFiringInstantBefore(schedule: DeclaredSchedule, instant: EpochMilliseconds): EpochMilliseconds {
-  return CronExpressionParser.parse(schedule.cron, { tz: schedule.timezone, currentDate: new Date(instant) })
-    .prev()
-    .getTime();
-}
-
-export type StoredSchedule = {
-  taskName: string;
-  cron: CronExpression | undefined;
-  timezone: IanaTimeZone | undefined;
-};
-
-export type ScheduleChange =
-  ({ kind: "added" | "changed" } & DeclaredSchedule) | ({ kind: "removed" } & StoredSchedule);
-
-export function scheduleChangesBetween(
-  storedSchedules: readonly StoredSchedule[],
-  declaredSchedules: readonly DeclaredSchedule[],
-): ScheduleChange[] {
-  const storedSchedulesByTaskName = new Map(storedSchedules.map((stored) => [stored.taskName, stored]));
-  const declaredTaskNames = new Set(declaredSchedules.map((declared) => declared.taskName));
-  const addedOrChanged = declaredSchedules.flatMap((declared): ScheduleChange[] => {
-    const stored = storedSchedulesByTaskName.get(declared.taskName);
-    if (stored === undefined) {
-      return [{ kind: "added", ...declared }];
-    }
-    const isUnchanged = stored.cron === declared.cron && stored.timezone === declared.timezone;
-    return isUnchanged ? [] : [{ kind: "changed", ...declared }];
-  });
-  const removed = storedSchedules
-    .filter((stored) => !declaredTaskNames.has(stored.taskName))
-    .map((stored): ScheduleChange => ({ kind: "removed", ...stored }));
-  return [...addedOrChanged, ...removed];
 }
 
 type CronRejection = { reason: string; cause?: unknown };

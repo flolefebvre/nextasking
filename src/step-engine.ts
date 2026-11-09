@@ -8,7 +8,7 @@ import type { SerializedStepValue, StepToSave } from "./engine/engine.js";
 import { StepMisuseError } from "./errors.js";
 import { deriveHandlerSendId, deriveStepIdempotencyKey } from "./ids.js";
 import type { EventId, HandlerSendId, IdempotencyKey, RunId, StepId } from "./ids.js";
-import { LostRunLockError } from "./job-lock.js";
+import { LostRunLockError } from "./errors.js";
 import type { JsonValue } from "./json.js";
 import type { Logger } from "./logger.js";
 import type {
@@ -18,7 +18,7 @@ import type {
   EmitByName,
   EmitOptions,
   EmittedEvent,
-} from "./enqueuer.js";
+} from "./enqueue-requests.js";
 
 export type { SerializedStepValue } from "./engine/engine.js";
 

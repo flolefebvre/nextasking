@@ -21,31 +21,24 @@ export class UnknownEventError extends Error {
   }
 }
 
-export type ReplayRefusal = "not found" | "not failed";
+export type ReplayRefusal = "not found" | "not failed" | "written by a newer release";
 
-function shownReplayRefusalOf(replayRefusal: ReplayRefusal, replayedKind: "run" | "fan-out", idName: string): string {
-  return replayRefusal === "not found"
-    ? `no such ${replayedKind} is kept, its ${idName} is unknown or the ${replayedKind} was removed`
-    : "it is not failed";
+function shownReplayRefusalOf(replayRefusal: ReplayRefusal): string {
+  switch (replayRefusal) {
+    case "not found":
+      return "no such run is kept, its id is unknown or the run was removed";
+    case "not failed":
+      return "it is not failed";
+    case "written by a newer release":
+      return "a newer release wrote the run's record, which this release cannot read: replay it from the newer release";
+  }
 }
 
 export class RunNotReplayableError extends Error {
   override readonly name = "RunNotReplayableError";
 
   constructor(taskName: string, runId: string, replayRefusal: ReplayRefusal) {
-    super(
-      `Run "${runId}" of task "${taskName}" can't be replayed: ${shownReplayRefusalOf(replayRefusal, "run", "id")}.`,
-    );
-  }
-}
-
-export class FanOutNotReplayableError extends Error {
-  override readonly name = "FanOutNotReplayableError";
-
-  constructor(eventName: string, eventId: string, replayRefusal: ReplayRefusal) {
-    super(
-      `Fan-out "${eventId}" of event "${eventName}" can't be replayed: ${shownReplayRefusalOf(replayRefusal, "fan-out", "event id")}.`,
-    );
+    super(`Run "${runId}" of task "${taskName}" can't be replayed: ${shownReplayRefusalOf(replayRefusal)}.`);
   }
 }
 
@@ -54,13 +47,21 @@ export type RedisCallIds = {
   eventId?: EventId;
 };
 
+export type RedisUnavailability =
+  { kind: "unanswered"; giveUpAfterInMilliseconds: DurationInMilliseconds } | { kind: "outOfMemory" };
+
 export class RedisUnavailableError extends Error {
   override readonly name = "RedisUnavailableError";
   readonly runId?: RunId;
   readonly eventId?: EventId;
 
-  constructor(giveUpAfterInMilliseconds: DurationInMilliseconds, callIds: RedisCallIds, unansweredError: unknown) {
-    super(`Redis didn't answer within ${shownDurationOf(giveUpAfterInMilliseconds)}`, { cause: unansweredError });
+  constructor(unavailability: RedisUnavailability, callIds: RedisCallIds, redisError: unknown) {
+    super(
+      unavailability.kind === "outOfMemory"
+        ? "Redis refused the command: it is out of memory"
+        : `Redis didn't answer within ${shownDurationOf(unavailability.giveUpAfterInMilliseconds)}`,
+      { cause: redisError },
+    );
     if (callIds.runId !== undefined) {
       this.runId = callIds.runId;
     }
@@ -151,4 +152,29 @@ function issuePath(schemaIssue: StandardSchemaV1Issue): string {
 
 function quotedList(names: readonly string[]): string {
   return names.length === 0 ? "none" : names.map((name) => `"${name}"`).join(", ");
+}
+export type RefusedStepCall = "saved" | "read" | "sent";
+
+export type LockLoss = { kind: "lockTakenOver" } | { kind: "recordRewritten"; recordVersion: number | undefined };
+
+export class LostRunLockError extends Error {
+  override readonly name = "LostRunLockError";
+
+  constructor(
+    refusedSubject: string,
+    {
+      refusedCall = "saved",
+      lockLoss = { kind: "lockTakenOver" },
+    }: { refusedCall?: RefusedStepCall; lockLoss?: LockLoss } = {},
+  ) {
+    super(`${refusedSubject} was not ${refusedCall}: ${reasonOfLockLoss(lockLoss)}`);
+  }
+}
+
+function reasonOfLockLoss(lockLoss: LockLoss): string {
+  if (lockLoss.kind === "lockTakenOver") {
+    return "this attempt no longer holds its lock, so another attempt owns it now.";
+  }
+  const shownVersion = lockLoss.recordVersion === undefined ? "a version" : `version ${lockLoss.recordVersion}`;
+  return `a newer release rewrote the run's record to ${shownVersion} this release cannot read, so this attempt no longer holds its lock.`;
 }

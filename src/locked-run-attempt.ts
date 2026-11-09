@@ -8,15 +8,16 @@ import { parseDuration, shownDurationOf } from "./durations.js";
 import type { DurationInMilliseconds, EpochMilliseconds } from "./durations.js";
 import { deserializePayload, UNKNOWN_TASK_FAILURE_DELAY_IN_MILLISECONDS } from "./engine/engine.js";
 import type { Engine, FailureNotice, LockedRun, SettleOutcome, SettleRequest } from "./engine/engine.js";
-import { engineFailureNoticeOf } from "./engine-failure-notice.js";
-import type { FailingRun, ListenerLeftOut, RunFailure, WorkerDefinitions } from "./engine-failure-notice.js";
+import { builtFailureNoticeOf } from "./failure-notices.js";
+import type { WorkerDefinitions } from "./definitions.js";
+import type { FailingRun, ListenerLeftOut, RunFailure } from "./failure-notices.js";
 import { createEngineStepStore } from "./engine-step-store.js";
 import { runFieldsOf } from "./lifecycle-logs.js";
 import { loggerWithFields } from "./logger.js";
 import type { Logger } from "./logger.js";
 import { answeredDespiteOutage } from "./redis-outage.js";
 import type { RedisOutage } from "./redis-outage.js";
-import type { FailureReason } from "./run-queue.js";
+import type { FailureReason } from "./run-states.js";
 import { executeTaskHandler, openStepEngine } from "./step-engine.js";
 import type { HandlerOutcome, HandlerSender } from "./step-engine.js";
 
@@ -70,7 +71,7 @@ export function failingAttemptOf(
   failure: RunFailure,
   definitions: WorkerDefinitions,
 ): AttemptResult {
-  const { failureNotice, listenersLeftOut } = engineFailureNoticeOf(failingRun, failure, definitions);
+  const { failureNotice, listenersLeftOut } = builtFailureNoticeOf(failingRun, failure, definitions);
   return { attemptOutcome: { kind: "fail", ...failure, failureNotice }, listenersLeftOut };
 }
 
@@ -80,7 +81,7 @@ export function handBackAttemptOf(lockedRun: LockedRun, definitions: WorkerDefin
     lockedRun.runId,
     shownDurationOf(UNKNOWN_TASK_FAILURE_DELAY_IN_MILLISECONDS),
   );
-  const { failureNotice, listenersLeftOut } = engineFailureNoticeOf(
+  const { failureNotice, listenersLeftOut } = builtFailureNoticeOf(
     lockedRun,
     { error, reason: "unknown task" },
     definitions,

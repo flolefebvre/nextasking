@@ -5,7 +5,7 @@ import { createNextasking, defineTask } from "../src/index.js";
 import { closeNextasking } from "../src/registry.js";
 import { integrationTest } from "./integration-test.js";
 import { createRecordingLogger } from "./recording-logger.js";
-import { storedJobNames } from "./stored-job-names.js";
+import { storedRunIdentities } from "./stored-run-identities.js";
 
 integrationTest(
   "a repeated runId returns the first id and starts one run, while the same runId on another task starts its own",
@@ -45,7 +45,10 @@ integrationTest(
       await nextasking.dispatch("purge-sessions", {}, { runId });
 
       expect([firstDispatch, pendingRepeat, completedRepeat]).toEqual([{ runId }, { runId }, { runId }]);
-      expect(await storedJobNames(redisUrl, keyPrefix)).toEqual(["purge-sessions", "send-welcome-email"]);
+      expect(await storedRunIdentities(redisUrl, keyPrefix)).toEqual([
+        { task: "purge-sessions", runId },
+        { task: "send-welcome-email", runId },
+      ]);
       const dispatchLines = lines.filter((line) => line.message.includes("dispatch"));
       expect(dispatchLines).toEqual([
         { level: "debug", fields: { task: "send-welcome-email", runId }, message: "run dispatched" },

@@ -2,10 +2,11 @@ import { expect, vi } from "vitest";
 import { z } from "zod";
 
 import { createNextasking, defineEvent, defineListener } from "../src/index.js";
+import { deriveListenerRunId } from "../src/ids.js";
 import { closeNextasking } from "../src/registry.js";
 import { integrationTest } from "./integration-test.js";
 import { createRecordingLogger } from "./recording-logger.js";
-import { storedJobNames } from "./stored-job-names.js";
+import { storedRunIdentities } from "./stored-run-identities.js";
 
 integrationTest("a repeated eventId returns the first id and fans out once", async ({ redisUrl, keyPrefix }) => {
   const { logger, lines } = createRecordingLogger();
@@ -41,7 +42,9 @@ integrationTest("a repeated eventId returns the first id and fans out once", asy
     const completedRepeat = await nextasking.emit("invoice.paid", { invoiceId: "inv-3" }, { eventId });
 
     expect([firstEmit, pendingRepeat, completedRepeat]).toEqual([{ eventId }, { eventId }, { eventId }]);
-    expect(await storedJobNames(redisUrl, keyPrefix)).toEqual(["invoice.paid", "record-invoice-payment"]);
+    expect(await storedRunIdentities(redisUrl, keyPrefix)).toEqual([
+      { task: "record-invoice-payment", runId: deriveListenerRunId(eventId, "record-invoice-payment") },
+    ]);
     expect(lines.filter((line) => line.message === "duplicate dispatch dropped")).toEqual([
       { level: "debug", fields: { eventName: "invoice.paid", eventId }, message: "duplicate dispatch dropped" },
       { level: "debug", fields: { eventName: "invoice.paid", eventId }, message: "duplicate dispatch dropped" },

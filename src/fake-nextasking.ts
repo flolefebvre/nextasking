@@ -1,11 +1,13 @@
 import type { BuiltInEventName } from "./built-in-events.js";
 import type { AnyTaskDefinition, EventDefinition, Payload, PayloadSchema } from "./definitions.js";
 import type { Duration } from "./durations.js";
-import type { RunWriter } from "./enqueuer.js";
-import { deriveJobId } from "./ids.js";
-import type { EventId, JobId, RunId } from "./ids.js";
+
+import type { RunIdentity } from "./engine/engine-keys.js";
+import { deserializePayload } from "./engine/engine.js";
+import type { EventId, RunId } from "./ids.js";
 import { controlsOf } from "./registry.js";
 import type { Nextasking, NextaskingControls } from "./registry.js";
+import type { SendTarget } from "./send-target.js";
 
 type PayloadOfTask<Task> = Task extends { schema: infer Schema extends PayloadSchema } ? Payload<Schema> : undefined;
 
@@ -17,21 +19,20 @@ export type RecordedEmit<Event extends EventDefinition> = Event extends EventDef
   ? { event: Event["name"]; payload: Payload<Event["schema"]>; eventId: EventId }
   : never;
 
-export type RecordedReplay<Task extends AnyTaskDefinition, Event extends EventDefinition> =
-  { task: Task["name"]; runId: RunId } | { event: Event["name"]; eventId: EventId };
+export type RecordedReplay<Task extends AnyTaskDefinition> = { task: Task["name"]; runId: RunId };
 
 export type NextaskingFake<Task extends AnyTaskDefinition, Event extends EventDefinition = never> = {
   readonly dispatches: readonly RecordedDispatch<Task>[];
   readonly emits: readonly RecordedEmit<Exclude<Event, { name: BuiltInEventName }>>[];
-  readonly replays: readonly RecordedReplay<Task, Event>[];
+  readonly replays: readonly RecordedReplay<Task>[];
   readonly restore: () => void;
   readonly [Symbol.dispose]: () => void;
 };
 
-export type RecordingRunWriter<Task extends AnyTaskDefinition, Event extends EventDefinition> = Pick<
+export type RecordingSendTarget<Task extends AnyTaskDefinition, Event extends EventDefinition> = Pick<
   NextaskingFake<Task, Event>,
   "dispatches" | "emits" | "replays"
-> & { runWriter: RunWriter };
+> & { sendTarget: SendTarget };
 
 export function controlsOfInstance(nextasking: object, callName: string): NextaskingControls {
   const controls = controlsOf(nextasking);
@@ -41,66 +42,68 @@ export function controlsOfInstance(nextasking: object, callName: string): Nextas
   return controls;
 }
 
-export function createRecordingRunWriter<
+export function createRecordingSendTarget<
   Task extends AnyTaskDefinition,
   Event extends EventDefinition,
->(): RecordingRunWriter<Task, Event> {
+>(): RecordingSendTarget<Task, Event> {
   type Fake = NextaskingFake<Task, Event>;
   const dispatches: Fake["dispatches"][number][] = [];
   const emits: Fake["emits"][number][] = [];
   const replays: Fake["replays"][number][] = [];
-  const writtenJobIds = new Set<JobId>();
-  const isWrittenAlready = (definitionName: string, consumerFacingId: RunId | EventId): boolean => {
-    const jobId = deriveJobId(definitionName, consumerFacingId);
-    if (writtenJobIds.has(jobId)) {
-      return true;
-    }
-    writtenJobIds.add(jobId);
-    return false;
-  };
-  const recordingRunWriter: RunWriter = {
-    enqueueRun: (taskName, run) => {
-      const isDuplicate = isWrittenAlready(taskName, run.runId);
-      if (!isDuplicate) {
+  const createdRunKeys = new Set<string>();
+  const emittedEventKeys = new Set<string>();
+  const sendTarget: SendTarget = {
+    enqueue: ({ runs, eventDedup }, delay) => {
+      if (eventDedup !== undefined) {
+        const eventKey = JSON.stringify([eventDedup.eventName, eventDedup.eventId]);
+        if (emittedEventKeys.has(eventKey)) {
+          return Promise.resolve({ kind: "duplicate" });
+        }
+        emittedEventKeys.add(eventKey);
+      }
+      const createdRuns: RunIdentity[] = [];
+      const skippedRuns: RunIdentity[] = [];
+      for (const { task, runId } of runs) {
+        const runKey = JSON.stringify([task, runId]);
+        (createdRunKeys.has(runKey) ? skippedRuns : createdRuns).push({ task, runId });
+        createdRunKeys.add(runKey);
+      }
+      const [firstRun] = runs;
+      if (eventDedup !== undefined) {
+        emits.push({
+          event: eventDedup.eventName,
+          payload: firstRun === undefined ? undefined : deserializePayload(firstRun.payload),
+          eventId: eventDedup.eventId,
+        } as Fake["emits"][number]);
+      } else if (firstRun !== undefined && createdRuns.length > 0) {
         dispatches.push({
-          task: taskName,
-          payload: run.payload,
-          runId: run.runId,
-          ...(run.delay === undefined ? {} : { delay: run.delay }),
+          task: firstRun.task,
+          payload: deserializePayload(firstRun.payload),
+          runId: firstRun.runId,
+          ...(delay === undefined ? {} : { delay }),
         } as Fake["dispatches"][number]);
       }
-      return Promise.resolve({ isDuplicate });
+      return Promise.resolve({ kind: "enqueued", createdRuns, skippedRuns });
     },
-    enqueueFanOut: (eventName, fanOut) => {
-      const isDuplicate = isWrittenAlready(eventName, fanOut.eventId);
-      if (!isDuplicate) {
-        emits.push({ event: eventName, payload: fanOut.payload, eventId: fanOut.eventId } as Fake["emits"][number]);
-      }
-      return Promise.resolve({ isDuplicate });
-    },
-    replayRun: (taskName, runId) => {
-      replays.push({ task: taskName, runId });
-      return Promise.resolve("replayed");
-    },
-    replayFanOut: (eventName, eventId) => {
-      replays.push({ event: eventName, eventId });
-      return Promise.resolve("replayed");
+    replay: ({ task, runId }) => {
+      replays.push({ task, runId });
+      return Promise.resolve({ kind: "replayed", task });
     },
   };
-  return { runWriter: recordingRunWriter, dispatches, emits, replays };
+  return { sendTarget, dispatches, emits, replays };
 }
 
 export function fakeNextasking<Task extends AnyTaskDefinition, Event extends EventDefinition>(
   nextasking: Nextasking<Task, Event>,
 ): NextaskingFake<Task, Event> {
   const controls = controlsOfInstance(nextasking, "fakeNextasking");
-  const { runWriter, dispatches, emits, replays } = createRecordingRunWriter<Task, Event>();
-  controls.startRecordingWrites(runWriter);
+  const { sendTarget, dispatches, emits, replays } = createRecordingSendTarget<Task, Event>();
+  controls.startRecordingSends(sendTarget);
   let isRestored = false;
   const restore = () => {
     if (!isRestored) {
       isRestored = true;
-      controls.stopRecordingWrites();
+      controls.stopRecordingSends();
     }
   };
   return { dispatches, emits, replays, restore, [Symbol.dispose]: restore };

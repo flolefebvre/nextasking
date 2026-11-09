@@ -5,7 +5,6 @@ import {
   deriveFailureNoticeEventId,
   deriveFiringRunId,
   deriveHandlerSendId,
-  deriveJobId,
   deriveListenerRunId,
   deriveStepIdempotencyKey,
   nameBasedUuid,
@@ -82,7 +81,6 @@ describe("deriveFailureNoticeEventId", () => {
     expect(deriveFailureNoticeEventId("sync-account", "run-1", 2)).not.toBe(eventId);
     expect(deriveFailureNoticeEventId("sync-account", "run-2", 1)).not.toBe(eventId);
     expect(deriveFailureNoticeEventId("invoice.paid", "run-1", 1)).not.toBe(eventId);
-    expect(deriveJobId("sync-account", "run-1")).not.toBe(eventId);
   });
 });
 
@@ -126,22 +124,6 @@ describe("deriveHandlerSendId", () => {
   test("keeps the top level apart from a step whatever its id", () => {
     expect(deriveHandlerSendId("charge-card", "run-1", "top-level", 0)).not.toBe(
       deriveHandlerSendId("charge-card", "run-1", undefined, 0),
-    );
-  });
-});
-
-describe("deriveJobId", () => {
-  test("derives the same version 5 UUID from the same definition name and id", () => {
-    expect(deriveJobId("send-welcome-email", "run-1")).toBe("dbb61551-a48e-5ff9-8dd1-68fc445a08ad");
-  });
-
-  test("keeps the definition name and the id apart, whatever characters they hold", () => {
-    expect(deriveJobId("send-welcome", "email:run-1")).toBe("f169c714-cc3b-5c64-9ab2-77a43591ea43");
-  });
-
-  test("derives a job id that is not the listener run id of the same parts", () => {
-    expect(deriveJobId("evt-1", "record-invoice-payment")).not.toBe(
-      deriveListenerRunId("evt-1", "record-invoice-payment"),
     );
   });
 });

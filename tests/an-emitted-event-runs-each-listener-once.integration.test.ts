@@ -7,7 +7,7 @@ import { deriveListenerRunId } from "../src/ids.js";
 import { closeNextasking } from "../src/registry.js";
 import { integrationTest } from "./integration-test.js";
 import { createRecordingLogger } from "./recording-logger.js";
-import { storedJobNames } from "./stored-job-names.js";
+import { storedRunIdentities } from "./stored-run-identities.js";
 
 type InvoicePaidPayload = { invoiceId: string; amountInCents: number };
 
@@ -63,10 +63,9 @@ integrationTest(
       const [sendReceiptContext] = recordedContextsByListener["send-receipt"] ?? [];
       expect(recordInvoicePaymentContext?.runId).toBe(deriveListenerRunId(eventId, "record-invoice-payment"));
       expect(sendReceiptContext?.runId).toBe(deriveListenerRunId(eventId, "send-receipt"));
-      expect(await storedJobNames(redisUrl, keyPrefix)).toEqual([
-        "invoice.paid",
-        "record-invoice-payment",
-        "send-receipt",
+      expect(await storedRunIdentities(redisUrl, keyPrefix)).toEqual([
+        { task: "record-invoice-payment", runId: recordInvoicePaymentContext?.runId },
+        { task: "send-receipt", runId: sendReceiptContext?.runId },
       ]);
       expect(lines).toContainEqual({
         level: "info",

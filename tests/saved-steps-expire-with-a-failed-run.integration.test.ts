@@ -1,16 +1,22 @@
-import { expect } from "vitest";
+import { expect, vi } from "vitest";
 import { z } from "zod";
 
+import { engineKeysOf } from "../src/engine/engine-keys.js";
+import { createEngine } from "../src/engine/engine.js";
 import { createNextasking, defineTask, NonRetriableError } from "../src/index.js";
 import { closeNextasking } from "../src/registry.js";
+import { backdateEndedRun } from "./engine-test.js";
 import { integrationTest } from "./integration-test.js";
 import { createRecordingLogger, waitForLogMessage } from "./recording-logger.js";
 import { savedSteps } from "./saved-steps.js";
+import { storedRun } from "./stored-run.js";
+import { withRedis } from "./with-redis.js";
 
-const FOURTEEN_DAYS_IN_MILLISECONDS = 14 * 24 * 60 * 60 * 1000;
+const FIFTEEN_DAYS_IN_MILLISECONDS = 15 * 24 * 60 * 60 * 1000;
 
 integrationTest(
-  "a run that fails for good keeps its saved steps until they expire with the failed-run retention of 14 days",
+  "a run that fails for good keeps its saved steps until the failed-run retention of 14 days removes it with them",
+  { timeout: 20_000 },
   async ({ redisUrl, keyPrefix }) => {
     const { logger, lines } = createRecordingLogger();
     const importContacts = defineTask("import-contacts", {
@@ -31,11 +37,24 @@ integrationTest(
       await nextasking.startWorker();
       const { runId } = await nextasking.dispatch("import-contacts", { fileId: "file-7" });
       await waitForLogMessage(lines, "run failed");
-      const steps = await savedSteps(redisUrl, keyPrefix, "import-contacts", runId);
+      const stepsOfTheFailedRun = await savedSteps(redisUrl, keyPrefix, "import-contacts", runId);
+      await withRedis(redisUrl, (redis) =>
+        backdateEndedRun(
+          { engine: createEngine(redis, keyPrefix), redis, keys: engineKeysOf(keyPrefix), keyPrefix },
+          "import-contacts",
+          runId,
+          FIFTEEN_DAYS_IN_MILLISECONDS,
+        ),
+      );
+      await vi.waitFor(
+        async () => {
+          expect(await storedRun(redisUrl, keyPrefix, "import-contacts", runId)).toBeUndefined();
+        },
+        { timeout: 10_000 },
+      );
 
-      expect(steps.serializedResultsByStepId).toEqual({ "parse-file": '[{"contactCount":2}]' });
-      expect(steps.timeToLiveInMilliseconds).toBeGreaterThan(FOURTEEN_DAYS_IN_MILLISECONDS - 60_000);
-      expect(steps.timeToLiveInMilliseconds).toBeLessThanOrEqual(FOURTEEN_DAYS_IN_MILLISECONDS);
+      expect(stepsOfTheFailedRun.serializedResultsByStepId).toEqual({ "parse-file": '[{"contactCount":2}]' });
+      expect((await savedSteps(redisUrl, keyPrefix, "import-contacts", runId)).serializedResultsByStepId).toEqual({});
     } finally {
       await closeNextasking(nextasking);
     }

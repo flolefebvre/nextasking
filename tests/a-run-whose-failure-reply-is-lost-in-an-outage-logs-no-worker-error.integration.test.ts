@@ -11,10 +11,8 @@ import {
   waitForLogMessage,
 } from "./recording-logger.js";
 import type { RecordedLogLine } from "./recording-logger.js";
-import { runJobKey } from "./run-job-key.js";
+import { isSettleRequestOf } from "./engine-requests.js";
 import { startTcpProxy } from "./tcp-proxy.js";
-
-const MOVE_TO_FAILED_ARGUMENT = "failedReason";
 
 type FailureReplyOutage = {
   directNextasking: ReturnType<typeof createNextasking>;
@@ -40,9 +38,12 @@ async function withFailureReplyCut(
         if (attempt > 1) {
           return;
         }
-        const jobKey = runJobKey(keyPrefix, "sync-account", runId);
-        failureReplyCut = proxy.cutBeforeReplyTo(
-          (request) => request.includes(jobKey) && request.includes(MOVE_TO_FAILED_ARGUMENT),
+        failureReplyCut = proxy.cutBeforeReplyTo((request) =>
+          isSettleRequestOf(request, keyPrefix, {
+            task: "sync-account",
+            runId,
+            settleKind: retries === 0 ? "fail" : "retry",
+          }),
         );
         throw new Error("upstream unavailable");
       },
@@ -72,9 +73,7 @@ async function withFailureReplyCut(
   await afterOutage({ directNextasking, lines, runId, runFailedNotices });
 
   expectOneConnectionErrorAndOneConnectionRestored(lines);
-  expect(lines.filter((line) => line.message === "worker error" || line.message === "run failure unconfirmed")).toEqual(
-    [],
-  );
+  expect(lines.filter((line) => line.message === "worker error")).toEqual([]);
 }
 
 integrationTest(

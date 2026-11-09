@@ -7,8 +7,8 @@ import type { AnyTaskDefinition } from "./definitions.js";
 import type { DurationInMilliseconds, EpochMilliseconds } from "./durations.js";
 import type { LockToken } from "./engine/engine-keys.js";
 import type { Engine, LockedRun, PruneRequest, ThirdStall, TickReply, TickRequest } from "./engine/engine.js";
-import type { WorkerDefinitions } from "./engine-failure-notice.js";
-import { declaredSchedulesOf, fireDueSchedules } from "./engine-schedules.js";
+import type { WorkerDefinitions } from "./definitions.js";
+import { declaredSchedulesOf, fireDueSchedules } from "./worker-schedules.js";
 import {
   lockLostAbortLineOf,
   parkLineOf,

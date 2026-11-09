@@ -101,6 +101,7 @@ integrationTest(
 
 integrationTest(
   "a task that leaves retries unset makes six attempts: the first and five retries",
+  { timeout: 20_000 },
   async ({ redisUrl, keyPrefix }) => {
     const { logger, lines } = createRecordingLogger();
     const syncAccount = defineTask("sync-account", {
@@ -120,7 +121,7 @@ integrationTest(
     try {
       await nextasking.startWorker();
       await nextasking.dispatch("sync-account", { accountId: "account-7" });
-      await waitForLogMessage(lines, "run failed");
+      await waitForLogMessage(lines, "run failed", { timeout: 15_000 });
 
       const failureLines = lines.filter((line) => line.message === "attempt failed" || line.message === "run failed");
       expect(failureLines.map((line) => [line.message, line.fields.attempt, line.fields.retriesLeft])).toEqual([

@@ -5,8 +5,8 @@ import type { AnyTaskDefinition } from "../src/definitions.js";
 import { engineKeysOf, storedRunIdOf } from "../src/engine/engine-keys.js";
 import type { RunIdentity } from "../src/engine/engine-keys.js";
 import { createEngine } from "../src/engine/engine.js";
-import { createEngineReader } from "../src/engine-reader.js";
-import type { EngineReader } from "../src/engine-reader.js";
+import { createReadApi } from "../src/read-api.js";
+import type { ReadApi } from "../src/read-api.js";
 import type { AnyListedRun } from "../src/read-api.js";
 import { endRuns } from "./ended-runs.js";
 import { engineTest } from "./engine-test.js";
@@ -22,14 +22,14 @@ const SHARED_RUN_IDENTITIES: RunIdentity[] = [
 
 const SHARED_FINISHED_AT = Date.UTC(2030, 0, 1);
 
-function readerOf({ redis, keyPrefix }: Pick<EngineTestContext, "redis" | "keyPrefix">): EngineReader {
+function readerOf({ redis, keyPrefix }: Pick<EngineTestContext, "redis" | "keyPrefix">): ReadApi {
   const tasksByName = new Map<string, AnyTaskDefinition>(
     SHARED_RUN_IDENTITIES.map(({ task }) => [
       task,
       defineScheduledTask(task, { schedule: { cron: "0 * * * *" }, handler: async () => undefined }),
     ]),
   );
-  return createEngineReader({
+  return createReadApi({
     client: redis,
     prefix: keyPrefix,
     tasksByName,
@@ -46,7 +46,7 @@ async function completedSharedRunsFinishedTogether({ engine, redis, keys }: Engi
   }
 }
 
-async function everyListedRunOf(reader: EngineReader, task?: string): Promise<AnyListedRun[]> {
+async function everyListedRunOf(reader: ReadApi, task?: string): Promise<AnyListedRun[]> {
   const listedRuns: AnyListedRun[] = [];
   let cursor: string | undefined;
   do {

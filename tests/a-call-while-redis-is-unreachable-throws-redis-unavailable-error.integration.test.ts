@@ -88,14 +88,16 @@ integrationTest(
     const dispatchRejection = await rejectionOf(
       nextasking.dispatch("send-welcome-email", { email: "grace@example.com" }, { runId: "welcome-grace" }),
     );
-    const replayEventRejection = await rejectionOf(nextasking.replayEvent("invoice.paid", "invoice-7-paid"));
+    const emitRejection = await rejectionOf(
+      nextasking.emit("invoice.paid", { invoiceId: "invoice-7" }, { eventId: "invoice-7-paid" }),
+    );
 
     expect(dispatchRejection).toMatchObject({
       name: "RedisUnavailableError",
       runId: "welcome-grace",
       cause: expect.any(Error),
     });
-    expect(replayEventRejection).toMatchObject({ name: "RedisUnavailableError", eventId: "invoice-7-paid" });
+    expect(emitRejection).toMatchObject({ name: "RedisUnavailableError", eventId: "invoice-7-paid" });
 
     await proxy.restore();
     await vi.waitFor(

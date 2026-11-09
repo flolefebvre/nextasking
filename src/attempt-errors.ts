@@ -1,6 +1,7 @@
 import { NonRetriableError, StepMisuseError } from "./errors.js";
 import type { RunId } from "./ids.js";
-import type { ErrorRecord, FailureReason } from "./run-queue.js";
+import type { ErrorRecord } from "./engine/engine.js";
+import type { FailureReason } from "./run-states.js";
 
 export class StalledRunError extends Error {
   override readonly name = "StalledRunError";

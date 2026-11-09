@@ -6,8 +6,6 @@ export type RunId = string;
 
 export type EventId = string;
 
-export type JobId = string;
-
 export type StepId = string;
 
 export type IdempotencyKey = string;
@@ -63,8 +61,4 @@ export function deriveHandlerSendId(
 ): HandlerSendId {
   const scope = enclosingStepId === undefined ? ["top-level"] : ["step", enclosingStepId];
   return uuidFromNameParts(["handler-send", taskName, runId, ...scope, String(positionInScope)]);
-}
-
-export function deriveJobId(definitionName: string, consumerFacingId: RunId | EventId): JobId {
-  return uuidFromNameParts(["job", definitionName, consumerFacingId]);
 }

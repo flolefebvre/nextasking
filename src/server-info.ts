@@ -16,7 +16,7 @@ export function maxmemoryPolicyRejectionOf(policy: string): Error | undefined {
 
 export type MaxmemoryPolicySource = Pick<Redis, "info" | "config">;
 
-export type SendInfo = () => Promise<string>;
+type SendInfo = () => Promise<string>;
 
 type PolicyQuery = { kind: "answered"; policy: string } | { kind: "failed"; error: unknown };
 
@@ -57,7 +57,7 @@ function queryPolicyFromInfo(sendInfo: SendInfo): Promise<PolicyQuery> {
   return queryPolicy({
     send: sendInfo,
     policyIn: (reply) => infoFieldOf(reply, INFO_MAXMEMORY_POLICY_FIELD),
-    missingPolicyErrorOf: () => new Error("INFO memory has no maxmemory_policy line"),
+    missingPolicyErrorOf: () => new Error("INFO has no maxmemory_policy line"),
   });
 }
 
@@ -72,10 +72,7 @@ function queryPolicyFromConfig(source: MaxmemoryPolicySource): Promise<PolicyQue
   });
 }
 
-export async function readMaxmemoryPolicy(
-  source: MaxmemoryPolicySource,
-  sendInfo: SendInfo = () => source.info("memory"),
-): Promise<MaxmemoryPolicyReading> {
+async function readMaxmemoryPolicy(source: MaxmemoryPolicySource, sendInfo: SendInfo): Promise<MaxmemoryPolicyReading> {
   const infoQuery = await queryPolicyFromInfo(sendInfo);
   if (infoQuery.kind === "answered") {
     return { kind: "read", policy: infoQuery.policy };
@@ -88,7 +85,7 @@ export async function readMaxmemoryPolicy(
     kind: "unreadable",
     error: new AggregateError(
       [infoQuery.error, configQuery.error],
-      "maxmemory-policy is readable from neither INFO memory nor CONFIG GET",
+      "maxmemory-policy is readable from neither INFO nor CONFIG GET",
     ),
   };
 }

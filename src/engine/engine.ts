@@ -5,8 +5,8 @@ import type { ChainableCommander, Redis } from "ioredis";
 import type { RunFailedPayload } from "../built-in-events.js";
 import type { ConcurrencyKey } from "../definitions.js";
 import type { DurationInMilliseconds, EpochMilliseconds } from "../durations.js";
-import type { RunId, StepId } from "../ids.js";
-import type { ErrorRecord, FailureReason, SourceEvent } from "../run-queue.js";
+import type { EventId, RunId, StepId } from "../ids.js";
+import type { FailureReason } from "../run-states.js";
 import { isRunState } from "../run-states.js";
 import type { RunState } from "../run-states.js";
 import { ENQUEUE_SCRIPT, enqueueKeysOf } from "./enqueue-script.js";
@@ -56,10 +56,27 @@ export const CUT_ERROR_TEXT_MARKER = `… [cut at ${String(MOST_ERROR_TEXT_CHARA
 
 export const UNKNOWN_TASK_FAILURE_DELAY_IN_MILLISECONDS: DurationInMilliseconds = 30 * 60 * 1000;
 
+export type SourceEvent = {
+  eventName: string;
+  eventId: EventId;
+};
+
+export type ErrorRecord = {
+  attempt: number;
+  name: string;
+  message: string;
+  stack: string;
+  failedAt: string;
+};
+
 export type SerializedPayload = string;
 
 export function deserializePayload(serializedPayload: SerializedPayload): unknown {
   return serializedPayload === "" ? undefined : JSON.parse(serializedPayload);
+}
+
+export function serializePayload(payload: unknown): SerializedPayload {
+  return payload === undefined ? "" : JSON.stringify(payload);
 }
 
 export type SerializedStepValue = string;
@@ -350,9 +367,9 @@ function nullIfAbsent(storedValue: string | null | undefined): string | null {
   return storedValue ?? null;
 }
 
-function storedIntegerOf(storedValue: string | null): number | undefined {
+export function storedIntegerOf(storedValue: unknown): number | undefined {
   const integer = Number(storedValue);
-  return storedValue !== null && storedValue !== "" && Number.isSafeInteger(integer) ? integer : undefined;
+  return typeof storedValue === "string" && storedValue !== "" && Number.isSafeInteger(integer) ? integer : undefined;
 }
 
 function recordVersionOf(storedVersion: unknown): number | undefined {
@@ -895,7 +912,7 @@ function serverInstantOf(reply: unknown): EpochMilliseconds {
   throw new Error(`The TIME of the server sent a reply the engine cannot read: ${JSON.stringify(reply)}`);
 }
 
-type PipelineResult = [error: Error | null, reply: unknown];
+export type PipelineResult = [error: Error | null, reply: unknown];
 
 function tickCommandReplyOf<Reply>(
   [error, reply]: PipelineResult,

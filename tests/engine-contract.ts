@@ -18,7 +18,7 @@ import type {
 import { MOST_DUE_RUNS_PROMOTED_PER_PROMOTE } from "../src/engine/promote-script.js";
 import { deriveFiringRunId } from "../src/ids.js";
 import type { RunId } from "../src/ids.js";
-import type { ErrorRecord } from "../src/run-queue.js";
+import type { ErrorRecord } from "../src/engine/engine.js";
 import type { RunState } from "../src/run-states.js";
 import {
   DAY_IN_MILLISECONDS,
@@ -353,7 +353,7 @@ export function defineEngineContractTests(contractTest: EngineContractTest): voi
   }
 
   contractTest(
-    "a hand back of a run first found unknown 30 minutes ago fails it unknown task and stores its notice",
+    "a hand back of a run first found unknown 30 minutes ago fails it unknown task and stores its notice, and its resend hears that failure, not already",
     async (harness) => {
       const { engine } = harness;
       const handBack = (lockedRun: LockedRun) =>
@@ -370,8 +370,10 @@ export function defineEngineContractTests(contractTest: EngineContractTest): voi
       const [lockedRun] = await lockedRunsOf(engine, 1);
 
       const reply = await handBack(lockedRun!);
+      const resentReply = await handBack(lockedRun!);
 
       expect(reply).toEqual({ kind: "failed", reason: "unknown task", finishedAt: expect.any(Number) });
+      expect(resentReply).toEqual(reply);
       expect(await statesOf(harness, "send-email", ["run-1"])).toEqual(["failed"]);
       expect(await statesOf(harness, "alert-on-call", ["listener-run-1"])).toEqual(["pending"]);
     },

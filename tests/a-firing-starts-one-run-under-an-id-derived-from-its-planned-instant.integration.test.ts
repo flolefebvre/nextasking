@@ -1,13 +1,14 @@
 import { expect, vi } from "vitest";
 
+import { createEngine } from "../src/engine/engine.js";
 import { createNextasking, defineScheduledTask } from "../src/index.js";
 import { deriveFiringRunId } from "../src/ids.js";
 import { closeNextasking } from "../src/registry.js";
-import { FIRING_JOB_NAME } from "../src/run-queue.js";
 import { integrationTest } from "./integration-test.js";
-import { storedJobNames } from "./stored-job-names.js";
+import { storedRunIdentities } from "./stored-run-identities.js";
 import { storedRun } from "./stored-run.js";
-import { promoteNextFiring, withRunQueue } from "./with-run-queue.js";
+import { moveNextFiringTo } from "./stored-schedules.js";
+import { withRedis } from "./with-redis.js";
 
 type RecordedFiringRun = { runId: string; scheduledAt: Date | undefined; attempt: number };
 
@@ -26,41 +27,37 @@ integrationTest(
       prefix: keyPrefix,
       tasks: [purgeExpiredSessions],
     });
+    const plannedInstant = Date.parse("2025-12-31T23:00:00.000Z");
+    const firingRunId = deriveFiringRunId("purge-expired-sessions", plannedInstant);
 
     try {
       await nextasking.startWorker();
-      const plannedInstant = await promoteNextFiring(redisUrl, keyPrefix, "purge-expired-sessions");
+      await moveNextFiringTo(redisUrl, keyPrefix, "purge-expired-sessions", plannedInstant);
       await vi.waitFor(
         () => {
           expect(recordedRuns).toHaveLength(1);
         },
         { timeout: 10_000 },
       );
-      const firingRunId = deriveFiringRunId("purge-expired-sessions", plannedInstant);
-      const repeatedFiringFinishedOn = await withRunQueue(redisUrl, keyPrefix, async (runQueue) => {
-        const completedJobs = await runQueue.getCompleted(0, -1);
-        const firingJob = completedJobs.find((completedJob) => completedJob.name === FIRING_JOB_NAME);
-        const firstFinishedOn = firingJob?.finishedOn ?? 0;
-        await firingJob?.retry("completed");
-        await vi.waitFor(
-          async () => {
-            const repeatedFiringJob = await runQueue.getJob(firingJob?.id ?? "");
-            expect(repeatedFiringJob?.finishedOn).toBeGreaterThan(firstFinishedOn);
-          },
-          { timeout: 10_000 },
-        );
-        return firstFinishedOn;
-      });
+      const repeatedFiring = await withRedis(redisUrl, (redis) =>
+        createEngine(redis, keyPrefix).fire({
+          task: "purge-expired-sessions",
+          instant: plannedInstant,
+          instantAfter: Date.parse("2026-12-31T23:00:00.000Z"),
+          runId: firingRunId,
+          retries: 5,
+        }),
+      );
 
-      expect(plannedInstant).toBeGreaterThan(Date.now());
-      expect(new Date(plannedInstant).toISOString()).toMatch(/^\d{4}-12-31T23:00:00\.000Z$/);
+      expect(plannedInstant).toBeLessThan(Date.now());
       expect(recordedRuns).toEqual([{ runId: firingRunId, scheduledAt: new Date(plannedInstant), attempt: 1 }]);
       expect(await storedRun(redisUrl, keyPrefix, "purge-expired-sessions", firingRunId)).toMatchObject({
-        runId: firingRunId,
-        scheduledAt: new Date(plannedInstant).toISOString(),
+        scheduledAt: String(plannedInstant),
       });
-      expect(repeatedFiringFinishedOn).toBeGreaterThan(0);
-      expect(await storedJobNames(redisUrl, keyPrefix)).toEqual(["purge-expired-sessions"]);
+      expect(repeatedFiring.kind).not.toBe("fired");
+      expect(await storedRunIdentities(redisUrl, keyPrefix)).toEqual([
+        { task: "purge-expired-sessions", runId: firingRunId },
+      ]);
     } finally {
       await closeNextasking(nextasking);
     }

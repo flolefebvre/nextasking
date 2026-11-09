@@ -4,8 +4,7 @@ import {
   defineListener,
   defineScheduledTask,
   defineTask,
-  fanOutFailed,
-  FanOutNotReplayableError,
+  InstanceClosedError,
   InvalidPayloadError,
   NonRetriableError,
   RedisUnavailableError,
@@ -30,8 +29,6 @@ import type {
   EventWithRuns,
   FailureNoticeError,
   FailureReason,
-  FanOutFailedPayload,
-  FanOutState,
   ListedRun,
   ListedSchedule,
   ListenerDefinition,
@@ -44,7 +41,6 @@ import type {
   PayloadSchema,
   PreviousFiring,
   Register,
-  ReplayedEvent,
   ReplayedRun,
   Run,
   RunFailedPayload,
@@ -191,9 +187,7 @@ export type RegisterHoldsTheInstance = Expect<IsEqual<Register["nextasking"], ty
 
 export type TaskNameIsTheRegisteredTasks = Expect<IsEqual<TaskName, RegisteredTaskName>>;
 
-export type EventNameIsTheRegisteredEvents = Expect<
-  IsEqual<EventName, "user.signed-up" | "nextasking/run.failed" | "nextasking/fan-out.failed">
->;
+export type EventNameIsTheRegisteredEvents = Expect<IsEqual<EventName, "user.signed-up" | "nextasking/run.failed">>;
 
 export type DispatchTakesARegisteredTaskName = Expect<
   IsEqual<Parameters<typeof nextasking.dispatch>[0], RegisteredTaskName>
@@ -241,7 +235,7 @@ export type InstanceIsANextasking = Expect<
     typeof nextasking,
     Nextasking<
       typeof sendWelcomeEmail | typeof createDefaultWorkspace | typeof purgeExpiredSessions,
-      typeof userSignedUp | typeof runFailed | typeof fanOutFailed
+      typeof userSignedUp | typeof runFailed
     >
   >
 >;
@@ -286,7 +280,7 @@ export const anyPayloadSchema: PayloadSchema = userSignedUpSchema;
 export const payloadIssues: PayloadIssue[] = [];
 
 export const errorClasses: (new (...args: never[]) => Error)[] = [
-  FanOutNotReplayableError,
+  InstanceClosedError,
   InvalidPayloadError,
   NonRetriableError,
   RedisUnavailableError,
@@ -331,15 +325,8 @@ export const workerStarted: Promise<void> = nextasking.startWorker();
 
 export const replayedRun: Promise<ReplayedRun> = nextasking.replay("send-welcome-email", "welcome-ada");
 
-export const replayedEvent: Promise<ReplayedEvent> = nextasking.replayEvent("user.signed-up", "event-1");
-
 // @ts-expect-error the instance lists no such task
 export const replayedUnknownTask = nextasking.replay("send-goodbye-email", "goodbye-ada");
-
-export const replayedBuiltInFanOut: Promise<ReplayedEvent> = nextasking.replayEvent(
-  "nextasking/run.failed",
-  "notice-1",
-);
 
 // @ts-expect-error only the library emits a built-in event
 export const emittedBuiltInEvent = nextasking.emit("nextasking/run.failed", {});
@@ -367,22 +354,9 @@ export const alertOnRunFailed = defineListener("alert-on-run-failed", {
   },
 });
 
-export const alertOnFanOutFailed = defineListener("alert-on-fan-out-failed", {
-  on: fanOutFailed,
-  handler: async ({ payload }) => {
-    await Promise.resolve(`${payload.eventName} ${payload.eventId} ${payload.failedAt}`);
-  },
-});
-
 type RunFailedListenerContext = Parameters<(typeof alertOnRunFailed)["handler"]>[0];
 
-type FanOutFailedListenerContext = Parameters<(typeof alertOnFanOutFailed)["handler"]>[0];
-
 export type RunFailedListenerGetsTheNotice = Expect<IsEqual<RunFailedListenerContext["payload"], RunFailedPayload>>;
-
-export type FanOutFailedListenerGetsTheNotice = Expect<
-  IsEqual<FanOutFailedListenerContext["payload"], FanOutFailedPayload>
->;
 
 export type NoticeErrorHoldsNameMessageAndStack = Expect<
   IsEqual<FailureNoticeError, { name: string; message: string; stack: string }>
@@ -438,7 +412,7 @@ export const runCounts: Promise<RunCounts> = nextasking.countRuns();
 
 export const followedEvent: Promise<EventWithRuns> = nextasking.getEvent("user.signed-up", "event-1");
 
-export type FanOutIsAFanOutState = Expect<IsEqual<EventWithRuns["fanOut"], FanOutState | undefined>>;
+export type EventWithRunsHasNoFanOut = Expect<IsEqual<"fanOut" extends keyof EventWithRuns ? true : false, false>>;
 
 export type RunsByListenerHoldEachListener = Expect<
   IsEqual<keyof Extract<EventWithRuns, { event: "user.signed-up" }>["runsByListener"], "create-default-workspace">

@@ -3,7 +3,7 @@ import { expect } from "vitest";
 import { fixtureRecordsOf } from "./fixture-records.js";
 import { integrationTest } from "./integration-test.js";
 import { waitForLogMessage } from "./recording-logger.js";
-import { runQueuePosition } from "./run-queue-position.js";
+import { storedRun } from "./stored-run.js";
 import { savedSteps } from "./saved-steps.js";
 import { startWorkerProcess } from "./worker-process.js";
 import { createWorkerProcessNextasking } from "./worker-process-nextasking.js";
@@ -26,12 +26,12 @@ integrationTest(
       shuttingDownProcess.kill("SIGINT");
       const exit = await shuttingDownProcess.exited;
       const stepsAfterTheYield = await savedSteps(redisUrl, keyPrefix, "wait-then-record", runId);
-      const positionAfterTheYield = await runQueuePosition(redisUrl, keyPrefix, "wait-then-record", runId);
+      const runAfterTheYield = await storedRun(redisUrl, keyPrefix, "wait-then-record", runId);
 
       const runFields = { task: "wait-then-record", runId, attempt: 1 };
       expect(exit).toEqual({ code: 0, signal: null });
       expect(stepsAfterTheYield.serializedResultsByStepId).toEqual({ wait: '["waited"]' });
-      expect(positionAfterTheYield).toEqual({ isWaiting: true, attemptsMade: 0, stallCount: 0 });
+      expect(runAfterTheYield).toMatchObject({ state: "pending", attempt: "1", stalls: "0" });
       expect(new Set(shuttingDownProcess.logLines.map((line) => line.message))).toEqual(
         new Set(["schedule added", "worker started", "attempt started", "run yielded at shutdown", "worker stopped"]),
       );

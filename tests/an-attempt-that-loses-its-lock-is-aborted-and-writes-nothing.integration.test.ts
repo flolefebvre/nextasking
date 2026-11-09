@@ -14,7 +14,7 @@ integrationTest(
     const workerProcess = await startWorkerProcess({
       redisUrl,
       keyPrefix,
-      timing: { lockDurationInMilliseconds: 1000, stallIntervalInMilliseconds: 60_000 },
+      timing: { lockDurationInMilliseconds: 1000, lockTimeLeftThatTriggersRenewalInMilliseconds: 500 },
     });
     const nextasking = createWorkerProcessNextasking(redisUrl, keyPrefix);
 

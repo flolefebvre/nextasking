@@ -44,7 +44,7 @@ integrationTest(
 
       expect(lines.map((line) => line.message)).not.toContain("run suspended");
       expect(serializedResultsByStepId).toEqual({
-        "wait-for-trial-end": JSON.stringify({ kind: "sleep", wakeAt: trialEndedAt.getTime(), attempt: 1 }),
+        "wait-for-trial-end": String(trialEndedAt.getTime()),
       });
     } finally {
       await closeNextasking(nextasking);

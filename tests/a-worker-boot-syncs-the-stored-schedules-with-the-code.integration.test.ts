@@ -4,11 +4,15 @@ import { z } from "zod";
 import { createNextasking, defineScheduledTask, defineTask } from "../src/index.js";
 import type { Schedule } from "../src/index.js";
 import { closeNextasking } from "../src/registry.js";
-import { FIRING_JOB_NAME } from "../src/run-queue.js";
+import { engineKeysOf } from "../src/engine/engine-keys.js";
+import { RECORD_VERSION } from "../src/engine/engine.js";
 import { integrationTest } from "./integration-test.js";
 import { createRecordingLogger } from "./recording-logger.js";
 import type { RecordedLogLine } from "./recording-logger.js";
-import { storedSchedulers, withRunQueue } from "./with-run-queue.js";
+import { storedSchedules } from "./stored-schedules.js";
+import { withRedis } from "./with-redis.js";
+
+const LEFT_UNTOUCHED_INSTANT = Date.UTC(2040, 0, 1, 3);
 
 function scheduledTask(name: string, schedule: Schedule) {
   return defineScheduledTask(name, { schedule, handler: async () => undefined });
@@ -21,10 +25,11 @@ function scheduleLinesOf(lines: readonly RecordedLogLine[]): RecordedLogLine[] {
 }
 
 integrationTest(
-  "each worker boot adds, changes and removes the stored schedules to match the code, and leaves the others untouched",
+  "each worker boot adds, changes and removes the stored schedules to match the code, updates a retries change alone, and leaves the others untouched",
   async ({ redisUrl, keyPrefix }) => {
     const firstRelease = createRecordingLogger();
     const secondRelease = createRecordingLogger();
+    const keys = engineKeysOf(keyPrefix);
     const firstReleaseNextasking = createNextasking({
       connection: { url: redisUrl },
       prefix: keyPrefix,
@@ -54,17 +59,17 @@ integrationTest(
     try {
       await firstReleaseNextasking.startWorker();
       await closeNextasking(firstReleaseNextasking);
-      await withRunQueue(redisUrl, keyPrefix, async (runQueue) => {
-        await runQueue.upsertJobScheduler(
-          "purge-expired-sessions",
-          { pattern: "0 3 * * *", tz: "UTC" },
-          { name: FIRING_JOB_NAME, data: { taskName: "left untouched" } },
-        );
-        await runQueue.upsertJobScheduler(
-          "compact-logs",
-          { pattern: "0 4 * * *" },
-          { name: FIRING_JOB_NAME, data: { taskName: "compact-logs" } },
-        );
+      await withRedis(redisUrl, async (redis) => {
+        await redis.hset(keys.schedule("purge-expired-sessions"), "nextFiringAt", LEFT_UNTOUCHED_INSTANT, "retries", 2);
+        await redis.zadd(keys.schedules, LEFT_UNTOUCHED_INSTANT, "purge-expired-sessions");
+        await redis.hset(keys.schedule("compact-logs"), {
+          version: RECORD_VERSION,
+          cron: "0 4 * * *",
+          timezone: "Europe/Paris",
+          nextFiringAt: LEFT_UNTOUCHED_INSTANT,
+          retries: 5,
+        });
+        await redis.zadd(keys.schedules, LEFT_UNTOUCHED_INSTANT, "compact-logs");
       });
       await secondReleaseNextasking.startWorker();
 
@@ -130,37 +135,24 @@ integrationTest(
       expect(secondRelease.lines.map((line) => line.message).indexOf("worker started")).toBeGreaterThan(
         secondRelease.lines.map((line) => line.message).lastIndexOf("schedule added"),
       );
-      expect(await storedSchedulers(redisUrl, keyPrefix)).toEqual([
-        {
-          taskName: "compact-logs",
+      const nextFiringAfterTheBoot = expect.not.stringMatching(`^${String(LEFT_UNTOUCHED_INSTANT)}$`);
+      expect(await storedSchedules(redisUrl, keyPrefix)).toEqual([
+        expect.objectContaining({
+          task: "compact-logs",
           cron: "0 4 * * *",
           timezone: "UTC",
-          firingTemplateData: { taskName: "compact-logs" },
-        },
-        {
-          taskName: "purge-expired-sessions",
+          nextFiringAt: nextFiringAfterTheBoot,
+        }),
+        expect.objectContaining({
+          task: "purge-expired-sessions",
           cron: "0 3 * * *",
           timezone: "UTC",
-          firingTemplateData: { taskName: "left untouched" },
-        },
-        {
-          taskName: "refresh-sitemap",
-          cron: "*/30 * * * *",
-          timezone: "UTC",
-          firingTemplateData: { taskName: "refresh-sitemap" },
-        },
-        {
-          taskName: "send-digest",
-          cron: "0 7 * * 1",
-          timezone: "UTC",
-          firingTemplateData: { taskName: "send-digest" },
-        },
-        {
-          taskName: "send-weekly-report",
-          cron: "0 9 * * 1",
-          timezone: "Europe/Paris",
-          firingTemplateData: { taskName: "send-weekly-report" },
-        },
+          nextFiringAt: String(LEFT_UNTOUCHED_INSTANT),
+          retries: "5",
+        }),
+        expect.objectContaining({ task: "refresh-sitemap", cron: "*/30 * * * *", timezone: "UTC" }),
+        expect.objectContaining({ task: "send-digest", cron: "0 7 * * 1", timezone: "UTC" }),
+        expect.objectContaining({ task: "send-weekly-report", cron: "0 9 * * 1", timezone: "Europe/Paris" }),
       ]);
     } finally {
       await closeNextasking(firstReleaseNextasking);

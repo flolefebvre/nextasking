@@ -1,5 +1,5 @@
-export { fanOutFailed, runFailed } from "./built-in-events.js";
-export type { FailureNoticeError, FanOutFailedPayload, RunFailedPayload } from "./built-in-events.js";
+export { runFailed } from "./built-in-events.js";
+export type { FailureNoticeError, RunFailedPayload } from "./built-in-events.js";
 export type { ConnectionConfig } from "./connection.js";
 export { defineEvent, defineListener, defineScheduledTask, defineTask } from "./definitions.js";
 export type {
@@ -19,16 +19,9 @@ export type {
 } from "./definitions.js";
 export type { EventDefinitionSummary, TaskDefinitionSummary } from "./definition-summaries.js";
 export type { Duration } from "./durations.js";
-export type {
-  DispatchedRun,
-  DispatchOptions,
-  EmitOptions,
-  EmittedEvent,
-  ReplayedEvent,
-  ReplayedRun,
-} from "./enqueuer.js";
+export type { DispatchedRun, DispatchOptions, EmitOptions, EmittedEvent, ReplayedRun } from "./enqueue-requests.js";
 export {
-  FanOutNotReplayableError,
+  InstanceClosedError,
   InvalidPayloadError,
   NonRetriableError,
   RedisUnavailableError,
@@ -40,7 +33,6 @@ export {
 export type { PayloadIssue } from "./errors.js";
 export type { EventId, RunId } from "./ids.js";
 export type { Logger } from "./logger.js";
-export type { FanOutState } from "./queue-reader.js";
 export type { PreviousFiring, RunError } from "./read-api.js";
 export { createNextasking } from "./registry.js";
 export type {
@@ -57,7 +49,7 @@ export type {
   RunPage,
   TaskName,
 } from "./registry.js";
-export type { FailureReason } from "./run-queue.js";
+export type { FailureReason } from "./run-states.js";
 export type { RunState } from "./run-states.js";
 export type { CronExpression, IanaTimeZone, Schedule } from "./schedules.js";
 export type { StandardSchemaV1 } from "./standard-schema.js";

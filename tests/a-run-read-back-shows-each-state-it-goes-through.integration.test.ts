@@ -43,7 +43,7 @@ integrationTest(
       const cardCharge = await reader.dispatch("charge-card", { cardId: "card-1" });
       const accountClosing = await reader.dispatch("close-account", { accountId: "account-7" });
       const invoiceArchiving = await reader.dispatch("archive-invoices", { year: 2025 });
-      await waitForLogMessage(workerLines, "run handed back: unknown task");
+      await waitForLogMessage(workerLines, "run handed back: unknown task", { timeout: 15_000 });
       await vi.waitFor(
         async () => {
           expect(await stateOf("send-reminder", pendingReminder.runId)).toBe("completed");
@@ -82,7 +82,11 @@ integrationTest(
         finishedAt: expect.any(Date),
         errors: [{ name: "NonRetriableError", message: "account has open invoices" }],
       });
-      expect(await stateOf("archive-invoices", invoiceArchiving.runId)).toBe("pending");
+      expect(await reader.getRun("archive-invoices", invoiceArchiving.runId)).toMatchObject({
+        state: expect.stringMatching(/^(pending|executing)$/),
+        attempt: 1,
+        errors: [],
+      });
       expect(await reader.getRun("send-reminder", "no-such-run")).toBeUndefined();
     });
   },

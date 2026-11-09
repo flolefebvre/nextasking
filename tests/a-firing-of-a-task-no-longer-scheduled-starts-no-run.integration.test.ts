@@ -1,16 +1,17 @@
-import { expect, vi } from "vitest";
+import { expect } from "vitest";
 import { z } from "zod";
 
+import { createEngine } from "../src/engine/engine.js";
 import { createNextasking, defineTask } from "../src/index.js";
 import { closeNextasking } from "../src/registry.js";
-import { FIRING_JOB_NAME } from "../src/run-queue.js";
 import { integrationTest } from "./integration-test.js";
-import { createRecordingLogger } from "./recording-logger.js";
-import { storedJobNames } from "./stored-job-names.js";
-import { withRunQueue } from "./with-run-queue.js";
+import { createRecordingLogger, waitForLogMessage } from "./recording-logger.js";
+import { storedRunIdentities } from "./stored-run-identities.js";
+import { storedSchedules } from "./stored-schedules.js";
+import { withRedis } from "./with-redis.js";
 
 integrationTest(
-  "a firing left by an earlier release for a task this release no longer schedules completes, starts no run and logs at debug",
+  "a due schedule left by an earlier release for a task this release no longer schedules is removed at boot and starts no run",
   async ({ redisUrl, keyPrefix }) => {
     const { logger, lines } = createRecordingLogger();
     const handledPayloads: unknown[] = [];
@@ -26,34 +27,33 @@ integrationTest(
       logger,
       tasks: [rebuildIndex],
     });
-    const plannedInstant = Date.UTC(2026, 10, 3, 2, 0, 0);
+    await withRedis(redisUrl, (redis) =>
+      createEngine(redis, keyPrefix).syncSchedules({
+        schedulesToSync: [
+          {
+            task: "rebuild-index",
+            cron: "0 2 * * *",
+            timezone: "UTC",
+            nextFiringAt: Date.UTC(2026, 10, 3, 2, 0, 0),
+            retries: 5,
+          },
+        ],
+      }),
+    );
 
     try {
       await nextasking.startWorker();
-      const firingJobState = await withRunQueue(redisUrl, keyPrefix, async (runQueue) => {
-        const firingJob = await runQueue.add(
-          FIRING_JOB_NAME,
-          { taskName: "rebuild-index" },
-          { jobId: `repeat:rebuild-index:${String(plannedInstant)}` },
-        );
-        await vi.waitFor(
-          async () => {
-            expect(await firingJob.getState()).toBe("completed");
-          },
-          { timeout: 10_000 },
-        );
-        return firingJob.getState();
-      });
+      await waitForLogMessage(lines, "worker started");
 
-      expect(firingJobState).toBe("completed");
-      expect(lines.filter((line) => line.message === "firing dropped: task not scheduled")).toEqual([
+      expect(lines.filter((line) => line.message.startsWith("schedule "))).toEqual([
         {
-          level: "debug",
-          fields: { task: "rebuild-index", scheduledAt: "2026-11-03T02:00:00.000Z" },
-          message: "firing dropped: task not scheduled",
+          level: "info",
+          fields: { task: "rebuild-index", cron: "0 2 * * *", timezone: "UTC" },
+          message: "schedule removed",
         },
       ]);
-      expect(await storedJobNames(redisUrl, keyPrefix)).toEqual([]);
+      expect(await storedSchedules(redisUrl, keyPrefix)).toEqual([]);
+      expect(await storedRunIdentities(redisUrl, keyPrefix)).toEqual([]);
       expect(handledPayloads).toEqual([]);
     } finally {
       await closeNextasking(nextasking);

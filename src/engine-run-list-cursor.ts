@@ -1,3 +1,4 @@
+import { storedRunIdOf } from "./engine/engine-keys.js";
 import type { RunIdentity } from "./engine/engine-keys.js";
 import type { IndexScore } from "./engine/index-page-script.js";
 import { INVALID_CURSOR_MESSAGE, cursorFieldsOf, cursorOfFields, otherStateCursorMessageOf } from "./read-api.js";
@@ -46,6 +47,15 @@ function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value !== "";
 }
 
+function isStorableRun(task: string, runId: string): boolean {
+  try {
+    storedRunIdOf(task, runId);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function positionIn(cursor: unknown): EngineRunListPosition | undefined {
   const fields = cursorFieldsOf(cursor, CURSOR_FORMAT_VERSION, 6);
   if (fields === undefined) {
@@ -58,6 +68,7 @@ function positionIn(cursor: unknown): EngineRunListPosition | undefined {
     !isScoreSentExactly(score) ||
     !isNonEmptyString(task) ||
     !isNonEmptyString(runId) ||
+    !isStorableRun(task, runId) ||
     (listedTask !== null && task !== listedTask)
   ) {
     return undefined;

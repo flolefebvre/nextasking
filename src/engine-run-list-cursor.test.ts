@@ -67,6 +67,7 @@ describe("the listRuns cursor on the indexes", () => {
     ["of a score that is not finite", cursorOfFields([2, "failed", null, null, "send-email", "run-42"])],
     ["of an empty last run task", cursorOfFields([2, "failed", null, 1, "", "run-42"])],
     ["of a last run task that is not a string", cursorOfFields([2, "failed", null, 1, null, "run-42"])],
+    ["of a last run task that cannot be encoded", cursorOfFields([2, "failed", null, 1, "\ud800", "run-42"])],
     ["of an empty run id", cursorOfFields([2, "failed", null, 1, "send-email", ""])],
     ["of a run id that is not a string", cursorOfFields([2, "failed", null, 1, "send-email", 42])],
   ])("is refused when it is %s", (_description, cursor) => {

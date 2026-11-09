@@ -14,7 +14,7 @@ import { startWorkerLoop } from "./worker-loop.js";
 import type { WaitForWakeUp, WorkerLoop, WorkerLoopEngine } from "./worker-loop.js";
 import { DEFAULT_WORKER_TIMING } from "./worker-timing.js";
 import type { WorkerTiming } from "./worker-timing.js";
-import { createHandlerGate } from "../tests/handler-gate.js";
+import { createHandlerGate, gatedBetweenTwoSteps, gatedWithNoStep } from "../tests/handler-gate.js";
 import type { HandlerGate } from "../tests/handler-gate.js";
 import { createInMemoryEngine } from "../tests/in-memory-engine.js";
 import type { HeldCalls, InMemoryEngine } from "../tests/in-memory-engine.js";
@@ -1590,20 +1590,6 @@ async function scenarioOfAnAttemptInItsHandler(
   void scenario.loop.stopFetching();
   return { ...scenario, handlerGate };
 }
-
-const gatedBetweenTwoSteps =
-  (handlerGate: HandlerGate): TaskHandler<object> =>
-  async ({ step }) => {
-    await step.run("look-up", () => "found");
-    await handlerGate.enter();
-    await step.run("charge", () => "paid");
-  };
-
-const gatedWithNoStep =
-  (handlerGate: HandlerGate): TaskHandler<object> =>
-  async () => {
-    await handlerGate.enter();
-  };
 
 test("a draining loop's attempt yields at its next step boundary, its saved step kept, with run yielded at shutdown", async () => {
   const { loop, engine, lines, handlerGate } = await scenarioOfAnAttemptInItsHandler(gatedBetweenTwoSteps);

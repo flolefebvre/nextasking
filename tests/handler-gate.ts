@@ -1,3 +1,5 @@
+import type { TaskHandler } from "../src/definitions.js";
+
 export type HandlerGate = {
   enter: () => Promise<void>;
   release: (count: number) => void;
@@ -25,3 +27,17 @@ export function createHandlerGate(): HandlerGate {
     mostInFlightCount: () => mostInFlightCount,
   };
 }
+
+export const gatedBetweenTwoSteps =
+  (handlerGate: HandlerGate): TaskHandler<object> =>
+  async ({ step }) => {
+    await step.run("look-up", () => "found");
+    await handlerGate.enter();
+    await step.run("charge", () => "paid");
+  };
+
+export const gatedWithNoStep =
+  (handlerGate: HandlerGate): TaskHandler<object> =>
+  async () => {
+    await handlerGate.enter();
+  };

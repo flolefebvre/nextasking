@@ -57,6 +57,20 @@ export function expectOneConnectionErrorAndOneConnectionRestored(lines: readonly
   ]);
 }
 
+export function expectOneStallAndOneCompletedPickupOfTheRun(
+  lines: readonly RecordedLogLine[],
+  { runFields, stalls }: { runFields: Record<string, unknown> & { runId: string }; stalls: number },
+): void {
+  const linesOfTheRun = lines.filter((line) => line.fields["runId"] === runFields.runId);
+  expect(linesOfTheRun.filter((line) => line.message === "attempt stalled")).toEqual([
+    { level: "warn", fields: { ...runFields, stalls }, message: "attempt stalled" },
+  ]);
+  expect(linesOfTheRun.filter((line) => line.message !== "attempt stalled")).toEqual([
+    { level: "debug", fields: runFields, message: "attempt started" },
+    { level: "info", fields: expect.objectContaining(runFields), message: "run completed" },
+  ]);
+}
+
 const awaitedMessageByLines = new WeakMap<readonly RecordedLogLine[], string>();
 
 function shownRecordedLines(lines: readonly RecordedLogLine[]): string {

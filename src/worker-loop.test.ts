@@ -40,6 +40,7 @@ import {
   UNANSWERED_COMMAND_ERROR,
 } from "../tests/simulated-redis-outage.js";
 import type { AwayEngineCalls, SimulatedRedisOutage } from "../tests/simulated-redis-outage.js";
+import { expectOneStallAndOneCompletedPickupOfTheRun } from "../tests/recording-logger.js";
 import type { RecordedLogLine } from "../tests/recording-logger.js";
 import { repliedOf } from "../tests/tick-replies.js";
 import { unhandledRejectionsDuring } from "../tests/unhandled-rejections.js";
@@ -725,6 +726,59 @@ test("an expired lock found by the tick writes attempt stalled with its stalls a
     },
   ]);
 });
+
+const PICKUP_AFTER_A_STALL_ORDERS = [
+  {
+    description: "a tick reply handled at once writes attempt stalled before the pickup's attempt started",
+    isTickReplyHeldUntilAfterThePickup: false,
+    messagesBeforeTheTickReply: ["attempt stalled", "attempt started", "run completed"],
+  },
+  {
+    description:
+      "a tick reply handled after the pickup's fetch answered writes attempt started and run completed before attempt stalled",
+    isTickReplyHeldUntilAfterThePickup: true,
+    messagesBeforeTheTickReply: ["attempt started", "run completed"],
+  },
+];
+
+for (const {
+  description,
+  isTickReplyHeldUntilAfterThePickup,
+  messagesBeforeTheTickReply,
+} of PICKUP_AFTER_A_STALL_ORDERS) {
+  test(`${description}: both orders are valid, the stall and the pickup being two round trips`, async () => {
+    const sendEmail = defineTask("send-email", { schema: v.object({}), handler: async () => undefined });
+    const engine = createInMemoryEngine();
+    await engine.enqueue({ runs: runsOf("send-email", 1) });
+    await expireTheLockOfAFetchedRun(engine, 0);
+    let releaseTheTickReply = () => undefined as void;
+    const tickReplyRelease = isTickReplyHeldUntilAfterThePickup
+      ? new Promise<void>((resolve) => {
+          releaseTheTickReply = resolve;
+        })
+      : Promise.resolve();
+    const tickWhoseReplyWaitsForTheRelease: WorkerLoopEngine["tick"] = async (request) => {
+      const reply = await engine.tick(request);
+      await tickReplyRelease;
+      return reply;
+    };
+    const { lines } = startedLoopOf([sendEmail] as AnyTaskDefinition[], {
+      engine,
+      loopEngine: { ...engine, tick: tickWhoseReplyWaitsForTheRelease },
+    });
+    await vi.advanceTimersByTimeAsync(1_000);
+    const messagesWrittenBeforeTheTickReply = messagesOf(lines);
+
+    releaseTheTickReply();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(messagesWrittenBeforeTheTickReply).toEqual(messagesBeforeTheTickReply);
+    expectOneStallAndOneCompletedPickupOfTheRun(lines, {
+      runFields: { task: "send-email", runId: "send-email-1", attempt: 1 },
+      stalls: 1,
+    });
+  });
+}
 
 test("two loops ticking on the same reported third stall end with one failed run, one notice and one run failed line", async () => {
   const alertOnCall = defineListener("alert-on-call", { on: runFailed, handler: async () => undefined });

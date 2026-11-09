@@ -4,6 +4,7 @@ import type { EpochMilliseconds } from "../src/durations.js";
 import type { RunId } from "../src/ids.js";
 import { fixtureRecordsOf } from "./fixture-records.js";
 import { integrationTest } from "./integration-test.js";
+import { expectOneStallAndOneCompletedPickupOfTheRun } from "./recording-logger.js";
 import { storedRun } from "./stored-run.js";
 import type { StoredRun } from "./stored-run.js";
 import { startWorkerProcess } from "./worker-process.js";
@@ -115,11 +116,10 @@ integrationTest(
       const [pickedUpRun] = await completedRunsOf({ redisUrl, keyPrefix, task }, [runId]);
 
       expectPickedUpWithinTheBoundAfter(killedHoldersLockedUntil, pickedUpRun!);
-      expect(survivingProcess.logLines.filter((line) => line.fields.runId === runId)).toEqual([
-        { level: "warn", fields: { task, runId, attempt: 1, stalls: 1 }, message: "attempt stalled" },
-        { level: "debug", fields: { task, runId, attempt: 1 }, message: "attempt started" },
-        expect.objectContaining({ message: "run completed", fields: expect.objectContaining({ runId, attempt: 1 }) }),
-      ]);
+      expectOneStallAndOneCompletedPickupOfTheRun(survivingProcess.logLines, {
+        runFields: { task, runId, attempt: 1 },
+        stalls: 1,
+      });
       expect(await fixtureRecordsOf(redisUrl, keyPrefix, task)).toEqual([
         { step: "wait", attempt: 1 },
         { step: "wait", attempt: 1 },

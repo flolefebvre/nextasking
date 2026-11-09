@@ -2,10 +2,13 @@ import * as v from "valibot";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 import { runFailed } from "./built-in-events.js";
-import { defineListener, defineTask } from "./definitions.js";
+import { defineListener, defineScheduledTask, defineTask } from "./definitions.js";
 import type { AnyTaskDefinition } from "./definitions.js";
-import type { FetchRequest, RunToCreate, SettleRequest, TickRequest } from "./engine/engine.js";
-import { deriveFailureNoticeEventId, deriveListenerRunId } from "./ids.js";
+import type { FetchRequest, FireRequest, RunToCreate, SettleRequest, TickRequest } from "./engine/engine.js";
+import { syncDeclaredSchedules } from "./engine-schedules.js";
+import { deriveFailureNoticeEventId, deriveFiringRunId, deriveListenerRunId } from "./ids.js";
+import type { EpochMilliseconds } from "./durations.js";
+import type { Schedule } from "./schedules.js";
 import type { HandlerSender } from "./step-engine.js";
 import { startWorkerLoop } from "./worker-loop.js";
 import type { WaitForWakeUp, WorkerLoop, WorkerLoopEngine } from "./worker-loop.js";
@@ -19,6 +22,7 @@ import {
   createSimulatedRedisOutage,
   engineAwayDuringOutage,
   OUT_OF_MEMORY_REPLY,
+  UNANSWERED_COMMAND_ERROR,
 } from "../tests/simulated-redis-outage.js";
 import type { AwayEngineCalls, SimulatedRedisOutage } from "../tests/simulated-redis-outage.js";
 import type { RecordedLogLine } from "../tests/recording-logger.js";
@@ -113,7 +117,7 @@ function runsOf(task: string, count: number, extraFields: Partial<RunToCreate> =
   }));
 }
 
-function requestsOf<Request>(engine: InMemoryEngine, method: "fetch" | "settle" | "tick"): Request[] {
+function requestsOf<Request>(engine: InMemoryEngine, method: "fetch" | "settle" | "tick" | "fire"): Request[] {
   return engine.calls.filter((call) => call.method === method).map(({ request }) => request as Request);
 }
 
@@ -1100,6 +1104,20 @@ test("stopFetching ends a pass-over wait at once", async () => {
   expect(isStopped).toBe(true);
 });
 
+type TickStopping = { isStoppedBeforeTheAnswer: boolean; isStoppedAfterTheAnswer: boolean };
+
+async function stoppingOfTheTickAcross(loop: WorkerLoop, heldCalls: HeldCalls): Promise<TickStopping> {
+  let isStopped = false;
+  void loop.stopTicking().then(() => {
+    isStopped = true;
+  });
+  await vi.advanceTimersByTimeAsync(0);
+  const isStoppedBeforeTheAnswer = isStopped;
+  heldCalls.release();
+  await vi.advanceTimersByTimeAsync(0);
+  return { isStoppedBeforeTheAnswer, isStoppedAfterTheAnswer: isStopped };
+}
+
 test("stopTicking with a third stall's settle in flight resolves once the settle answers, and its run failed line is written", async () => {
   const sendEmail = defineTask("send-email", { schema: v.object({}), handler: async () => undefined });
   const engine = createInMemoryEngine();
@@ -1108,18 +1126,10 @@ test("stopTicking with a third stall's settle in flight resolves once the settle
   const heldSettles = engine.holdCalls("settle");
   const { loop, lines } = startedLoopOf([sendEmail] as AnyTaskDefinition[], { engine });
   await vi.advanceTimersByTimeAsync(1_000);
-  let isStopped = false;
 
-  void loop.stopTicking().then(() => {
-    isStopped = true;
-  });
-  await vi.advanceTimersByTimeAsync(0);
-  const isStoppedBeforeTheAnswer = isStopped;
-  heldSettles.release();
-  await vi.advanceTimersByTimeAsync(0);
+  const stopping = await stoppingOfTheTickAcross(loop, heldSettles);
 
-  expect(isStoppedBeforeTheAnswer).toBe(false);
-  expect(isStopped).toBe(true);
+  expect(stopping).toEqual({ isStoppedBeforeTheAnswer: false, isStoppedAfterTheAnswer: true });
   expect(engine.storedRunOf("send-email-1")).toMatchObject({ state: "failed", reason: "stalled" });
   expect(messagesOf(lines)).toEqual(["run failed"]);
 });
@@ -1188,4 +1198,277 @@ test("an unreadable reply is logged once as worker error, and the loop goes on a
     { level: "error", message: "worker error", fields: { err: unreadableReply } },
   ]);
   expect(engine.storedRunOf("send-email-1")?.state).toBe("completed");
+});
+
+const HOURLY: Schedule = { cron: "0 * * * *" };
+
+const ONE_AM = Date.UTC(2030, 0, 1, 1);
+
+function scheduledTaskOf(name: string, schedule: Schedule): AnyTaskDefinition {
+  return defineScheduledTask(name, { schedule, retries: 1, handler: async () => undefined }) as AnyTaskDefinition;
+}
+
+async function bootSync(engine: InMemoryEngine, tasks: readonly AnyTaskDefinition[]): Promise<void> {
+  const { logger } = createRecordingLogger();
+  await syncDeclaredSchedules({ engine, definitions: workerDefinitionsOf(tasks), logger });
+}
+
+async function engineSyncedWith(tasks: readonly AnyTaskDefinition[]): Promise<InMemoryEngine> {
+  const engine = createInMemoryEngine();
+  await bootSync(engine, tasks);
+  return engine;
+}
+
+function firedScheduledAtsOf(engine: InMemoryEngine): string[] {
+  const firedRunIds = new Set(requestsOf<FireRequest>(engine, "fire").map(({ runId }) => runId));
+  return [...firedRunIds].flatMap((runId) => {
+    const scheduledAt = engine.storedRunOf(runId)?.scheduledAt;
+    return scheduledAt === undefined ? [] : [new Date(scheduledAt).toISOString()];
+  });
+}
+
+type Firings = { fireRequestInstants: EpochMilliseconds[]; firedScheduledAts: string[] };
+
+function firingsOf(engine: InMemoryEngine): Firings {
+  return {
+    fireRequestInstants: requestsOf<FireRequest>(engine, "fire").map(({ instant }) => instant),
+    firedScheduledAts: firedScheduledAtsOf(engine),
+  };
+}
+
+const FIRED_ONCE_AT_ONE_AM_BY_TWO_FIRE_REQUESTS: Firings = {
+  fireRequestInstants: [ONE_AM, ONE_AM],
+  firedScheduledAts: ["2030-01-01T01:00:00.000Z"],
+};
+
+const TIMING_KEEPING_COMPLETED_RUNS: WorkerTiming = {
+  ...DEFAULT_WORKER_TIMING,
+  completedRunRetention: { maxAgeInMilliseconds: 30 * 24 * 60 * MINUTE_IN_MILLISECONDS, maxRunCount: 1000 },
+};
+
+async function tickAtEachNextFiring(engine: InMemoryEngine, task: string, firingCount: number): Promise<void> {
+  for (let firing = 0; firing < firingCount; firing += 1) {
+    vi.setSystemTime(engine.storedScheduleOf(task)!.nextFiringAt);
+    await vi.advanceTimersByTimeAsync(1_000);
+  }
+}
+
+test("two loops ticking the same instant fire once, and the loser writes nothing", async () => {
+  const buildReport = scheduledTaskOf("build-report", HOURLY);
+  const engine = await engineSyncedWith([buildReport]);
+  vi.setSystemTime(ONE_AM - 500);
+  const heldFires = engine.holdCalls("fire");
+  const firstLoop = startedLoopOf([buildReport], { engine });
+  const secondLoop = startedLoopOf([buildReport], { engine });
+  await vi.advanceTimersByTimeAsync(1_000);
+
+  heldFires.release();
+  await vi.advanceTimersByTimeAsync(1_000);
+
+  expect(firingsOf(engine)).toEqual(FIRED_ONCE_AT_ONE_AM_BY_TWO_FIRE_REQUESTS);
+  expect([...messagesOf(firstLoop.lines), ...messagesOf(secondLoop.lines)].sort()).toEqual([
+    "attempt started",
+    "run completed",
+  ]);
+});
+
+test("every line of a fired run carries its scheduledAt, and the firing itself writes no line", async () => {
+  const buildReport = scheduledTaskOf("build-report", HOURLY);
+  const engine = await engineSyncedWith([buildReport]);
+  vi.setSystemTime(ONE_AM - 500);
+  const { lines } = startedLoopOf([buildReport], { engine });
+
+  await vi.advanceTimersByTimeAsync(1_000);
+
+  const runFields = {
+    task: "build-report",
+    runId: deriveFiringRunId("build-report", ONE_AM),
+    attempt: 1,
+    scheduledAt: "2030-01-01T01:00:00.000Z",
+  };
+  expect(lines).toEqual([
+    { level: "debug", message: "attempt started", fields: runFields },
+    { level: "info", message: "run completed", fields: expect.objectContaining(runFields) as unknown },
+  ]);
+  expect(requestsOf<FireRequest>(engine, "fire")).toEqual([
+    {
+      task: "build-report",
+      instant: ONE_AM,
+      instantAfter: ONE_AM + 60 * MINUTE_IN_MILLISECONDS,
+      runId: deriveFiringRunId("build-report", ONE_AM),
+      retries: 1,
+    },
+  ]);
+});
+
+test("a worker whose release does not schedule a stored task never fires it", async () => {
+  const engine = await engineSyncedWith([
+    scheduledTaskOf("build-report", HOURLY),
+    scheduledTaskOf("send-digest", HOURLY),
+  ]);
+  vi.setSystemTime(ONE_AM - 500);
+  const unscheduledBuildReport = defineTask("build-report", { schema: v.object({}), handler: async () => undefined });
+  startedLoopOf([unscheduledBuildReport as AnyTaskDefinition, scheduledTaskOf("send-digest", HOURLY)], { engine });
+
+  await vi.advanceTimersByTimeAsync(5_000);
+
+  expect(requestsOf<TickRequest>(engine, "tick")[0]?.scheduledTaskNames).toEqual(["send-digest"]);
+  expect(requestsOf<FireRequest>(engine, "fire").map(({ task }) => task)).toEqual(["send-digest"]);
+  expect(engine.storedScheduleOf("build-report")?.nextFiringAt).toBe(ONE_AM);
+});
+
+const RESTARTED_AT = Date.UTC(2030, 0, 1, 3, 30);
+
+test("a worker restarted after three missed instants fires once with the first planned instant as scheduledAt and skips the rest", async () => {
+  const buildReport = scheduledTaskOf("build-report", HOURLY);
+  const engine = await engineSyncedWith([buildReport]);
+  vi.setSystemTime(RESTARTED_AT);
+  await bootSync(engine, [buildReport]);
+  startedLoopOf([buildReport], { engine });
+
+  await vi.advanceTimersByTimeAsync(5_000);
+
+  expect(firedScheduledAtsOf(engine)).toEqual(["2030-01-01T01:00:00.000Z"]);
+  expect(requestsOf<FireRequest>(engine, "fire")).toHaveLength(1);
+  expect(engine.storedScheduleOf("build-report")?.nextFiringAt).toBe(Date.UTC(2030, 0, 1, 4));
+});
+
+test("a worker restarted after three missed instants with a cron changed at its boot fires none of them", async () => {
+  const engine = await engineSyncedWith([scheduledTaskOf("build-report", HOURLY)]);
+  vi.setSystemTime(RESTARTED_AT);
+  const changedBuildReport = scheduledTaskOf("build-report", { cron: "45 * * * *" });
+  await bootSync(engine, [changedBuildReport]);
+  startedLoopOf([changedBuildReport], { engine });
+
+  await vi.advanceTimersByTimeAsync(5_000);
+
+  expect(requestsOf<FireRequest>(engine, "fire")).toEqual([]);
+  expect(engine.storedScheduleOf("build-report")?.nextFiringAt).toBe(Date.UTC(2030, 0, 1, 3, 45));
+});
+
+const EUROPE_PARIS_DAYLIGHT_SAVING_SEQUENCES = [
+  {
+    description: "at the spring change, 30 2 * * * fires once, at 03:30 summer time",
+    cron: "30 2 * * *",
+    bootedAt: Date.UTC(2030, 2, 30, 12),
+    firedScheduledAts: ["2030-03-31T01:30:00.000Z", "2030-04-01T00:30:00.000Z", "2030-04-02T00:30:00.000Z"],
+  },
+  {
+    description: "at the autumn change, 30 2 * * * fires once, at the first 02:30",
+    cron: "30 2 * * *",
+    bootedAt: Date.UTC(2030, 9, 26, 12),
+    firedScheduledAts: ["2030-10-27T00:30:00.000Z", "2030-10-28T01:30:00.000Z", "2030-10-29T01:30:00.000Z"],
+  },
+  {
+    description: "at the autumn change, 0 * * * * fires at both 02:00s",
+    cron: "0 * * * *",
+    bootedAt: Date.UTC(2030, 9, 26, 23, 30),
+    firedScheduledAts: ["2030-10-27T00:00:00.000Z", "2030-10-27T01:00:00.000Z", "2030-10-27T02:00:00.000Z"],
+  },
+];
+
+for (const { description, cron, bootedAt, firedScheduledAts } of EUROPE_PARIS_DAYLIGHT_SAVING_SEQUENCES) {
+  test(`in Europe/Paris ${description}`, async () => {
+    vi.setSystemTime(bootedAt);
+    const buildReport = scheduledTaskOf("build-report", { cron, timezone: "Europe/Paris" });
+    const engine = await engineSyncedWith([buildReport]);
+    startedLoopOf([buildReport], { engine, timing: TIMING_KEEPING_COMPLETED_RUNS });
+
+    await tickAtEachNextFiring(engine, "build-report", firedScheduledAts.length);
+
+    expect(firedScheduledAtsOf(engine)).toEqual(firedScheduledAts);
+  });
+}
+
+test("two releases with different crons on one record fire one sequence, from the record's cron", async () => {
+  const olderBuildReport = scheduledTaskOf("build-report", { cron: "30 * * * *" });
+  const newerBuildReport = scheduledTaskOf("build-report", HOURLY);
+  const engine = await engineSyncedWith([olderBuildReport]);
+  await bootSync(engine, [newerBuildReport]);
+  startedLoopOf([olderBuildReport], { engine, timing: TIMING_KEEPING_COMPLETED_RUNS });
+  startedLoopOf([newerBuildReport], { engine, timing: TIMING_KEEPING_COMPLETED_RUNS });
+
+  await tickAtEachNextFiring(engine, "build-report", 3);
+
+  expect(firedScheduledAtsOf(engine)).toEqual([
+    "2030-01-01T01:00:00.000Z",
+    "2030-01-01T02:00:00.000Z",
+    "2030-01-01T03:00:00.000Z",
+  ]);
+  expect(engine.storedScheduleOf("build-report")?.nextFiringAt).toBe(Date.UTC(2030, 0, 1, 4));
+});
+
+test("a lost fire reply fires nothing twice: the resend after the outage hears already and writes nothing", async () => {
+  const buildReport = scheduledTaskOf("build-report", HOURLY);
+  const engine = await engineSyncedWith([buildReport]);
+  vi.setSystemTime(ONE_AM - 500);
+  const recordingLogger = createRecordingLogger();
+  const simulatedRedisOutage = createSimulatedRedisOutage(recordingLogger.logger);
+  let isFireReplyLost = true;
+  const fireWhoseFirstReplyIsLost: WorkerLoopEngine["fire"] = async (request) => {
+    const reply = await engine.fire(request);
+    if (!isFireReplyLost) {
+      return reply;
+    }
+    isFireReplyLost = false;
+    simulatedRedisOutage.startOutage();
+    throw UNANSWERED_COMMAND_ERROR;
+  };
+  const { lines } = startedLoopOf([buildReport], {
+    engine,
+    loopEngine: engineAwayDuringOutage(
+      { ...engine, fire: fireWhoseFirstReplyIsLost },
+      simulatedRedisOutage,
+      "rejected",
+    ),
+    recordingLogger,
+    simulatedRedisOutage,
+  });
+  await vi.advanceTimersByTimeAsync(1_000);
+
+  simulatedRedisOutage.endOutage();
+  await vi.advanceTimersByTimeAsync(1_000);
+
+  expect(firingsOf(engine)).toEqual(FIRED_ONCE_AT_ONE_AM_BY_TWO_FIRE_REQUESTS);
+  expect(messagesOf(lines).sort()).toEqual([
+    "attempt started",
+    "connection error",
+    "connection restored",
+    "run completed",
+  ]);
+});
+
+test("stopTicking with a fire in flight resolves once the fire answers, and the firing's run is created", async () => {
+  const buildReport = scheduledTaskOf("build-report", HOURLY);
+  const engine = await engineSyncedWith([buildReport]);
+  vi.setSystemTime(ONE_AM - 500);
+  const heldFires = engine.holdCalls("fire");
+  const { loop } = startedLoopOf([buildReport], { engine });
+  await vi.advanceTimersByTimeAsync(1_000);
+
+  const stopping = await stoppingOfTheTickAcross(loop, heldFires);
+
+  expect(stopping).toEqual({ isStoppedBeforeTheAnswer: false, isStoppedAfterTheAnswer: true });
+  expect(engine.storedRunOf(deriveFiringRunId("build-report", ONE_AM))?.scheduledAt).toBe(ONE_AM);
+});
+
+test("a stored cron this release cannot parse writes one worker error, and the other due schedules still fire", async () => {
+  const tasks = [scheduledTaskOf("build-report", HOURLY), scheduledTaskOf("send-digest", HOURLY)];
+  const engine = createInMemoryEngine();
+  await engine.syncSchedules({
+    schedulesToSync: [
+      { task: "build-report", cron: "not a cron", timezone: "UTC", nextFiringAt: ONE_AM },
+      { task: "send-digest", cron: "0 * * * *", timezone: "UTC", nextFiringAt: ONE_AM },
+    ],
+  });
+  vi.setSystemTime(ONE_AM - 500);
+  const { lines } = startedLoopOf(tasks, { engine });
+
+  await vi.advanceTimersByTimeAsync(1_000);
+
+  expect(linesWithMessage(lines, "worker error")).toEqual([
+    { level: "error", message: "worker error", fields: { err: expect.any(Error) as unknown } },
+  ]);
+  expect(requestsOf<FireRequest>(engine, "fire").map(({ task }) => task)).toEqual(["send-digest"]);
+  expect(firedScheduledAtsOf(engine)).toEqual(["2030-01-01T01:00:00.000Z"]);
 });

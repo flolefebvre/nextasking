@@ -77,5 +77,6 @@ export function engineAwayDuringOutage(
     tick: awayDuringOutage(engine.tick),
     saveStep: awayDuringOutage(engine.saveStep),
     readStep: awayDuringOutage(engine.readStep),
+    fire: awayDuringOutage(engine.fire),
   };
 }

@@ -15,6 +15,7 @@ import {
   SEND_EMAIL_PRUNE_REQUEST,
 } from "./ended-runs.js";
 import { freshLockTokensOf } from "./lock-tokens.js";
+import { REPLIED_EMPTY_PROMOTE, REPLIED_ONE_RENEWAL, repliedOf } from "./tick-replies.js";
 
 export type ContractEngine = Pick<
   Engine,
@@ -389,29 +390,40 @@ export function defineEngineContractTests(contractTest: EngineContractTest): voi
     },
   );
 
-  contractTest("a tick promotes, renews the held locks and lists the task names in one reply", async (harness) => {
-    const { engine } = harness;
-    await engine.enqueue({ runs: sendEmailRunsOf(["held-run", "stalled-run"]) });
-    const [heldRun] = await lockedRunsOf(engine, 2);
-    await harness.expireLock("stalled-run");
+  for (const isPromoteIncluded of [true, false]) {
+    contractTest(
+      isPromoteIncluded
+        ? "a tick promotes, renews the held locks and lists the task names in one reply"
+        : "a tick leaving the promote out stalls nothing and still renews",
+      async (harness) => {
+        const { engine } = harness;
+        await engine.enqueue({ runs: sendEmailRunsOf(["held-run", "stalled-run"]) });
+        const [heldRun] = await lockedRunsOf(engine, 2);
+        await harness.expireLock("stalled-run");
 
-    const reply = await engine.tick({
-      heldLocks: [{ runId: heldRun!.runId, lockToken: heldRun!.lockToken }],
-      lockDurationInMilliseconds: LOCK_DURATION_IN_MILLISECONDS,
-    });
+        const reply = await engine.tick({
+          heldLocks: [{ runId: heldRun!.runId, lockToken: heldRun!.lockToken }],
+          lockDurationInMilliseconds: LOCK_DURATION_IN_MILLISECONDS,
+          isPromoteIncluded,
+        });
 
-    expect(reply).toEqual({
-      promote: {
-        kind: "promoted",
-        promotedRunCount: 0,
-        stalledRuns: [{ runId: "stalled-run", task: "send-email", attempt: 1, stalls: 1 }],
-        thirdStalls: [],
+        expect(reply).toEqual({
+          promote: isPromoteIncluded
+            ? repliedOf({
+                kind: "promoted",
+                promotedRunCount: 0,
+                stalledRuns: [{ runId: "stalled-run", task: "send-email", attempt: 1, stalls: 1 }],
+                thirdStalls: [],
+              })
+            : undefined,
+          renewals: REPLIED_ONE_RENEWAL,
+          prune: undefined,
+          taskNames: repliedOf(["send-email"]),
+        });
+        expect(await harness.stateOf("stalled-run")).toBe(isPromoteIncluded ? "pending" : "executing");
       },
-      renewals: [{ kind: "renewed", lockedUntil: expect.any(Number) }],
-      prune: undefined,
-      taskNames: ["send-email"],
-    });
-  });
+    );
+  }
 
   contractTest(
     "a saved step reads back under its lock, and a step call after the settle hears stale",
@@ -574,10 +586,10 @@ export function defineEngineContractTests(contractTest: EngineContractTest): voi
     });
 
     expect(reply).toEqual({
-      promote: { kind: "promoted", promotedRunCount: 0, stalledRuns: [], thirdStalls: [] },
-      renewals: [],
-      prune: { kind: "pruned", prunedRunCount: 1 },
-      taskNames: ["send-email"],
+      promote: REPLIED_EMPTY_PROMOTE,
+      renewals: repliedOf([]),
+      prune: repliedOf({ kind: "pruned", prunedRunCount: 1 }),
+      taskNames: repliedOf(["send-email"]),
     });
     expect(await harness.stateOf("aged-run")).toBeUndefined();
   });

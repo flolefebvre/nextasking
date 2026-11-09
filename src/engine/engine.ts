@@ -266,13 +266,16 @@ export type TickRequest = {
   heldLocks: readonly HeldLock[];
   lockDurationInMilliseconds: DurationInMilliseconds;
   prune?: PruneRequest;
+  isPromoteIncluded?: boolean;
 };
 
+export type TickCommandReply<Reply> = { kind: "replied"; reply: Reply } | { kind: "failed"; error: Error };
+
 export type TickReply = {
-  promote: PromoteReply;
-  renewals: LockRenewal[];
-  prune: PruneReply | undefined;
-  taskNames: string[];
+  promote: TickCommandReply<PromoteReply> | undefined;
+  renewals: TickCommandReply<LockRenewal[]>;
+  taskNames: TickCommandReply<string[]>;
+  prune: TickCommandReply<PruneReply> | undefined;
 };
 
 export type Engine = {
@@ -787,21 +790,45 @@ function renewArgumentsOf({ heldLocks, lockDurationInMilliseconds }: RenewReques
 
 function taskNamesOf(reply: unknown): string[] {
   if (!isStringList(reply)) {
-    throw unreadableReplyError("tick", reply);
+    throw new Error(`The SMEMBERS of the task names sent a reply the engine cannot read: ${JSON.stringify(reply)}`);
   }
   return reply;
 }
 
-function pipelineRepliesOf(results: [error: Error | null, reply: unknown][] | null): unknown[] {
+type PipelineResult = [error: Error | null, reply: unknown];
+
+function tickCommandReplyOf<Reply>(
+  [error, reply]: PipelineResult,
+  readReply: (reply: unknown) => Reply,
+): TickCommandReply<Reply> {
+  if (error !== null) {
+    return { kind: "failed", error };
+  }
+  try {
+    return { kind: "replied", reply: readReply(reply) };
+  } catch (readError) {
+    return { kind: "failed", error: readError as Error };
+  }
+}
+
+function tickReplyOf(results: PipelineResult[] | null, request: TickRequest): TickReply {
   if (results === null) {
     throw new Error("The tick pipeline was discarded before it ran");
   }
-  return results.map(([error, reply]) => {
-    if (error !== null) {
-      throw error;
+  const remainingResults = [...results];
+  const nextCommandReplyOf = <Reply>(readReply: (reply: unknown) => Reply): TickCommandReply<Reply> => {
+    const result = remainingResults.shift();
+    if (result === undefined) {
+      throw new Error(`The tick pipeline answered ${String(results.length)} commands, fewer than it sent`);
     }
-    return reply;
-  });
+    return tickCommandReplyOf(result, readReply);
+  };
+  return {
+    promote: request.isPromoteIncluded === false ? undefined : nextCommandReplyOf(promoteReplyOf),
+    renewals: nextCommandReplyOf(renewalsOf),
+    taskNames: nextCommandReplyOf(taskNamesOf),
+    prune: request.prune === undefined ? undefined : nextCommandReplyOf(pruneReplyOf),
+  };
 }
 
 export function createEngine(client: Redis, prefix: string): Engine {
@@ -886,19 +913,15 @@ export function createEngine(client: Redis, prefix: string): Engine {
     promote: async () => promoteReplyOf(await runPromoteScript(PROMOTE_ARGUMENTS)),
     tick: async (request) => {
       const pipeline = client.pipeline();
-      runPromoteScript.appendTo(pipeline, PROMOTE_ARGUMENTS);
+      if (request.isPromoteIncluded !== false) {
+        runPromoteScript.appendTo(pipeline, PROMOTE_ARGUMENTS);
+      }
       runRenewScript.appendTo(pipeline, renewArgumentsOf(request));
       pipeline.smembers(keys.tasks);
       if (request.prune !== undefined) {
         runPruneScript.appendTo(pipeline, pruneKeysOf(keys, request.prune.task), pruneArgumentsOf(request.prune));
       }
-      const [promoteReply, renewReply, taskNamesReply, pruneReply] = pipelineRepliesOf(await pipeline.exec());
-      return {
-        promote: promoteReplyOf(promoteReply),
-        renewals: renewalsOf(renewReply),
-        prune: request.prune === undefined ? undefined : pruneReplyOf(pruneReply),
-        taskNames: taskNamesOf(taskNamesReply),
-      };
+      return tickReplyOf(await pipeline.exec(), request);
     },
     settle: async ({ runId, lockToken, outcome, concurrencyLimit }) =>
       settleReplyOf(

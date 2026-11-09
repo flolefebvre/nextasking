@@ -206,14 +206,24 @@ export function startWorkerLoop(config: WorkerLoopConfig): WorkerLoop {
       lockDurationInMilliseconds,
       ...(prune === undefined ? {} : { prune }),
     });
-    for (const [position, renewal] of reply.renewals.entries()) {
-      const renewedAttempt = renewedAttempts[position];
-      if (renewal.kind === "renewed" && renewedAttempt !== undefined) {
-        renewedAttempt.lockExpiresAtByWorkerClock = tickSentAt + lockDurationInMilliseconds;
+    lastPrunedTaskName = prune?.task;
+    if (reply.renewals.kind === "replied") {
+      for (const [position, renewal] of reply.renewals.reply.entries()) {
+        const renewedAttempt = renewedAttempts[position];
+        if (renewal.kind === "renewed" && renewedAttempt !== undefined) {
+          renewedAttempt.lockExpiresAtByWorkerClock = tickSentAt + lockDurationInMilliseconds;
+        }
       }
     }
-    lastPrunedTaskName = prune?.task;
-    knownTaskNames = reply.taskNames;
+    if (reply.taskNames.kind === "replied") {
+      knownTaskNames = reply.taskNames.reply;
+    }
+    writeLifecycleLines(
+      logger,
+      [reply.promote, reply.renewals, reply.taskNames, reply.prune].flatMap((commandReply) =>
+        commandReply?.kind === "failed" ? [workerErrorLineOf(commandReply.error)] : [],
+      ),
+    );
   };
 
   const tickTimer = setInterval(() => {

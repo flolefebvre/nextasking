@@ -365,6 +365,44 @@ test("a tick prunes one task per tick, round robin over the task names", async (
   });
 });
 
+test("a tick whose prune fails still applies its renewals, writes one worker error, and the next tick prunes the next task", async () => {
+  const handlerGate = createHandlerGate();
+  const sendEmail = defineTask("send-email", { schema: v.object({}), handler: handlerGate.enter });
+  const engine = createInMemoryEngine();
+  await engine.enqueue({
+    runs: [
+      ...runsOf("send-email", 1),
+      ...runsOf("resize-image", 1, { delayInMilliseconds: 60 * MINUTE_IN_MILLISECONDS }),
+    ],
+  });
+  const tickWithAFailedPruneWhenItRenews: WorkerLoopEngine["tick"] = async (request) => {
+    const reply = await engine.tick(request);
+    return request.heldLocks.length > 0 && request.prune !== undefined
+      ? { ...reply, prune: { kind: "failed", error: new Error("WRONGTYPE Operation against a key") } }
+      : reply;
+  };
+  const { lines } = startedLoopOf([sendEmail] as AnyTaskDefinition[], {
+    engine,
+    loopEngine: { ...engine, tick: tickWithAFailedPruneWhenItRenews },
+  });
+
+  await vi.advanceTimersByTimeAsync(63_000);
+
+  const ticks = requestsOf<TickRequest>(engine, "tick");
+  const renewingTickPosition = ticks.findIndex(({ heldLocks }) => heldLocks.length > 0);
+  const [renewingTick, nextTick] = ticks.slice(renewingTickPosition);
+  expect(ticks.filter(({ heldLocks }) => heldLocks.length > 0)).toHaveLength(1);
+  expect(nextTick?.prune?.task).not.toBe(renewingTick?.prune?.task);
+  expect(linesWithMessage(lines, "worker error")).toEqual([
+    {
+      level: "error",
+      message: "worker error",
+      fields: { err: expect.objectContaining({ message: expect.stringContaining("WRONGTYPE") }) },
+    },
+  ]);
+  expect(engine.storedRunOf("send-email-1")?.state).toBe("executing");
+});
+
 test("a pickup after a suspend writes run resumed, and a pickup after a stall writes attempt started with the same attempt", async () => {
   const handlerGate = createHandlerGate();
   const tasks = [

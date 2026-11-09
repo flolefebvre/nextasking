@@ -36,6 +36,7 @@ import type {
   SettleRequest,
   StalledRun,
   ThirdStall,
+  TickCommandReply,
   TickReply,
   TickRequest,
 } from "../src/engine/engine.js";
@@ -687,15 +688,18 @@ export function createInMemoryEngine({ now = () => Date.now() }: InMemoryEngineO
     return { kind: "pruned", prunedRunCount: prunedRunIds.size };
   };
 
+  const replied = <Reply>(reply: Reply): TickCommandReply<Reply> => ({ kind: "replied", reply });
+
   const tick = async ({
     heldLocks,
     lockDurationInMilliseconds,
     prune: pruneRequest,
+    isPromoteIncluded = true,
   }: TickRequest): Promise<TickReply> => ({
-    promote: await promote(),
-    renewals: await renew({ heldLocks, lockDurationInMilliseconds }),
-    prune: pruneRequest === undefined ? undefined : await prune(pruneRequest),
-    taskNames: [...taskNames],
+    promote: isPromoteIncluded ? replied(await promote()) : undefined,
+    renewals: replied(await renew({ heldLocks, lockDurationInMilliseconds })),
+    taskNames: replied([...taskNames]),
+    prune: pruneRequest === undefined ? undefined : replied(await prune(pruneRequest)),
   });
 
   const recorded =

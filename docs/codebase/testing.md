@@ -93,6 +93,7 @@
 
 ## Under contention
 
-- Run `pnpm test:integration:contended` five times in a row, reading `uptime` before and after each, when a change adds or changes an integration scenario that waits on a reconnect, a deadline, a stall, a shutdown or several connections, or bounds a duration; each run passed only if it ends with `--test:integration:contended OK--`. It is in neither `check`, `gate` nor CI.
+- Run `pnpm test:integration:contended` five times in a row when a change adds or changes an integration scenario that waits on a reconnect, a deadline, a stall, a shutdown or several connections, or bounds a duration. The ticket's own tests fail in none of the five runs; every run is reported with `uptime` before and after; a failure in another test is named with its first assertion line and added to the tracker, not chased in that PR and not re-run away. A run passed only if it ends with `--test:integration:contended OK--`. It is in neither `check`, `gate` nor CI.
+- When measuring on part of the suite, pass the test files' paths explicitly: `vitest run --project integration --exclude <file>` ignores `--exclude` under this projects config.
 - It runs the integration project twice at once, each run on a container of its own. A CPU hog does not reproduce the failures the suite shows on a busy machine and a second suite does: what contends is the suite's own work, fresh connections to the containers (about 250 ms instead of 13) and the event loop of a test process opening them (stalls of hundreds of milliseconds instead of tens).
 - Killed, it leaves its two runs to end on their own within about a minute, and testcontainers' reaper removes their containers.

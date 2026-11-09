@@ -21,7 +21,10 @@ export default defineConfig([
     extends: [tseslint.configs.recommended],
     plugins: { "no-comments": noComments },
     rules: {
-      "no-comments/disallowComments": ["error", { allow: ["eslint", "global", "@ts-", "prettier-ignore"] }],
+      "no-comments/disallowComments": [
+        "error",
+        { allow: ["eslint", "global", "@ts-", "prettier-ignore", "/ <reference "] },
+      ],
     },
   },
   {

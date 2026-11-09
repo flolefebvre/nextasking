@@ -1,3 +1,5 @@
+/// <reference types="node" preserve="true" />
+
 export { runFailed } from "./built-in-events.js";
 export type { FailureNoticeError, RunFailedPayload } from "./built-in-events.js";
 export type { ConnectionConfig } from "./connection.js";

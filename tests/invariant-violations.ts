@@ -21,6 +21,8 @@ type TestInvariants = {
   checkStoredKeysOn: (redisUrl: string) => Promise<void>;
 };
 
+export const CLOSE_BOUND_PAST_THE_SHUTDOWN_TIMEOUT_IN_MILLISECONDS = 2000;
+
 let invariantsOfCurrentTest: TestInvariants | undefined;
 
 export function invariantsOfCurrentTestIfAny(): TestInvariants | undefined {

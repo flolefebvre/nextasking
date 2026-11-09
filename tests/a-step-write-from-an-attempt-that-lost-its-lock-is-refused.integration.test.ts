@@ -3,8 +3,9 @@ import { z } from "zod";
 
 import { engineKeysOf } from "../src/engine/engine-keys.js";
 import { createNextasking, defineTask } from "../src/index.js";
-import { closeNextasking } from "../src/registry.js";
+import { closeNextaskingAndCheckItsDuration } from "./close-nextasking-and-check-its-duration.js";
 import { integrationTest } from "./integration-test.js";
+import { createRecordingLogger } from "./recording-logger.js";
 import { savedSteps } from "./saved-steps.js";
 import { runLeftExecutingSentenceOf } from "./stored-key-violations.js";
 import { withRedis } from "./with-redis.js";
@@ -32,6 +33,7 @@ integrationTest(
     const nextasking = createNextasking({
       connection: { url: redisUrl },
       prefix: keyPrefix,
+      logger: createRecordingLogger().logger,
       tasks: [sendNewsletter],
     });
 
@@ -52,7 +54,7 @@ integrationTest(
       });
       expect(steps.serializedResultsByStepId).toEqual({ "pick-recipients": '[["ada@example.com"]]' });
     } finally {
-      await closeNextasking(nextasking);
+      await closeNextaskingAndCheckItsDuration(nextasking);
     }
   },
 );

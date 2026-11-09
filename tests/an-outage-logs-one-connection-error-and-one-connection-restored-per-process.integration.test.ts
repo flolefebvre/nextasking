@@ -37,6 +37,5 @@ integrationTest(
     await vi.waitFor(() => expect(completedEmails).toContain("grace@example.com"), { timeout: 10_000 });
 
     expectOneConnectionErrorAndOneConnectionRestored(lines);
-    expect(lines.filter((line) => line.message === "worker error")).toEqual([]);
   },
 );

@@ -3,7 +3,7 @@ import { z } from "zod";
 
 import { RunNotReplayableError, UnknownTaskError, createNextasking, defineTask } from "../src/index.js";
 import type { Logger } from "../src/index.js";
-import { closeNextasking } from "../src/registry.js";
+import { closeNextaskingAndCheckItsDuration } from "./close-nextasking-and-check-its-duration.js";
 import { integrationTest } from "./integration-test.js";
 import { createRecordingLogger, waitForLogMessage } from "./recording-logger.js";
 import { engineKeysOf } from "../src/engine/engine-keys.js";
@@ -77,7 +77,7 @@ integrationTest(
         replays: "1",
       });
     } finally {
-      await closeNextasking(nextasking);
+      await closeNextaskingAndCheckItsDuration(nextasking);
     }
   },
 );
@@ -93,7 +93,7 @@ integrationTest(
       await worker.startWorker();
       const { runId } = await worker.dispatch("charge-invoice", { invoiceId: "inv-7" });
       await waitForLogMessage(lines, "run failed");
-      await closeNextasking(worker);
+      await closeNextaskingAndCheckItsDuration(worker);
       await withRedis(redisUrl, (redis) =>
         redis.hset(
           engineKeysOf(keyPrefix).runRecord("charge-invoice", runId),
@@ -122,8 +122,8 @@ integrationTest(
         steps: [{ id: "create-charge", result: { chargeId: "ch-7" } }],
       });
     } finally {
-      await closeNextasking(worker);
-      await closeNextasking(operator);
+      await closeNextaskingAndCheckItsDuration(worker);
+      await closeNextaskingAndCheckItsDuration(operator);
     }
   },
 );
@@ -151,7 +151,7 @@ integrationTest("a replayed run that fails again keeps only its new life's error
       replays: "1",
     });
   } finally {
-    await closeNextasking(nextasking);
+    await closeNextaskingAndCheckItsDuration(nextasking);
   }
 });
 
@@ -191,7 +191,7 @@ integrationTest(
       expect(unknownTaskReplayError).toBeInstanceOf(UnknownTaskError);
       expect(lines.map((line) => line.message)).not.toContain("run replayed");
     } finally {
-      await closeNextasking(nextasking);
+      await closeNextaskingAndCheckItsDuration(nextasking);
     }
   },
 );

@@ -3,8 +3,9 @@ import { CronExpressionParser } from "cron-parser";
 import { z } from "zod";
 
 import { createNextasking, defineScheduledTask, defineTask } from "../src/index.js";
-import { closeNextasking } from "../src/registry.js";
+import { closeNextaskingAndCheckItsDuration } from "./close-nextasking-and-check-its-duration.js";
 import { integrationTest } from "./integration-test.js";
+import { createRecordingLogger } from "./recording-logger.js";
 import { moveNextFiringTo } from "./stored-schedules.js";
 
 integrationTest(
@@ -14,6 +15,7 @@ integrationTest(
     const nextasking = createNextasking({
       connection: { url: redisUrl },
       prefix: keyPrefix,
+      logger: createRecordingLogger().logger,
       tasks: [
         defineScheduledTask("purge-expired-sessions", {
           schedule: { cron: "0 3 * * *", timezone: "Europe/Paris" },
@@ -61,7 +63,7 @@ integrationTest(
       expect(purgeSchedule?.nextFiringAt?.getTime()).toBeGreaterThan(Date.now());
       expect(schedulesBeforeAFiring[0]?.nextFiringAt?.getTime()).toBeGreaterThan(plannedInstant);
     } finally {
-      await closeNextasking(nextasking);
+      await closeNextaskingAndCheckItsDuration(nextasking);
     }
   },
 );

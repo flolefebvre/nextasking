@@ -2,7 +2,7 @@ import { expect } from "vitest";
 import { z } from "zod";
 
 import { createNextasking, defineTask } from "../src/index.js";
-import { closeNextasking } from "../src/registry.js";
+import { closeNextaskingAndCheckItsDuration } from "./close-nextasking-and-check-its-duration.js";
 import { integrationTest } from "./integration-test.js";
 import { createRecordingLogger, waitForLogMessage } from "./recording-logger.js";
 
@@ -43,7 +43,7 @@ integrationTest(
       expect(chargesSeenByAttempt).toStrictEqual([{ chargeId: "ch-for-inv-7" }, { chargeId: "ch-for-inv-7" }]);
       expect(lines.filter((line) => line.message === "attempt started")).toHaveLength(2);
     } finally {
-      await closeNextasking(nextasking);
+      await closeNextaskingAndCheckItsDuration(nextasking);
     }
   },
 );

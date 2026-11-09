@@ -1,6 +1,6 @@
 import { expect, vi } from "vitest";
 
-import { closeNextasking } from "../src/registry.js";
+import { closeNextaskingAndCheckItsDuration } from "./close-nextasking-and-check-its-duration.js";
 import { EVICTING_POLICY_REJECTION, startEvictingServer } from "./evicting-server.js";
 import { createGiveUpAfterOneSecondNextasking } from "./give-up-after-one-second-nextasking.js";
 import { integrationTest } from "./integration-test.js";
@@ -27,7 +27,7 @@ integrationTest(
       expect(lines.map((line) => line.message)).not.toContain("maxmemory-policy unreadable");
       expect(lines.map((line) => line.message)).toContain("worker started");
     } finally {
-      await closeNextasking(nextasking);
+      await closeNextaskingAndCheckItsDuration(nextasking);
       await withRedis(redisUrl, (redis) => redis.call("ACL", "DELUSER", userDeniedConfig));
     }
   },
@@ -54,7 +54,7 @@ integrationTest.skipIf(providedRedisUrl() !== undefined)(
       await expect(
         foregroundNextasking.startWorker({ onWorkerNotStarted: foregroundOnWorkerNotStarted }),
       ).rejects.toThrow(EVICTING_POLICY_REJECTION);
-      await closeNextasking(foregroundNextasking);
+      await closeNextaskingAndCheckItsDuration(foregroundNextasking);
       await evictingServer.proxy.cut();
       await backgroundNextasking.startWorker({ onWorkerNotStarted: backgroundOnWorkerNotStarted });
       await evictingServer.proxy.restore();
@@ -75,8 +75,8 @@ integrationTest.skipIf(providedRedisUrl() !== undefined)(
       expect(foregroundOnWorkerNotStarted).not.toHaveBeenCalled();
       expect(process.exitCode).toBe(exitCodeBefore);
     } finally {
-      await closeNextasking(foregroundNextasking);
-      await closeNextasking(backgroundNextasking);
+      await closeNextaskingAndCheckItsDuration(foregroundNextasking);
+      await closeNextaskingAndCheckItsDuration(backgroundNextasking);
       await evictingServer.stop();
     }
   },

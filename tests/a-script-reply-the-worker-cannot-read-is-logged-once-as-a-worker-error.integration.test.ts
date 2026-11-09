@@ -3,7 +3,7 @@ import { z } from "zod";
 
 import { engineKeysOf, storedRunIdOf } from "../src/engine/engine-keys.js";
 import { createNextasking, defineTask, NonRetriableError } from "../src/index.js";
-import { closeNextasking } from "../src/registry.js";
+import { closeNextaskingAndCheckItsDuration } from "./close-nextasking-and-check-its-duration.js";
 import { integrationTest } from "./integration-test.js";
 import { createRecordingLogger, waitForLogMessage } from "./recording-logger.js";
 import { withRedis } from "./with-redis.js";
@@ -45,6 +45,8 @@ integrationTest(
         `run "${storedRunIdOf("charge-card", runId)}" is failed but missing from ${failedIndexKey}`,
       );
       await waitForLogMessage(lines, "worker error");
+      const scriptError = lines.find((line) => line.message === "worker error")?.fields["err"] as Error;
+      expectInvariantViolation("worker error", scriptError.message);
       await nextasking.dispatch("ship-order", { orderId: "order-1" });
       await vi.waitFor(() => expect(completedOrderIds).toEqual(["order-1"]), { timeout: 10_000 });
 
@@ -56,7 +58,7 @@ integrationTest(
         },
       ]);
     } finally {
-      await closeNextasking(nextasking);
+      await closeNextaskingAndCheckItsDuration(nextasking);
     }
   },
 );

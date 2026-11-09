@@ -6,6 +6,13 @@ import tseslint from "typescript-eslint";
 
 const gitignorePath = fileURLToPath(new URL(".gitignore", import.meta.url));
 
+const CLOSE_NEXTASKING_RESTRICTION = {
+  group: ["**/registry.js"],
+  importNames: ["closeNextasking"],
+  message:
+    "Close an instance in a test with closeNextaskingAndCheckItsDuration (tests/close-nextasking-and-check-its-duration.ts): it checks the close against its bound.",
+};
+
 export default defineConfig([
   includeIgnoreFile(gitignorePath, "Ignore what git ignores"),
   globalIgnores([".agents/skills/**"], "Ignore the agent skills"),
@@ -15,6 +22,13 @@ export default defineConfig([
     plugins: { "no-comments": noComments },
     rules: {
       "no-comments/disallowComments": ["error", { allow: ["eslint", "global", "@ts-", "prettier-ignore"] }],
+    },
+  },
+  {
+    files: ["tests/**/*.ts"],
+    ignores: ["tests/close-nextasking-and-check-its-duration.ts", "tests/close-while-booting-process-entry.ts"],
+    rules: {
+      "no-restricted-imports": ["error", { patterns: [CLOSE_NEXTASKING_RESTRICTION] }],
     },
   },
   {
@@ -31,6 +45,7 @@ export default defineConfig([
                 "Write an integration test with integrationTest (tests/integration-test.ts) and an e2e test with e2eTest (tests/e2e/e2e-test.ts): they check the invariants after every test.",
             },
           ],
+          patterns: [CLOSE_NEXTASKING_RESTRICTION],
         },
       ],
     },

@@ -4,7 +4,7 @@ import { z } from "zod";
 import { createNextasking, defineEvent, defineListener, defineTask } from "../src/index.js";
 import { engineKeysOf } from "../src/engine/engine-keys.js";
 import { createEngine } from "../src/engine/engine.js";
-import { closeNextasking } from "../src/registry.js";
+import { closeNextaskingAndCheckItsDuration } from "./close-nextasking-and-check-its-duration.js";
 import { integrationTest } from "./integration-test.js";
 import { createRecordingLogger, waitForLogMessage } from "./recording-logger.js";
 import type { RecordedLogLine } from "./recording-logger.js";
@@ -44,7 +44,7 @@ async function withNextReleaseAndOlderReleaseWorker(
     await use({ nextasking, lines, olderReleaseWorker, handledAccountIds });
   } finally {
     await olderReleaseWorker.stop();
-    await closeNextasking(nextasking);
+    await closeNextaskingAndCheckItsDuration(nextasking);
   }
 }
 

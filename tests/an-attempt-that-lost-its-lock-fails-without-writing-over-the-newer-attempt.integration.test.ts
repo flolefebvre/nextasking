@@ -3,7 +3,7 @@ import { z } from "zod";
 
 import { engineKeysOf } from "../src/engine/engine-keys.js";
 import { createNextasking, defineTask } from "../src/index.js";
-import { closeNextasking } from "../src/registry.js";
+import { closeNextaskingAndCheckItsDuration } from "./close-nextasking-and-check-its-duration.js";
 import { integrationTest } from "./integration-test.js";
 import { createRecordingLogger, waitForLogMessage } from "./recording-logger.js";
 import { runLeftExecutingSentenceOf } from "./stored-key-violations.js";
@@ -60,7 +60,7 @@ integrationTest(
       });
       expect(lines.map((line) => line.message)).not.toContain("attempt failed");
     } finally {
-      await closeNextasking(nextasking);
+      await closeNextaskingAndCheckItsDuration(nextasking);
     }
   },
 );

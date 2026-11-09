@@ -11,7 +11,7 @@ import {
 } from "../src/index.js";
 import type { Logger, RunFailedPayload } from "../src/index.js";
 import { deriveFailureNoticeEventId } from "../src/ids.js";
-import { closeNextasking } from "../src/registry.js";
+import { closeNextaskingAndCheckItsDuration } from "./close-nextasking-and-check-its-duration.js";
 import { integrationTest } from "./integration-test.js";
 import { createRecordingLogger, waitForLogMessage } from "./recording-logger.js";
 import { storedRun } from "./stored-run.js";
@@ -117,7 +117,7 @@ integrationTest(
       expect(failedRun).toMatchObject({ state: "failed", reason: "non-retriable", replays: "0" });
       expect(lines.map((line) => line.message)).not.toContain("no listeners for event");
     } finally {
-      await closeNextasking(nextasking);
+      await closeNextaskingAndCheckItsDuration(nextasking);
     }
   },
 );
@@ -154,7 +154,7 @@ integrationTest(
         expect(noticeEvent.runsByListener["alert-on-run-failed"]).toBeDefined();
       }
     } finally {
-      await closeNextasking(nextasking);
+      await closeNextaskingAndCheckItsDuration(nextasking);
     }
   },
 );
@@ -185,7 +185,7 @@ integrationTest(
       expect(noticeOfAlertRun.runsByListener["alert-on-run-failed"]).toBeUndefined();
       expect(alerting.runFailedNotices.map((notice) => notice.task)).toEqual(["sync-account", "sync-account"]);
     } finally {
-      await closeNextasking(nextasking);
+      await closeNextaskingAndCheckItsDuration(nextasking);
     }
   },
 );
@@ -210,7 +210,7 @@ integrationTest(
       expect(await storedRun(redisUrl, keyPrefix, "sync-account", runId)).toMatchObject({ state: "failed" });
       expect(lines.map((line) => line.message)).not.toContain("no listeners for event");
     } finally {
-      await closeNextasking(nextasking);
+      await closeNextaskingAndCheckItsDuration(nextasking);
     }
   },
 );

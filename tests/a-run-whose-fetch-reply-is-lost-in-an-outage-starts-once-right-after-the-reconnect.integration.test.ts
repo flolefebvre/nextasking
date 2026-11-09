@@ -2,7 +2,7 @@ import { expect, vi } from "vitest";
 import { z } from "zod";
 
 import { createNextasking, defineTask } from "../src/index.js";
-import { closeNextasking } from "../src/registry.js";
+import { closeNextaskingAndCheckItsDuration } from "./close-nextasking-and-check-its-duration.js";
 import { integrationTest } from "./integration-test.js";
 import { startTcpProxy } from "./tcp-proxy.js";
 import { isFetchRequest } from "./engine-requests.js";
@@ -71,14 +71,12 @@ integrationTest(
       expect([...startedRunIds].sort()).toEqual([...runIdsInDispatchOrder].sort());
       expect(stalledCounters).toEqual([0, 0, 0]);
       expectOneConnectionErrorAndOneConnectionRestored(lines);
-      expect(
-        lines.filter((line) =>
-          ["worker error", "attempt aborted: lock lost", "attempt stalled"].includes(line.message),
-        ),
-      ).toEqual([]);
+      expect(lines.filter((line) => ["attempt aborted: lock lost", "attempt stalled"].includes(line.message))).toEqual(
+        [],
+      );
     } finally {
       openGate();
-      await closeNextasking(nextasking);
+      await closeNextaskingAndCheckItsDuration(nextasking);
       await proxy.stop();
     }
   },

@@ -3,7 +3,7 @@ import { z } from "zod";
 
 import { engineKeysOf, storedRunIdOf } from "../src/engine/engine-keys.js";
 import { createNextasking, defineTask } from "../src/index.js";
-import { closeNextasking } from "../src/registry.js";
+import { closeNextaskingAndCheckItsDuration } from "./close-nextasking-and-check-its-duration.js";
 import { integrationTest } from "./integration-test.js";
 import { createRecordingLogger, waitForLogMessage } from "./recording-logger.js";
 import { runLeftExecutingSentenceOf } from "./stored-key-violations.js";
@@ -45,7 +45,7 @@ integrationTest(
             message: "attempt outcome discarded: lock lost",
           },
         ]);
-        expect(lines.filter((line) => line.message === "run completed" || line.message === "worker error")).toEqual([]);
+        expect(lines.filter((line) => line.message === "run completed")).toEqual([]);
         expect(await redis.hgetall(engineKeysOf(keyPrefix).runRecord("archive-invoice", runId))).toMatchObject({
           state: "executing",
           lockToken: "token-of-another-attempt",
@@ -54,7 +54,7 @@ integrationTest(
           await redis.zscore(engineKeysOf(keyPrefix).locks, storedRunIdOf("archive-invoice", runId)),
         ).not.toBeNull();
       } finally {
-        await closeNextasking(nextasking);
+        await closeNextaskingAndCheckItsDuration(nextasking);
       }
     });
   },

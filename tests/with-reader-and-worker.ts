@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 import { NonRetriableError, createNextasking, defineTask } from "../src/index.js";
-import { closeNextasking } from "../src/registry.js";
+import { closeNextaskingAndCheckItsDuration } from "./close-nextasking-and-check-its-duration.js";
 import { createRecordingLogger } from "./recording-logger.js";
 import type { RecordedLogLine } from "./recording-logger.js";
 
@@ -76,7 +76,7 @@ export async function withReaderAndWorker(
     await use({ reader, startWorker: () => worker.startWorker(), workerLines: lines });
   } finally {
     releaseImport();
-    await closeNextasking(worker);
-    await closeNextasking(reader);
+    await closeNextaskingAndCheckItsDuration(worker);
+    await closeNextaskingAndCheckItsDuration(reader);
   }
 }

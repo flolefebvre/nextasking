@@ -2,7 +2,7 @@ import { expect, vi } from "vitest";
 import { z } from "zod";
 
 import { createNextasking, defineEvent, defineListener, defineTask } from "../src/index.js";
-import { closeNextasking } from "../src/registry.js";
+import { closeNextaskingAndCheckItsDuration } from "./close-nextasking-and-check-its-duration.js";
 import { integrationTest } from "./integration-test.js";
 import { createRecordingLogger } from "./recording-logger.js";
 
@@ -50,7 +50,7 @@ integrationTest("a payload never reaches the logger, dispatched or emitted", asy
       },
       { timeout: 10_000 },
     );
-    await closeNextasking(nextasking);
+    await closeNextaskingAndCheckItsDuration(nextasking);
 
     expect(lines.map((line) => line.message)).toContain("no listeners for event");
     for (const line of lines) {
@@ -58,6 +58,6 @@ integrationTest("a payload never reaches the logger, dispatched or emitted", asy
       expect(line.message).not.toContain(PAYLOAD_SENTINEL);
     }
   } finally {
-    await closeNextasking(nextasking);
+    await closeNextaskingAndCheckItsDuration(nextasking);
   }
 });

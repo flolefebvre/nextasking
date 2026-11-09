@@ -1,6 +1,6 @@
 import { expect, onTestFinished, vi } from "vitest";
 
-import { closeNextasking } from "../src/registry.js";
+import { closeNextaskingAndCheckItsDuration } from "./close-nextasking-and-check-its-duration.js";
 import { reportOfRecordedLines } from "./recording-logger.js";
 import type { RecordedLogLine } from "./recording-logger.js";
 import type { TcpProxy } from "./tcp-proxy.js";
@@ -44,7 +44,7 @@ export function closeWhenTestFinishes({
         await waitUntilEveryOutageIsRestored(lines);
       }
       for (const nextasking of nextaskings) {
-        await closeNextasking(nextasking);
+        await closeNextaskingAndCheckItsDuration(nextasking);
       }
     } finally {
       await proxy.stop();

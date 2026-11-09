@@ -2,7 +2,7 @@ import { expect } from "vitest";
 import { z } from "zod";
 
 import { createNextasking, defineTask } from "../src/index.js";
-import { closeNextasking } from "../src/registry.js";
+import { closeNextaskingAndCheckItsDuration } from "./close-nextasking-and-check-its-duration.js";
 import { integrationTest } from "./integration-test.js";
 import { createRecordingLogger, waitForLogMessage } from "./recording-logger.js";
 import { savedSteps } from "./saved-steps.js";
@@ -46,7 +46,7 @@ integrationTest(
         ],
       });
     } finally {
-      await closeNextasking(nextasking);
+      await closeNextaskingAndCheckItsDuration(nextasking);
     }
   },
 );
@@ -84,7 +84,7 @@ integrationTest(
       });
       expect(steps.serializedResultsByStepId).toEqual({ "count-rows": "[3]" });
     } finally {
-      await closeNextasking(nextasking);
+      await closeNextaskingAndCheckItsDuration(nextasking);
     }
   },
 );

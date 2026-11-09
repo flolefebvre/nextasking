@@ -3,8 +3,9 @@ import { z } from "zod";
 
 import { createNextasking, defineEvent, defineListener, defineTask } from "../src/index.js";
 import { deriveListenerRunId } from "../src/ids.js";
-import { closeNextasking } from "../src/registry.js";
+import { closeNextaskingAndCheckItsDuration } from "./close-nextasking-and-check-its-duration.js";
 import { integrationTest } from "./integration-test.js";
+import { createRecordingLogger } from "./recording-logger.js";
 import { storedRunIdentities } from "./stored-run-identities.js";
 import { storedRun } from "./stored-run.js";
 
@@ -28,6 +29,7 @@ integrationTest(
     const nextasking = createNextasking({
       connection: { url: redisUrl },
       prefix: keyPrefix,
+      logger: createRecordingLogger().logger,
       events: [invoicePaid],
       tasks: [rebuildIndex, recordInvoicePayment],
     });
@@ -51,7 +53,7 @@ integrationTest(
         concurrencyKey: "account-9",
       });
     } finally {
-      await closeNextasking(nextasking);
+      await closeNextaskingAndCheckItsDuration(nextasking);
     }
   },
 );
@@ -76,6 +78,7 @@ integrationTest(
     const nextasking = createNextasking({
       connection: { url: redisUrl },
       prefix: keyPrefix,
+      logger: createRecordingLogger().logger,
       events: [invoicePaid],
       tasks: [recordInvoicePayment, billAccount],
     });
@@ -88,7 +91,7 @@ integrationTest(
       );
       expect(await storedRunIdentities(redisUrl, keyPrefix)).toEqual([]);
     } finally {
-      await closeNextasking(nextasking);
+      await closeNextaskingAndCheckItsDuration(nextasking);
     }
   },
 );

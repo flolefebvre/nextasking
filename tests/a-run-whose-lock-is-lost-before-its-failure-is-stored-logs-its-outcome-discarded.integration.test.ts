@@ -57,6 +57,6 @@ integrationTest(
         message: "attempt outcome discarded: lock lost",
       },
     ]);
-    expect(lines.filter((line) => line.message === "attempt failed" || line.message === "worker error")).toEqual([]);
+    expect(lines.filter((line) => line.message === "attempt failed")).toEqual([]);
   },
 );

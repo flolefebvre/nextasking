@@ -2,6 +2,8 @@ import { inspect } from "node:util";
 import { expect, vi } from "vitest";
 
 import type { Logger } from "../src/index.js";
+import { invariantsOfCurrentTestIfAny } from "./invariant-violations.js";
+import type { InvariantViolation } from "./invariant-violations.js";
 
 export type LogLevel = keyof Logger;
 
@@ -11,12 +13,31 @@ export type RecordedLogLine = {
   message: string;
 };
 
+export function reportedWorkerErrorOf(line: RecordedLogLine): InvariantViolation | undefined {
+  if (line.message !== "worker error") {
+    return undefined;
+  }
+  const err = line.fields["err"];
+  const isErrorLike = typeof err === "object" && err !== null && typeof (err as Error).message === "string";
+  return {
+    invariant: "worker error",
+    message: isErrorLike ? (err as Error).message : inspect(err),
+    detail: err instanceof Error ? err.stack : undefined,
+  };
+}
+
 export function createRecordingLogger(): { logger: Logger; lines: RecordedLogLine[] } {
   const lines: RecordedLogLine[] = [];
+  const invariants = invariantsOfCurrentTestIfAny();
   const lineRecorderAt =
     (level: LogLevel): Logger[LogLevel] =>
     (fields, message) => {
-      lines.push({ level, fields, message });
+      const line = { level, fields, message };
+      lines.push(line);
+      const workerError = reportedWorkerErrorOf(line);
+      if (workerError !== undefined) {
+        invariants?.report(workerError);
+      }
     };
   return {
     logger: {

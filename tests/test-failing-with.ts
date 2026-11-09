@@ -8,9 +8,11 @@ export type FailingTestContext = {
   expectInvariantViolation: ExpectInvariantViolation;
 };
 
+type FailingTestOptions = { timeout?: number };
+
 type FailingTestChain = {
   (name: string, fn: () => void): void;
-  fails: (name: string, fn: (context: FailingTestContext) => Promise<void>) => void;
+  fails: (name: string, options: FailingTestOptions, fn: (context: FailingTestContext) => Promise<void>) => void;
 };
 
 type RecordedFailure = { failureMessages: string[]; expectedFailureMessages: string[] };
@@ -22,9 +24,10 @@ export function testFailingWith(
   name: string,
   expectedFailureMessagesOf: (context: FailingTestContext) => string[],
   body: (context: FailingTestContext) => Promise<void>,
+  options: FailingTestOptions = {},
 ): void {
   describe(name, () => {
-    chain.fails("fails", async ({ redisUrl, keyPrefix, expectInvariantViolation }) => {
+    chain.fails("fails", options, async ({ redisUrl, keyPrefix, expectInvariantViolation }) => {
       const context = { redisUrl, keyPrefix, expectInvariantViolation };
       const expectedFailureMessages = expectedFailureMessagesOf(context);
       onTestFailed(({ task }) => {

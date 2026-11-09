@@ -2,7 +2,7 @@ import { expect } from "vitest";
 import { z } from "zod";
 
 import { createNextasking, defineTask } from "../src/index.js";
-import { closeNextasking } from "../src/registry.js";
+import { closeNextaskingAndCheckItsDuration } from "./close-nextasking-and-check-its-duration.js";
 import { integrationTest } from "./integration-test.js";
 import { createRecordingLogger, waitForLogMessage } from "./recording-logger.js";
 import { engineKeysOf } from "../src/engine/engine-keys.js";
@@ -40,7 +40,7 @@ integrationTest(
       expect(stallCountsBeforeEachStep).toEqual(["2"]);
       expect(stallCountAfterTheStep).toBe("0");
     } finally {
-      await closeNextasking(nextasking);
+      await closeNextaskingAndCheckItsDuration(nextasking);
     }
   },
 );

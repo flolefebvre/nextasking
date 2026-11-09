@@ -5,7 +5,7 @@ import { engineKeysOf } from "../src/engine/engine-keys.js";
 import { createEngine } from "../src/engine/engine.js";
 import { deriveListenerRunId } from "../src/ids.js";
 import { createNextasking, defineEvent, defineListener } from "../src/index.js";
-import { closeNextasking } from "../src/registry.js";
+import { closeNextaskingAndCheckItsDuration } from "./close-nextasking-and-check-its-duration.js";
 import { DAY_IN_MILLISECONDS } from "./ended-runs.js";
 import { backdateEndedRun } from "./engine-test.js";
 import { integrationTest } from "./integration-test.js";
@@ -102,7 +102,7 @@ integrationTest(
         state: "completed",
       });
     } finally {
-      await closeNextasking(nextasking);
+      await closeNextaskingAndCheckItsDuration(nextasking);
     }
   },
 );

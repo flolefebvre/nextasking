@@ -2,9 +2,10 @@ import { onTestFinished } from "vitest";
 
 import { engineKeysOf, storedRunIdOf } from "../src/engine/engine-keys.js";
 import { integrationTest } from "./integration-test.js";
-import { testFailingWith } from "./test-failing-with.js";
 import { freshLockTokensOf } from "./lock-tokens.js";
+import { createRecordingLogger } from "./recording-logger.js";
 import { serverInstantInMillisecondsOf } from "./server-instant.js";
+import { testFailingWith } from "./test-failing-with.js";
 import { withRedis } from "./with-redis.js";
 
 const UNDECLARED = "The test ended with invariant violations it did not declare:";
@@ -182,5 +183,37 @@ testFailingWith(
   () => [`${NEVER_HAPPENED}\n  process warning: Warning: warned on purpose`],
   async ({ expectInvariantViolation }) => {
     expectInvariantViolation("process warning", "Warning: warned on purpose");
+  },
+);
+
+function logWorkerError(): void {
+  const { logger } = createRecordingLogger();
+  logger.error({ err: new Error("failed on purpose") }, "worker error");
+}
+
+testFailingWith(
+  integrationTest,
+  "a test whose recording logger receives a worker error fails naming the error",
+  () => [`${UNDECLARED}\n  worker error: failed on purpose`],
+  async () => {
+    logWorkerError();
+  },
+);
+
+integrationTest(
+  "a test whose recording logger receives a worker error passes when it declares the error",
+  async ({ expectInvariantViolation }) => {
+    expectInvariantViolation("worker error", "failed on purpose");
+
+    logWorkerError();
+  },
+);
+
+testFailingWith(
+  integrationTest,
+  "a test declaring a worker error that never happens fails",
+  () => [`${NEVER_HAPPENED}\n  worker error: failed on purpose`],
+  async ({ expectInvariantViolation }) => {
+    expectInvariantViolation("worker error", "failed on purpose");
   },
 );

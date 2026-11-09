@@ -3,7 +3,7 @@ import { z } from "zod";
 
 import { createEngine } from "../src/engine/engine.js";
 import { createNextasking, defineTask } from "../src/index.js";
-import { closeNextasking } from "../src/registry.js";
+import { closeNextaskingAndCheckItsDuration } from "./close-nextasking-and-check-its-duration.js";
 import { integrationTest } from "./integration-test.js";
 import { createRecordingLogger, waitForLogMessage } from "./recording-logger.js";
 import { storedRunIdentities } from "./stored-run-identities.js";
@@ -56,7 +56,7 @@ integrationTest(
       expect(await storedRunIdentities(redisUrl, keyPrefix)).toEqual([]);
       expect(handledPayloads).toEqual([]);
     } finally {
-      await closeNextasking(nextasking);
+      await closeNextaskingAndCheckItsDuration(nextasking);
     }
   },
 );

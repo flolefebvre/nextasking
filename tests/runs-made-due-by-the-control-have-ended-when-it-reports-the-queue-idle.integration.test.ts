@@ -6,7 +6,6 @@ import { z } from "zod";
 
 import { defineTask } from "../src/definitions.js";
 import { createNextasking } from "../src/index.js";
-import { closeNextasking } from "../src/registry.js";
 import { createNextaskingControl } from "../src/testing.js";
 import type { AnyTaskDefinition } from "../src/definitions.js";
 import { engineKeysOf } from "../src/engine/engine-keys.js";
@@ -14,6 +13,7 @@ import { createEngine } from "../src/engine/engine.js";
 import type { HandlerSender } from "../src/step-engine.js";
 import { startWorkerLoop } from "../src/worker-loop.js";
 import { DEFAULT_WORKER_TIMING } from "../src/worker-timing.js";
+import { closeNextaskingAndCheckItsDuration } from "./close-nextasking-and-check-its-duration.js";
 import { integrationTest } from "./integration-test.js";
 import { createRecordingLogger } from "./recording-logger.js";
 import { createSimulatedRedisOutage } from "./simulated-redis-outage.js";
@@ -195,7 +195,7 @@ integrationTest(
       expect(syncCalendarDebugMessages.filter((message) => message === "run dispatched")).toHaveLength(1);
       expect(runsLeftToMakeDue).toEqual([]);
     } finally {
-      await closeNextasking(nextasking);
+      await closeNextaskingAndCheckItsDuration(nextasking);
     }
   },
 );

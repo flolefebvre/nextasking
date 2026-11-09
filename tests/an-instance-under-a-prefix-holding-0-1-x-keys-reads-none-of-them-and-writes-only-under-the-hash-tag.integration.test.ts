@@ -4,7 +4,7 @@ import { z } from "zod";
 
 import { hashTaggedPrefixOf } from "../src/engine/engine-keys.js";
 import { createNextasking, defineScheduledTask, defineTask } from "../src/index.js";
-import { closeNextasking } from "../src/registry.js";
+import { closeNextaskingAndCheckItsDuration } from "./close-nextasking-and-check-its-duration.js";
 import { integrationTest } from "./integration-test.js";
 import { createRecordingLogger, waitForLogMessage } from "./recording-logger.js";
 import { storedValuesByKeyOf } from "./engine-test.js";
@@ -91,7 +91,7 @@ integrationTest(
       });
     } finally {
       monitorClient.disconnect();
-      await closeNextasking(nextasking);
+      await closeNextaskingAndCheckItsDuration(nextasking);
     }
   },
 );

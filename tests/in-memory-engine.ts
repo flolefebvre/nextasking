@@ -26,6 +26,7 @@ import type {
   ReadStepRequest,
   RenewRequest,
   RetentionLimit,
+  RunOrigin,
   RunToCreate,
   SaveStepReply,
   SaveStepRequest,
@@ -340,18 +341,21 @@ export function createInMemoryEngine({ now = () => Date.now() }: InMemoryEngineO
     dispatchedAt: storedRun.dispatchedAt,
     startedAt: storedRun.startedAt ?? 0,
     lockedUntil: storedRun.lockedUntil ?? 0,
-    ...(storedRun.scheduledAt === undefined ? {} : { scheduledAt: storedRun.scheduledAt }),
-    ...(storedRun.sourceEvent === undefined ? {} : { sourceEvent: storedRun.sourceEvent }),
+    ...runOriginOf(storedRun),
     ...(storedRun.concurrencyKey === undefined ? {} : { concurrencyKey: storedRun.concurrencyKey }),
     ...(sleepsWokenAt === undefined ? {} : { sleepsWokenAt }),
+  });
+
+  const runOriginOf = (storedRun: InMemoryStoredRun): RunOrigin => ({
+    ...(storedRun.scheduledAt === undefined ? {} : { scheduledAt: storedRun.scheduledAt }),
+    ...(storedRun.sourceEvent === undefined ? {} : { sourceEvent: storedRun.sourceEvent }),
   });
 
   const parkedRunReplyOf = (runId: RunId, storedRun: InMemoryStoredRun): ParkedRun => ({
     runId,
     task: storedRun.task,
     attempt: storedRun.attempt,
-    ...(storedRun.scheduledAt === undefined ? {} : { scheduledAt: storedRun.scheduledAt }),
-    ...(storedRun.sourceEvent === undefined ? {} : { sourceEvent: storedRun.sourceEvent }),
+    ...runOriginOf(storedRun),
   });
 
   const enqueue = async ({ runs, eventDedup, parentFence }: EnqueueRequest): Promise<EnqueueReply> => {
@@ -578,12 +582,22 @@ export function createInMemoryEngine({ now = () => Date.now() }: InMemoryEngineO
           task: storedRun.task,
           attempt: storedRun.attempt,
           expiredLockToken: storedRun.lockToken ?? "",
+          replays: storedRun.replays,
+          dispatchedAt: storedRun.dispatchedAt,
+          startedAt: storedRun.startedAt ?? 0,
+          ...runOriginOf(storedRun),
         });
       } else {
         endLock(runId, storedRun, "stalled", undefined);
         storedRun.stalls += 1;
         enterPending(storedRun, storedRun.order);
-        stalledRuns.push({ runId, task: storedRun.task, attempt: storedRun.attempt, stalls: storedRun.stalls });
+        stalledRuns.push({
+          runId,
+          task: storedRun.task,
+          attempt: storedRun.attempt,
+          stalls: storedRun.stalls,
+          ...runOriginOf(storedRun),
+        });
       }
     }
     const dueRunEntries = [...runsById.entries()]

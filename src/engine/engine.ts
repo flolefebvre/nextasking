@@ -129,13 +129,7 @@ export type LockedRun = {
   sleepsWokenAt?: EpochMilliseconds;
 };
 
-export type ParkedRun = {
-  runId: RunId;
-  task: string;
-  attempt: number;
-  scheduledAt?: EpochMilliseconds;
-  sourceEvent?: SourceEvent;
-};
+export type ParkedRun = { runId: RunId; task: string; attempt: number } & RunOrigin;
 
 export type FetchedReply = {
   kind: "fetched";
@@ -186,9 +180,19 @@ export type SettledReply =
 
 export type SettleReply = SettledReply | StaleReply | AlreadyReply | UnknownVersionReply;
 
-export type StalledRun = { runId: RunId; task: string; attempt: number; stalls: number };
+export type RunOrigin = { scheduledAt?: EpochMilliseconds; sourceEvent?: SourceEvent };
 
-export type ThirdStall = { runId: RunId; task: string; attempt: number; expiredLockToken: LockToken };
+export type StalledRun = { runId: RunId; task: string; attempt: number; stalls: number } & RunOrigin;
+
+export type ThirdStall = {
+  runId: RunId;
+  task: string;
+  attempt: number;
+  expiredLockToken: LockToken;
+  replays: number;
+  dispatchedAt: EpochMilliseconds;
+  startedAt: EpochMilliseconds;
+} & RunOrigin;
 
 export type PromotedReply = {
   kind: "promoted";
@@ -353,23 +357,25 @@ function lockedRunOf(reply: unknown): LockedRun | undefined {
   };
 }
 
+function runOriginOf(storedOrigin: readonly (string | null | undefined)[]): RunOrigin {
+  const [storedScheduledAt, eventName, eventId] = storedOrigin.map(nullIfAbsent);
+  const scheduledAt = storedIntegerOf(nullIfAbsent(storedScheduledAt));
+  return {
+    ...(scheduledAt === undefined ? {} : { scheduledAt }),
+    ...(eventName == null || eventId == null ? {} : { sourceEvent: { eventName, eventId } }),
+  };
+}
+
 function parkedRunOf(reply: unknown): ParkedRun | undefined {
   if (!isStoredValueList(reply) || reply.length !== 6) {
     return undefined;
   }
-  const [runId, task, storedAttempt, storedScheduledAt, eventName, eventId] = reply.map(nullIfAbsent);
+  const [runId, task, storedAttempt, ...storedOrigin] = reply.map(nullIfAbsent);
   const attempt = storedIntegerOf(nullIfAbsent(storedAttempt));
   if (runId == null || task == null || attempt === undefined) {
     return undefined;
   }
-  const scheduledAt = storedIntegerOf(nullIfAbsent(storedScheduledAt));
-  return {
-    runId,
-    task,
-    attempt,
-    ...(scheduledAt === undefined ? {} : { scheduledAt }),
-    ...(eventName == null || eventId == null ? {} : { sourceEvent: { eventName, eventId } }),
-  };
+  return { runId, task, attempt, ...runOriginOf(storedOrigin) };
 }
 
 function definedElementsOf<Element>(elements: readonly (Element | undefined)[]): Element[] | undefined {
@@ -476,25 +482,26 @@ function settleReplyOf(reply: unknown): SettleReply {
 }
 
 function stalledRunOf(reply: unknown): StalledRun | undefined {
-  if (!isStringList(reply) || reply.length !== 4) {
+  if (!isStoredValueList(reply) || reply.length !== 7) {
     return undefined;
   }
-  const [runId, task, storedAttempt, storedStalls] = reply;
+  const [runId, task, storedAttempt, storedStalls, ...storedOrigin] = reply.map(nullIfAbsent);
   const integersByField = storedIntegersByFieldOf({ attempt: storedAttempt, stalls: storedStalls });
-  return runId === undefined || task === undefined || integersByField === undefined
+  return runId == null || task == null || integersByField === undefined
     ? undefined
-    : { runId, task, ...integersByField };
+    : { runId, task, ...integersByField, ...runOriginOf(storedOrigin) };
 }
 
 function thirdStallOf(reply: unknown): ThirdStall | undefined {
-  if (!isStringList(reply) || reply.length !== 4) {
+  if (!isStoredValueList(reply) || reply.length !== 10) {
     return undefined;
   }
-  const [runId, task, storedAttempt, expiredLockToken] = reply;
-  const attempt = storedIntegerOf(nullIfAbsent(storedAttempt));
-  return runId === undefined || task === undefined || attempt === undefined || expiredLockToken === undefined
+  const [runId, task, attempt, expiredLockToken, replays, dispatchedAt, startedAt, ...storedOrigin] =
+    reply.map(nullIfAbsent);
+  const integersByField = storedIntegersByFieldOf({ attempt, replays, dispatchedAt, startedAt });
+  return runId == null || task == null || expiredLockToken == null || integersByField === undefined
     ? undefined
-    : { runId, task, attempt, expiredLockToken };
+    : { runId, task, expiredLockToken, ...integersByField, ...runOriginOf(storedOrigin) };
 }
 
 function promoteReplyOf(reply: unknown): PromoteReply {

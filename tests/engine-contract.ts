@@ -313,9 +313,79 @@ export function defineEngineContractTests(contractTest: EngineContractTest): voi
         kind: "promoted",
         promotedRunCount: 0,
         stalledRuns: [],
-        thirdStalls: [{ runId: "run-1", task: "send-email", attempt: 1, expiredLockToken: lockedRun.lockToken }],
+        thirdStalls: [
+          {
+            runId: "run-1",
+            task: "send-email",
+            attempt: 1,
+            expiredLockToken: lockedRun.lockToken,
+            replays: 0,
+            dispatchedAt: lockedRun.dispatchedAt,
+            startedAt: lockedRun.startedAt,
+          },
+        ],
       });
       expect(await harness.stateOf("run-1")).toBe("executing");
+    },
+  );
+
+  contractTest("a stalled run and a third stall carry the source event of their run", async (harness) => {
+    const { engine } = harness;
+    const sourceEvent = { eventName: "user.signed-up", eventId: "event-1" };
+    await engine.enqueue({ runs: sendEmailRunsOf(["run-1"], { sourceEvent }) });
+    const stalledRuns: unknown[] = [];
+    for (let stallCount = 0; stallCount < 2; stallCount += 1) {
+      await lockedRunsOf(engine, 1);
+      await harness.expireLock("run-1");
+      const reply = await engine.promote();
+      stalledRuns.push(...(reply.kind === "promoted" ? reply.stalledRuns : []));
+    }
+    await lockedRunsOf(engine, 1);
+    await harness.expireLock("run-1");
+
+    const thirdPromoteReply = await engine.promote();
+
+    expect(stalledRuns).toEqual([1, 2].map((stalls) => expect.objectContaining({ stalls, sourceEvent })));
+    expect(thirdPromoteReply).toMatchObject({ thirdStalls: [{ runId: "run-1", sourceEvent }] });
+  });
+
+  contractTest(
+    "a reported third stall fails through a fail settle fenced by its expired token, and a second caller hears already",
+    async (harness) => {
+      const { engine } = harness;
+      await engine.enqueue({ runs: sendEmailRunsOf(["run-1"]) });
+      for (let stallCount = 0; stallCount < 2; stallCount += 1) {
+        await lockedRunsOf(engine, 1);
+        await harness.expireLock("run-1");
+        await engine.promote();
+      }
+      await lockedRunsOf(engine, 1);
+      await harness.expireLock("run-1");
+      const promoteReply = await engine.promote();
+      const [thirdStall] = promoteReply.kind === "promoted" ? promoteReply.thirdStalls : [];
+      const failStalled = {
+        runId: thirdStall!.runId,
+        lockToken: thirdStall!.expiredLockToken,
+        outcome: {
+          kind: "fail" as const,
+          reason: "stalled" as const,
+          error: ATTEMPT_ERROR,
+          failureNotice: failureNoticeOf("run-1", ["listener-run-1"]),
+        },
+      };
+
+      const firstReply = await engine.settle(failStalled);
+      const secondReply = await engine.settle(failStalled);
+
+      expect(firstReply).toEqual({ kind: "failed", reason: "stalled", finishedAt: expect.any(Number) });
+      expect(secondReply).toEqual({ kind: "already" });
+      expect(await statesOf(harness, ["run-1", "listener-run-1"])).toEqual(["failed", "pending"]);
+      expect(await engine.promote()).toEqual({
+        kind: "promoted",
+        promotedRunCount: 0,
+        stalledRuns: [],
+        thirdStalls: [],
+      });
     },
   );
 

@@ -9,10 +9,13 @@ import {
 } from "../../tests/ended-runs.js";
 import { backdateEndedRun, engineTest, fetchedLockedRunsOf } from "../../tests/engine-test.js";
 import type { EngineTestContext } from "../../tests/engine-test.js";
+import { invariantViolationsOf } from "../../tests/invariant-violations.js";
+import { seededRandomnessOfThisRun } from "../../tests/seeded-random.js";
+import type { SeededRandomness } from "../../tests/seeded-random.js";
 import { serverInstantInMillisecondsOf } from "../../tests/server-instant.js";
 import type { RunId } from "../ids.js";
 import { EXPIRED_DEDUP_ENTRIES_TRIMMED_PER_PRUNE, MOST_RUNS_PRUNED_PER_PRUNE, RECORD_VERSION } from "./engine.js";
-import type { PruneRequest } from "./engine.js";
+import type { PruneRequest, SettleOutcome } from "./engine.js";
 import { NEWER_VERSION_RECORDS_PASSED_OVER_PER_PRUNE } from "./prune-script.js";
 
 const PRUNE_REQUEST_WITH_NO_COMPLETED_RUN_KEPT: PruneRequest = {
@@ -167,5 +170,81 @@ engineTest(
 
     expect(reply).toEqual({ kind: "pruned", prunedRunCount: 0 });
     expect(await completedRunIdsOf(context)).toEqual([...newerVersionRunIds, "run-1"]);
+  },
+);
+
+const LOAD_TASKS = ["send-email", "resize-image", "sync-crm"];
+
+const LOAD_ROUND_COUNT = 60;
+
+const LOAD_ROUNDS_BETWEEN_SAMPLES = 5;
+
+async function fetchAndEndSomeRuns(context: EngineTestContext, { random, pick }: SeededRandomness): Promise<void> {
+  const { engine } = context;
+  const lockedRuns = await fetchedLockedRunsOf(context, 1 + Math.floor(random() * 6));
+  await Promise.all(
+    lockedRuns.map((lockedRun) =>
+      engine.settle({
+        ...lockedRun,
+        outcome: pick<SettleOutcome>([
+          { kind: "complete" },
+          {
+            kind: "fail",
+            reason: "non-retriable",
+            error: { attempt: 1, name: "Error", message: "boom", stack: "", failedAt: "" },
+            failureNotice: undefined,
+          },
+        ]),
+      }),
+    ),
+  );
+}
+
+function loadPruneRequestOf({ random, pick }: SeededRandomness): PruneRequest {
+  const retentionLimitOf = () => ({
+    maxAgeInMilliseconds: pick([0, DAY_IN_MILLISECONDS]),
+    maxRunCount: Math.floor(random() * 4),
+  });
+  return { task: pick(LOAD_TASKS), completedRetention: retentionLimitOf(), failedRetention: retentionLimitOf() };
+}
+
+engineTest(
+  "the invariant checker passes across prunes under concurrent enqueues, fetches and settles",
+  async (context) => {
+    const { engine, redis, keyPrefix } = context;
+    const randomness = seededRandomnessOfThisRun();
+    const { random, pick, seedMessage } = randomness;
+    const enqueuedRunIds: RunId[] = [];
+    const prunedRunCounts: number[] = [];
+
+    for (let round = 1; round <= LOAD_ROUND_COUNT; round += 1) {
+      const runs = Array.from({ length: 1 + Math.floor(random() * 8) }, (_, position) => ({
+        runId:
+          enqueuedRunIds.length > 0 && random() < 0.2
+            ? pick(enqueuedRunIds)
+            : `run-${String(round)}-${String(position)}`,
+        task: pick(LOAD_TASKS),
+        payload: "{}",
+        retries: 0,
+      }));
+      enqueuedRunIds.push(...runs.map(({ runId }) => runId));
+      const [, , pruneReply] = await Promise.all([
+        engine.enqueue({ runs }),
+        fetchAndEndSomeRuns(context, randomness),
+        engine.prune(loadPruneRequestOf(randomness)),
+        fetchAndEndSomeRuns(context, randomness),
+      ]);
+      prunedRunCounts.push(pruneReply.prunedRunCount);
+      if (round % LOAD_ROUNDS_BETWEEN_SAMPLES === 0) {
+        expect(await invariantViolationsOf(redis, keyPrefix), `after round ${String(round)}, ${seedMessage}`).toEqual(
+          [],
+        );
+      }
+    }
+
+    expect(
+      prunedRunCounts.some((prunedRunCount) => prunedRunCount > 0),
+      `some prune removed a run, ${seedMessage}`,
+    ).toBe(true);
   },
 );

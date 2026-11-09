@@ -59,7 +59,7 @@
     "build": "rm -rf dist && tsc -p tsconfig.build.json",
     "manual-links:check": "tsx scripts/manual-links-check.ts",
     "pack:check": "tsx scripts/pack-check.ts",
-    "typecheck:dist": "tsc -p tests/dist-consumer && pnpm --dir tests/dist-consumer exec tsc -p .",
+    "typecheck:dist": "tsc -p tests/dist-consumer && tsc -p tests/dist-consumer/root-entry-alone && tsc -p tests/dist-consumer/testing-entry-alone && pnpm --dir tests/dist-consumer exec tsc -p . && pnpm --dir tests/dist-consumer exec tsc -p root-entry-alone && pnpm --dir tests/dist-consumer exec tsc -p testing-entry-alone",
     "prepublishOnly": "pnpm run build",
     "format": "prettier --cache --write .",
     "format:check": "prettier --cache --check .",

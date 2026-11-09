@@ -74,7 +74,7 @@ function startedLoopOf(
 ): LoopScenario {
   const { logger, lines } = recordingLogger;
   const loop = startWorkerLoop({
-    engine: loopEngine,
+    engine: simulatedRedisOutage.engineOnWorkerCalls(loopEngine),
     definitions: workerDefinitionsOf(tasks),
     timing,
     logger,
@@ -1034,6 +1034,28 @@ test("an out-of-memory reply lasting several ticks, with answered reads in betwe
 
   expect(messagesOf(lines)).toEqual(["connection error", "connection restored"]);
   expect(lines[0]?.fields).toEqual({ err: OUT_OF_MEMORY_REPLY });
+});
+
+test("a settle answered out of memory across several retries, with ticks answered completely in between, writes one connection pair, restored once the settle is accepted", async () => {
+  const sendEmail = defineTask("send-email", { schema: v.object({}), handler: async () => undefined });
+  const engine = createInMemoryEngine();
+  await engine.enqueue({ runs: runsOf("send-email", 1) });
+  let isOutOfMemory = true;
+  const settleRefusedWhileOutOfMemory: WorkerLoopEngine["settle"] = async (request) =>
+    isOutOfMemory ? Promise.reject(OUT_OF_MEMORY_REPLY) : engine.settle(request);
+  const { lines } = startedLoopOf([sendEmail] as AnyTaskDefinition[], {
+    engine,
+    loopEngine: { ...engine, settle: settleRefusedWhileOutOfMemory },
+  });
+  await vi.advanceTimersByTimeAsync(5_000);
+  const ticksAnsweredDuringTheRefusals = requestsOf(engine, "tick").length;
+
+  isOutOfMemory = false;
+  await vi.advanceTimersByTimeAsync(3_000);
+
+  expect(ticksAnsweredDuringTheRefusals).toBeGreaterThan(1);
+  expect(messagesOf(lines)).toEqual(["attempt started", "connection error", "connection restored", "run completed"]);
+  expect(lines[1]?.fields).toEqual({ err: OUT_OF_MEMORY_REPLY });
 });
 
 test("a handler's emit and dispatch on the instance's sender wait out an outage and succeed, and the attempt completes with no attempt failed line", async () => {

@@ -52,29 +52,22 @@ export function isRedisAwayError(error: unknown): boolean {
 }
 
 export type RedisOutageSources = {
-  outageTracker: ConnectionOutageTracker;
   waitUntilReady: (stopSignal?: AbortSignal) => Promise<void>;
   outOfMemoryRetryDelayInMilliseconds: DurationInMilliseconds;
 };
 
 export function createRedisOutage({
-  outageTracker,
   waitUntilReady,
   outOfMemoryRetryDelayInMilliseconds,
 }: RedisOutageSources): RedisOutage {
-  const outOfMemorySubject = {};
   return {
     isRedisAway: isRedisAwayError,
     waitForRedis: async (awayError, stopSignal) => {
-      if (!isOutOfMemoryReply(awayError)) {
-        await waitUntilReady(stopSignal);
+      if (isOutOfMemoryReply(awayError)) {
+        await delayUnlessAborted(outOfMemoryRetryDelayInMilliseconds, stopSignal);
         return;
       }
-      outageTracker.reportClientError(outOfMemorySubject, awayError);
-      await delayUnlessAborted(outOfMemoryRetryDelayInMilliseconds, stopSignal);
-    },
-    noteRedisAnswered: () => {
-      outageTracker.reportClientReady(outOfMemorySubject);
+      await waitUntilReady(stopSignal);
     },
   };
 }
@@ -206,18 +199,36 @@ function commandNameOf(command: RedisCommand): string {
   return command.kind === "script" ? command.script.name : command.name;
 }
 
-type ReadOnlyAnswer = { commandName: string; readOnlyReply: Error };
+type RefusedAnswer = { commandName: string; refusalReply: Error };
 
-function readOnlyAnswersOf(
+function answersRefusedAs(
+  isRefusalReply: (error: unknown) => boolean,
   commands: readonly RedisCommand[],
   commandErrors: readonly (Error | undefined)[],
-): ReadOnlyAnswer[] {
+): RefusedAnswer[] {
   return commands.flatMap((command, position) => {
     const commandError = commandErrors[position];
-    return commandError !== undefined && isReadOnlyReply(commandError)
-      ? [{ commandName: commandNameOf(command), readOnlyReply: commandError }]
+    return commandError !== undefined && isRefusalReply(commandError)
+      ? [{ commandName: commandNameOf(command), refusalReply: commandError }]
       : [];
   });
+}
+
+function isRefusedWriteReply(error: unknown): boolean {
+  return isReadOnlyReply(error) || isOutOfMemoryReply(error);
+}
+
+function noteRefusedAnswers(
+  refusedAnswers: readonly RefusedAnswer[],
+  noteRefusal: (writeCommandNames: readonly string[], firstRefusalReply: Error) => void,
+): void {
+  const [firstRefusedAnswer] = refusedAnswers;
+  if (firstRefusedAnswer !== undefined) {
+    noteRefusal(
+      refusedAnswers.map(({ commandName }) => commandName),
+      firstRefusedAnswer.refusalReply,
+    );
+  }
 }
 
 export function createRedisConnections(
@@ -402,39 +413,44 @@ export function createRedisConnections(
     send: Send<Reply>,
     commandErrorsOfReply: (reply: Reply) => readonly (Error | undefined)[],
   ): Promise<Reply> => {
+    const noteAnswered = (commandErrors: readonly (Error | undefined)[]): { isAnsweredReadOnly: boolean } => {
+      const readOnlyAnswers = answersRefusedAs(isReadOnlyReply, commands, commandErrors);
+      const outOfMemoryAnswers = answersRefusedAs(isOutOfMemoryReply, commands, commandErrors);
+      if (readOnlyAnswers.length === 0 && outOfMemoryAnswers.length === 0) {
+        refusedWriteStretch.noteAccepted(commands.map(commandNameOf));
+      }
+      noteRefusedAnswers(readOnlyAnswers, refusedWriteStretch.noteAnsweredReadOnly);
+      noteRefusedAnswers(outOfMemoryAnswers, refusedWriteStretch.noteAnsweredOutOfMemory);
+      return { isAnsweredReadOnly: readOnlyAnswers.length > 0 };
+    };
     for (;;) {
       throwIfClosed(state);
-      let readOnlyAnswers: ReadOnlyAnswer[];
+      let reply: Reply;
       try {
-        const reply = await answeredWithinTheAnswerBound(state, () => send());
-        readOnlyAnswers = readOnlyAnswersOf(commands, commandErrorsOfReply(reply));
-        if (readOnlyAnswers.length === 0) {
-          if (!isClosed(state)) {
-            refusedWriteStretch.noteAccepted(commands.map(commandNameOf));
-          }
-          return reply;
-        }
-        throwIfClosed(state);
+        reply = await answeredWithinTheAnswerBound(state, () => send());
       } catch (error) {
         if (isUnblockedReply(error) && !isClosed(state)) {
           reconnectByForceUnlessUnderWay(state);
           await untilAborted(readyWaitOf(state), state.closedController.signal);
           continue;
         }
-        if (!isReadOnlyReply(error) || isClosed(state)) {
+        if (!isRefusedWriteReply(error) || isClosed(state)) {
           throw error;
         }
-        readOnlyAnswers = readOnlyAnswersOf(
-          commands,
-          commands.map(() => error as Error),
-        );
+        if (!noteAnswered(commands.map(() => error as Error)).isAnsweredReadOnly) {
+          throw error;
+        }
+        await untilAborted(reconnectedAfterReadOnly(state), state.closedController.signal);
+        continue;
       }
-      const [firstReadOnlyAnswer] = readOnlyAnswers;
-      if (firstReadOnlyAnswer !== undefined) {
-        refusedWriteStretch.noteAnsweredReadOnly(
-          readOnlyAnswers.map(({ commandName }) => commandName),
-          firstReadOnlyAnswer.readOnlyReply,
-        );
+      if (isClosed(state)) {
+        if (answersRefusedAs(isReadOnlyReply, commands, commandErrorsOfReply(reply)).length > 0) {
+          throw new ConnectionClosedError();
+        }
+        return reply;
+      }
+      if (!noteAnswered(commandErrorsOfReply(reply)).isAnsweredReadOnly) {
+        return reply;
       }
       await untilAborted(reconnectedAfterReadOnly(state), state.closedController.signal);
     }
@@ -533,7 +549,6 @@ export function createRedisConnections(
     waitUntilReady: (redisConnection, stopSignal) => untilAborted(readyWaitOf(stateOf(redisConnection)), stopSignal),
     workerRedisOutageOf: (redisConnection, outOfMemoryRetryDelayInMilliseconds) =>
       createRedisOutage({
-        outageTracker,
         waitUntilReady: (stopSignal) => untilAborted(readyWaitOf(stateOf(redisConnection)), stopSignal),
         outOfMemoryRetryDelayInMilliseconds,
       }),

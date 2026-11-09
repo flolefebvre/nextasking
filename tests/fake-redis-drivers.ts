@@ -37,6 +37,8 @@ export class FakeRedisDriver implements RedisDriver {
   isAnswering = true;
   infoReply: () => Promise<string> = () => Promise.reject(new Error("this fake driver has no INFO reply"));
   configReply: () => Promise<unknown> = () => Promise.reject(new Error("this fake driver has no CONFIG reply"));
+  scriptReply: (scriptName: string) => Promise<unknown> = (scriptName) =>
+    Promise.reject(new Error(`this fake driver has no reply to ${scriptName}`));
   onForceReconnect: () => void = () => undefined;
   private readonly events: RedisDriverEvents;
   private readonly heldCommands = new Set<{ run: () => void; reject: (error: Error) => void }>();
@@ -173,7 +175,8 @@ export class FakeRedisDriver implements RedisDriver {
 
   private replyTo(command: RedisCommand): { commandName: string; reply: FakeReply } {
     if (command.kind === "script") {
-      return { commandName: command.script.name, reply: noReplyTo(command.script.name) };
+      const scriptName = command.script.name;
+      return { commandName: scriptName, reply: () => this.scriptReply(scriptName) };
     }
     const [token] = command.commandArguments;
     const fakeReply = command.name === FAKE_REPLY_COMMAND_NAME ? repliesByToken.get(String(token)) : undefined;

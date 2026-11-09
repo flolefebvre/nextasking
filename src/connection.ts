@@ -214,6 +214,9 @@ export function createRedisConnections(connection: ConnectionConfig, logger: Log
     client.on("end", () => {
       outageTracker.forgetClient(client);
     });
+    client.on("close", () => {
+      clearSocketTimeoutOfClosedStream(client);
+    });
   };
 
   const optionsByRole: Record<RedisClientRole, RedisOptions> = {
@@ -327,6 +330,14 @@ export function createRedisConnections(connection: ConnectionConfig, logger: Log
       }
     },
   };
+}
+
+type ClientWithSocketTimeoutTimer = { socketTimeoutTimer: ReturnType<typeof setTimeout> | undefined };
+
+function clearSocketTimeoutOfClosedStream(client: Redis): void {
+  const clientWithTimer = client as unknown as ClientWithSocketTimeoutTimer;
+  clearTimeout(clientWithTimer.socketTimeoutTimer);
+  clientWithTimer.socketTimeoutTimer = undefined;
 }
 
 function causeOf(unansweredError: unknown): unknown {

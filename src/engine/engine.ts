@@ -28,6 +28,7 @@ import {
   PROMOTE_SCRIPT,
   promoteKeysOf,
 } from "./promote-script.js";
+import { NEWER_VERSION_RECORDS_PASSED_OVER_PER_PRUNE, PRUNE_SCRIPT, pruneKeysOf } from "./prune-script.js";
 import { READ_STEP_SCRIPT, readStepKeysOf } from "./read-step-script.js";
 import { RENEW_SCRIPT, renewKeysOf } from "./renew-script.js";
 import { REPLAY_SCRIPT, replayKeysOf } from "./replay-script.js";
@@ -42,6 +43,10 @@ export const RECORD_VERSION = 1;
 export const DEDUP_WINDOW_IN_MILLISECONDS: DurationInMilliseconds = 24 * 60 * 60 * 1000;
 
 export const EXPIRED_DEDUP_ENTRIES_TRIMMED_PER_SET = 100;
+
+export const MOST_RUNS_PRUNED_PER_PRUNE = 200;
+
+export const EXPIRED_DEDUP_ENTRIES_TRIMMED_PER_PRUNE = 1000;
 
 export const MOST_ERROR_TEXT_CHARACTERS = 4000;
 
@@ -280,23 +285,6 @@ export type Engine = {
   prune: (request: PruneRequest) => Promise<PruneReply>;
   replay: (request: ReplayRequest) => Promise<ReplayReply>;
   makeDue: () => Promise<MakeDueReply>;
-};
-
-export type ImplementedEngine = Pick<
-  Engine,
-  | "enqueue"
-  | "fetch"
-  | "renew"
-  | "settle"
-  | "promote"
-  | "saveStep"
-  | "readStep"
-  | "fire"
-  | "syncSchedules"
-  | "replay"
-  | "makeDue"
-> & {
-  tick: (request: TickRequest & { prune?: undefined }) => Promise<TickReply>;
 };
 
 function unreadableReplyError(scriptName: string, reply: unknown): Error {
@@ -652,6 +640,25 @@ function replayReplyOf(reply: unknown): ReplayReply {
   throw unreadableReplyError("replay", reply);
 }
 
+function pruneReplyOf(reply: unknown): PruneReply {
+  if (Array.isArray(reply) && reply.length === 2 && reply[0] === "pruned" && Number.isSafeInteger(reply[1])) {
+    return { kind: "pruned", prunedRunCount: Number(reply[1]) };
+  }
+  throw unreadableReplyError("prune", reply);
+}
+
+function pruneArgumentsOf({ completedRetention, failedRetention }: PruneRequest): ScriptArgument[] {
+  return [
+    completedRetention.maxAgeInMilliseconds,
+    completedRetention.maxRunCount,
+    failedRetention.maxAgeInMilliseconds,
+    failedRetention.maxRunCount,
+    MOST_RUNS_PRUNED_PER_PRUNE,
+    NEWER_VERSION_RECORDS_PASSED_OVER_PER_PRUNE,
+    EXPIRED_DEDUP_ENTRIES_TRIMMED_PER_PRUNE,
+  ];
+}
+
 function makeDueReplyOf(reply: unknown): MakeDueReply {
   if (Array.isArray(reply) && reply.length === 2 && reply[0] === "madeDue" && Number.isSafeInteger(reply[1])) {
     return { kind: "madeDue", madeDueRunCount: Number(reply[1]) };
@@ -747,10 +754,16 @@ function settleArgumentsOf(outcome: SettleOutcome): ScriptArgument[] {
 
 type ScriptRunner = (scriptArguments: readonly ScriptArgument[]) => Promise<unknown>;
 
-type ScriptRunnerWithKeys = (
+type PipelinedScriptRunnerWithKeys = ((
   scriptKeys: readonly string[],
   scriptArguments: readonly ScriptArgument[],
-) => Promise<unknown>;
+) => Promise<unknown>) & {
+  appendTo: (
+    pipeline: ChainableCommander,
+    scriptKeys: readonly string[],
+    scriptArguments: readonly ScriptArgument[],
+  ) => void;
+};
 
 type PipelinedScriptRunner = ScriptRunner & {
   appendTo: (pipeline: ChainableCommander, scriptArguments: readonly ScriptArgument[]) => void;
@@ -788,24 +801,37 @@ function pipelineRepliesOf(results: [error: Error | null, reply: unknown][] | nu
   });
 }
 
-export function createEngine(client: Redis, prefix: string): ImplementedEngine {
+export function createEngine(client: Redis, prefix: string): Engine {
   const keys = engineKeysOf(prefix);
   const sharedArguments: ScriptArgument[] = [hashTaggedPrefixOf(prefix), RECORD_VERSION];
-  const scriptRunnerWithKeysOf = (commandName: string, script: string, keyCount: number): ScriptRunnerWithKeys => {
+  const scriptRunnerWithKeysOf = (
+    commandName: string,
+    script: string,
+    keyCount: number,
+  ): PipelinedScriptRunnerWithKeys => {
     const command = defineScriptCommand(client, commandName, `${LUA_LIBRARY}\n${script}`, keyCount);
-    return (scriptKeys, scriptArguments) => command.call(scriptKeys, [...sharedArguments, ...scriptArguments]);
+    const runScript = (scriptKeys: readonly string[], scriptArguments: readonly ScriptArgument[]) =>
+      command.call(scriptKeys, [...sharedArguments, ...scriptArguments]);
+    return Object.assign(runScript, {
+      appendTo: (
+        pipeline: ChainableCommander,
+        scriptKeys: readonly string[],
+        scriptArguments: readonly ScriptArgument[],
+      ) => {
+        command.appendTo(pipeline, scriptKeys, [...sharedArguments, ...scriptArguments]);
+      },
+    });
   };
   const scriptRunnerOf = (
     commandName: string,
     script: string,
     scriptKeys: readonly string[],
   ): PipelinedScriptRunner => {
-    const command = defineScriptCommand(client, commandName, `${LUA_LIBRARY}\n${script}`, scriptKeys.length);
-    const runScript = (scriptArguments: readonly ScriptArgument[]) =>
-      command.call(scriptKeys, [...sharedArguments, ...scriptArguments]);
+    const runScriptWithKeys = scriptRunnerWithKeysOf(commandName, script, scriptKeys.length);
+    const runScript = (scriptArguments: readonly ScriptArgument[]) => runScriptWithKeys(scriptKeys, scriptArguments);
     return Object.assign(runScript, {
       appendTo: (pipeline: ChainableCommander, scriptArguments: readonly ScriptArgument[]) => {
-        command.appendTo(pipeline, scriptKeys, [...sharedArguments, ...scriptArguments]);
+        runScriptWithKeys.appendTo(pipeline, scriptKeys, scriptArguments);
       },
     });
   };
@@ -824,8 +850,11 @@ export function createEngine(client: Redis, prefix: string): ImplementedEngine {
   );
   const runFireScript = scriptRunnerOf("nextaskingFire", FIRE_SCRIPT, fireKeysOf(keys));
   const runReplayScript = scriptRunnerOf("nextaskingReplay", REPLAY_SCRIPT, replayKeysOf(keys));
+  const runPruneScript = scriptRunnerWithKeysOf("nextaskingPrune", PRUNE_SCRIPT, 3);
   return {
     replay: async ({ runId }) => replayReplyOf(await runReplayScript([runId])),
+    prune: async (request) =>
+      pruneReplyOf(await runPruneScript(pruneKeysOf(keys, request.task), pruneArgumentsOf(request))),
     fire: async ({ task, instant, instantAfter, runId, retries }) =>
       fireReplyOf(await runFireScript([task, instant, instantAfter, runId, retries])),
     syncSchedules: async ({ schedulesToSync }) =>
@@ -857,11 +886,14 @@ export function createEngine(client: Redis, prefix: string): ImplementedEngine {
       runPromoteScript.appendTo(pipeline, PROMOTE_ARGUMENTS);
       runRenewScript.appendTo(pipeline, renewArgumentsOf(request));
       pipeline.smembers(keys.tasks);
-      const [promoteReply, renewReply, taskNamesReply] = pipelineRepliesOf(await pipeline.exec());
+      if (request.prune !== undefined) {
+        runPruneScript.appendTo(pipeline, pruneKeysOf(keys, request.prune.task), pruneArgumentsOf(request.prune));
+      }
+      const [promoteReply, renewReply, taskNamesReply, pruneReply] = pipelineRepliesOf(await pipeline.exec());
       return {
         promote: promoteReplyOf(promoteReply),
         renewals: renewalsOf(renewReply),
-        prune: undefined,
+        prune: request.prune === undefined ? undefined : pruneReplyOf(pruneReply),
         taskNames: taskNamesOf(taskNamesReply),
       };
     },

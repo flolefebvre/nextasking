@@ -1,5 +1,5 @@
 import { defineEngineContractTests } from "./engine-contract.js";
-import { engineTest, expireLock } from "./engine-test.js";
+import { backdateEndedRun, engineTest, expireLock } from "./engine-test.js";
 import { serverInstantInMillisecondsOf } from "./server-instant.js";
 import type { RunState } from "../src/run-states.js";
 
@@ -9,6 +9,7 @@ defineEngineContractTests((name, body) => {
     await body({
       engine,
       expireLock: (runId) => expireLock(context, runId),
+      backdateEndedRun: (runId, durationInMilliseconds) => backdateEndedRun(context, runId, durationInMilliseconds),
       pastInstant: async () => (await serverInstantInMillisecondsOf(redis)) - 1000,
       stateOf: async (runId) =>
         ((await redis.hget(keys.runRecord(runId), "state")) ?? undefined) as RunState | undefined,

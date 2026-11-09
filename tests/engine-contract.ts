@@ -1,28 +1,30 @@
 import { expect } from "vitest";
 
 import { runFailed } from "../src/built-in-events.js";
-import type { EpochMilliseconds } from "../src/durations.js";
-import type {
-  Engine,
-  FailureNotice,
-  FetchedReply,
-  ImplementedEngine,
-  LockedRun,
-  RunToCreate,
-} from "../src/engine/engine.js";
+import type { DurationInMilliseconds, EpochMilliseconds } from "../src/durations.js";
+import { MOST_RUNS_PRUNED_PER_PRUNE } from "../src/engine/engine.js";
+import type { Engine, FailureNotice, FetchedReply, LockedRun, RunToCreate } from "../src/engine/engine.js";
 import type { RunId } from "../src/ids.js";
 import type { ErrorRecord } from "../src/run-queue.js";
 import type { RunState } from "../src/run-states.js";
+import {
+  DAY_IN_MILLISECONDS,
+  endRuns,
+  MINUTE_IN_MILLISECONDS,
+  runIdsOf,
+  SEND_EMAIL_PRUNE_REQUEST,
+} from "./ended-runs.js";
 import { freshLockTokensOf } from "./lock-tokens.js";
 
 export type ContractEngine = Pick<
   Engine,
-  "enqueue" | "fetch" | "renew" | "settle" | "promote" | "saveStep" | "readStep"
-> & { tick: ImplementedEngine["tick"] };
+  "enqueue" | "fetch" | "renew" | "settle" | "promote" | "saveStep" | "readStep" | "prune" | "tick"
+>;
 
 export type EngineContractHarness = {
   engine: ContractEngine;
   expireLock: (runId: RunId) => Promise<void>;
+  backdateEndedRun: (runId: RunId, durationInMilliseconds: DurationInMilliseconds) => Promise<void>;
   pastInstant: () => Promise<EpochMilliseconds>;
   stateOf: (runId: RunId) => Promise<RunState | undefined>;
   isWakeUpMarkerArmed: () => Promise<boolean>;
@@ -88,6 +90,24 @@ function failureNoticeOf(runId: RunId, listenerRunIds: readonly RunId[]): Failur
     })),
     eventDedup: { eventName: runFailed.name, eventId: `notice-of-${runId}` },
   };
+}
+
+async function statesOf(harness: EngineContractHarness, runIds: readonly RunId[]): Promise<(RunState | undefined)[]> {
+  const states: (RunState | undefined)[] = [];
+  for (const runId of runIds) {
+    states.push(await harness.stateOf(runId));
+  }
+  return states;
+}
+
+async function backdateEndedRuns(
+  harness: EngineContractHarness,
+  runIds: readonly RunId[],
+  durationInMilliseconds: DurationInMilliseconds,
+): Promise<void> {
+  for (const runId of runIds) {
+    await harness.backdateEndedRun(runId, durationInMilliseconds);
+  }
 }
 
 export function defineEngineContractTests(contractTest: EngineContractTest): void {
@@ -376,4 +396,119 @@ export function defineEngineContractTests(contractTest: EngineContractTest): voi
       expect(await harness.isWakeUpMarkerArmed()).toBe(false);
     },
   );
+
+  contractTest(
+    "a prune removes a completed run ended 24 hours ago, and keeps a failed run of the same age until 14 days",
+    async (harness) => {
+      const { engine } = harness;
+      await endRuns(engine, "send-email", ["completed-run", "younger-completed-run"], "complete");
+      await endRuns(engine, "send-email", ["failed-run"], "fail");
+      await backdateEndedRuns(harness, ["completed-run", "failed-run"], DAY_IN_MILLISECONDS);
+      await harness.backdateEndedRun("younger-completed-run", DAY_IN_MILLISECONDS - MINUTE_IN_MILLISECONDS);
+
+      const dayReply = await engine.prune(SEND_EMAIL_PRUNE_REQUEST);
+      const statesAfterADay = await statesOf(harness, ["completed-run", "younger-completed-run", "failed-run"]);
+      await harness.backdateEndedRun("failed-run", 13 * DAY_IN_MILLISECONDS);
+      const fortnightReply = await engine.prune(SEND_EMAIL_PRUNE_REQUEST);
+
+      expect(dayReply).toEqual({ kind: "pruned", prunedRunCount: 1 });
+      expect(statesAfterADay).toEqual([undefined, "completed", "failed"]);
+      expect(fortnightReply).toEqual({ kind: "pruned", prunedRunCount: 1 });
+      expect(await harness.stateOf("failed-run")).toBeUndefined();
+    },
+  );
+
+  contractTest("a prune removes the oldest ended runs over the cap of their state", async (harness) => {
+    const { engine } = harness;
+    const completedRunIds = runIdsOf("completed-run", 5);
+    const failedRunIds = runIdsOf("failed-run", 4);
+    await endRuns(engine, "send-email", completedRunIds, "complete");
+    await endRuns(engine, "send-email", failedRunIds, "fail");
+
+    const reply = await engine.prune({
+      ...SEND_EMAIL_PRUNE_REQUEST,
+      completedRetention: { ...SEND_EMAIL_PRUNE_REQUEST.completedRetention, maxRunCount: 3 },
+      failedRetention: { ...SEND_EMAIL_PRUNE_REQUEST.failedRetention, maxRunCount: 2 },
+    });
+
+    expect(reply).toEqual({ kind: "pruned", prunedRunCount: 4 });
+    expect(await statesOf(harness, completedRunIds)).toEqual([undefined, undefined, ...Array(3).fill("completed")]);
+    expect(await statesOf(harness, failedRunIds)).toEqual([undefined, undefined, "failed", "failed"]);
+  });
+
+  contractTest(
+    `a prune removes at most ${String(MOST_RUNS_PRUNED_PER_PRUNE)} runs of its task per call: aged completed, aged failed, then over the cap`,
+    async (harness) => {
+      const { engine } = harness;
+      const agedCompletedRunIds = runIdsOf("aged-completed-run", 150);
+      const agedFailedRunIds = runIdsOf("aged-failed-run", 100);
+      const completedRunIdsOverTheCap = runIdsOf("completed-run", 50);
+      await endRuns(engine, "send-email", agedCompletedRunIds, "complete");
+      await endRuns(engine, "send-email", agedFailedRunIds, "fail");
+      await endRuns(engine, "send-email", completedRunIdsOverTheCap, "complete");
+      await engine.enqueue({ runs: [{ runId: "other-task-run", task: "resize-image", payload: "{}", retries: 0 }] });
+      await backdateEndedRuns(harness, [...agedCompletedRunIds, ...agedFailedRunIds], 15 * DAY_IN_MILLISECONDS);
+      const pruneRequest = {
+        ...SEND_EMAIL_PRUNE_REQUEST,
+        completedRetention: { ...SEND_EMAIL_PRUNE_REQUEST.completedRetention, maxRunCount: 0 },
+      };
+
+      const firstReply = await engine.prune(pruneRequest);
+      const failedStatesAfterTheFirstPrune = await statesOf(harness, agedFailedRunIds);
+      const completedStatesAfterTheFirstPrune = await statesOf(harness, completedRunIdsOverTheCap);
+      const secondReply = await engine.prune(pruneRequest);
+
+      expect(firstReply).toEqual({ kind: "pruned", prunedRunCount: MOST_RUNS_PRUNED_PER_PRUNE });
+      expect(await statesOf(harness, agedCompletedRunIds)).toEqual(Array(150).fill(undefined));
+      expect(failedStatesAfterTheFirstPrune).toEqual([...Array(50).fill(undefined), ...Array(50).fill("failed")]);
+      expect(completedStatesAfterTheFirstPrune).toEqual(Array(50).fill("completed"));
+      expect(secondReply).toEqual({ kind: "pruned", prunedRunCount: 100 });
+      expect(await statesOf(harness, [...agedFailedRunIds, ...completedRunIdsOverTheCap])).toEqual(
+        Array(150).fill(undefined),
+      );
+      expect(await harness.stateOf("other-task-run")).toBe("pending");
+    },
+  );
+
+  contractTest(
+    "a pruned run's id is skipped while its dedup entry is live, and starts a new run once it expired",
+    async (harness) => {
+      const { engine } = harness;
+      await endRuns(engine, "send-email", ["run-ended-24h01-ago", "run-ended-23h59-ago"], "complete");
+      await harness.backdateEndedRun("run-ended-24h01-ago", DAY_IN_MILLISECONDS + MINUTE_IN_MILLISECONDS);
+      await harness.backdateEndedRun("run-ended-23h59-ago", DAY_IN_MILLISECONDS - MINUTE_IN_MILLISECONDS);
+      await engine.prune({
+        ...SEND_EMAIL_PRUNE_REQUEST,
+        completedRetention: { ...SEND_EMAIL_PRUNE_REQUEST.completedRetention, maxRunCount: 0 },
+      });
+
+      const reply = await engine.enqueue({ runs: sendEmailRunsOf(["run-ended-24h01-ago", "run-ended-23h59-ago"]) });
+
+      expect(reply).toEqual({
+        kind: "enqueued",
+        createdRunIds: ["run-ended-24h01-ago"],
+        skippedRunIds: ["run-ended-23h59-ago"],
+      });
+    },
+  );
+
+  contractTest("a tick carrying a prune prunes its task and returns the prune's reply", async (harness) => {
+    const { engine } = harness;
+    await endRuns(engine, "send-email", ["aged-run"], "complete");
+    await harness.backdateEndedRun("aged-run", DAY_IN_MILLISECONDS);
+
+    const reply = await engine.tick({
+      heldLocks: [],
+      lockDurationInMilliseconds: LOCK_DURATION_IN_MILLISECONDS,
+      prune: SEND_EMAIL_PRUNE_REQUEST,
+    });
+
+    expect(reply).toEqual({
+      promote: { kind: "promoted", promotedRunCount: 0, stalledRuns: [], thirdStalls: [] },
+      renewals: [],
+      prune: { kind: "pruned", prunedRunCount: 1 },
+      taskNames: ["send-email"],
+    });
+    expect(await harness.stateOf("aged-run")).toBeUndefined();
+  });
 }

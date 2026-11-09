@@ -4,7 +4,9 @@ import type { LockToken } from "../src/engine/engine-keys.js";
 import {
   DEDUP_WINDOW_IN_MILLISECONDS,
   errorTextCutOf,
+  EXPIRED_DEDUP_ENTRIES_TRIMMED_PER_PRUNE,
   EXPIRED_DEDUP_ENTRIES_TRIMMED_PER_SET,
+  MOST_RUNS_PRUNED_PER_PRUNE,
   UNKNOWN_TASK_FAILURE_DELAY_IN_MILLISECONDS,
 } from "../src/engine/engine.js";
 import type {
@@ -41,8 +43,6 @@ import { MOST_DUE_RUNS_PROMOTED_PER_PROMOTE } from "../src/engine/promote-script
 import type { RunId, StepId } from "../src/ids.js";
 import type { ErrorRecord, FailureReason, SourceEvent } from "../src/run-queue.js";
 import type { RunState } from "../src/run-states.js";
-
-export const MOST_RUNS_PRUNED_PER_PRUNE = 200;
 
 export type InMemoryEngineMethod =
   "enqueue" | "fetch" | "renew" | "settle" | "promote" | "saveStep" | "readStep" | "prune" | "tick";
@@ -91,6 +91,7 @@ export type InMemoryEngine = Pick<
   storedRunOf: (runId: RunId) => Readonly<InMemoryStoredRun> | undefined;
   runIdsInState: (state: RunState) => RunId[];
   expireLock: (runId: RunId) => void;
+  backdateEndedRun: (runId: RunId, durationInMilliseconds: DurationInMilliseconds) => void;
 };
 
 export type InMemoryEngineOptions = { now?: () => EpochMilliseconds };
@@ -668,7 +669,7 @@ export function createInMemoryEngine({ now = () => Date.now() }: InMemoryEngineO
     for (const runId of prunedRunIds) {
       runsById.delete(runId);
     }
-    trimExpiredDedupEntries(dedupExpiryByRunIdByTask.get(task), instant, Number.POSITIVE_INFINITY);
+    trimExpiredDedupEntries(dedupExpiryByRunIdByTask.get(task), instant, EXPIRED_DEDUP_ENTRIES_TRIMMED_PER_PRUNE);
     return { kind: "pruned", prunedRunCount: prunedRunIds.size };
   };
 
@@ -743,6 +744,18 @@ export function createInMemoryEngine({ now = () => Date.now() }: InMemoryEngineO
         throw new Error(`run "${runId}" holds no lock to expire`);
       }
       storedRun.lockedUntil = now() - 1;
+    },
+    backdateEndedRun: (runId, durationInMilliseconds) => {
+      const storedRun = runsById.get(runId);
+      if (storedRun?.finishedAt === undefined || (storedRun.state !== "completed" && storedRun.state !== "failed")) {
+        throw new Error(`run "${runId}" has not ended`);
+      }
+      storedRun.finishedAt -= durationInMilliseconds;
+      const dedupExpiryByRunId = dedupExpiryByRunIdByTask.get(storedRun.task);
+      const dedupExpiresAt = dedupExpiryByRunId?.get(runId);
+      if (dedupExpiresAt !== undefined) {
+        dedupExpiryByRunId?.set(runId, dedupExpiresAt - durationInMilliseconds);
+      }
     },
   };
 }

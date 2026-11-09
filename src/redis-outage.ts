@@ -63,6 +63,7 @@ export async function answeredDespiteOutage<Answer>(
   const waitEndSignals = [callAbortSignal, resendStopSignal].filter((signal) => signal !== undefined);
   const waitEndSignal = waitEndSignals.length === 0 ? undefined : AbortSignal.any(waitEndSignals);
   for (;;) {
+    callAbortSignal?.throwIfAborted();
     let answer: Answer;
     try {
       answer = await untilAborted(call(), callAbortSignal);

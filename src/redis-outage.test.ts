@@ -133,6 +133,17 @@ describe("answeredDespiteOutage", () => {
     expect(redisOutage.answeredCount()).toBe(1);
   });
 
+  test("sends nothing and rejects with the abort reason when its call abort signal is already aborted", async () => {
+    const redisOutage = recordingRedisOutage();
+    const call = vi.fn<() => Promise<string>>().mockResolvedValue("answered");
+    const abortReason = new Error("shutdown deadline");
+
+    await expect(
+      answeredDespiteOutage(redisOutage, call, { callAbortSignal: AbortSignal.abort(abortReason) }),
+    ).rejects.toBe(abortReason);
+    expect(call).not.toHaveBeenCalled();
+  });
+
   test("rethrows an error that is not Redis being away, without waiting or noting an answer", async () => {
     const redisOutage = recordingRedisOutage();
     const unreadableReply = new Error("The fetch script sent a reply the engine cannot read");

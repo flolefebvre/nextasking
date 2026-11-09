@@ -6,6 +6,45 @@ export type LockToken = string;
 
 export type HashTaggedPrefix = `{${string}}`;
 
+export type StoredRunId = `${string}:${string}`;
+
+export type RunIdentity = { task: string; runId: RunId };
+
+const STORED_RUN_ID_SEPARATOR = ":";
+
+export function storedRunIdOf(task: string, runId: RunId): StoredRunId {
+  if (task === "" || runId === "") {
+    throw new Error("invalid argument: a run is identified by a task and a run id, neither empty");
+  }
+  return `${encodeURIComponent(task)}${STORED_RUN_ID_SEPARATOR}${runId}`;
+}
+
+function decodedTaskOf(encodedTask: string): string | undefined {
+  try {
+    return decodeURIComponent(encodedTask);
+  } catch {
+    return undefined;
+  }
+}
+
+export function runIdentityOf(storedRunId: string): RunIdentity | undefined {
+  const separatorPosition = storedRunId.indexOf(STORED_RUN_ID_SEPARATOR);
+  if (separatorPosition === -1) {
+    return undefined;
+  }
+  const task = decodedTaskOf(storedRunId.slice(0, separatorPosition));
+  const runId = storedRunId.slice(separatorPosition + 1);
+  if (
+    task === undefined ||
+    task === "" ||
+    runId === "" ||
+    encodeURIComponent(task) !== storedRunId.slice(0, separatorPosition)
+  ) {
+    return undefined;
+  }
+  return { task, runId };
+}
+
 export type EngineKeys = {
   runRecord: (runId: RunId) => string;
   runPayload: (runId: RunId) => string;

@@ -4,9 +4,9 @@ import { fileURLToPath } from "node:url";
 import { expect, vi } from "vitest";
 
 import { closeWhenTestFinishes } from "./close-when-test-finishes.js";
-import { createGiveUpAfterOneSecondNextasking } from "./give-up-after-one-second-nextasking.js";
+import { giveUpAfterOneSecondNextaskingBehindACutProxyOf } from "./give-up-after-one-second-nextasking.js";
 import { integrationTest } from "./integration-test.js";
-import { createRecordingLogger, waitForLogMessage } from "./recording-logger.js";
+import { waitForLogMessage } from "./recording-logger.js";
 import { startTcpProxy } from "./tcp-proxy.js";
 import { startWorkerProcess } from "./worker-process.js";
 import { CLOSE_WHILE_BOOTING_URL_VARIABLE } from "./worker-process-config.js";
@@ -39,13 +39,8 @@ async function exitOfAProcessClosingAWorkerWhileItBoots(url: string): Promise<{ 
 integrationTest(
   "startWorker() resolves while Redis is unreachable, and the worker syncs its schedules and starts once Redis is back",
   async ({ redisUrl, keyPrefix }) => {
-    const proxy = await startTcpProxy(redisUrl);
-    await proxy.cut();
-    const { logger, lines } = createRecordingLogger();
-    const nextasking = createGiveUpAfterOneSecondNextasking(proxy.url, keyPrefix, { logger });
+    const { proxy, nextasking, lines } = await giveUpAfterOneSecondNextaskingBehindACutProxyOf(redisUrl, keyPrefix);
     const onWorkerNotStarted = vi.fn();
-
-    closeWhenTestFinishes({ proxy, nextaskings: [nextasking], lines });
 
     const startedAt = performance.now();
     await nextasking.startWorker({ onWorkerNotStarted });

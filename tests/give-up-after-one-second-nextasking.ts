@@ -2,7 +2,18 @@ import { z } from "zod";
 
 import { createNextasking, defineScheduledTask, defineTask } from "../src/index.js";
 import type { Logger } from "../src/index.js";
+import { closeWhenTestFinishes } from "./close-when-test-finishes.js";
 import { createRecordingLogger } from "./recording-logger.js";
+import { startTcpProxy } from "./tcp-proxy.js";
+
+export async function giveUpAfterOneSecondNextaskingBehindACutProxyOf(redisUrl: string, keyPrefix: string) {
+  const proxy = await startTcpProxy(redisUrl);
+  await proxy.cut();
+  const { logger, lines } = createRecordingLogger();
+  const nextasking = createGiveUpAfterOneSecondNextasking(proxy.url, keyPrefix, { logger });
+  closeWhenTestFinishes({ proxy, nextaskings: [nextasking], lines });
+  return { proxy, nextasking, lines };
+}
 
 export function createGiveUpAfterOneSecondNextasking(
   url: string,

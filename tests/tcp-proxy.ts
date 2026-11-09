@@ -12,6 +12,7 @@ export type TcpProxy = {
   stopAnswering: () => void;
   answerAgain: () => void;
   acceptedConnectionCount: () => number;
+  recordRequestChunks: () => () => string[];
   stop: () => Promise<void>;
 };
 
@@ -83,6 +84,7 @@ export async function startTcpProxy(targetUrl: string): Promise<TcpProxy> {
   const switchesAcceptedWhileNotAnswering = new Set<ForwardingSwitch>();
   let isAnswering = true;
   let acceptedConnectionCount = 0;
+  let recordedRequestChunks: string[] | undefined;
   let armedReplyCut: ArmedReplyCut | undefined;
 
   const track = (socket: Socket) => {
@@ -152,6 +154,7 @@ export async function startTcpProxy(targetUrl: string): Promise<TcpProxy> {
     let unforwardedRequestBytes = Buffer.alloc(0);
     let isForwardingRequests = true;
     clientSocket.on("data", (requestChunk: Buffer) => {
+      recordedRequestChunks?.push(requestChunk.toString());
       unforwardedRequestBytes = Buffer.concat([unforwardedRequestBytes, requestChunk]);
       let commandByteLength = byteLengthOfFirstCompleteCommand(unforwardedRequestBytes);
       while (isForwardingRequests && commandByteLength !== undefined) {
@@ -216,6 +219,11 @@ export async function startTcpProxy(targetUrl: string): Promise<TcpProxy> {
       switchesAcceptedWhileNotAnswering.clear();
     },
     acceptedConnectionCount: () => acceptedConnectionCount,
+    recordRequestChunks: () => {
+      const requestChunks: string[] = [];
+      recordedRequestChunks = requestChunks;
+      return () => [...requestChunks];
+    },
     stop: async () => {
       isStopped = true;
       await cut();

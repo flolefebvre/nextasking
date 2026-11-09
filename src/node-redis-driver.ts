@@ -106,6 +106,7 @@ function shaOf({ lua }: RedisScript): string {
 }
 
 export const createNodeRedisDriver: CreateRedisDriver = (url, { onConnect, onReady, onError }) => {
+  let isDestroyed = false;
   const createFreshClient = () => {
     const createdClient = createClient({
       url,
@@ -115,9 +116,11 @@ export const createNodeRedisDriver: CreateRedisDriver = (url, { onConnect, onRea
     });
     const isCurrent = () => createdClient === client;
     createdClient.on("connect", () => {
-      if (isCurrent()) {
-        onConnect();
+      if (!isCurrent() || isDestroyed) {
+        createdClient.destroy();
+        return;
       }
+      onConnect();
     });
     createdClient.on("ready", () => {
       if (isCurrent()) {
@@ -155,7 +158,6 @@ export const createNodeRedisDriver: CreateRedisDriver = (url, { onConnect, onRea
     }
   };
 
-  let isDestroyed = false;
   const connect = () => {
     if (!isDestroyed) {
       client.connect().catch(() => undefined);

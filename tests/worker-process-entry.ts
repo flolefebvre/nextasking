@@ -1,4 +1,5 @@
 import { createNextasking, defineListener, runFailed } from "../src/index.js";
+import { envelopeDefinitionsOf } from "./benchmark/envelope-definitions.js";
 import type { Logger } from "../src/index.js";
 import { overrideWorkerTiming } from "../src/worker-timing.js";
 import { fixtureRecordsKey } from "./fixture-records.js";
@@ -58,12 +59,24 @@ const failureNoticeRecordingListeners =
       ]
     : [];
 
-const nextasking = createNextasking({
+const commonConfig = {
   connection: config.connection ?? { url: config.redisUrl },
   prefix: config.keyPrefix,
   logger: ndjsonLogger,
-  tasks: [...workerProcessTasks(writeRecord), ...failureNoticeRecordingListeners],
-});
+};
+
+function createEnvelopeLoadNextasking() {
+  const { tasks, events } = envelopeDefinitionsOf(writeRecord);
+  return createNextasking({ ...commonConfig, tasks, events });
+}
+
+const nextasking =
+  config.definitions === "envelope load"
+    ? createEnvelopeLoadNextasking()
+    : createNextasking({
+        ...commonConfig,
+        tasks: [...workerProcessTasks(writeRecord), ...failureNoticeRecordingListeners],
+      });
 
 await nextasking.startWorker(config.startWorkerOptions);
 process.send?.(WORKER_PROCESS_READY);

@@ -218,7 +218,7 @@ export function createNextasking<
     recordingSendTarget === undefined
       ? callOnRedisWhileOpen(callIds, ({ commandClient }) => {
           readApi ??= createReadApi({
-            client: commandClient,
+            client: ioredisClientOf(commandClient),
             prefix,
             tasksByName,
             listenerNamesByEventName,

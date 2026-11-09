@@ -30,7 +30,7 @@ function readerOf({ redis, keyPrefix }: Pick<EngineTestContext, "redis" | "keyPr
     ]),
   );
   return createReadApi({
-    client: redis,
+    client: redisClientOf(redis),
     prefix: keyPrefix,
     tasksByName,
     listenerNamesByEventName: new Map(),

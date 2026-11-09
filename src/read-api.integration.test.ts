@@ -49,7 +49,7 @@ function taskDefinitionOf(taskName: string): AnyTaskDefinition {
 function readerOf({ redis, keyPrefix }: EngineTestContext): ReadApi {
   const taskNames = [...TASK_NAMES, ...LISTENER_NAMES];
   return createReadApi({
-    client: redis,
+    client: redisClientOf(redis),
     prefix: keyPrefix,
     tasksByName: new Map(taskNames.map((taskName) => [taskName, taskDefinitionOf(taskName)])),
     listenerNamesByEventName: new Map([["invoice.paid", LISTENER_NAMES]]),
@@ -126,6 +126,32 @@ engineTest(
       steps: [{ id: "charge", result: "paid" }],
     });
     expect(run?.errors[0]?.failedAt.getTime()).toBeLessThanOrEqual(secondAttempt!.startedAt);
+  },
+);
+
+engineTest(
+  "getRun reads saved values whose step ids are integer-like or __proto__, integer-like ids first in ascending order",
+  async (context) => {
+    const { engine } = context;
+    await enqueueRuns(context, [runOf("run-1", "send-email")]);
+    const [attempt] = await fetchedLockedRunsOf(context, 1);
+    for (const [stepId, value] of [
+      ["charge", '["paid"]'],
+      ["__proto__", '["polluted"]'],
+      ["10", '["ten"]'],
+      ["2", '["two"]'],
+    ]) {
+      await engine.saveStep({ ...attempt!, stepId: stepId!, step: { kind: "value", value: value! } });
+    }
+
+    const run = await readerOf(context).getRun("send-email", "run-1");
+
+    expect(run?.steps).toEqual([
+      { id: "2", result: "two" },
+      { id: "10", result: "ten" },
+      { id: "charge", result: "paid" },
+      { id: "__proto__", result: "polluted" },
+    ]);
   },
 );
 

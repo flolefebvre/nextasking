@@ -1,16 +1,11 @@
-import type { ChainableCommander, Redis } from "ioredis";
-
-import { defineScriptCommand } from "./script-commands.js";
+import { scriptCommandOf } from "../redis-client.js";
+import type { RedisCommand, RedisScript } from "../redis-client.js";
 
 export type IndexScore = number;
 
 export type IndexPosition = { score: IndexScore; storedRunId: string };
 
 export type IndexPageRequest = { indexKey: string; limit: number; after: IndexPosition | undefined };
-
-export type IndexPageCommand = {
-  appendTo: (pipeline: ChainableCommander, request: IndexPageRequest) => void;
-};
 
 export const INDEX_PAGE_SCRIPT = `
 local indexKey = KEYS[1]
@@ -54,17 +49,14 @@ end
 return redis.call("ZRANGE", indexKey, firstRank, firstRank + limit - 1, "REV", "WITHSCORES")
 `;
 
-export function defineIndexPageCommand(client: Redis): IndexPageCommand {
-  const command = defineScriptCommand(client, "nextaskingIndexPage", INDEX_PAGE_SCRIPT, 1);
-  return {
-    appendTo: (pipeline, { indexKey, limit, after }) => {
-      command.appendTo(
-        pipeline,
-        [indexKey],
-        after === undefined ? [limit] : [limit, String(after.score), after.storedRunId],
-      );
-    },
-  };
+const INDEX_PAGE_REDIS_SCRIPT: RedisScript = { name: "nextaskingIndexPage", lua: INDEX_PAGE_SCRIPT, keyCount: 1 };
+
+export function indexPageCommandOf({ indexKey, limit, after }: IndexPageRequest): RedisCommand {
+  return scriptCommandOf(
+    INDEX_PAGE_REDIS_SCRIPT,
+    [indexKey],
+    after === undefined ? [limit] : [limit, String(after.score), after.storedRunId],
+  );
 }
 
 export function indexPageOf(reply: unknown): IndexPosition[] {

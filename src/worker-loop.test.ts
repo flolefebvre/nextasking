@@ -227,6 +227,60 @@ test("a completed, retried, failed and suspended attempt each settle with their 
   expect(engine.storedRunOf("suspends", "suspends-1")?.state).toBe("suspended");
 });
 
+test("two runs sharing a run id on two tasks each hand their handler, their lines and their failure notice the consumer's run id", async () => {
+  const handledRunIdsByTask: Record<string, string[]> = { "send-receipt": [], "update-stock": [] };
+  const noticedRuns: { task: string; runId: string }[] = [];
+  const tasks = [
+    defineTask("send-receipt", {
+      schema: v.object({}),
+      handler: async ({ runId }) => {
+        handledRunIdsByTask["send-receipt"]!.push(runId);
+      },
+    }),
+    defineTask("update-stock", {
+      schema: v.object({}),
+      retries: 0,
+      handler: async ({ runId }) => {
+        handledRunIdsByTask["update-stock"]!.push(runId);
+        throw new Error("stock service down");
+      },
+    }),
+    defineListener("alert-on-call", {
+      on: runFailed,
+      handler: async ({ payload }) => {
+        noticedRuns.push({ task: payload.task, runId: payload.runId });
+      },
+    }),
+  ] as AnyTaskDefinition[];
+  const engine = createInMemoryEngine();
+  await engine.enqueue({
+    runs: [...runsOf("send-receipt", 1), ...runsOf("update-stock", 1, { retries: 0 })].map((run) => ({
+      ...run,
+      runId: "order-1",
+    })),
+  });
+
+  const { lines } = startedLoopOf(tasks, { engine });
+  await vi.advanceTimersByTimeAsync(0);
+
+  const taskAndRunIdOf = ({ fields }: RecordedLogLine) => [fields?.["task"], fields?.["runId"]];
+  expect(handledRunIdsByTask).toEqual({ "send-receipt": ["order-1"], "update-stock": ["order-1"] });
+  expect(engine.storedRunOf("send-receipt", "order-1")?.state).toBe("completed");
+  expect(engine.storedRunOf("update-stock", "order-1")?.state).toBe("failed");
+  expect(noticedRuns).toEqual([{ task: "update-stock", runId: "order-1" }]);
+  expect(alertOnCallNoticeRunOf(engine, "update-stock", "order-1")?.state).toBe("completed");
+  expect(linesWithMessage(lines, "run completed").map(taskAndRunIdOf)).toContainEqual(["send-receipt", "order-1"]);
+  expect(linesWithMessage(lines, "run failed").map(taskAndRunIdOf)).toEqual([["update-stock", "order-1"]]);
+  expect(
+    linesWithMessage(lines, "attempt started")
+      .map(taskAndRunIdOf)
+      .filter(([task]) => task !== "alert-on-call"),
+  ).toEqual([
+    ["send-receipt", "order-1"],
+    ["update-stock", "order-1"],
+  ]);
+});
+
 test("a run of a listener of runFailed that fails carries an empty notice", async () => {
   const failingListener = defineListener("failing-listener", {
     on: runFailed,

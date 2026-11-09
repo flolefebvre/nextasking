@@ -6,6 +6,7 @@ import { errorFromThrownValue, StalledRunError } from "./attempt-errors.js";
 import type { AnyTaskDefinition } from "./definitions.js";
 import type { DurationInMilliseconds, EpochMilliseconds } from "./durations.js";
 import type { LockToken } from "./engine/engine-keys.js";
+import { MOST_RUNS_PRUNED_PER_PRUNE } from "./engine/engine.js";
 import type { Engine, LockedRun, PruneRequest, ThirdStall, TickReply, TickRequest } from "./engine/engine.js";
 import type { WorkerDefinitions } from "./definitions.js";
 import { declaredSchedulesOf, fireDueSchedules } from "./worker-schedules.js";
@@ -84,15 +85,27 @@ function concurrencyLimitsByTaskOf(tasksByName: ReadonlyMap<string, AnyTaskDefin
   );
 }
 
-function nextTaskNameInTurnOf(
+export const MOST_FULL_PRUNES_IN_A_ROW = 9;
+
+function nextTaskNameOfTheRoundOf(
   taskNames: readonly string[],
-  lastPrunedTaskName: string | undefined,
+  taskNameLastVisitedByTheRound: string | undefined,
+  taskNameHoldingTheTurn: string | undefined,
 ): string | undefined {
-  const sortedTaskNames = [...taskNames].sort();
+  const sortedTaskNames = taskNames.filter((taskName) => taskName !== taskNameHoldingTheTurn).sort();
   return (
-    sortedTaskNames.find((taskName) => lastPrunedTaskName === undefined || taskName > lastPrunedTaskName) ??
-    sortedTaskNames[0]
+    sortedTaskNames.find(
+      (taskName) => taskNameLastVisitedByTheRound === undefined || taskName > taskNameLastVisitedByTheRound,
+    ) ??
+    sortedTaskNames[0] ??
+    taskNameHoldingTheTurn
   );
+}
+
+type PruneTurn = { task: string; isKeptByTheHolder: boolean };
+
+function isPruneFull(pruneReply: TickReply["prune"]): boolean {
+  return pruneReply?.kind === "replied" && pruneReply.reply.prunedRunCount === MOST_RUNS_PRUNED_PER_PRUNE;
 }
 
 export function startWorkerLoop(config: WorkerLoopConfig): WorkerLoop {
@@ -106,7 +119,9 @@ export function startWorkerLoop(config: WorkerLoopConfig): WorkerLoop {
   let fetchCueWaiter: (() => void) | undefined;
   let pendingWakeUp: Promise<void> | undefined;
   let knownTaskNames: readonly string[] = [];
-  let lastPrunedTaskName: string | undefined;
+  let taskNameLastVisitedByTheRound: string | undefined;
+  let taskNameHoldingTheTurn: string | undefined;
+  let fullPrunesInARowOfTheHolder = 0;
   let tickInProgress: Promise<void> | undefined;
   let fetchPassOverEndsAt: EpochMilliseconds = 0;
   let promotePassOverEndsAt: EpochMilliseconds = 0;
@@ -347,15 +362,36 @@ export function startWorkerLoop(config: WorkerLoopConfig): WorkerLoop {
     }
   })();
 
-  const pruneRequestOfThisTick = (): PruneRequest | undefined => {
-    const taskName = nextTaskNameInTurnOf(knownTaskNames, lastPrunedTaskName);
-    return taskName === undefined
-      ? undefined
-      : {
-          task: taskName,
-          completedRetention: timing.completedRunRetention,
-          failedRetention: timing.failedRunRetention,
-        };
+  const pruneTurnOfThisTick = (): PruneTurn | undefined => {
+    if (taskNameHoldingTheTurn !== undefined && fullPrunesInARowOfTheHolder < MOST_FULL_PRUNES_IN_A_ROW) {
+      return { task: taskNameHoldingTheTurn, isKeptByTheHolder: true };
+    }
+    const taskName = nextTaskNameOfTheRoundOf(knownTaskNames, taskNameLastVisitedByTheRound, taskNameHoldingTheTurn);
+    return taskName === undefined ? undefined : { task: taskName, isKeptByTheHolder: false };
+  };
+
+  const pruneRequestOf = ({ task }: PruneTurn): PruneRequest => ({
+    task,
+    completedRetention: timing.completedRunRetention,
+    failedRetention: timing.failedRunRetention,
+  });
+
+  const settleWhoHoldsTheTurnAfter = ({ task, isKeptByTheHolder }: PruneTurn, pruneReply: TickReply["prune"]) => {
+    if (!isKeptByTheHolder) {
+      taskNameLastVisitedByTheRound = task;
+      if (taskNameHoldingTheTurn !== undefined && taskNameHoldingTheTurn !== task) {
+        fullPrunesInARowOfTheHolder = 0;
+        return;
+      }
+      taskNameHoldingTheTurn = task;
+      fullPrunesInARowOfTheHolder = 0;
+    }
+    if (!isPruneFull(pruneReply)) {
+      taskNameHoldingTheTurn = undefined;
+      fullPrunesInARowOfTheHolder = 0;
+      return;
+    }
+    fullPrunesInARowOfTheHolder += 1;
   };
 
   const failThirdStall = async (thirdStall: ThirdStall) => {
@@ -398,11 +434,11 @@ export function startWorkerLoop(config: WorkerLoopConfig): WorkerLoop {
       ({ lockExpiresAtByWorkerClock, abortController }) =>
         lockExpiresAtByWorkerClock < lockRenewalDeadline && !abortController.signal.aborted,
     );
-    const prune = pruneRequestOfThisTick();
+    const pruneTurn = pruneTurnOfThisTick();
     const tickRequest: TickRequest = {
       heldLocks: renewedAttempts.map(({ lockedRun: { task, runId, lockToken } }) => ({ task, runId, lockToken })),
       lockDurationInMilliseconds,
-      ...(prune === undefined ? {} : { prune }),
+      ...(pruneTurn === undefined ? {} : { prune: pruneRequestOf(pruneTurn) }),
       isPromoteIncluded: tickSentAt >= promotePassOverEndsAt,
       ...(scheduledTaskNames.length === 0 ? {} : { scheduledTaskNames }),
     };
@@ -411,7 +447,9 @@ export function startWorkerLoop(config: WorkerLoopConfig): WorkerLoop {
     const reply = await answeredDespiteOutage(redisOutage, () => engine.tick(tickRequest), {
       resendStopSignal: tickStopController.signal,
     });
-    lastPrunedTaskName = prune?.task;
+    if (pruneTurn !== undefined) {
+      settleWhoHoldsTheTurnAfter(pruneTurn, reply.prune);
+    }
     if (reply.renewals.kind === "replied") {
       for (const [position, renewal] of reply.renewals.reply.entries()) {
         const renewedAttempt = renewedAttempts[position];

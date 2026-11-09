@@ -27,7 +27,7 @@ const ALL_CAPPED_BOUND_IN_MILLISECONDS =
   ONE_TURN_IN_MILLISECONDS + TICK_INTERVAL_IN_MILLISECONDS + CHILD_MARGIN_IN_MILLISECONDS;
 
 integrationTest(
-  "the prune round robin brings each of 50 tasks back to its cap within one turn of ticks",
+  "the prune round robin brings each of 50 tasks over its cap by less than a batch back to its cap within one turn of ticks",
   { timeout: 20_000 + 20_000 + ALL_CAPPED_BOUND_IN_MILLISECONDS + 10_000 + 5_000 },
   async ({ redisUrl, keyPrefix }) => {
     const keys = engineKeysOf(keyPrefix);

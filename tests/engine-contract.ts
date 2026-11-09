@@ -996,6 +996,34 @@ export function defineEngineContractTests(contractTest: EngineContractTest): voi
     expect(await harness.stateOf("send-email", "aged-run")).toBeUndefined();
   });
 
+  contractTest(
+    `a tick's prune reports the runs it removed: all ${String(MOST_RUNS_PRUNED_PER_PRUNE)} of its budget while more than a batch is over the cap, fewer on the prune that reaches it`,
+    async (harness) => {
+      const { engine } = harness;
+      const overflowingRunCount = MOST_RUNS_PRUNED_PER_PRUNE + 50;
+      await endRuns(engine, "send-email", runIdsOf("completed-run", overflowingRunCount), "complete");
+      const tickRequest = {
+        heldLocks: [],
+        lockDurationInMilliseconds: LOCK_DURATION_IN_MILLISECONDS,
+        prune: {
+          ...SEND_EMAIL_PRUNE_REQUEST,
+          completedRetention: { ...SEND_EMAIL_PRUNE_REQUEST.completedRetention, maxRunCount: 0 },
+        },
+      };
+
+      const pruneReplies = [];
+      for (let tickCount = 0; tickCount < 3; tickCount += 1) {
+        pruneReplies.push((await engine.tick(tickRequest)).prune);
+      }
+
+      expect(pruneReplies).toEqual([
+        repliedOf({ kind: "pruned", prunedRunCount: MOST_RUNS_PRUNED_PER_PRUNE }),
+        repliedOf({ kind: "pruned", prunedRunCount: overflowingRunCount - MOST_RUNS_PRUNED_PER_PRUNE }),
+        repliedOf({ kind: "pruned", prunedRunCount: 0 }),
+      ]);
+    },
+  );
+
   const SHARED_RUN_IDENTITIES: RunIdentity[] = [
     { task: "send-receipt", runId: "order-1" },
     { task: "update-stock", runId: "order-1" },

@@ -1,17 +1,16 @@
 import { expect } from "vitest";
 import { z } from "zod";
 
-import { deriveJobId } from "../src/ids.js";
+import { engineKeysOf } from "../src/engine/engine-keys.js";
 import { createNextasking, defineTask } from "../src/index.js";
 import { closeNextasking } from "../src/registry.js";
 import { integrationTest } from "./integration-test.js";
 import { createRecordingLogger, waitForLogMessage } from "./recording-logger.js";
-import { runJobKey } from "./run-job-key.js";
 import { storedRun } from "./stored-run.js";
 import { withRedis } from "./with-redis.js";
 
 integrationTest(
-  "a failed attempt whose lock key <prefix>:runs:<jobId>:lock holds another attempt's token leaves that attempt's run data untouched",
+  "a failed attempt whose run's record holds another attempt's lock token leaves that attempt's errors and state untouched",
   { timeout: 15_000 },
   async ({ redisUrl, keyPrefix }) => {
     const { logger, lines } = createRecordingLogger();
@@ -22,25 +21,14 @@ integrationTest(
       stack: "Error: the newer attempt failed",
       failedAt: "2026-11-03T10:00:00.000Z",
     };
-    const newerAttemptDelayedRunState = { state: "backingOff", nextAttemptAt: "2026-11-03T10:00:30.000Z" };
+    const keys = engineKeysOf(keyPrefix);
     const sendNewsletter = defineTask("send-newsletter", {
       schema: z.object({ issueId: z.string() }),
       retries: 1,
       handler: async ({ runId }) => {
-        const lockKey = `${keyPrefix}:runs:${deriveJobId("send-newsletter", runId)}:lock`;
         await withRedis(redisUrl, async (redis) => {
-          const jobKey = runJobKey(keyPrefix, "send-newsletter", runId);
-          const storedData = JSON.parse((await redis.hget(jobKey, "data")) ?? "{}") as Record<string, unknown>;
-          await redis.set(lockKey, "token-of-the-newer-attempt", "PX", 60_000);
-          await redis.hset(
-            jobKey,
-            "data",
-            JSON.stringify({
-              ...storedData,
-              errors: [newerAttemptError],
-              delayedRunState: newerAttemptDelayedRunState,
-            }),
-          );
+          await redis.hset(keys.runRecord("send-newsletter", runId), "lockToken", "token-of-the-newer-attempt");
+          await redis.rpush(keys.runErrors("send-newsletter", runId), JSON.stringify(newerAttemptError));
         });
         throw new Error("the stale attempt failed");
       },
@@ -55,14 +43,18 @@ integrationTest(
     try {
       await nextasking.startWorker();
       const { runId } = await nextasking.dispatch("send-newsletter", { issueId: "issue-7" });
-      await waitForLogMessage(lines, "attempt aborted: lock lost");
+      await waitForLogMessage(lines, "attempt outcome discarded: lock lost");
       const run = await storedRun(redisUrl, keyPrefix, "send-newsletter", runId);
 
-      expect(run).toMatchObject({ errors: [newerAttemptError], delayedRunState: newerAttemptDelayedRunState });
+      expect(run).toMatchObject({
+        state: "executing",
+        lockToken: "token-of-the-newer-attempt",
+        errors: [newerAttemptError],
+      });
       expect(lines).toContainEqual({
-        level: "debug",
-        fields: { task: "send-newsletter", runId, attempt: 1 },
-        message: "attempt aborted: lock lost",
+        level: "warn",
+        fields: { task: "send-newsletter", runId, attempt: 1, outcome: "retry" },
+        message: "attempt outcome discarded: lock lost",
       });
       expect(lines.map((line) => line.message)).not.toContain("attempt failed");
     } finally {

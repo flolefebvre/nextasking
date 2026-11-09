@@ -7,28 +7,24 @@ import {
   defineEvent,
   defineListener,
   defineTask,
-  fanOutFailed,
   runFailed,
 } from "../src/index.js";
-import type { FanOutFailedPayload, Logger, RunFailedPayload } from "../src/index.js";
+import type { Logger, RunFailedPayload } from "../src/index.js";
 import { deriveFailureNoticeEventId } from "../src/ids.js";
 import { closeNextasking } from "../src/registry.js";
 import { integrationTest } from "./integration-test.js";
-import { createRecordingLogger } from "./recording-logger.js";
-import { runJobKey } from "./run-job-key.js";
+import { createRecordingLogger, waitForLogMessage } from "./recording-logger.js";
 import { storedRun } from "./stored-run.js";
-import { withRedis } from "./with-redis.js";
 
 const ISO_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 
 type Alerting = {
   runFailedNotices: RunFailedPayload[];
-  fanOutFailedNotices: FanOutFailedPayload[];
   isRunFailedAlertBroken: boolean;
 };
 
 function noAlerting(): Alerting {
-  return { runFailedNotices: [], fanOutFailedNotices: [], isRunFailedAlertBroken: false };
+  return { runFailedNotices: [], isRunFailedAlertBroken: false };
 }
 
 const invoicePaid = defineEvent("invoice.paid", { schema: z.object({ invoiceId: z.string() }) });
@@ -64,12 +60,6 @@ function createAlertingNextasking(redisUrl: string, keyPrefix: string, logger: L
               }
             },
           }),
-          defineListener("alert-on-fan-out-failed", {
-            on: fanOutFailed,
-            handler: async ({ payload }) => {
-              alerting.fanOutFailedNotices.push(payload);
-            },
-          }),
         ];
   return createNextasking({
     connection: { url: redisUrl },
@@ -103,7 +93,7 @@ integrationTest(
       const failedRun = await storedRun(redisUrl, keyPrefix, "sync-account", runId);
       const noticeEvent = await nextasking.getEvent(
         "nextasking/run.failed",
-        deriveFailureNoticeEventId("sync-account", runId, 1),
+        deriveFailureNoticeEventId("sync-account", runId, 0),
       );
 
       expect(alerting.runFailedNotices).toEqual([
@@ -124,7 +114,7 @@ integrationTest(
         (failedRun?.errors as { failedAt: string }[] | undefined)?.[0]?.failedAt,
       );
       expect(noticeEvent.runsByListener["alert-on-run-failed"]).toMatchObject({ state: "completed" });
-      expect(failedRun).toMatchObject({ failureCount: 1, notifiedFailureCount: 1 });
+      expect(failedRun).toMatchObject({ state: "failed", reason: "non-retriable", replays: "0" });
       expect(lines.map((line) => line.message)).not.toContain("no listeners for event");
     } finally {
       await closeNextasking(nextasking);
@@ -153,9 +143,16 @@ integrationTest(
         expect.objectContaining({ task: "record-payment", runId, eventName: "invoice.paid", eventId, attempt: 1 }),
       ]);
       expect(await storedRun(redisUrl, keyPrefix, "record-payment", runId)).toMatchObject({
-        failureCount: 2,
-        notifiedFailureCount: 2,
+        state: "failed",
+        replays: "1",
       });
+      for (const replays of [0, 1]) {
+        const noticeEvent = await nextasking.getEvent(
+          "nextasking/run.failed",
+          deriveFailureNoticeEventId("record-payment", runId, replays),
+        );
+        expect(noticeEvent.runsByListener["alert-on-run-failed"]).toBeDefined();
+      }
     } finally {
       await closeNextasking(nextasking);
     }
@@ -182,7 +179,7 @@ integrationTest(
 
       const noticeOfAlertRun = await nextasking.getEvent(
         "nextasking/run.failed",
-        deriveFailureNoticeEventId("alert-on-run-failed", alertRunId, 1),
+        deriveFailureNoticeEventId("alert-on-run-failed", alertRunId, 0),
       );
 
       expect(noticeOfAlertRun.runsByListener["alert-on-run-failed"]).toBeUndefined();
@@ -194,7 +191,7 @@ integrationTest(
 );
 
 integrationTest(
-  "a failure with no listener on its built-in event is marked notified, silently",
+  "a failure with no listener on its built-in event sends nothing, silently",
   async ({ redisUrl, keyPrefix }) => {
     const { logger, lines } = createRecordingLogger();
     const nextasking = createAlertingNextasking(redisUrl, keyPrefix, logger);
@@ -202,66 +199,16 @@ integrationTest(
     try {
       await nextasking.startWorker();
       const { runId } = await nextasking.dispatch("sync-account", { accountId: "account-7", email: "a@b.c" });
-      await vi.waitFor(
-        async () => {
-          expect(await storedRun(redisUrl, keyPrefix, "sync-account", runId)).toMatchObject({
-            notifiedFailureCount: 1,
-          });
-        },
-        { timeout: 10_000 },
-      );
+      await waitForLogMessage(lines, "run failed");
 
       const noticeEvent = await nextasking.getEvent(
         "nextasking/run.failed",
-        deriveFailureNoticeEventId("sync-account", runId, 1),
+        deriveFailureNoticeEventId("sync-account", runId, 0),
       );
 
       expect(noticeEvent.runsByListener).toEqual({});
+      expect(await storedRun(redisUrl, keyPrefix, "sync-account", runId)).toMatchObject({ state: "failed" });
       expect(lines.map((line) => line.message)).not.toContain("no listeners for event");
-    } finally {
-      await closeNextasking(nextasking);
-    }
-  },
-);
-
-integrationTest(
-  "a fan-out failed by stalls logs fan-out failed and sends one fan-out.failed notice",
-  async ({ redisUrl, keyPrefix }) => {
-    const { logger, lines } = createRecordingLogger();
-    const alerting = noAlerting();
-    const nextasking = createAlertingNextasking(redisUrl, keyPrefix, logger, alerting);
-    const stallLimitReason = "job stalled more than allowable limit";
-
-    try {
-      const { eventId } = await nextasking.emit("invoice.paid", { invoiceId: "inv-7" });
-      await withRedis(redisUrl, (redis) =>
-        redis.hset(runJobKey(keyPrefix, "invoice.paid", eventId), "defa", stallLimitReason),
-      );
-
-      await nextasking.startWorker();
-      await waitForNotices(alerting.fanOutFailedNotices, 1);
-
-      expect(alerting.fanOutFailedNotices).toEqual([
-        {
-          eventName: "invoice.paid",
-          eventId,
-          error: { name: expect.any(String), message: stallLimitReason, stack: expect.any(String) },
-          failedAt: expect.stringMatching(ISO_TIMESTAMP),
-        },
-      ]);
-      expect(lines.filter((line) => line.message === "fan-out failed")).toEqual([
-        {
-          level: "error",
-          fields: { eventName: "invoice.paid", eventId, err: expect.objectContaining({ message: stallLimitReason }) },
-          message: "fan-out failed",
-        },
-      ]);
-      expect(await storedRun(redisUrl, keyPrefix, "invoice.paid", eventId)).toMatchObject({
-        failureCount: 1,
-        notifiedFailureCount: 1,
-        finalError: { message: stallLimitReason },
-      });
-      expect(alerting.runFailedNotices).toEqual([]);
     } finally {
       await closeNextasking(nextasking);
     }

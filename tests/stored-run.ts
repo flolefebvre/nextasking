@@ -3,11 +3,7 @@ import { deserializePayload } from "../src/engine/engine.js";
 import type { RunId } from "../src/ids.js";
 import { withRedis } from "./with-redis.js";
 
-export type StoredRun = {
-  record: Record<string, string>;
-  payload: unknown;
-  errors: unknown[];
-};
+export type StoredRun = Record<string, string> & { payload: unknown; errors: unknown[] };
 
 export async function storedRun(
   redisUrl: string,
@@ -26,9 +22,9 @@ export async function storedRun(
       return undefined;
     }
     return {
-      record,
+      ...record,
       payload: serializedPayload === null ? undefined : deserializePayload(serializedPayload),
       errors: serializedErrors.map((serializedError) => JSON.parse(serializedError) as unknown),
-    };
+    } as StoredRun;
   });
 }

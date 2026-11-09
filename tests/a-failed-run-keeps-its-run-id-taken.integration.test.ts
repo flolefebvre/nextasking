@@ -5,7 +5,7 @@ import { createNextasking, defineTask } from "../src/index.js";
 import { closeNextasking } from "../src/registry.js";
 import { integrationTest } from "./integration-test.js";
 import { createRecordingLogger, waitForLogMessage } from "./recording-logger.js";
-import { storedJobNames } from "./stored-job-names.js";
+import { storedRunIdentities } from "./stored-run-identities.js";
 
 integrationTest(
   "a repeat of a failed run's runId is dropped: a final failure doesn't reopen the dedup window",
@@ -39,7 +39,7 @@ integrationTest(
         { level: "debug", fields: { task: "import-contacts", runId }, message: "run dispatched" },
         { level: "debug", fields: { task: "import-contacts", runId }, message: "duplicate dispatch dropped" },
       ]);
-      expect(await storedJobNames(redisUrl, keyPrefix)).toEqual(["import-contacts"]);
+      expect(await storedRunIdentities(redisUrl, keyPrefix)).toEqual([{ task: "import-contacts", runId }]);
       expect(attemptCount).toBe(1);
     } finally {
       await closeNextasking(nextasking);

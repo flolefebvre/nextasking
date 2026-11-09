@@ -6,7 +6,7 @@ import type { Logger } from "../src/index.js";
 import { closeNextasking } from "../src/registry.js";
 import { integrationTest } from "./integration-test.js";
 import { createRecordingLogger, waitForLogMessage } from "./recording-logger.js";
-import { runJobKey } from "./run-job-key.js";
+import { engineKeysOf } from "../src/engine/engine-keys.js";
 import { storedRun } from "./stored-run.js";
 import { withRedis } from "./with-redis.js";
 
@@ -72,7 +72,10 @@ integrationTest(
         attempt: 1,
         errors: [],
       });
-      expect(await storedRun(redisUrl, keyPrefix, "charge-invoice", runId)).toMatchObject({ failureCount: 1 });
+      expect(await storedRun(redisUrl, keyPrefix, "charge-invoice", runId)).toMatchObject({
+        state: "completed",
+        replays: "1",
+      });
     } finally {
       await closeNextasking(nextasking);
     }
@@ -80,7 +83,7 @@ integrationTest(
 );
 
 integrationTest(
-  "replay resets the failed run's errors, reason, stall count and unknown-task marker before its first new attempt",
+  "replay resets the failed run's errors, reason, stall count and unknown-task marker before its first new attempt, and counts the replay",
   async ({ redisUrl, keyPrefix }) => {
     const { logger, lines } = createRecordingLogger();
     const worker = createChargeInvoiceNextasking(redisUrl, keyPrefix, brokenReceiptService(), logger);
@@ -91,24 +94,26 @@ integrationTest(
       const { runId } = await worker.dispatch("charge-invoice", { invoiceId: "inv-7" });
       await waitForLogMessage(lines, "run failed");
       await closeNextasking(worker);
-      const jobKey = runJobKey(keyPrefix, "charge-invoice", runId);
-      await withRedis(redisUrl, async (redis) => {
-        const failedRun = JSON.parse((await redis.hget(jobKey, "data")) ?? "{}") as Record<string, unknown>;
-        await redis.hset(
-          jobKey,
-          "stc",
+      await withRedis(redisUrl, (redis) =>
+        redis.hset(
+          engineKeysOf(keyPrefix).runRecord("charge-invoice", runId),
+          "stalls",
           2,
-          "data",
-          JSON.stringify({ ...failedRun, firstFoundUnknownAt: new Date().toISOString() }),
-        );
-      });
+          "firstFoundUnknownAt",
+          Date.now(),
+        ),
+      );
 
       await operator.replay("charge-invoice", runId);
-      const stalledCount = await withRedis(redisUrl, (redis) => redis.hget(jobKey, "stc"));
       const replayedRun = await storedRun(redisUrl, keyPrefix, "charge-invoice", runId);
 
-      expect(stalledCount).toBe("0");
-      expect(replayedRun).toMatchObject({ payload: { invoiceId: "inv-7" }, errors: [], failureCount: 1 });
+      expect(replayedRun).toMatchObject({
+        payload: { invoiceId: "inv-7" },
+        errors: [],
+        stalls: "0",
+        attempt: "1",
+        replays: "1",
+      });
       expect(replayedRun).not.toHaveProperty("reason");
       expect(replayedRun).not.toHaveProperty("firstFoundUnknownAt");
       expect(await operator.getRun("charge-invoice", runId)).toMatchObject({
@@ -123,35 +128,32 @@ integrationTest(
   },
 );
 
-integrationTest(
-  "a replayed run that fails again keeps only its new life's errors and counts a second failure",
-  async ({ redisUrl, keyPrefix }) => {
-    const { logger, lines } = createRecordingLogger();
-    const nextasking = createChargeInvoiceNextasking(redisUrl, keyPrefix, brokenReceiptService(), logger);
+integrationTest("a replayed run that fails again keeps only its new life's errors", async ({ redisUrl, keyPrefix }) => {
+  const { logger, lines } = createRecordingLogger();
+  const nextasking = createChargeInvoiceNextasking(redisUrl, keyPrefix, brokenReceiptService(), logger);
 
-    try {
-      await nextasking.startWorker();
-      const { runId } = await nextasking.dispatch("charge-invoice", { invoiceId: "inv-7" });
-      await waitForLogMessage(lines, "run failed");
+  try {
+    await nextasking.startWorker();
+    const { runId } = await nextasking.dispatch("charge-invoice", { invoiceId: "inv-7" });
+    await waitForLogMessage(lines, "run failed");
 
-      await nextasking.replay("charge-invoice", runId);
-      await vi.waitFor(
-        () => {
-          expect(lines.filter((line) => line.message === "run failed")).toHaveLength(2);
-        },
-        { timeout: 10_000 },
-      );
+    await nextasking.replay("charge-invoice", runId);
+    await vi.waitFor(
+      () => {
+        expect(lines.filter((line) => line.message === "run failed")).toHaveLength(2);
+      },
+      { timeout: 10_000 },
+    );
 
-      expect(await storedRun(redisUrl, keyPrefix, "charge-invoice", runId)).toMatchObject({
-        reason: "retries exhausted",
-        errors: [{ attempt: 1 }, { attempt: 2 }],
-        failureCount: 2,
-      });
-    } finally {
-      await closeNextasking(nextasking);
-    }
-  },
-);
+    expect(await storedRun(redisUrl, keyPrefix, "charge-invoice", runId)).toMatchObject({
+      reason: "retries exhausted",
+      errors: [{ attempt: 1 }, { attempt: 2 }],
+      replays: "1",
+    });
+  } finally {
+    await closeNextasking(nextasking);
+  }
+});
 
 integrationTest(
   "replay throws for a run that is unknown or not failed, and for a task the instance doesn't list",

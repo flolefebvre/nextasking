@@ -1,7 +1,7 @@
 import { expect, vi } from "vitest";
 import { z } from "zod";
 
-import { deriveJobId } from "../src/ids.js";
+import { engineKeysOf } from "../src/engine/engine-keys.js";
 import { createNextasking, defineTask } from "../src/index.js";
 import { closeNextasking } from "../src/registry.js";
 import { integrationTest } from "./integration-test.js";
@@ -9,7 +9,7 @@ import { savedSteps } from "./saved-steps.js";
 import { withRedis } from "./with-redis.js";
 
 integrationTest(
-  "a step write is refused once BullMQ's lock key <prefix>:runs:<jobId>:lock holds another attempt's token",
+  "a step is refused, read or write, once the run's record holds another attempt's lock token",
   async ({ redisUrl, keyPrefix }) => {
     const stepErrors: unknown[] = [];
     const sendNewsletter = defineTask("send-newsletter", {
@@ -17,8 +17,8 @@ integrationTest(
       retries: 0,
       handler: async ({ step, runId }) => {
         await step.run("pick-recipients", () => ["ada@example.com"]);
-        const lockKey = `${keyPrefix}:runs:${deriveJobId("send-newsletter", runId)}:lock`;
-        await withRedis(redisUrl, (redis) => redis.set(lockKey, "token-of-another-attempt", "PX", 60_000));
+        const recordKey = engineKeysOf(keyPrefix).runRecord("send-newsletter", runId);
+        await withRedis(redisUrl, (redis) => redis.hset(recordKey, "lockToken", "token-of-another-attempt"));
         await step
           .run("send", () => "sent")
           .catch((error: unknown) => {
@@ -46,7 +46,7 @@ integrationTest(
 
       expect(stepErrors[0]).toMatchObject({
         name: "LostRunLockError",
-        message: `Step "send" of run "${runId}" was not saved: this attempt no longer holds its lock, so another attempt owns it now.`,
+        message: `Step "send" of run "${runId}" was not read: this attempt no longer holds its lock, so another attempt owns it now.`,
       });
       expect(steps.serializedResultsByStepId).toEqual({ "pick-recipients": '[["ada@example.com"]]' });
     } finally {

@@ -2,12 +2,11 @@ import { expect, vi } from "vitest";
 import { z } from "zod";
 
 import { createNextasking, defineEvent, defineListener, defineTask } from "../src/index.js";
-import { deriveJobId, deriveListenerRunId } from "../src/ids.js";
+import { deriveListenerRunId } from "../src/ids.js";
 import { closeNextasking } from "../src/registry.js";
 import { integrationTest } from "./integration-test.js";
-import { storedJobNames } from "./stored-job-names.js";
+import { storedRunIdentities } from "./stored-run-identities.js";
 import { storedRun } from "./stored-run.js";
-import { withRunQueue } from "./with-run-queue.js";
 
 const invoicePaid = defineEvent("invoice.paid", {
   schema: z.object({ accountId: z.string(), invoiceId: z.string() }),
@@ -58,9 +57,13 @@ integrationTest(
 );
 
 integrationTest(
-  "a listener key function that throws fails the fan-out attempt, naming the listener, and starts no listener run",
+  "an emit whose listener's key function throws throws, naming the listener, and stores no run of any listener",
   async ({ redisUrl, keyPrefix }) => {
     const recordInvoicePayment = defineListener("record-invoice-payment", {
+      on: invoicePaid,
+      handler: async () => undefined,
+    });
+    const billAccount = defineListener("bill-account", {
       on: invoicePaid,
       concurrency: {
         key: () => {
@@ -74,27 +77,16 @@ integrationTest(
       connection: { url: redisUrl },
       prefix: keyPrefix,
       events: [invoicePaid],
-      tasks: [recordInvoicePayment],
+      tasks: [recordInvoicePayment, billAccount],
     });
 
     try {
-      const { eventId } = await nextasking.emit("invoice.paid", { accountId: "account-9", invoiceId: "inv-1" });
-      await nextasking.startWorker();
-      const fanOutFailure = await vi.waitFor(
-        () =>
-          withRunQueue(redisUrl, keyPrefix, async (runQueue) => {
-            const fanOutJob = await runQueue.getJob(deriveJobId("invoice.paid", eventId));
-            expect(fanOutJob?.attemptsMade).toBe(1);
-            return { failedReason: fanOutJob?.failedReason, state: await fanOutJob?.getState() };
-          }),
-        { timeout: 10_000 },
-      );
+      const emitting = nextasking.emit("invoice.paid", { accountId: "account-9", invoiceId: "inv-1" });
 
-      expect(fanOutFailure).toEqual({
-        failedReason: 'Task "record-invoice-payment" has an invalid concurrency.key: it threw "no account"',
-        state: "delayed",
-      });
-      expect(await storedJobNames(redisUrl, keyPrefix)).toEqual(["invoice.paid"]);
+      await expect(emitting).rejects.toThrow(
+        'Task "bill-account" has an invalid concurrency.key: it threw "no account"',
+      );
+      expect(await storedRunIdentities(redisUrl, keyPrefix)).toEqual([]);
     } finally {
       await closeNextasking(nextasking);
     }

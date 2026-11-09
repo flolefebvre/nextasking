@@ -30,12 +30,15 @@ async function waitForWorkerStarted(nextProcess: NextProcess): Promise<void> {
 
 e2eTest(
   "two instances on one prefix start one run per firing of a schedule, and fan out one emit once",
-  async ({ redisUrl, keyPrefix, fixtureAppDir, fixtureAppEnv }) => {
+  async ({ redisUrl, keyPrefix, fixtureAppDir, fixtureAppEnvWithScheduleOnAndGracefulStop }) => {
     const nextProcesses: NextProcess[] = [];
 
     try {
       for (let instance = 0; instance < 2; instance += 1) {
-        const nextProcess = await startNext(fixtureAppDir, { command: "start", env: fixtureAppEnv });
+        const nextProcess = await startNext(fixtureAppDir, {
+          command: "start",
+          env: fixtureAppEnvWithScheduleOnAndGracefulStop,
+        });
         nextProcesses.push(nextProcess);
         await waitForWorkerStarted(nextProcess);
       }
@@ -65,6 +68,8 @@ e2eTest(
       }
       const oneListenerRun = [{ runId: expect.any(String), payload: { invoiceId: "inv-1" } }];
       expect(listenerRecords).toEqual(INVOICE_PAID_LISTENER_NAMES.map(() => oneListenerRun));
+      const exits = await Promise.all(nextProcesses.map((nextProcess) => nextProcess.stop()));
+      expect(exits).toEqual(nextProcesses.map(() => ({ code: 0, signal: null, wasForced: false })));
     } finally {
       await Promise.all(nextProcesses.map((nextProcess) => nextProcess.stop()));
     }

@@ -1,6 +1,6 @@
 import type { ConcurrencyKey } from "../src/definitions.js";
 import type { DurationInMilliseconds, EpochMilliseconds } from "../src/durations.js";
-import { storedRunIdOf } from "../src/engine/engine-keys.js";
+import { compareInSortedSetMemberOrder, storedRunIdOf } from "../src/engine/engine-keys.js";
 import type { LockToken, RunIdentity, StoredRunId } from "../src/engine/engine-keys.js";
 import {
   DEDUP_WINDOW_IN_MILLISECONDS,
@@ -151,13 +151,7 @@ function concurrencyScopeOf(task: string, concurrencyKey: ConcurrencyKey | undef
 }
 
 function byScoreThenMember<Entry extends { score: number; member: string }>(left: Entry, right: Entry): number {
-  if (left.score !== right.score) {
-    return left.score - right.score;
-  }
-  if (left.member === right.member) {
-    return 0;
-  }
-  return left.member < right.member ? -1 : 1;
+  return left.score - right.score || compareInSortedSetMemberOrder(left.member, right.member);
 }
 
 function errorWithTextsCutOf(error: ErrorRecord): ErrorRecord {

@@ -2,7 +2,7 @@ import type { ChainableCommander, Redis } from "ioredis";
 
 import type { AnyTaskDefinition, EventDefinition } from "./definitions.js";
 import type { EpochMilliseconds } from "./durations.js";
-import { engineKeysOf, runIdentityOf, storedRunIdOf } from "./engine/engine-keys.js";
+import { compareInSortedSetMemberOrder, engineKeysOf, runIdentityOf, storedRunIdOf } from "./engine/engine-keys.js";
 import type { RunIdentity } from "./engine/engine-keys.js";
 import { RECORD_VERSION, deserializePayload, isFailureReason } from "./engine/engine.js";
 import { defineIndexPageCommand, indexPageOf } from "./engine/index-page-script.js";
@@ -224,14 +224,10 @@ function listedRunOf(entry: IndexEntry, state: RunState, [recordReply, lastError
   return lastError === undefined ? undefined : ({ ...runSummary, lastErrorMessage: lastError.message } as AnyListedRun);
 }
 
-function compareStoredRunIdBytes(leftStoredRunId: string, rightStoredRunId: string): number {
-  return Buffer.compare(Buffer.from(leftStoredRunId, "utf8"), Buffer.from(rightStoredRunId, "utf8"));
-}
-
 function compareInIndexOrder(left: IndexEntry, right: IndexEntry): number {
   return (
     right.indexPosition.score - left.indexPosition.score ||
-    compareStoredRunIdBytes(right.indexPosition.storedRunId, left.indexPosition.storedRunId)
+    compareInSortedSetMemberOrder(right.indexPosition.storedRunId, left.indexPosition.storedRunId)
   );
 }
 

@@ -45,6 +45,10 @@ export function runIdentityOf(storedRunId: string): RunIdentity | undefined {
   return { task, runId };
 }
 
+export function compareInSortedSetMemberOrder(leftMember: string, rightMember: string): number {
+  return Buffer.compare(Buffer.from(leftMember, "utf8"), Buffer.from(rightMember, "utf8"));
+}
+
 export type EngineKeys = {
   runRecord: (task: string, runId: RunId) => string;
   runPayload: (task: string, runId: RunId) => string;

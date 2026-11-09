@@ -851,6 +851,20 @@ export function defineEngineContractTests(contractTest: EngineContractTest): voi
   );
 
   contractTest(
+    "a makeDue hands back runs due at the same instant in the byte order of their stored ids, as Redis orders them",
+    async (harness) => {
+      const { engine } = harness;
+      await engine.enqueue({
+        runs: sendEmailRunsOf(["\u{1F680}", "～"], { delayInMilliseconds: HOUR_IN_MILLISECONDS }),
+      });
+
+      const reply = await engine.makeDue();
+
+      expect(reply).toEqual({ kind: "madeDue", madeDueRuns: sendEmailRunIdentitiesOf(["～", "\u{1F680}"]) });
+    },
+  );
+
+  contractTest(
     `a makeDue given a task moves only its runs, even behind more than ${String(MOST_DUE_RUNS_PROMOTED_PER_PROMOTE)} timed runs of another task`,
     async (harness) => {
       const { engine } = harness;

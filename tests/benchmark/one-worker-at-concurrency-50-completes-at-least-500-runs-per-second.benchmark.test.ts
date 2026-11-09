@@ -76,8 +76,11 @@ benchmarkTest(
         ].join("\n"),
       );
 
-      expect(isEveryRunCompleted, `${String(handledRunCount)} of ${String(RUN_COUNT)} runs completed`).toBe(true);
-      expect(runsPerSecondOf(workerThroughput)).toBeGreaterThanOrEqual(FLOOR_IN_RUNS_PER_SECOND);
+      expect(
+        runsPerSecondOf(workerThroughput),
+        `${String(handledRunCount)} of ${String(RUN_COUNT)} runs completed in ${(workerThroughput.elapsedInMilliseconds / 1000).toFixed(2)} s`,
+      ).toBeGreaterThanOrEqual(FLOOR_IN_RUNS_PER_SECOND);
+      expect(isEveryRunCompleted).toBe(true);
     } finally {
       await closeNextaskingAndCheckItsDuration(nextasking);
     }

@@ -11,6 +11,7 @@ import type { WorkerDefinitions } from "./engine-failure-notice.js";
 import {
   lockLostAbortLineOf,
   parkLineOf,
+  passOverLineOf,
   pickupLineOf,
   settleLinesOf,
   stallLineOf,
@@ -98,6 +99,20 @@ export function startWorkerLoop(config: WorkerLoopConfig): WorkerLoop {
   let knownTaskNames: readonly string[] = [];
   let lastPrunedTaskName: string | undefined;
   let tickInProgress: Promise<void> | undefined;
+  let fetchPassOverEndsAt: EpochMilliseconds = 0;
+  let promotePassOverEndsAt: EpochMilliseconds = 0;
+  const fetchStopController = new AbortController();
+  const loggedPassedOverRecordVersions = new Set<number | undefined>();
+
+  const logPassOver = (recordVersions: readonly (number | undefined)[]) => {
+    const recordVersionsNotLoggedYet = [...new Set(recordVersions)].filter(
+      (recordVersion) => !loggedPassedOverRecordVersions.has(recordVersion),
+    );
+    for (const recordVersion of recordVersionsNotLoggedYet) {
+      loggedPassedOverRecordVersions.add(recordVersion);
+    }
+    writeLifecycleLines(logger, recordVersionsNotLoggedYet.map(passOverLineOf));
+  };
 
   const cueFetch = () => {
     isFetchCued = true;
@@ -225,10 +240,13 @@ export function startWorkerLoop(config: WorkerLoopConfig): WorkerLoop {
     const lockTokens = Array.from({ length: Math.min(freeCapacity, timing.mostLockTokensPerFetch) }, freshLockTokenOf);
     const fetchSentAt = Date.now();
     const reply = await engine.fetch({ lockTokens, concurrencyLimitsByTask, lockDurationInMilliseconds });
-    if (reply.kind !== "fetched") {
+    if (reply.kind === "unknownVersion") {
+      fetchPassOverEndsAt = Date.now() + timing.passOverWaitInMilliseconds;
+      logPassOver([reply.recordVersion]);
       return;
     }
     const fetchRepliedAt = Date.now();
+    logPassOver(reply.passedOverRecordVersions);
     writeLifecycleLines(logger, reply.parkedRuns.map(parkLineOf));
     for (const lockedRun of reply.lockedRuns) {
       startAttempt(lockedRun, fetchSentAt, fetchRepliedAt);
@@ -241,6 +259,11 @@ export function startWorkerLoop(config: WorkerLoopConfig): WorkerLoop {
       await fetchOnce().catch(() => undefined);
       if (!isFetching) {
         break;
+      }
+      const passOverWaitLeftInMilliseconds = fetchPassOverEndsAt - Date.now();
+      if (passOverWaitLeftInMilliseconds > 0) {
+        await delayUnlessAborted(passOverWaitLeftInMilliseconds, fetchStopController.signal);
+        continue;
       }
       keepWaitingForWakeUp();
       await fetchCued();
@@ -302,6 +325,7 @@ export function startWorkerLoop(config: WorkerLoopConfig): WorkerLoop {
       heldLocks: renewedAttempts.map(({ lockedRun: { runId, lockToken } }) => ({ runId, lockToken })),
       lockDurationInMilliseconds,
       ...(prune === undefined ? {} : { prune }),
+      isPromoteIncluded: tickSentAt >= promotePassOverEndsAt,
     });
     lastPrunedTaskName = prune?.task;
     if (reply.renewals.kind === "replied") {
@@ -326,6 +350,10 @@ export function startWorkerLoop(config: WorkerLoopConfig): WorkerLoop {
         commandReply?.kind === "failed" ? [workerErrorLineOf(commandReply.error)] : [],
       ),
     );
+    if (reply.promote?.kind === "replied" && reply.promote.reply.kind === "unknownVersion") {
+      promotePassOverEndsAt = Date.now() + timing.passOverWaitInMilliseconds;
+      logPassOver([reply.promote.reply.recordVersion]);
+    }
     if (reply.promote?.kind === "replied" && reply.promote.reply.kind === "promoted") {
       const { stalledRuns, thirdStalls } = reply.promote.reply;
       writeLifecycleLines(logger, stalledRuns.map(stallLineOf));
@@ -349,6 +377,7 @@ export function startWorkerLoop(config: WorkerLoopConfig): WorkerLoop {
   return {
     stopFetching: async () => {
       isFetching = false;
+      fetchStopController.abort();
       cueFetch();
       await fetchLoopEnded;
     },

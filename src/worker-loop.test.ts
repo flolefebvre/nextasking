@@ -676,6 +676,78 @@ test("an unknown task's hold stopped by the local stop sends no hand back", asyn
   expect(requestsOf(engine, "settle")).toEqual([]);
 });
 
+const PASS_OVER_LINE = {
+  level: "debug",
+  message: "runs passed over: newer record version",
+  fields: { recordVersion: 2, supportedVersion: 1 },
+};
+
+test("a fetch answered unknownVersion writes one pass-over line and no fetch happens for 10 seconds", async () => {
+  const sendEmail = defineTask("send-email", { schema: v.object({}), handler: async () => undefined });
+  const engine = createInMemoryEngine();
+  await engine.enqueue({ runs: runsOf("send-email", 1) });
+  let fetchCount = 0;
+  const fetchAnsweredUnknownVersionFirst: WorkerLoopEngine["fetch"] = async (request) => {
+    fetchCount += 1;
+    return fetchCount === 1 ? { kind: "unknownVersion", recordVersion: 2 } : engine.fetch(request);
+  };
+  const { lines } = startedLoopOf([sendEmail] as AnyTaskDefinition[], {
+    engine,
+    loopEngine: { ...engine, fetch: fetchAnsweredUnknownVersionFirst },
+  });
+
+  await vi.advanceTimersByTimeAsync(10_000 - 1);
+  const fetchCountDuringTheWait = fetchCount;
+  await vi.advanceTimersByTimeAsync(1);
+
+  expect(fetchCountDuringTheWait).toBe(1);
+  expect(engine.storedRunOf("send-email-1")?.state).toBe("completed");
+  expect(linesWithMessage(lines, "runs passed over: newer record version")).toEqual([PASS_OVER_LINE]);
+});
+
+test("a promote answered unknownVersion leaves the promote out of the ticks for 10 seconds, which still renew, and the line is written once per version", async () => {
+  const engine = createInMemoryEngine();
+  const tickWithAPromoteAnsweredUnknownVersion: WorkerLoopEngine["tick"] = async (request) => {
+    const reply = await engine.tick(request);
+    return reply.promote === undefined
+      ? reply
+      : { ...reply, promote: { kind: "replied", reply: { kind: "unknownVersion", recordVersion: 2 } } };
+  };
+  const { lines } = startedLoopOf([], {
+    engine,
+    loopEngine: { ...engine, tick: tickWithAPromoteAnsweredUnknownVersion },
+  });
+
+  await vi.advanceTimersByTimeAsync(25_000);
+
+  const ticks = requestsOf<TickRequest>(engine, "tick");
+  expect(ticks).toHaveLength(25);
+  expect(
+    ticks.flatMap(({ isPromoteIncluded }, position) => (isPromoteIncluded === true ? [position + 1] : [])),
+  ).toEqual([1, 11, 21]);
+  expect(linesWithMessage(lines, "runs passed over: newer record version")).toEqual([PASS_OVER_LINE]);
+});
+
+test("a fetched reply that passed over records writes the pass-over line once per version and does not wait", async () => {
+  const sendEmail = defineTask("send-email", { schema: v.object({}), handler: async () => undefined });
+  const engine = createInMemoryEngine();
+  const fetchPassingOverVersion2: WorkerLoopEngine["fetch"] = async (request) => {
+    const reply = await engine.fetch(request);
+    return reply.kind === "fetched" ? { ...reply, passedOverRecordVersions: [2, 2] } : reply;
+  };
+  const { lines } = startedLoopOf([sendEmail] as AnyTaskDefinition[], {
+    engine,
+    loopEngine: { ...engine, fetch: fetchPassingOverVersion2 },
+  });
+  await vi.advanceTimersByTimeAsync(1_000);
+
+  await engine.enqueue({ runs: runsOf("send-email", 1) });
+  await vi.advanceTimersByTimeAsync(0);
+
+  expect(engine.storedRunOf("send-email-1")?.state).toBe("completed");
+  expect(linesWithMessage(lines, "runs passed over: newer record version")).toEqual([PASS_OVER_LINE]);
+});
+
 test("a pickup after a suspend writes run resumed, and a pickup after a stall writes attempt started with the same attempt", async () => {
   const handlerGate = createHandlerGate();
   const tasks = [

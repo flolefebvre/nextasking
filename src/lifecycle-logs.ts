@@ -1,4 +1,5 @@
 import type { DurationInMilliseconds, EpochMilliseconds } from "./durations.js";
+import { RECORD_VERSION } from "./engine/engine.js";
 import type {
   DispatchOrEmitRequest,
   EnqueueReply,
@@ -90,6 +91,14 @@ export function lockLostAbortLineOf(lockedRun: LockedRun): LifecycleLine {
 
 export function parkLineOf(parkedRun: ParkedRun): LifecycleLine {
   return { level: "debug", message: "run waiting for a concurrency slot", fields: runFieldsOf(parkedRun) };
+}
+
+export function passOverLineOf(recordVersion: number | undefined): LifecycleLine {
+  return {
+    level: "debug",
+    message: "runs passed over: newer record version",
+    fields: { recordVersion, supportedVersion: RECORD_VERSION },
+  };
 }
 
 export function stallLineOf(stalledRun: StalledRun): LifecycleLine {

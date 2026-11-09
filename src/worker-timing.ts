@@ -14,6 +14,7 @@ export type WorkerTiming = {
   tickIntervalInMilliseconds: DurationInMilliseconds;
   lockTimeLeftThatTriggersRenewalInMilliseconds: DurationInMilliseconds;
   mostLockTokensPerFetch: number;
+  passOverWaitInMilliseconds: DurationInMilliseconds;
   completedRunRetention: RetentionLimit;
   failedRunRetention: RetentionLimit;
 };
@@ -32,6 +33,7 @@ export const DEFAULT_WORKER_TIMING: WorkerTiming = {
   tickIntervalInMilliseconds: 1000,
   lockTimeLeftThatTriggersRenewalInMilliseconds: 60 * 1000,
   mostLockTokensPerFetch: MOST_LOCK_TOKENS_PER_FETCH,
+  passOverWaitInMilliseconds: 10 * 1000,
   completedRunRetention: { maxAgeInMilliseconds: DAY_IN_MILLISECONDS, maxRunCount: 1000 },
   failedRunRetention: { maxAgeInMilliseconds: 14 * DAY_IN_MILLISECONDS, maxRunCount: 10_000 },
 };

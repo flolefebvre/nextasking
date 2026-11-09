@@ -5,6 +5,7 @@ import type { ConnectionConfig } from "./connection.js";
 import type { AnyTaskDefinition, EventDefinition, PayloadInput, PayloadSchema } from "./definitions.js";
 import { parseDuration } from "./durations.js";
 import { createEngine, wakeUpWaitOf } from "./engine/engine.js";
+import { workerTiming } from "./worker-timing.js";
 import { createReadApi } from "./read-api.js";
 import type { ReadApi } from "./read-api.js";
 import { RESERVED_NAME_PREFIX, createEnqueueRequests } from "./enqueue-requests.js";
@@ -184,7 +185,7 @@ export function createNextasking<
   const requests = createEnqueueRequests({ tasksByName, eventsByName, listenerNamesByEventName });
   const lifecycle = createInstanceLifecycle({
     connections,
-    engineOn: (client) => createEngine(client, prefix),
+    engineOn: (client) => createEngine(client, prefix, workerTiming().supportedRecordVersion),
     wakeUpWaitOn: (blockingClient) => wakeUpWaitOf(blockingClient, prefix),
     senderOn: (engine) => handlerSenderOn(engine, requests, logger),
     definitions: { tasksByName, listenerNamesByEventName },

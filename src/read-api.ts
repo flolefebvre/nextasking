@@ -2,7 +2,13 @@ import type { AnyTaskDefinition, EventDefinition, Payload, PayloadSchema } from 
 import type { EpochMilliseconds } from "./durations.js";
 import { compareInSortedSetMemberOrder, engineKeysOf, runIdentityOf, storedRunIdOf } from "./engine/engine-keys.js";
 import type { RunIdentity } from "./engine/engine-keys.js";
-import { RECORD_VERSION, deserializePayload, isFailureReason, storedIntegerOf } from "./engine/engine.js";
+import {
+  RECORD_VERSION,
+  deserializePayload,
+  isFailureReason,
+  isRecordVersionReadable,
+  storedIntegerOf,
+} from "./engine/engine.js";
 import type { ErrorRecord, ScheduleSummary } from "./engine/engine.js";
 import { indexPageCommandOf, indexPageOf } from "./engine/index-page-script.js";
 import type { IndexPosition } from "./engine/index-page-script.js";
@@ -173,8 +179,6 @@ type AnyRunSummary = Omit<AnyListedRun, "lastErrorMessage">;
 
 type IndexEntry = { indexPosition: IndexPosition; runIdentity: RunIdentity };
 
-const KNOWN_RECORD_VERSION = String(RECORD_VERSION);
-
 function storedDateOf(storedValue: unknown): Date | undefined {
   const instant: EpochMilliseconds | undefined = storedIntegerOf(storedValue);
   return instant === undefined ? undefined : new Date(instant);
@@ -231,7 +235,11 @@ function runStateFieldsOf(state: RunState, storedRecord: StoredRunRecord): RunSt
 
 function runSummaryOf(runId: RunId, recordReply: unknown): AnyRunSummary | undefined {
   const storedRecord = storedFieldsOf(recordReply, RUN_RECORD_FIELDS);
-  if (storedRecord?.version !== KNOWN_RECORD_VERSION || storedRecord.task === null) {
+  if (
+    storedRecord === undefined ||
+    !isRecordVersionReadable(storedRecord.version, RECORD_VERSION) ||
+    storedRecord.task === null
+  ) {
     return undefined;
   }
   const { state } = storedRecord;
@@ -499,7 +507,8 @@ export function createReadApi(config: ReadApiConfig): ReadApi {
       );
       return declaredSchedules.map(({ task, cron, timezone }, position) => {
         const storedSchedule = storedFieldsOf(replies[position], SCHEDULE_RECORD_FIELDS);
-        const isScheduleRecordKnown = storedSchedule?.version === KNOWN_RECORD_VERSION;
+        const isScheduleRecordKnown =
+          storedSchedule !== undefined && isRecordVersionReadable(storedSchedule.version, RECORD_VERSION);
         const nextFiringAt = isScheduleRecordKnown ? storedIntegerOf(storedSchedule.nextFiringAt) : undefined;
         const previousFiringAt = isScheduleRecordKnown ? storedIntegerOf(storedSchedule.previousFiringAt) : undefined;
         return {

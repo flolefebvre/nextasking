@@ -113,31 +113,36 @@ engineTest(
 const HOURLY_REPORT = { task: "build-report", cron: "0 * * * *", timezone: "UTC" };
 
 engineTest(
-  "a tick reads the due schedules in the same pipelined round trip, leaving out a record of a newer version",
+  "a tick reads the due schedules in the same pipelined round trip, reporting a record of an older version due and leaving out a record of a newer version",
   async (context) => {
     const { engine, client, redis, keys } = context;
     const instantBefore = await serverInstantInMillisecondsOf(redis);
     await engine.syncSchedules({
       schedulesToSync: [
         { ...HOURLY_REPORT, nextFiringAt: instantBefore - 1000, retries: 2 },
+        { ...HOURLY_REPORT, task: "older-report", nextFiringAt: instantBefore - 1000, retries: 2 },
         { ...HOURLY_REPORT, task: "newer-report", nextFiringAt: instantBefore - 1000, retries: 2 },
       ],
     });
+    await redis.hSet(keys.schedule("older-report"), "version", RECORD_VERSION - 1);
     await redis.hSet(keys.schedule("newer-report"), "version", RECORD_VERSION + 1);
     const batchSpy = vi.spyOn(client, "sendBatch");
 
     const reply = await engine.tick({
       heldLocks: [],
       lockDurationInMilliseconds: LOCK_DURATION_IN_MILLISECONDS,
-      scheduledTaskNames: ["build-report", "newer-report"],
+      scheduledTaskNames: ["build-report", "older-report", "newer-report"],
     });
 
     expect(batchSpy).toHaveBeenCalledTimes(1);
-    expect(batchSpy.mock.calls[0]?.[0]).toHaveLength(6);
+    expect(batchSpy.mock.calls[0]?.[0]).toHaveLength(7);
     expect(reply.dueSchedules).toEqual(
       repliedOf({
         serverInstant: expect.any(Number),
-        dueSchedules: [{ ...HOURLY_REPORT, nextFiringAt: instantBefore - 1000 }],
+        dueSchedules: [
+          { ...HOURLY_REPORT, nextFiringAt: instantBefore - 1000 },
+          { ...HOURLY_REPORT, task: "older-report", nextFiringAt: instantBefore - 1000 },
+        ],
       }),
     );
     const serverInstant = reply.dueSchedules?.kind === "replied" ? reply.dueSchedules.reply.serverInstant : 0;

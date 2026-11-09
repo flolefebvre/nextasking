@@ -813,6 +813,21 @@ test("a fetched reply that passed over records writes the pass-over line once pe
   expect(linesWithMessage(lines, "runs passed over: newer record version")).toEqual([PASS_OVER_LINE]);
 });
 
+test("the pass-over line names the record version the worker's timing supports", async () => {
+  const engine = createInMemoryEngine();
+  const { lines } = startedLoopOf([], {
+    engine,
+    loopEngine: { ...engine, fetch: async () => ({ kind: "unknownVersion", recordVersion: 1 }) },
+    timing: { ...DEFAULT_WORKER_TIMING, supportedRecordVersion: 0 },
+  });
+
+  await vi.advanceTimersByTimeAsync(0);
+
+  expect(linesWithMessage(lines, "runs passed over: newer record version")).toEqual([
+    { ...PASS_OVER_LINE, fields: { recordVersion: 1, supportedVersion: 0 } },
+  ]);
+});
+
 test("a pickup after a suspend writes run resumed, and a pickup after a stall writes attempt started with the same attempt", async () => {
   const handlerGate = createHandlerGate();
   const tasks = [

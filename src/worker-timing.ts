@@ -1,4 +1,5 @@
 import type { DurationInMilliseconds } from "./durations.js";
+import { RECORD_VERSION } from "./engine/engine.js";
 import type { RetentionLimit } from "./engine/engine.js";
 import { MOST_LOCK_TOKENS_PER_FETCH } from "./engine/fetch-script.js";
 
@@ -14,6 +15,7 @@ export type WorkerTiming = {
   passOverWaitInMilliseconds: DurationInMilliseconds;
   completedRunRetention: RetentionLimit;
   failedRunRetention: RetentionLimit;
+  supportedRecordVersion: number;
 };
 
 const DAY_IN_MILLISECONDS: DurationInMilliseconds = 24 * 60 * 60 * 1000;
@@ -30,6 +32,7 @@ export const DEFAULT_WORKER_TIMING: WorkerTiming = {
   passOverWaitInMilliseconds: 10 * 1000,
   completedRunRetention: { maxAgeInMilliseconds: DAY_IN_MILLISECONDS, maxRunCount: 1000 },
   failedRunRetention: { maxAgeInMilliseconds: 14 * DAY_IN_MILLISECONDS, maxRunCount: 10_000 },
+  supportedRecordVersion: RECORD_VERSION,
 };
 
 let currentWorkerTiming: WorkerTiming = DEFAULT_WORKER_TIMING;

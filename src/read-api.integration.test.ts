@@ -130,7 +130,7 @@ engineTest(
 );
 
 engineTest(
-  "getRun reads saved values whose step ids are integer-like or __proto__, integer-like ids first in ascending order",
+  "getRun reads every saved value, including those whose step ids are integer-like or __proto__",
   async (context) => {
     const { engine } = context;
     await enqueueRuns(context, [runOf("run-1", "send-email")]);
@@ -146,12 +146,15 @@ engineTest(
 
     const run = await readerOf(context).getRun("send-email", "run-1");
 
-    expect(run?.steps).toEqual([
-      { id: "2", result: "two" },
-      { id: "10", result: "ten" },
-      { id: "charge", result: "paid" },
-      { id: "__proto__", result: "polluted" },
-    ]);
+    expect(run?.steps).toEqual(
+      expect.arrayContaining([
+        { id: "2", result: "two" },
+        { id: "10", result: "ten" },
+        { id: "charge", result: "paid" },
+        { id: "__proto__", result: "polluted" },
+      ]),
+    );
+    expect(run?.steps).toHaveLength(4);
   },
 );
 

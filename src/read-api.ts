@@ -2,13 +2,7 @@ import type { AnyTaskDefinition, EventDefinition, Payload, PayloadSchema } from 
 import type { EpochMilliseconds } from "./durations.js";
 import { compareInSortedSetMemberOrder, engineKeysOf, runIdentityOf, storedRunIdOf } from "./engine/engine-keys.js";
 import type { RunIdentity } from "./engine/engine-keys.js";
-import {
-  RECORD_VERSION,
-  deserializePayload,
-  isFailureReason,
-  isRecordVersionReadable,
-  storedIntegerOf,
-} from "./engine/engine.js";
+import { deserializePayload, isFailureReason, isRecordVersionReadable, storedIntegerOf } from "./engine/engine.js";
 import type { ErrorRecord, ScheduleSummary } from "./engine/engine.js";
 import { indexPageCommandOf, indexPageOf } from "./engine/index-page-script.js";
 import type { IndexPosition } from "./engine/index-page-script.js";
@@ -144,6 +138,7 @@ export type ReadApiConfig = {
   tasksByName: ReadonlyMap<string, AnyTaskDefinition>;
   listenerNamesByEventName: ReadonlyMap<string, readonly string[]>;
   declaredSchedules: readonly ScheduleSummary[];
+  supportedRecordVersion: number;
 };
 
 export type ReadApi = {
@@ -233,11 +228,11 @@ function runStateFieldsOf(state: RunState, storedRecord: StoredRunRecord): RunSt
   }
 }
 
-function runSummaryOf(runId: RunId, recordReply: unknown): AnyRunSummary | undefined {
+function runSummaryOf(runId: RunId, recordReply: unknown, supportedRecordVersion: number): AnyRunSummary | undefined {
   const storedRecord = storedFieldsOf(recordReply, RUN_RECORD_FIELDS);
   if (
     storedRecord === undefined ||
-    !isRecordVersionReadable(storedRecord.version, RECORD_VERSION) ||
+    !isRecordVersionReadable(storedRecord.version, supportedRecordVersion) ||
     storedRecord.task === null
   ) {
     return undefined;
@@ -315,8 +310,9 @@ function runOf(
   taskName: string,
   runId: RunId,
   [recordReply, payloadReply, errorsReply, stepsReply]: readonly unknown[],
+  supportedRecordVersion: number,
 ): AnyRun | undefined {
-  const runSummary = runSummaryOf(runId, recordReply);
+  const runSummary = runSummaryOf(runId, recordReply, supportedRecordVersion);
   if (runSummary?.task !== taskName || typeof payloadReply !== "string") {
     return undefined;
   }
@@ -329,8 +325,13 @@ function runOf(
   return { ...runSummary, payload: payload.value, errors, steps } as AnyRun;
 }
 
-function listedRunOf(entry: IndexEntry, state: RunState, [recordReply, lastErrorReply]: readonly unknown[]) {
-  const runSummary = runSummaryOf(entry.runIdentity.runId, recordReply);
+function listedRunOf(
+  entry: IndexEntry,
+  state: RunState,
+  [recordReply, lastErrorReply]: readonly unknown[],
+  supportedRecordVersion: number,
+) {
+  const runSummary = runSummaryOf(entry.runIdentity.runId, recordReply, supportedRecordVersion);
   if (runSummary?.task !== entry.runIdentity.task || runSummary.state !== state) {
     return undefined;
   }
@@ -379,7 +380,7 @@ function repliesInGroupsOf(replies: readonly unknown[], groupSize: number): unkn
 }
 
 export function createReadApi(config: ReadApiConfig): ReadApi {
-  const { client, tasksByName, listenerNamesByEventName, declaredSchedules } = config;
+  const { client, tasksByName, listenerNamesByEventName, declaredSchedules, supportedRecordVersion } = config;
   const keys = engineKeysOf(config.prefix);
   const repliesToBatchOf = async (commands: readonly RedisCommand[]): Promise<unknown[]> =>
     repliesOf(await client.sendBatch(commands));
@@ -394,7 +395,9 @@ export function createReadApi(config: ReadApiConfig): ReadApi {
   const readRuns = async (runReads: readonly RunIdentity[]): Promise<(AnyRun | undefined)[]> => {
     const replies = await repliesToBatchOf(runReads.flatMap(runReadCommandsOf));
     const repliesByRun = repliesInGroupsOf(replies, COMMANDS_PER_RUN_READ);
-    return runReads.map(({ task, runId }, position) => runOf(task, runId, repliesByRun[position] ?? []));
+    return runReads.map(({ task, runId }, position) =>
+      runOf(task, runId, repliesByRun[position] ?? [], supportedRecordVersion),
+    );
   };
 
   const readIndexEntries = async (
@@ -427,7 +430,7 @@ export function createReadApi(config: ReadApiConfig): ReadApi {
     );
     const repliesByRun = repliesInGroupsOf(replies, COMMANDS_PER_LISTED_RUN_READ);
     return indexEntries.flatMap((entry, position) => {
-      const listedRun = listedRunOf(entry, state, repliesByRun[position] ?? []);
+      const listedRun = listedRunOf(entry, state, repliesByRun[position] ?? [], supportedRecordVersion);
       return listedRun === undefined ? [] : [listedRun];
     });
   };
@@ -508,7 +511,7 @@ export function createReadApi(config: ReadApiConfig): ReadApi {
       return declaredSchedules.map(({ task, cron, timezone }, position) => {
         const storedSchedule = storedFieldsOf(replies[position], SCHEDULE_RECORD_FIELDS);
         const isScheduleRecordKnown =
-          storedSchedule !== undefined && isRecordVersionReadable(storedSchedule.version, RECORD_VERSION);
+          storedSchedule !== undefined && isRecordVersionReadable(storedSchedule.version, supportedRecordVersion);
         const nextFiringAt = isScheduleRecordKnown ? storedIntegerOf(storedSchedule.nextFiringAt) : undefined;
         const previousFiringAt = isScheduleRecordKnown ? storedIntegerOf(storedSchedule.previousFiringAt) : undefined;
         return {

@@ -47,7 +47,7 @@ function taskDefinitionOf(taskName: string): AnyTaskDefinition {
   return defineScheduledTask(taskName, { schedule: { cron: "0 * * * *" }, handler: async () => undefined });
 }
 
-function readerOf({ client, keyPrefix }: EngineTestContext): ReadApi {
+function readerOf({ client, keyPrefix }: EngineTestContext, supportedRecordVersion = RECORD_VERSION): ReadApi {
   const taskNames = [...TASK_NAMES, ...LISTENER_NAMES];
   return createReadApi({
     client,
@@ -55,6 +55,7 @@ function readerOf({ client, keyPrefix }: EngineTestContext): ReadApi {
     tasksByName: new Map(taskNames.map((taskName) => [taskName, taskDefinitionOf(taskName)])),
     listenerNamesByEventName: new Map([["invoice.paid", LISTENER_NAMES]]),
     declaredSchedules: DECLARED_SCHEDULES,
+    supportedRecordVersion,
   });
 }
 
@@ -441,6 +442,21 @@ engineTest("listSchedules reads a schedule record of a newer version as no recor
 
   expect(buildReport).toEqual({ task: "build-report", cron: "0 * * * *", timezone: "UTC" });
 });
+
+engineTest(
+  "a reader of an older release reads a run and a schedule record of the current version as no record",
+  async (context) => {
+    await nextFiringAtOfAScheduleStoredAtVersion(context, RECORD_VERSION);
+    await enqueueRuns(context, [runOf("current-run", "send-email")]);
+    const olderReader = readerOf(context, RECORD_VERSION - 1);
+
+    const run = await olderReader.getRun("send-email", "current-run");
+    const [buildReport] = await olderReader.listSchedules();
+
+    expect(run).toBeUndefined();
+    expect(buildReport).toEqual({ task: "build-report", cron: "0 * * * *", timezone: "UTC" });
+  },
+);
 
 engineTest("listSchedules reads a schedule record of an older version as its record", async (context) => {
   const nextFiringAt = await nextFiringAtOfAScheduleStoredAtVersion(context, RECORD_VERSION - 1);

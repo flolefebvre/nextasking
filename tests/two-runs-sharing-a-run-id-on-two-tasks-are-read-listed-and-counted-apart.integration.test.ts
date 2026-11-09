@@ -4,7 +4,7 @@ import { defineScheduledTask } from "../src/definitions.js";
 import type { AnyTaskDefinition } from "../src/definitions.js";
 import { engineKeysOf, storedRunIdOf } from "../src/engine/engine-keys.js";
 import type { RunIdentity } from "../src/engine/engine-keys.js";
-import { createEngine } from "../src/engine/engine.js";
+import { createEngine, RECORD_VERSION } from "../src/engine/engine.js";
 import { createReadApi } from "../src/read-api.js";
 import type { ReadApi } from "../src/read-api.js";
 import type { AnyListedRun } from "../src/read-api.js";
@@ -35,6 +35,7 @@ function readerOf({ client, keyPrefix }: Pick<EngineTestContext, "client" | "key
     tasksByName,
     listenerNamesByEventName: new Map(),
     declaredSchedules: [],
+    supportedRecordVersion: RECORD_VERSION,
   });
 }
 

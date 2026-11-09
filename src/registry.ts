@@ -223,6 +223,7 @@ export function createNextasking<
             tasksByName,
             listenerNamesByEventName,
             declaredSchedules,
+            supportedRecordVersion: workerTiming().supportedRecordVersion,
           });
           return read(readApi);
         })

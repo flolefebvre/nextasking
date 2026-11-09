@@ -3,6 +3,7 @@ import { z } from "zod";
 
 import { createEngine } from "../src/engine/engine.js";
 import { createNextasking, defineTask } from "../src/index.js";
+import { DEFAULT_WORKER_TIMING } from "../src/worker-timing.js";
 import { closeNextaskingAndCheckItsDuration } from "./close-nextasking-and-check-its-duration.js";
 import { integrationTest } from "./integration-test.js";
 import { freshLockTokensOf } from "./lock-tokens.js";
@@ -61,7 +62,7 @@ integrationTest(
         createEngine(client, keyPrefix).fetch({
           lockTokens: freshLockTokensOf(1),
           concurrencyLimitsByTask: {},
-          lockDurationInMilliseconds: WAIT_WELL_UNDER_THE_LOCK_DURATION_IN_MILLISECONDS,
+          lockDurationInMilliseconds: DEFAULT_WORKER_TIMING.lockDurationInMilliseconds,
         }),
       );
       const runIdsInDispatchOrder: string[] = [];

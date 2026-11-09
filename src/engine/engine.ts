@@ -963,6 +963,18 @@ function tickReplyOf(results: PipelineResult[] | null, request: TickRequest): Ti
   };
 }
 
+const MILLISECONDS_PER_SECOND = 1000;
+
+export function wakeUpWaitOf(
+  blockingClient: Pick<Redis, "bzpopmin">,
+  prefix: string,
+): (timeoutInMilliseconds: DurationInMilliseconds) => Promise<void> {
+  const { wakeUpMarker } = engineKeysOf(prefix);
+  return async (timeoutInMilliseconds) => {
+    await blockingClient.bzpopmin(wakeUpMarker, timeoutInMilliseconds / MILLISECONDS_PER_SECOND);
+  };
+}
+
 export function createEngine(client: Redis, prefix: string): Engine {
   const keys = engineKeysOf(prefix);
   const sharedArguments: ScriptArgument[] = [hashTaggedPrefixOf(prefix), RECORD_VERSION];

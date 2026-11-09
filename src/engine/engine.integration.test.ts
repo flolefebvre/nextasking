@@ -1,10 +1,11 @@
+import type { Redis } from "ioredis";
 import { expect, vi } from "vitest";
 
 import { DAY_IN_MILLISECONDS, SEND_EMAIL_PRUNE_REQUEST } from "../../tests/ended-runs.js";
 import { backdateEndedRun, engineTest, expireLock, fetchedLockedRunsOf } from "../../tests/engine-test.js";
 import { serverInstantInMillisecondsOf } from "../../tests/server-instant.js";
 import { REPLIED_EMPTY_PROMOTE, REPLIED_ONE_RENEWAL, repliedOf } from "../../tests/tick-replies.js";
-import { RECORD_VERSION } from "./engine.js";
+import { RECORD_VERSION, wakeUpWaitOf } from "./engine.js";
 
 const LOCK_DURATION_IN_MILLISECONDS = 120_000;
 
@@ -189,4 +190,55 @@ engineTest("a tick leaving the promote out sends three commands", async (context
   expect(pipelineSpy.mock.results[0]?.value).toHaveLength(3);
   expect(reply.promote).toBeUndefined();
   expect(reply.prune).toEqual({ kind: "replied", reply: { kind: "pruned", prunedRunCount: 0 } });
+});
+
+async function withBlockingClient(redis: Redis, use: (blockingClient: Redis) => Promise<void>): Promise<void> {
+  const blockingClient = redis.duplicate();
+  blockingClient.on("error", () => undefined);
+  try {
+    await blockingClient.connect();
+    await use(blockingClient);
+  } finally {
+    blockingClient.disconnect();
+  }
+}
+
+const LONG_WAKE_UP_TIMEOUT_IN_MILLISECONDS = 5000;
+
+engineTest(
+  "a wake-up wait returns at once on an armed marker, and takes it",
+  async ({ engine, redis, keys, keyPrefix }) => {
+    await engine.enqueue({ runs: [{ runId: "welcome-ada", task: "send-email", payload: "{}", retries: 0 }] });
+
+    await withBlockingClient(redis, async (blockingClient) => {
+      const waitStartedAt = Date.now();
+      await wakeUpWaitOf(blockingClient, keyPrefix)(LONG_WAKE_UP_TIMEOUT_IN_MILLISECONDS);
+
+      expect(Date.now() - waitStartedAt).toBeLessThan(LONG_WAKE_UP_TIMEOUT_IN_MILLISECONDS);
+      expect(await redis.exists(keys.wakeUpMarker)).toBe(0);
+    });
+  },
+);
+
+engineTest(
+  "a wake-up wait returns once an enqueue arms the marker while it blocks",
+  async ({ engine, redis, keyPrefix }) => {
+    await withBlockingClient(redis, async (blockingClient) => {
+      const waitStartedAt = Date.now();
+      const wakeUpWait = wakeUpWaitOf(blockingClient, keyPrefix)(LONG_WAKE_UP_TIMEOUT_IN_MILLISECONDS);
+      await engine.enqueue({ runs: [{ runId: "welcome-ada", task: "send-email", payload: "{}", retries: 0 }] });
+      await wakeUpWait;
+
+      expect(Date.now() - waitStartedAt).toBeLessThan(LONG_WAKE_UP_TIMEOUT_IN_MILLISECONDS);
+    });
+  },
+);
+
+engineTest("a wake-up wait on no marker returns at its fractional timeout", async ({ redis, keyPrefix }) => {
+  await withBlockingClient(redis, async (blockingClient) => {
+    const waitStartedAt = Date.now();
+    await wakeUpWaitOf(blockingClient, keyPrefix)(300);
+
+    expect(Date.now() - waitStartedAt).toBeGreaterThanOrEqual(250);
+  });
 });

@@ -8,9 +8,11 @@ import {
   isOutOfMemoryReply,
   isReadOnlyReply,
   isUnansweredCommandError,
+  isUnblockedReply,
   unansweredWithinDeadlineError,
 } from "./node-redis-driver.js";
 import type { CreateRedisDriver, RedisDriver } from "./node-redis-driver.js";
+import { createReadOnlyStretch } from "./read-only-stretch.js";
 import type { CommandResult, RedisClient, RedisCommand } from "./redis-client.js";
 import { delayUnlessAborted, untilAborted } from "./redis-outage.js";
 import type { RedisOutage } from "./redis-outage.js";
@@ -192,6 +194,32 @@ function noRetryError(): undefined {
   return undefined;
 }
 
+function noErrors(): readonly Error[] {
+  return [];
+}
+
+function commandErrorsOf(results: readonly CommandResult[]): readonly (Error | undefined)[] {
+  return results.map((result) => (result.kind === "failed" ? result.error : undefined));
+}
+
+function commandNameOf(command: RedisCommand): string {
+  return command.kind === "script" ? command.script.name : command.name;
+}
+
+type ReadOnlyAnswer = { commandName: string; readOnlyReply: Error };
+
+function readOnlyAnswersOf(
+  commands: readonly RedisCommand[],
+  commandErrors: readonly (Error | undefined)[],
+): ReadOnlyAnswer[] {
+  return commands.flatMap((command, position) => {
+    const commandError = commandErrors[position];
+    return commandError !== undefined && isReadOnlyReply(commandError)
+      ? [{ commandName: commandNameOf(command), readOnlyReply: commandError }]
+      : [];
+  });
+}
+
 export function createRedisConnections(
   connection: ConnectionConfig,
   logger: Logger,
@@ -199,7 +227,9 @@ export function createRedisConnections(
 ): RedisConnections {
   const giveUpAfterInMilliseconds = giveUpAfterInMillisecondsOf(connection);
   const outageTracker = createConnectionOutageTracker(logger);
+  const readOnlyStretch = createReadOnlyStretch({ outageTracker, giveUpAfterInMilliseconds });
   const stateByConnection = new WeakMap<RedisConnection, ConnectionState>();
+  let openConnectionCount = 0;
 
   const stateOf = (redisConnection: RedisConnection): ConnectionState => {
     const state = stateByConnection.get(redisConnection);
@@ -290,20 +320,24 @@ export function createRedisConnections(
     });
   };
 
-  const unansweredErrorAtTheDeadline = (state: ConnectionState): Error =>
+  const unansweredErrorAtTheDeadline = (state: ConnectionState, lastReadOnlyReply: Error | undefined): Error =>
     !state.driver.isReady && isUnansweredCommandError(state.errorWhileDown)
       ? (state.errorWhileDown as Error)
-      : unansweredWithinDeadlineError();
+      : (lastReadOnlyReply ?? unansweredWithinDeadlineError());
+
+  const reconnectByForceUnlessUnderWay = (state: ConnectionState) => {
+    if (state.driver.isReady && !state.isReconnectingByForce) {
+      state.isReconnectingByForce = true;
+      state.driver.forceReconnect();
+    }
+  };
 
   const reconnectedAfterReadOnly = (state: ConnectionState): Promise<void> => {
     if (state.readOnlyReconnect === undefined) {
       const readOnlyReconnect = (async () => {
         await unrefDelayUnlessAborted(READ_ONLY_RECONNECT_PAUSE_IN_MILLISECONDS, state.closedController.signal);
         throwIfClosed(state);
-        if (state.driver.isReady && !state.isReconnectingByForce) {
-          state.isReconnectingByForce = true;
-          state.driver.forceReconnect();
-        }
+        reconnectByForceUnlessUnderWay(state);
         await readyWaitOf(state);
       })().finally(() => {
         state.readOnlyReconnect = undefined;
@@ -320,9 +354,10 @@ export function createRedisConnections(
     retryErrorOf: (reply: Reply) => Error | undefined,
   ): Promise<Reply> => {
     const deadlineController = new AbortController();
+    let lastReadOnlyReply: Error | undefined;
     const deadlineTimer = unrefTimer(
       setTimeout(() => {
-        deadlineController.abort(unansweredErrorAtTheDeadline(state));
+        deadlineController.abort(unansweredErrorAtTheDeadline(state, lastReadOnlyReply));
       }, giveUpAfterInMilliseconds),
     );
     const deadlineSignal = deadlineController.signal;
@@ -348,6 +383,9 @@ export function createRedisConnections(
         if (isClosed(state)) {
           throw retryError;
         }
+        if (isReadOnlyReply(retryError)) {
+          lastReadOnlyReply = retryError;
+        }
         await untilAborted(
           isReadOnlyReply(retryError) ? reconnectedAfterReadOnly(state) : readyWaitOf(state),
           deadlineSignal,
@@ -360,22 +398,43 @@ export function createRedisConnections(
 
   const sentWithoutDeadline = async <Reply>(
     state: ConnectionState,
+    commands: readonly RedisCommand[],
     send: Send<Reply>,
-    readOnlyReplyOf: (reply: Reply) => Error | undefined,
+    commandErrorsOfReply: (reply: Reply) => readonly (Error | undefined)[],
   ): Promise<Reply> => {
     for (;;) {
       throwIfClosed(state);
-      let readOnlyReply: Error | undefined;
+      let readOnlyAnswers: ReadOnlyAnswer[];
       try {
         const reply = await answeredWithinTheAnswerBound(state, () => send());
-        readOnlyReply = readOnlyReplyOf(reply);
-        if (readOnlyReply === undefined) {
+        readOnlyAnswers = readOnlyAnswersOf(commands, commandErrorsOfReply(reply));
+        if (readOnlyAnswers.length === 0) {
+          if (!isClosed(state)) {
+            readOnlyStretch.noteAccepted(commands.map(commandNameOf));
+          }
           return reply;
         }
+        throwIfClosed(state);
       } catch (error) {
+        if (isUnblockedReply(error) && !isClosed(state)) {
+          reconnectByForceUnlessUnderWay(state);
+          await untilAborted(readyWaitOf(state), state.closedController.signal);
+          continue;
+        }
         if (!isReadOnlyReply(error) || isClosed(state)) {
           throw error;
         }
+        readOnlyAnswers = readOnlyAnswersOf(
+          commands,
+          commands.map(() => error as Error),
+        );
+      }
+      const [firstReadOnlyAnswer] = readOnlyAnswers;
+      if (firstReadOnlyAnswer !== undefined) {
+        readOnlyStretch.noteAnsweredReadOnly(
+          readOnlyAnswers.map(({ commandName }) => commandName),
+          firstReadOnlyAnswer.readOnlyReply,
+        );
       }
       await untilAborted(reconnectedAfterReadOnly(state), state.closedController.signal);
     }
@@ -393,9 +452,9 @@ export function createRedisConnections(
   });
 
   const workerCallsOf = (state: ConnectionState): RedisClient => ({
-    send: (command: RedisCommand) => sentWithoutDeadline(state, () => state.driver.send(command), noRetryError),
+    send: (command: RedisCommand) => sentWithoutDeadline(state, [command], () => state.driver.send(command), noErrors),
     sendBatch: (commands: readonly RedisCommand[]) =>
-      sentWithoutDeadline(state, () => state.driver.sendBatch(commands), failedResultErrorOf(isReadOnlyReply)),
+      sentWithoutDeadline(state, commands, () => state.driver.sendBatch(commands), commandErrorsOf),
   });
 
   const openConnection = (longestBlockInMilliseconds: DurationInMilliseconds): RedisConnection => {
@@ -462,6 +521,7 @@ export function createRedisConnections(
     };
     opened.state = state;
     stateByConnection.set(redisConnection, state);
+    openConnectionCount += 1;
     driver.connect();
     return redisConnection;
   };
@@ -488,6 +548,10 @@ export function createRedisConnections(
       state.readyWait?.markClosed();
       state.readyWait = undefined;
       outageTracker.forgetClient(state.subject);
+      openConnectionCount -= 1;
+      if (openConnectionCount === 0) {
+        readOnlyStretch.forget();
+      }
       if (closeBoundInMilliseconds !== undefined && state.driver.isReady) {
         await isSettledWithin(
           state.driver.close().catch(() => undefined),
@@ -501,7 +565,7 @@ export function createRedisConnections(
       try {
         return await call();
       } catch (error) {
-        if (isUnansweredError(error)) {
+        if (isUnansweredError(error) || isReadOnlyReply(error)) {
           throw new RedisUnavailableError({ kind: "unanswered", giveUpAfterInMilliseconds }, callIds, error);
         }
         if (isOutOfMemoryReply(error)) {

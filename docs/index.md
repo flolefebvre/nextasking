@@ -10,104 +10,106 @@ Typed background tasks and events for Next.js, on Redis or Valkey. Define tasks 
 
 ## Where to go
 
-| Job                                                | Page                                            |
-| -------------------------------------------------- | ----------------------------------------------- |
-| Learn the words this manual uses                   | [Core concepts](core-concepts.md)               |
-| Add nextasking to an app, step by step             | [Setup](setup.md)                               |
-| Lay out the definition files and name them         | [Setup](setup.md)                               |
-| Set the environment variables a worker needs       | [Setup](setup.md)                               |
-| Point the app's agents at this manual              | [Setup](setup.md)                               |
-| Define a task and its payload schema               | [Tasks and events](tasks-and-events.md)         |
-| Define an event                                    | [Tasks and events](tasks-and-events.md)         |
-| Define a listener that reacts to an event          | [Tasks and events](tasks-and-events.md)         |
-| Register tasks and events in `createNextasking`    | [Tasks and events](tasks-and-events.md)         |
-| Dispatch a task                                    | [Tasks and events](tasks-and-events.md)         |
-| Start a run later with `delay`                     | [Tasks and events](tasks-and-events.md)         |
-| Emit an event, with or without listeners           | [Tasks and events](tasks-and-events.md)         |
-| Run once per business fact with your own id        | [Tasks and events](tasks-and-events.md)         |
-| Know how long a repeated id is dropped             | [Tasks and events](tasks-and-events.md)         |
-| Dispatch or emit a name known only at runtime      | [Tasks and events](tasks-and-events.md)         |
-| Handle dispatch and emit errors                    | [Tasks and events](tasks-and-events.md)         |
-| Answer 503 when Redis is down                      | [Tasks and events](tasks-and-events.md)         |
-| Set how long a call waits with `giveUpAfter`       | [Tasks and events](tasks-and-events.md)         |
-| Write a duration                                   | [Tasks and events](tasks-and-events.md)         |
-| Fix an error `createNextasking` throws at startup  | [Tasks and events](tasks-and-events.md)         |
-| Start the embedded worker                          | [Tasks and events](tasks-and-events.md)         |
-| Pass `startWorker` options                         | [Worker](worker.md)                             |
-| Cap the attempts in flight with `concurrency`      | [Worker](worker.md)                             |
-| Let a deploy finish running attempts               | [Worker](worker.md)                             |
-| Choose which processes run a worker                | [Worker](worker.md)                             |
-| Stop a handler cleanly with `abortSignal`          | [Worker](worker.md)                             |
-| Know what a stall is and when a run fails stalled  | [Worker](worker.md)                             |
-| Know what happens to runs during a deploy overlap  | [Worker](worker.md)                             |
-| Know which release decides each task option        | [Deploys](deploys.md)                           |
-| Change a payload schema without breaking runs      | [Deploys](deploys.md)                           |
-| Rename or rework a step that is already deployed   | [Deploys](deploys.md)                           |
-| Remove a task, a listener or an event              | [Deploys](deploys.md)                           |
-| Rename a task or an event                          | [Deploys](deploys.md)                           |
-| Pick the Valkey or Redis for the queues            | [Worker](worker.md)                             |
-| Set `maxmemory-policy` to `noeviction`             | [Worker](worker.md)                             |
-| Know what the worker does when Redis is down       | [Worker](worker.md)                             |
-| Exit when the worker can't start                   | [Worker](worker.md)                             |
-| Configure webpack with `serverExternalPackages`    | [Worker](worker.md)                             |
-| Limit a task's attempts across every instance      | [Concurrency](concurrency.md)                   |
-| Limit a task's attempts per account or other key   | [Concurrency](concurrency.md)                   |
-| Keep a scheduled task's firings from overlapping   | [Concurrency](concurrency.md)                   |
-| Know what a run waiting for a slot costs           | [Concurrency](concurrency.md)                   |
-| Run a task on a cron, in a time zone               | [Scheduled tasks](scheduled-tasks.md)           |
-| Know what `scheduledAt` holds                      | [Scheduled tasks](scheduled-tasks.md)           |
-| Run a scheduled task now                           | [Scheduled tasks](scheduled-tasks.md)           |
-| Know what a deploy does to schedules               | [Scheduled tasks](scheduled-tasks.md)           |
-| Know what daylight saving time does to a schedule  | [Scheduled tasks](scheduled-tasks.md)           |
-| Know what happens to firings missed in downtime    | [Scheduled tasks](scheduled-tasks.md)           |
-| Make a side effect run once across retries         | [Steps](steps.md)                               |
-| Name steps, in a loop too                          | [Steps](steps.md)                               |
-| Return a step result that compiles                 | [Steps](steps.md)                               |
-| Run steps in parallel                              | [Steps](steps.md)                               |
-| Pass an idempotency key to a provider              | [Steps](steps.md)                               |
-| Sleep for minutes or days without holding workers  | [Steps](steps.md)                               |
-| Skip work a sleep made unnecessary                 | [Steps](steps.md)                               |
-| Emit or dispatch from a handler, once per run      | [Steps](steps.md)                               |
-| Know the step size limits                          | [Steps](steps.md)                               |
-| Fix a `StepMisuseError`                            | [Steps](steps.md)                               |
-| Know what nextasking guarantees against duplicates | [Duplicate runs](duplicate-runs.md)             |
-| Close the duplicate windows that stay open         | [Duplicate runs](duplicate-runs.md)             |
-| Send an email or charge a card only once           | [Duplicate runs](duplicate-runs.md)             |
-| Know how long a provider keeps an idempotency key  | [Duplicate runs](duplicate-runs.md)             |
-| Set how often and how soon a failed run retries    | [Retries and failures](retries-and-failures.md) |
-| Fail a run at once with `NonRetriableError`        | [Retries and failures](retries-and-failures.md) |
-| Bound an attempt with `timeout`                    | [Retries and failures](retries-and-failures.md) |
-| Know what a failed run keeps, and for how long     | [Retries and failures](retries-and-failures.md) |
-| Replay a failed run after deploying a fix          | [Retries and failures](retries-and-failures.md) |
-| Replay a failed fan-out without duplicates         | [Retries and failures](retries-and-failures.md) |
-| Alert on a failed run or fan-out with a listener   | [Retries and failures](retries-and-failures.md) |
-| Pass a logger and read the lifecycle lines         | [Logging](logging.md)                           |
-| Protect a dashboard route                          | [Dashboard](dashboard.md)                       |
-| Read one run: state, payload, errors, steps        | [Dashboard](dashboard.md)                       |
-| Know what each of the eight run states means       | [Dashboard](dashboard.md)                       |
-| Page through failed runs                           | [Dashboard](dashboard.md)                       |
-| Count the backlog per task and state               | [Dashboard](dashboard.md)                       |
-| Follow an event from its fan-out to each listener  | [Dashboard](dashboard.md)                       |
-| Check that last night's scheduled run happened     | [Dashboard](dashboard.md)                       |
-| Build a typed "run now" picker                     | [Dashboard](dashboard.md)                       |
-| Know what a read costs and what it can miss        | [Dashboard](dashboard.md)                       |
-| Log from a handler                                 | [Logging](logging.md)                           |
-| Test code that dispatches or emits, without Redis  | [Testing](testing.md)                           |
-| Assert on the recorded dispatches and emits        | [Testing](testing.md)                           |
-| Know which checks a faked instance still runs      | [Testing](testing.md)                           |
-| Know what throws on a faked instance               | [Testing](testing.md)                           |
-| Test a whole handler in one call                   | [Testing](testing.md)                           |
-| Simulate a retry or a resume of a handler          | [Testing](testing.md)                           |
-| Simulate a shutdown in a handler test              | [Testing](testing.md)                           |
-| Wait in an e2e test until the queue is idle        | [Testing](testing.md)                           |
-| Get an e2e test past a delay, a sleep or a backoff | [Testing](testing.md)                           |
-| Fire a schedule from a test or in offline dev      | [Testing](testing.md)                           |
-| Skip a sleep in offline dev with a script          | [Testing](testing.md)                           |
-| Start each e2e test from a clean queue             | [Testing](testing.md)                           |
-| Run the worker under `next dev`                    | [Dev](dev.md)                                   |
-| Pick up a task edit                                | [Dev](dev.md)                                   |
-| Know what Ctrl-C does to the attempt in flight     | [Dev](dev.md)                                   |
-| Change a task's steps                              | [Dev](dev.md)                                   |
+| Job                                                       | Page                                            |
+| --------------------------------------------------------- | ----------------------------------------------- |
+| Learn the words this manual uses                          | [Core concepts](core-concepts.md)               |
+| Add nextasking to an app, step by step                    | [Setup](setup.md)                               |
+| Lay out the definition files and name them                | [Setup](setup.md)                               |
+| Set the environment variables a worker needs              | [Setup](setup.md)                               |
+| Point the app's agents at this manual                     | [Setup](setup.md)                               |
+| Define a task and its payload schema                      | [Tasks and events](tasks-and-events.md)         |
+| Define an event                                           | [Tasks and events](tasks-and-events.md)         |
+| Define a listener that reacts to an event                 | [Tasks and events](tasks-and-events.md)         |
+| Register tasks and events in `createNextasking`           | [Tasks and events](tasks-and-events.md)         |
+| Dispatch a task                                           | [Tasks and events](tasks-and-events.md)         |
+| Start a run later with `delay`                            | [Tasks and events](tasks-and-events.md)         |
+| Emit an event, with or without listeners                  | [Tasks and events](tasks-and-events.md)         |
+| Run once per business fact with your own id               | [Tasks and events](tasks-and-events.md)         |
+| Know how long a repeated id is dropped                    | [Tasks and events](tasks-and-events.md)         |
+| Dispatch or emit a name known only at runtime             | [Tasks and events](tasks-and-events.md)         |
+| Handle dispatch and emit errors                           | [Tasks and events](tasks-and-events.md)         |
+| Answer 503 when Redis is down                             | [Tasks and events](tasks-and-events.md)         |
+| Set how long a call waits with `giveUpAfter`              | [Tasks and events](tasks-and-events.md)         |
+| Write a duration                                          | [Tasks and events](tasks-and-events.md)         |
+| Fix an error `createNextasking` throws at startup         | [Tasks and events](tasks-and-events.md)         |
+| Start the embedded worker                                 | [Tasks and events](tasks-and-events.md)         |
+| Pass `startWorker` options                                | [Worker](worker.md)                             |
+| Cap the attempts in flight with `concurrency`             | [Worker](worker.md)                             |
+| Let a deploy finish running attempts                      | [Worker](worker.md)                             |
+| Choose which processes run a worker                       | [Worker](worker.md)                             |
+| Stop a handler cleanly with `abortSignal`                 | [Worker](worker.md)                             |
+| Know what a stall is and when a run fails stalled         | [Worker](worker.md)                             |
+| Know what happens to runs during a deploy overlap         | [Worker](worker.md)                             |
+| Know what an old release does with a newer release's runs | [Worker](worker.md)                             |
+| Know which release decides each task option               | [Deploys](deploys.md)                           |
+| Change a payload schema without breaking runs             | [Deploys](deploys.md)                           |
+| Rename or rework a step that is already deployed          | [Deploys](deploys.md)                           |
+| Remove a task, a listener or an event                     | [Deploys](deploys.md)                           |
+| Rename a task or an event                                 | [Deploys](deploys.md)                           |
+| Pick the Valkey or Redis for the queues                   | [Worker](worker.md)                             |
+| Set `maxmemory-policy` to `noeviction`                    | [Worker](worker.md)                             |
+| Know what the worker does when Redis is down              | [Worker](worker.md)                             |
+| Exit when the worker can't start                          | [Worker](worker.md)                             |
+| Configure webpack with `serverExternalPackages`           | [Worker](worker.md)                             |
+| Deploy with `output: "standalone"`                        | [Worker](worker.md)                             |
+| Limit a task's attempts across every instance             | [Concurrency](concurrency.md)                   |
+| Limit a task's attempts per account or other key          | [Concurrency](concurrency.md)                   |
+| Keep a scheduled task's firings from overlapping          | [Concurrency](concurrency.md)                   |
+| Know what a run waiting for a slot costs                  | [Concurrency](concurrency.md)                   |
+| Run a task on a cron, in a time zone                      | [Scheduled tasks](scheduled-tasks.md)           |
+| Know what `scheduledAt` holds                             | [Scheduled tasks](scheduled-tasks.md)           |
+| Run a scheduled task now                                  | [Scheduled tasks](scheduled-tasks.md)           |
+| Know what a deploy does to schedules                      | [Scheduled tasks](scheduled-tasks.md)           |
+| Know what daylight saving time does to a schedule         | [Scheduled tasks](scheduled-tasks.md)           |
+| Know what happens to firings missed in downtime           | [Scheduled tasks](scheduled-tasks.md)           |
+| Make a side effect run once across retries                | [Steps](steps.md)                               |
+| Name steps, in a loop too                                 | [Steps](steps.md)                               |
+| Return a step result that compiles                        | [Steps](steps.md)                               |
+| Run steps in parallel                                     | [Steps](steps.md)                               |
+| Pass an idempotency key to a provider                     | [Steps](steps.md)                               |
+| Sleep for minutes or days without holding workers         | [Steps](steps.md)                               |
+| Skip work a sleep made unnecessary                        | [Steps](steps.md)                               |
+| Emit or dispatch from a handler, once per run             | [Steps](steps.md)                               |
+| Know the step size limits                                 | [Steps](steps.md)                               |
+| Fix a `StepMisuseError`                                   | [Steps](steps.md)                               |
+| Know what nextasking guarantees against duplicates        | [Duplicate runs](duplicate-runs.md)             |
+| Close the duplicate windows that stay open                | [Duplicate runs](duplicate-runs.md)             |
+| Send an email or charge a card only once                  | [Duplicate runs](duplicate-runs.md)             |
+| Know how long a provider keeps an idempotency key         | [Duplicate runs](duplicate-runs.md)             |
+| Set how often and how soon a failed run retries           | [Retries and failures](retries-and-failures.md) |
+| Fail a run at once with `NonRetriableError`               | [Retries and failures](retries-and-failures.md) |
+| Bound an attempt with `timeout`                           | [Retries and failures](retries-and-failures.md) |
+| Know what a failed run keeps, and for how long            | [Retries and failures](retries-and-failures.md) |
+| Replay a failed run after deploying a fix                 | [Retries and failures](retries-and-failures.md) |
+| Replay a failed fan-out without duplicates                | [Retries and failures](retries-and-failures.md) |
+| Alert on a failed run or fan-out with a listener          | [Retries and failures](retries-and-failures.md) |
+| Pass a logger and read the lifecycle lines                | [Logging](logging.md)                           |
+| Protect a dashboard route                                 | [Dashboard](dashboard.md)                       |
+| Read one run: state, payload, errors, steps               | [Dashboard](dashboard.md)                       |
+| Know what each of the eight run states means              | [Dashboard](dashboard.md)                       |
+| Page through failed runs                                  | [Dashboard](dashboard.md)                       |
+| Count the backlog per task and state                      | [Dashboard](dashboard.md)                       |
+| Follow an event from its fan-out to each listener         | [Dashboard](dashboard.md)                       |
+| Check that last night's scheduled run happened            | [Dashboard](dashboard.md)                       |
+| Build a typed "run now" picker                            | [Dashboard](dashboard.md)                       |
+| Know what a read costs and what it can miss               | [Dashboard](dashboard.md)                       |
+| Log from a handler                                        | [Logging](logging.md)                           |
+| Test code that dispatches or emits, without Redis         | [Testing](testing.md)                           |
+| Assert on the recorded dispatches and emits               | [Testing](testing.md)                           |
+| Know which checks a faked instance still runs             | [Testing](testing.md)                           |
+| Know what throws on a faked instance                      | [Testing](testing.md)                           |
+| Test a whole handler in one call                          | [Testing](testing.md)                           |
+| Simulate a retry or a resume of a handler                 | [Testing](testing.md)                           |
+| Simulate a shutdown in a handler test                     | [Testing](testing.md)                           |
+| Wait in an e2e test until the queue is idle               | [Testing](testing.md)                           |
+| Get an e2e test past a delay, a sleep or a backoff        | [Testing](testing.md)                           |
+| Fire a schedule from a test or in offline dev             | [Testing](testing.md)                           |
+| Skip a sleep in offline dev with a script                 | [Testing](testing.md)                           |
+| Start each e2e test from a clean queue                    | [Testing](testing.md)                           |
+| Run the worker under `next dev`                           | [Dev](dev.md)                                   |
+| Pick up a task edit                                       | [Dev](dev.md)                                   |
+| Know what Ctrl-C does to the attempt in flight            | [Dev](dev.md)                                   |
+| Change a task's steps                                     | [Dev](dev.md)                                   |
 
 ## Import map
 

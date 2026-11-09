@@ -14,9 +14,9 @@ export async function storedRun(
   const keys = engineKeysOf(keyPrefix);
   return withRedis(redisUrl, async (redis) => {
     const [record, serializedPayload, serializedErrors] = await Promise.all([
-      redis.hgetall(keys.runRecord(task, runId)),
+      redis.hGetAll(keys.runRecord(task, runId)),
       redis.get(keys.runPayload(task, runId)),
-      redis.lrange(keys.runErrors(task, runId), 0, -1),
+      redis.lRange(keys.runErrors(task, runId), 0, -1),
     ]);
     if (Object.keys(record).length === 0) {
       return undefined;

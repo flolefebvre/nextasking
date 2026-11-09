@@ -82,7 +82,7 @@ integrationTest(
             [
               { task: "send-email", runId: delayedRunId },
               { task: "send-reminder", runId: sleepingRunId },
-            ].map(({ task, runId }) => redis.hget(keys.runRecord(task, runId), "state")),
+            ].map(({ task, runId }) => redis.hGet(keys.runRecord(task, runId), "state")),
           );
           statesSeenAtIdleByTry.push(`try ${String(tryNumber)}: ${states.join(", ")}`);
         }

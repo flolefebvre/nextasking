@@ -1,4 +1,3 @@
-import type { Redis } from "ioredis";
 import { expect } from "vitest";
 
 import { engineTest, storedValuesByKeyOf } from "../../tests/engine-test.js";
@@ -7,6 +6,7 @@ import type { EngineKeys } from "./engine-keys.js";
 import { createEngine, RECORD_VERSION } from "./engine.js";
 import type { ScheduleToSync } from "./engine.js";
 import { withRedisClient } from "../../tests/with-redis.js";
+import type { TestClient } from "../../tests/with-redis.js";
 
 const NIGHTLY_REPORT: ScheduleToSync = {
   task: "build-report",
@@ -24,16 +24,15 @@ const HOURLY_RATES: ScheduleToSync = {
   retries: 0,
 };
 
-async function storedSchedulesOf(redis: Redis, keys: EngineKeys): Promise<ScheduleToSync[]> {
+async function storedSchedulesOf(redis: TestClient, keys: EngineKeys): Promise<ScheduleToSync[]> {
   const storedSchedules: ScheduleToSync[] = [];
-  for (const task of await redis.zrange(keys.schedules, 0, -1)) {
-    const [cron, timezone, nextFiringAt, retries] = await redis.hmget(
-      keys.schedule(task),
+  for (const task of await redis.zRange(keys.schedules, 0, -1)) {
+    const [cron, timezone, nextFiringAt, retries] = await redis.hmGet(keys.schedule(task), [
       "cron",
       "timezone",
       "nextFiringAt",
       "retries",
-    );
+    ]);
     storedSchedules.push({
       task,
       cron: cron!,
@@ -47,7 +46,7 @@ async function storedSchedulesOf(redis: Redis, keys: EngineKeys): Promise<Schedu
 
 async function nightlyReportFiredOnceOf({ engine, redis, keys }: EngineTestContext): Promise<void> {
   await engine.syncSchedules({ schedulesToSync: [NIGHTLY_REPORT] });
-  await redis.hset(keys.schedule("build-report"), "previousFiringAt", Date.UTC(2029, 11, 31, 2));
+  await redis.hSet(keys.schedule("build-report"), "previousFiringAt", Date.UTC(2029, 11, 31, 2));
 }
 
 function summaryOf({ task, cron, timezone }: ScheduleToSync) {
@@ -65,7 +64,7 @@ engineTest("a sync adds every missing schedule as a record and in the schedules 
     changed: [],
     removed: [],
   });
-  expect(await redis.hgetall(keys.schedule("build-report"))).toEqual({
+  expect(await redis.hGetAll(keys.schedule("build-report"))).toEqual({
     version: String(RECORD_VERSION),
     cron: "0 3 * * *",
     timezone: "Europe/Paris",
@@ -92,7 +91,7 @@ for (const changedField of ["cron", "timezone"] as const) {
 
       expect(reply).toEqual({ kind: "synced", added: [], changed: [summaryOf(changedSchedule)], removed: [] });
       expect(await storedSchedulesOf(redis, keys)).toEqual([changedSchedule]);
-      expect(await redis.hget(keys.schedule("build-report"), "previousFiringAt")).toBe(
+      expect(await redis.hGet(keys.schedule("build-report"), "previousFiringAt")).toBe(
         String(Date.UTC(2029, 11, 31, 2)),
       );
     },
@@ -117,15 +116,15 @@ engineTest(
   async (context) => {
     const { engine, redis, keys } = context;
     await nightlyReportFiredOnceOf(context);
-    const recordBefore = await redis.hgetall(keys.schedule("build-report"));
+    const recordBefore = await redis.hGetAll(keys.schedule("build-report"));
 
     const reply = await engine.syncSchedules({
       schedulesToSync: [{ ...NIGHTLY_REPORT, retries: 7, nextFiringAt: Date.UTC(2030, 0, 2, 2) }],
     });
 
     expect(reply).toEqual({ kind: "synced", added: [], changed: [], removed: [] });
-    expect(await redis.hgetall(keys.schedule("build-report"))).toEqual({ ...recordBefore, retries: "7" });
-    expect(await redis.zscore(keys.schedules, "build-report")).toBe(String(NIGHTLY_REPORT.nextFiringAt));
+    expect(await redis.hGetAll(keys.schedule("build-report"))).toEqual({ ...recordBefore, retries: "7" });
+    expect(await redis.zScore(keys.schedules, "build-report")).toBe(NIGHTLY_REPORT.nextFiringAt);
   },
 );
 
@@ -164,7 +163,7 @@ engineTest(
   async (context) => {
     const { engine, redis, keys, keyPrefix } = context;
     await engine.syncSchedules({ schedulesToSync: [NIGHTLY_REPORT, HOURLY_RATES] });
-    await redis.hset(keys.schedule("build-report"), "version", RECORD_VERSION + 1);
+    await redis.hSet(keys.schedule("build-report"), "version", RECORD_VERSION + 1);
     const storedValuesBefore = await storedValuesByKeyOf(redis, keyPrefix);
 
     const reply = await engine.syncSchedules({ schedulesToSync: [{ ...HOURLY_RATES, cron: "*/5 * * * *" }] });

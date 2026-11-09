@@ -15,8 +15,8 @@ defineEngineContractTests((name, body) => {
         backdateFirstFoundUnknownAt(context, task, runId, durationInMilliseconds),
       pastInstant: async () => (await serverInstantInMillisecondsOf(redis)) - 1000,
       stateOf: async (task, runId) =>
-        ((await redis.hget(keys.runRecord(task, runId), "state")) ?? undefined) as RunState | undefined,
-      isWakeUpMarkerArmed: async () => (await redis.zcard(keys.wakeUpMarker)) > 0,
+        ((await redis.hGet(keys.runRecord(task, runId), "state")) ?? undefined) as RunState | undefined,
+      isWakeUpMarkerArmed: async () => (await redis.zCard(keys.wakeUpMarker)) > 0,
       disarmWakeUpMarker: async () => {
         await redis.del(keys.wakeUpMarker);
       },

@@ -7,8 +7,8 @@ export type StoredSchedule = { task: string } & Record<string, string>;
 export async function storedSchedules(redisUrl: string, keyPrefix: string): Promise<StoredSchedule[]> {
   const keys = engineKeysOf(keyPrefix);
   return withRedis(redisUrl, async (redis) => {
-    const tasks = (await redis.zrange(keys.schedules, 0, -1)).sort();
-    return Promise.all(tasks.map(async (task) => ({ ...(await redis.hgetall(keys.schedule(task))), task })));
+    const tasks = (await redis.zRange(keys.schedules, 0, -1)).sort();
+    return Promise.all(tasks.map(async (task) => ({ ...(await redis.hGetAll(keys.schedule(task))), task })));
   });
 }
 
@@ -23,7 +23,7 @@ export async function moveNextFiringTo(
     if ((await redis.exists(keys.schedule(task))) === 0) {
       throw new Error(`No schedule of "${task}" is stored`);
     }
-    await redis.hset(keys.schedule(task), "nextFiringAt", plannedInstant);
-    await redis.zadd(keys.schedules, plannedInstant, task);
+    await redis.hSet(keys.schedule(task), "nextFiringAt", plannedInstant);
+    await redis.zAdd(keys.schedules, { score: plannedInstant, value: task });
   });
 }

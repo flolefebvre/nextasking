@@ -41,7 +41,7 @@ function fetchedReplyOf(reply: FetchReply): FetchedReply {
 
 async function markRecordsNewer(context: EngineTestContext, runIds: readonly string[]): Promise<void> {
   for (const runId of runIds) {
-    await context.redis.hset(context.keys.runRecord("send-email", runId), "version", 2);
+    await context.redis.hSet(context.keys.runRecord("send-email", runId), "version", 2);
   }
 }
 
@@ -50,7 +50,7 @@ async function lockedRunIdsOf(fetch: Promise<FetchReply>): Promise<string[]> {
 }
 
 function sortedSetMembersOf(context: EngineTestContext, sortedSetKey: (keys: EngineKeys) => string) {
-  return context.redis.zrange(sortedSetKey(context.keys), 0, -1);
+  return context.redis.zRange(sortedSetKey(context.keys), 0, -1);
 }
 
 engineTest(
@@ -75,13 +75,13 @@ engineTest(
       expect(startedAt).toBeLessThanOrEqual(instantAfter);
       expect(lockedUntil).toBe(startedAt + LOCK_DURATION_IN_MILLISECONDS);
       expect(
-        await redis.hmget(keys.runRecord("send-email", runId), "state", "lockToken", "lockedUntil", "startedAt"),
+        await redis.hmGet(keys.runRecord("send-email", runId), ["state", "lockToken", "lockedUntil", "startedAt"]),
       ).toEqual(["executing", lockToken, String(lockedUntil), String(startedAt)]);
       expect(await redis.get(keys.lock(lockToken))).toBe(storedRunIdOf("send-email", runId));
-      expect(await redis.pttl(keys.lock(lockToken))).toBeGreaterThan(0);
-      expect(await redis.pttl(keys.lock(lockToken))).toBeLessThanOrEqual(LOCK_DURATION_IN_MILLISECONDS);
+      expect(await redis.pTTL(keys.lock(lockToken))).toBeGreaterThan(0);
+      expect(await redis.pTTL(keys.lock(lockToken))).toBeLessThanOrEqual(LOCK_DURATION_IN_MILLISECONDS);
     }
-    expect((await redis.smembers(keys.slotSet("send-email", undefined))).sort()).toEqual([
+    expect((await redis.sMembers(keys.slotSet("send-email", undefined))).sort()).toEqual([
       storedRunIdOf("send-email", "run-1"),
       storedRunIdOf("send-email", "run-2"),
     ]);
@@ -151,12 +151,12 @@ engineTest(
       { runId: "account-7-2", task: "send-email", attempt: 1 },
       { runId: "account-7-3", task: "send-email", attempt: 1 },
     ]);
-    expect(await redis.hget(keys.runRecord("send-email", "account-7-2"), "state")).toBe("waitingForConcurrencySlot");
+    expect(await redis.hGet(keys.runRecord("send-email", "account-7-2"), "state")).toBe("waitingForConcurrencySlot");
     expect(await sortedSetMembersOf(context, ({ waitingList }) => waitingList("send-email", "account-7"))).toEqual([
       storedRunIdOf("send-email", "account-7-2"),
       storedRunIdOf("send-email", "account-7-3"),
     ]);
-    expect(await redis.smembers(keys.slotSet("send-email", "account-7"))).toEqual([
+    expect(await redis.sMembers(keys.slotSet("send-email", "account-7"))).toEqual([
       storedRunIdOf("send-email", "account-7-1"),
     ]);
   },
@@ -219,7 +219,7 @@ engineTest("a run of a task without a limit is never parked", async ({ engine, r
 
   expect(reply.lockedRuns).toHaveLength(3);
   expect(reply.parkedRuns).toEqual([]);
-  expect(await redis.scard(keys.slotSet("send-email", undefined))).toBe(3);
+  expect(await redis.sCard(keys.slotSet("send-email", undefined))).toBe(3);
 });
 
 engineTest(
@@ -233,8 +233,8 @@ engineTest(
 
     expect(reply.lockedRuns.map(({ runId }) => runId)).toEqual(["run-1"]);
     expect(reply.parkedRuns).toHaveLength(MOST_RUNS_PARKED_PER_FETCH);
-    expect(await redis.zcard(keys.pending)).toBe(2);
-    expect(await redis.zcard(keys.wakeUpMarker)).toBe(1);
+    expect(await redis.zCard(keys.pending)).toBe(2);
+    expect(await redis.zCard(keys.wakeUpMarker)).toBe(1);
   },
 );
 
@@ -271,7 +271,7 @@ async function resumedRunFetchedTwiceOf(
   resumeFields: Record<string, number>,
 ): Promise<{ lockedRun: LockedRun | undefined; resentLockedRun: LockedRun | undefined }> {
   await engine.enqueue({ runs: sendEmailRunsOf(1) });
-  await redis.hset(keys.runRecord("send-email", "run-1"), resumeFields);
+  await redis.hSet(keys.runRecord("send-email", "run-1"), resumeFields);
   const request = fetchRequestOf(1);
   const [lockedRun] = fetchedReplyOf(await engine.fetch(request)).lockedRuns;
   const [resentLockedRun] = fetchedReplyOf(await engine.fetch(request)).lockedRuns;
@@ -286,8 +286,8 @@ engineTest(
     const { lockedRun, resentLockedRun } = await resumedRunFetchedTwiceOf(context, { resumesAt: 1000 });
 
     expect(lockedRun?.isResume).toBe(true);
-    expect(await redis.hexists(keys.runRecord("send-email", "run-1"), "resumesAt")).toBe(0);
-    expect(await redis.hmget(keys.runRecord("send-email", "run-1"), "isLockAResume", "lockSleepsWokenAt")).toEqual([
+    expect(await redis.hExists(keys.runRecord("send-email", "run-1"), "resumesAt")).toBe(0);
+    expect(await redis.hmGet(keys.runRecord("send-email", "run-1"), ["isLockAResume", "lockSleepsWokenAt"])).toEqual([
       "1",
       null,
     ]);
@@ -306,8 +306,8 @@ engineTest(
     });
 
     expect(lockedRun?.sleepsWokenAt).toBe(1000);
-    expect(await redis.hexists(keys.runRecord("send-email", "run-1"), "sleepsWokenAt")).toBe(0);
-    expect(await redis.hget(keys.runRecord("send-email", "run-1"), "lockSleepsWokenAt")).toBe("1000");
+    expect(await redis.hExists(keys.runRecord("send-email", "run-1"), "sleepsWokenAt")).toBe(0);
+    expect(await redis.hGet(keys.runRecord("send-email", "run-1"), "lockSleepsWokenAt")).toBe("1000");
     expect(resentLockedRun).toEqual(lockedRun);
   },
 );
@@ -319,7 +319,7 @@ engineTest("a fresh lock overwrites the pickup fields a previous lock left on th
 
   expect(lockedRun).toMatchObject({ isResume: false });
   expect(lockedRun).not.toHaveProperty("sleepsWokenAt");
-  expect(await redis.hmget(keys.runRecord("send-email", "run-1"), "isLockAResume", "lockSleepsWokenAt")).toEqual([
+  expect(await redis.hmGet(keys.runRecord("send-email", "run-1"), ["isLockAResume", "lockSleepsWokenAt"])).toEqual([
     "0",
     null,
   ]);
@@ -394,10 +394,10 @@ engineTest(
     await redis.del(keys.wakeUpMarker);
 
     await engine.fetch(fetchRequestOf(1));
-    const isArmedWithRunsLeft = (await redis.zcard(keys.wakeUpMarker)) === 1;
+    const isArmedWithRunsLeft = (await redis.zCard(keys.wakeUpMarker)) === 1;
     await redis.del(keys.wakeUpMarker);
     await engine.fetch(fetchRequestOf(1));
-    const isArmedWithOnlyNewerRecordsLeft = (await redis.zcard(keys.wakeUpMarker)) === 1;
+    const isArmedWithOnlyNewerRecordsLeft = (await redis.zCard(keys.wakeUpMarker)) === 1;
 
     expect(isArmedWithRunsLeft).toBe(true);
     expect(isArmedWithOnlyNewerRecordsLeft).toBe(false);

@@ -1,11 +1,10 @@
-import type { Redis } from "ioredis";
-
 import { engineKeysOf, hashTaggedPrefixOf, runIdentityOf, storedRunIdOf } from "../src/engine/engine-keys.js";
 import type { RunId } from "../src/ids.js";
 import type { EngineKeys, LockToken } from "../src/engine/engine-keys.js";
 import type { EpochMilliseconds } from "../src/durations.js";
 import { isRunState } from "../src/run-states.js";
 import type { RunState } from "../src/run-states.js";
+import type { TestClient } from "./with-redis.js";
 
 export type StoredValue =
   | { type: "hash"; fieldsByName: Record<string, string> }
@@ -85,13 +84,11 @@ function storedValueOf(type: string, content: string[]): StoredValue {
   return { type: type as "string" | "list" | "stream" | "none" };
 }
 
-export async function storedKeysSnapshotOf(redis: Redis, keyPrefix: string): Promise<StoredKeysSnapshot> {
+export async function storedKeysSnapshotOf(redis: TestClient, keyPrefix: string): Promise<StoredKeysSnapshot> {
   const escapedPrefix = hashTaggedPrefixOf(keyPrefix).replace(/[*?[\]\\]/g, "\\$&");
-  const [seconds, microseconds, storedValues] = (await redis.eval(SNAPSHOT_SCRIPT, 0, `${escapedPrefix}:*`)) as [
-    string,
-    string,
-    [string, string, string[]][],
-  ];
+  const [seconds, microseconds, storedValues] = (await redis.eval(SNAPSHOT_SCRIPT, {
+    arguments: [`${escapedPrefix}:*`],
+  })) as [string, string, [string, string, string[]][]];
   return {
     serverInstantInMilliseconds: Number(seconds) * 1000 + Math.floor(Number(microseconds) / 1000),
     storedValuesByKey: new Map(storedValues.map(([key, type, content]) => [key, storedValueOf(type, content)])),
@@ -305,6 +302,6 @@ export function runsLeftExecutingIn(
   return runsLeftExecuting;
 }
 
-export async function storedKeyViolationsOf(redis: Redis, keyPrefix: string): Promise<string[]> {
+export async function storedKeyViolationsOf(redis: TestClient, keyPrefix: string): Promise<string[]> {
   return storedKeyViolationsIn(await storedKeysSnapshotOf(redis, keyPrefix), keyPrefix);
 }

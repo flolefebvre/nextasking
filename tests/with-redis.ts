@@ -1,7 +1,17 @@
-import { Redis } from "ioredis";
+import { createClient } from "@redis/client";
 
 import { createNodeRedisDriver } from "../src/node-redis-driver.js";
 import type { RedisClient } from "../src/redis-client.js";
+
+function testClientOf(redisUrl: string) {
+  return createClient({ url: redisUrl, RESP: 2 }).on("error", () => undefined);
+}
+
+export type TestClient = ReturnType<typeof testClientOf>;
+
+export function connectedTestClientOf(redisUrl: string): Promise<TestClient> {
+  return testClientOf(redisUrl).connect();
+}
 
 export async function withRedisClient<Result>(
   redisUrl: string,
@@ -28,14 +38,13 @@ export async function withRedisClient<Result>(
 
 export async function withRedis<Result>(
   redisUrl: string,
-  use: (redis: Redis, client: RedisClient) => Promise<Result>,
+  use: (redis: TestClient, client: RedisClient) => Promise<Result>,
 ): Promise<Result> {
-  const redis = new Redis(redisUrl, { lazyConnect: true });
-  redis.on("error", () => undefined);
+  const redis = testClientOf(redisUrl);
   try {
     await redis.connect();
     return await withRedisClient(redisUrl, (client) => use(redis, client));
   } finally {
-    await redis.quit().catch(() => undefined);
+    await redis.close().catch(() => undefined);
   }
 }

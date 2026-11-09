@@ -1,9 +1,9 @@
-import type { Redis } from "ioredis";
 import { expect } from "vitest";
 
 import { integrationTest } from "../../tests/integration-test.js";
 import { serverInstantInMillisecondsOf } from "../../tests/server-instant.js";
 import { withRedis } from "../../tests/with-redis.js";
+import type { TestClient } from "../../tests/with-redis.js";
 import { engineKeysOf, hashTaggedPrefixOf, storedRunIdOf } from "./engine-keys.js";
 import { RECORD_VERSION } from "./engine.js";
 import { ENQUEUE_KEYS_ASSIGNMENT, enqueueKeysOf } from "./enqueue-script.js";
@@ -45,25 +45,26 @@ end
 `;
 
 function probeReplyOf(
-  redis: Redis,
+  redis: TestClient,
   keyPrefix: string,
   supportedVersion: number,
   probe: string,
   ...probeArguments: (string | number)[]
 ) {
   const probeKeys = enqueueKeysOf(engineKeysOf(keyPrefix));
-  return redis.eval(
-    PROBE_SCRIPT,
-    probeKeys.length,
-    ...probeKeys,
-    hashTaggedPrefixOf(keyPrefix),
-    supportedVersion,
-    probe,
-    ...probeArguments,
-  );
+  return redis.eval(PROBE_SCRIPT, {
+    keys: probeKeys,
+    arguments: [hashTaggedPrefixOf(keyPrefix), supportedVersion, probe, ...probeArguments].map(String),
+  });
 }
 
-function runProbe(redis: Redis, keyPrefix: string, probe: string, runId = "run-1", supportedVersion = RECORD_VERSION) {
+function runProbe(
+  redis: TestClient,
+  keyPrefix: string,
+  probe: string,
+  runId = "run-1",
+  supportedVersion = RECORD_VERSION,
+) {
   return probeReplyOf(redis, keyPrefix, supportedVersion, probe, storedRunIdOf("send-email", runId));
 }
 
@@ -133,14 +134,14 @@ for (const { name, storedVersion, reportedVersion } of UNKNOWN_VERSIONS) {
         const recordKey = engineKeysOf(keyPrefix).runRecord("send-email", "run-1");
         await runProbe(redis, keyPrefix, "create a delayed run");
         await (storedVersion === undefined
-          ? redis.hdel(recordKey, "version")
-          : redis.hset(recordKey, "version", storedVersion));
-        const recordBefore = await redis.hgetall(recordKey);
+          ? redis.hDel(recordKey, "version")
+          : redis.hSet(recordKey, "version", storedVersion));
+        const recordBefore = await redis.hGetAll(recordKey);
 
         const reply = await runProbe(redis, keyPrefix, "write after the version check");
 
         expect(reply).toEqual(["unknownVersion", reportedVersion]);
-        expect(await redis.hgetall(recordKey)).toEqual(recordBefore);
+        expect(await redis.hGetAll(recordKey)).toEqual(recordBefore);
       });
     },
   );
@@ -177,7 +178,7 @@ integrationTest(
 
       expect(replyOnTheCurrentVersion).toEqual(["written"]);
       expect(replyOnAnOlderVersion).toEqual(["written"]);
-      expect(await redis.hget(keys.runRecord("send-email", "older-run"), "version")).toBe(String(RECORD_VERSION));
+      expect(await redis.hGet(keys.runRecord("send-email", "older-run"), "version")).toBe(String(RECORD_VERSION));
     });
   },
 );
@@ -203,11 +204,11 @@ integrationTest(
 
       await runProbe(redis, keyPrefix, "move the delayed run to pending");
 
-      expect(await redis.hget(keys.runRecord("send-email", "run-1"), "state")).toBe("pending");
-      expect(await redis.zrange(keys.pending, 0, -1)).toEqual([storedRunIdOf("send-email", "run-1")]);
-      expect(await redis.zcard(keys.due)).toBe(0);
-      expect(await redis.zcard(keys.runIndex("send-email", "delayed"))).toBe(0);
-      expect(await redis.zcard(keys.wakeUpMarker)).toBe(1);
+      expect(await redis.hGet(keys.runRecord("send-email", "run-1"), "state")).toBe("pending");
+      expect(await redis.zRange(keys.pending, 0, -1)).toEqual([storedRunIdOf("send-email", "run-1")]);
+      expect(await redis.zCard(keys.due)).toBe(0);
+      expect(await redis.zCard(keys.runIndex("send-email", "delayed"))).toBe(0);
+      expect(await redis.zCard(keys.wakeUpMarker)).toBe(1);
     });
   },
 );

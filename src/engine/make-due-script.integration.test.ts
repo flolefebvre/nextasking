@@ -56,17 +56,17 @@ engineTest("makeDue moves every delayed, suspended and backingOff run to pending
     kind: "madeDue",
     madeDueRuns: ["backing-off-run", "delayed-run", "suspended-run"].map((runId) => ({ task: "send-email", runId })),
   });
-  expect(await redis.zcard(keys.due)).toBe(0);
-  const pendingRunIds = await redis.zrange(keys.pending, 0, -1);
+  expect(await redis.zCard(keys.due)).toBe(0);
+  const pendingRunIds = await redis.zRange(keys.pending, 0, -1);
   expect(pendingRunIds[0]).toBe(storedRunIdOf("send-email", "pending-run"));
   expect(new Set(pendingRunIds.slice(1))).toEqual(
     new Set(["delayed-run", "suspended-run", "backing-off-run"].map((runId) => storedRunIdOf("send-email", runId))),
   );
-  expect(await redis.hmget(keys.runRecord("send-email", "delayed-run"), "startsAt", "nextAttemptAt")).toEqual([
+  expect(await redis.hmGet(keys.runRecord("send-email", "delayed-run"), ["startsAt", "nextAttemptAt"])).toEqual([
     null,
     null,
   ]);
-  expect(await redis.hget(keys.runRecord("send-email", "backing-off-run"), "nextAttemptAt")).toBeNull();
+  expect(await redis.hGet(keys.runRecord("send-email", "backing-off-run"), "nextAttemptAt")).toBeNull();
 });
 
 engineTest(
@@ -79,20 +79,19 @@ engineTest(
     await engine.makeDue();
 
     const instantAfter = await serverInstantInMillisecondsOf(redis);
-    const [resumesAt, sleepsWokenAt] = await redis.hmget(
-      keys.runRecord("send-email", "suspended-run"),
+    const [resumesAt, sleepsWokenAt] = await redis.hmGet(keys.runRecord("send-email", "suspended-run"), [
       "resumesAt",
       "sleepsWokenAt",
-    );
+    ]);
     expect(Number(sleepsWokenAt)).toBeGreaterThanOrEqual(instantBefore);
     expect(Number(sleepsWokenAt)).toBeLessThanOrEqual(instantAfter);
     expect(resumesAt).toBe(sleepsWokenAt);
-    expect(await redis.hgetall(keys.runSteps("send-email", "suspended-run"))).toEqual({
+    expect(await redis.hGetAll(keys.runSteps("send-email", "suspended-run"))).toEqual({
       "charge-card": '"charged"',
       "wait-for-2030": sleepsWokenAt,
       "wait-for-2031": String(NEW_YEAR_2031),
     });
-    expect(await redis.hget(keys.runRecord("send-email", "backing-off-run"), "sleepsWokenAt")).toBeNull();
+    expect(await redis.hGet(keys.runRecord("send-email", "backing-off-run"), "sleepsWokenAt")).toBeNull();
   },
 );
 
@@ -125,13 +124,13 @@ engineTest("makeDue passes over a record of a newer version and leaves it in pla
       sendEmailRunOf(runId, { delayInMilliseconds: ONE_HOUR_IN_MILLISECONDS }),
     ),
   });
-  await redis.hset(keys.runRecord("send-email", "newer-run"), "version", RECORD_VERSION + 1);
+  await redis.hSet(keys.runRecord("send-email", "newer-run"), "version", RECORD_VERSION + 1);
 
   const reply = await engine.makeDue();
 
   expect(reply).toEqual({ kind: "madeDue", madeDueRuns: [{ task: "send-email", runId: "older-run" }] });
-  expect(await redis.zrange(keys.due, 0, -1)).toEqual([storedRunIdOf("send-email", "newer-run")]);
-  expect(await redis.hget(keys.runRecord("send-email", "older-run"), "state")).toBe("pending");
+  expect(await redis.zRange(keys.due, 0, -1)).toEqual([storedRunIdOf("send-email", "newer-run")]);
+  expect(await redis.hGet(keys.runRecord("send-email", "older-run"), "state")).toBe("pending");
 });
 
 engineTest(`makeDue moves at most ${String(MOST_DUE_RUNS_PROMOTED_PER_PROMOTE)} runs per call`, async (context) => {
@@ -147,7 +146,7 @@ engineTest(`makeDue moves at most ${String(MOST_DUE_RUNS_PROMOTED_PER_PROMOTE)} 
 
   expect(firstReply.madeDueRuns).toHaveLength(MOST_DUE_RUNS_PROMOTED_PER_PROMOTE);
   expect(secondReply.madeDueRuns).toHaveLength(1);
-  expect(await redis.zcard(keys.due)).toBe(0);
+  expect(await redis.zCard(keys.due)).toBe(0);
 });
 
 engineTest("makeDue given a task moves only that task's timed runs and names each", async (context) => {
@@ -169,7 +168,7 @@ engineTest("makeDue given a task moves only that task's timed runs and names eac
       { task: "build-report", runId: "later-report-run" },
     ],
   });
-  expect(new Set(await redis.zrange(keys.due, 0, -1))).toEqual(
+  expect(new Set(await redis.zRange(keys.due, 0, -1))).toEqual(
     new Set(["suspended-run", "backing-off-run", "delayed-run"].map((runId) => storedRunIdOf("send-email", runId))),
   );
 });

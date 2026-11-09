@@ -39,14 +39,14 @@ engineTest(
     const { engine, redis, keys } = context;
     await failedRunWithAStepAtAttempt2Of(context);
     await enqueueSendEmailRun(context, "run-2");
-    const recordBefore = await redis.hgetall(keys.runRecord("send-email", "run-1"));
-    const dedupExpiryBefore = await redis.zscore(keys.runDedup("send-email"), storedRunIdOf("send-email", "run-1"));
+    const recordBefore = await redis.hGetAll(keys.runRecord("send-email", "run-1"));
+    const dedupExpiryBefore = await redis.zScore(keys.runDedup("send-email"), storedRunIdOf("send-email", "run-1"));
     await redis.del(keys.wakeUpMarker);
 
     const reply = await engine.replay({ task: "send-email", runId: "run-1" });
 
     expect(reply).toEqual({ kind: "replayed", task: "send-email" });
-    const record = await redis.hgetall(keys.runRecord("send-email", "run-1"));
+    const record = await redis.hGetAll(keys.runRecord("send-email", "run-1"));
     expect(record).toEqual({
       version: String(RECORD_VERSION),
       state: "pending",
@@ -61,20 +61,20 @@ engineTest(
       order: expect.any(String),
     });
     expect(Number(record["order"])).toBeGreaterThan(
-      Number(await redis.hget(keys.runRecord("send-email", "run-2"), "order")),
+      Number(await redis.hGet(keys.runRecord("send-email", "run-2"), "order")),
     );
     expect(await redis.exists(keys.runErrors("send-email", "run-1"))).toBe(0);
-    expect(await redis.hgetall(keys.runSteps("send-email", "run-1"))).toEqual({ charge: '["paid"]' });
+    expect(await redis.hGetAll(keys.runSteps("send-email", "run-1"))).toEqual({ charge: '["paid"]' });
     expect(await redis.get(keys.runPayload("send-email", "run-1"))).toBe('{"to":"ada"}');
-    expect(await redis.zscore(keys.runIndex("send-email", "failed"), storedRunIdOf("send-email", "run-1"))).toBeNull();
-    expect(await redis.zscore(keys.runIndex("send-email", "pending"), storedRunIdOf("send-email", "run-1"))).toBe(
-      record["order"],
+    expect(await redis.zScore(keys.runIndex("send-email", "failed"), storedRunIdOf("send-email", "run-1"))).toBeNull();
+    expect(await redis.zScore(keys.runIndex("send-email", "pending"), storedRunIdOf("send-email", "run-1"))).toBe(
+      Number(record["order"]),
     );
-    expect(await redis.zscore(keys.pending, storedRunIdOf("send-email", "run-1"))).toBe(record["order"]);
-    expect(await redis.zscore(keys.runDedup("send-email"), storedRunIdOf("send-email", "run-1"))).toBe(
+    expect(await redis.zScore(keys.pending, storedRunIdOf("send-email", "run-1"))).toBe(Number(record["order"]));
+    expect(await redis.zScore(keys.runDedup("send-email"), storedRunIdOf("send-email", "run-1"))).toBe(
       dedupExpiryBefore,
     );
-    expect(await redis.zcard(keys.wakeUpMarker)).toBe(1);
+    expect(await redis.zCard(keys.wakeUpMarker)).toBe(1);
   },
 );
 
@@ -123,7 +123,7 @@ engineTest(
     ];
 
     expect(pruneReply).toEqual({ kind: "pruned", prunedRunCount: 2 });
-    expect(await redis.zrange(keys.runDedup("send-email"), 0, -1)).toEqual([
+    expect(await redis.zRange(keys.runDedup("send-email"), 0, -1)).toEqual([
       storedRunIdOf("send-email", "run-over-the-cap"),
     ]);
     expect(replies).toEqual([{ kind: "notFound" }, { kind: "notFound" }]);
@@ -136,7 +136,7 @@ engineTest(
   async (context) => {
     const { engine, redis, keys, keyPrefix } = context;
     await failedRunWithAStepAtAttempt2Of(context);
-    await redis.hset(keys.runRecord("send-email", "run-1"), "version", RECORD_VERSION + 1);
+    await redis.hSet(keys.runRecord("send-email", "run-1"), "version", RECORD_VERSION + 1);
     const storedValuesBefore = await storedValuesByKeyOf(redis, keyPrefix);
 
     const reply = await engine.replay({ task: "send-email", runId: "run-1" });

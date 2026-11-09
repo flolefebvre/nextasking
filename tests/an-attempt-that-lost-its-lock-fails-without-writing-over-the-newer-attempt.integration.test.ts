@@ -29,8 +29,8 @@ integrationTest(
       handler: async ({ runId }) => {
         expectInvariantViolation("run left executing", runLeftExecutingSentenceOf("send-newsletter", runId));
         await withRedis(redisUrl, async (redis) => {
-          await redis.hset(keys.runRecord("send-newsletter", runId), "lockToken", "token-of-the-newer-attempt");
-          await redis.rpush(keys.runErrors("send-newsletter", runId), JSON.stringify(newerAttemptError));
+          await redis.hSet(keys.runRecord("send-newsletter", runId), "lockToken", "token-of-the-newer-attempt");
+          await redis.rPush(keys.runErrors("send-newsletter", runId), JSON.stringify(newerAttemptError));
         });
         throw new Error("the stale attempt failed");
       },

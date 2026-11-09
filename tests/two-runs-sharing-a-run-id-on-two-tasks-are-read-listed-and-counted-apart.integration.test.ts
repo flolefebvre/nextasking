@@ -41,8 +41,11 @@ function readerOf({ client, keyPrefix }: Pick<EngineTestContext, "client" | "key
 async function completedSharedRunsFinishedTogether({ engine, redis, keys }: EngineTestContext): Promise<void> {
   for (const { task, runId } of SHARED_RUN_IDENTITIES) {
     await endRuns(engine, task, [runId], "complete");
-    await redis.hset(keys.runRecord(task, runId), "finishedAt", SHARED_FINISHED_AT);
-    await redis.zadd(keys.runIndex(task, "completed"), SHARED_FINISHED_AT, storedRunIdOf(task, runId));
+    await redis.hSet(keys.runRecord(task, runId), "finishedAt", SHARED_FINISHED_AT);
+    await redis.zAdd(keys.runIndex(task, "completed"), {
+      score: SHARED_FINISHED_AT,
+      value: storedRunIdOf(task, runId),
+    });
   }
 }
 
@@ -110,7 +113,7 @@ integrationTest(
       await endRuns(engine, "send-receipt", ["order-1"], "complete");
       const indexKey = keys.runIndex("send-receipt", "completed");
       expectInvariantViolation("stored keys", `run "order-2" sits in ${indexKey} but has no record with a known state`);
-      await redis.zadd(indexKey, 0, "order-2");
+      await redis.zAdd(indexKey, { score: 0, value: "order-2" });
 
       const listing = readerOf({ client, keyPrefix }).listRuns({ state: "completed" });
 

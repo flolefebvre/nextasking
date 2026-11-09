@@ -42,7 +42,7 @@ integrationTest(
         const flushes = (async () => {
           let flushCount = 0;
           while (isFlushing) {
-            await admin.script("FLUSH");
+            await admin.scriptFlush();
             flushCount += 1;
             await sleep(FLUSH_INTERVAL_IN_MILLISECONDS);
           }

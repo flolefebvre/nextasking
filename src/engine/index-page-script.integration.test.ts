@@ -105,7 +105,7 @@ for (const limit of [1, 2, 3]) {
       expect(walkedStoredRunIds).toEqual(
         storedRunIdsOf([...LATER_RUN_IDS_IN_INDEX_ORDER, ...EARLIER_RUN_IDS_IN_INDEX_ORDER]),
       );
-      expect(walkedStoredRunIds).toEqual(await context.redis.zrange(indexKey, 0, -1, "REV"));
+      expect(walkedStoredRunIds).toEqual(await context.redis.zRange(indexKey, 0, -1, { REV: true }));
     },
   );
 }

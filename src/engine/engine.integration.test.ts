@@ -51,7 +51,7 @@ engineTest(
     expect(renewal?.kind === "renewed" ? renewal.lockedUntil : 0).toBeGreaterThanOrEqual(
       instantBefore + LOCK_DURATION_IN_MILLISECONDS,
     );
-    expect(await redis.hget(keys.runRecord("resize-image", "stalled-run"), "state")).toBe("pending");
+    expect(await redis.hGet(keys.runRecord("resize-image", "stalled-run"), "state")).toBe("pending");
   },
 );
 
@@ -122,7 +122,7 @@ engineTest(
         { ...HOURLY_REPORT, task: "newer-report", nextFiringAt: instantBefore - 1000, retries: 2 },
       ],
     });
-    await redis.hset(keys.schedule("newer-report"), "version", RECORD_VERSION + 1);
+    await redis.hSet(keys.schedule("newer-report"), "version", RECORD_VERSION + 1);
     const batchSpy = vi.spyOn(client, "sendBatch");
 
     const reply = await engine.tick({
@@ -252,7 +252,7 @@ integrationTest(
         expectInvariantViolation("stored keys", corruption);
       }
       await engine.enqueue({ runs: [{ runId: "order-1", task: "send-receipt", payload: "{}", retries: 0 }] });
-      await redis.hset(keys.runRecord("send-receipt", "order-1"), "task", "update-stock");
+      await redis.hSet(keys.runRecord("send-receipt", "order-1"), "task", "update-stock");
 
       const fetch = engine.fetch({
         lockTokens: freshLockTokensOf(1),

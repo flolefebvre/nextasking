@@ -39,11 +39,11 @@ engineTest(
 
     expect(reply).toEqual({ kind: "fired", runId: firing.runId, isRunCreated: true });
     expect(
-      await redis.hmget(keys.runRecord("build-report", firing.runId), "state", "task", "retries", "scheduledAt"),
+      await redis.hmGet(keys.runRecord("build-report", firing.runId), ["state", "task", "retries", "scheduledAt"]),
     ).toEqual(["pending", "build-report", "2", String(firing.instant)]);
-    expect(await redis.hget(keys.runRecord("build-report", firing.runId), "concurrencyKey")).toBeNull();
+    expect(await redis.hGet(keys.runRecord("build-report", firing.runId), "concurrencyKey")).toBeNull();
     expect(await redis.get(keys.runPayload("build-report", firing.runId))).toBe("");
-    expect(await redis.hmget(keys.schedule("build-report"), "nextFiringAt", "previousFiringAt")).toEqual([
+    expect(await redis.hmGet(keys.schedule("build-report"), ["nextFiringAt", "previousFiringAt"])).toEqual([
       String(firing.instantAfter),
       String(firing.instant),
     ]);
@@ -63,8 +63,8 @@ engineTest(
       const replies = await Promise.all([engine.fire(firing), otherEngine.fire(firing)]);
 
       expect(replies.map(({ kind }) => kind).sort()).toEqual(["already", "fired"]);
-      expect(await redis.zrange(keys.pending, 0, -1)).toEqual([storedRunIdOf("build-report", firing.runId)]);
-      expect(await redis.hget(keys.schedule("build-report"), "nextFiringAt")).toBe(String(firing.instantAfter));
+      expect(await redis.zRange(keys.pending, 0, -1)).toEqual([storedRunIdOf("build-report", firing.runId)]);
+      expect(await redis.hGet(keys.schedule("build-report"), "nextFiringAt")).toBe(String(firing.instantAfter));
     });
   },
 );
@@ -113,17 +113,16 @@ for (const { description, offsetFromNowInMilliseconds, refusedFiringOf, refusal 
 engineTest("a firing whose run id is still taken creates no run and still advances the record", async (context) => {
   const { engine, redis, keys } = context;
   const firing = await scheduledFiringOf(context, -60_000);
-  await redis.zadd(
-    keys.runDedup("build-report"),
-    firing.instant + 2 * ONE_HOUR_IN_MILLISECONDS,
-    storedRunIdOf("build-report", firing.runId),
-  );
+  await redis.zAdd(keys.runDedup("build-report"), {
+    score: firing.instant + 2 * ONE_HOUR_IN_MILLISECONDS,
+    value: storedRunIdOf("build-report", firing.runId),
+  });
 
   const reply = await engine.fire(firing);
 
   expect(reply).toEqual({ kind: "fired", runId: firing.runId, isRunCreated: false });
   expect(await redis.exists(keys.runRecord("build-report", firing.runId))).toBe(0);
-  expect(await redis.hmget(keys.schedule("build-report"), "nextFiringAt", "previousFiringAt")).toEqual([
+  expect(await redis.hmGet(keys.schedule("build-report"), ["nextFiringAt", "previousFiringAt"])).toEqual([
     String(firing.instantAfter),
     String(firing.instant),
   ]);
@@ -134,7 +133,7 @@ engineTest(
   async (context) => {
     const { engine, redis, keys, keyPrefix } = context;
     const firing = await scheduledFiringOf(context, -60_000);
-    await redis.hset(keys.schedule("build-report"), "version", RECORD_VERSION + 1);
+    await redis.hSet(keys.schedule("build-report"), "version", RECORD_VERSION + 1);
     const storedValuesBefore = await storedValuesByKeyOf(redis, keyPrefix);
 
     const reply = await engine.fire(firing);

@@ -11,8 +11,8 @@ export async function savedSteps(redisUrl: string, keyPrefix: string, task: stri
   const stepsKey = engineKeysOf(keyPrefix).runSteps(task, runId);
   return withRedis(redisUrl, async (redis) => {
     const [serializedResultsByStepId, timeToLiveInMilliseconds] = await Promise.all([
-      redis.hgetall(stepsKey),
-      redis.pttl(stepsKey),
+      redis.hGetAll(stepsKey),
+      redis.pTTL(stepsKey),
     ]);
     return { serializedResultsByStepId, timeToLiveInMilliseconds };
   });

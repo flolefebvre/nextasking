@@ -19,11 +19,6 @@ const NODE_REDIS_RESTRICTION = {
     "Only the driver (src/node-redis-driver.ts) imports @redis/client: the rest of the library reaches Redis through it.",
 };
 
-const IOREDIS_RESTRICTION = {
-  group: ["ioredis", "ioredis/*"],
-  message: "ioredis is a dev dependency, for the tests that read the server directly: the library runs on node-redis.",
-};
-
 export default defineConfig([
   includeIgnoreFile(gitignorePath, "Ignore what git ignores"),
   globalIgnores([".agents/skills/**"], "Ignore the agent skills"),
@@ -42,13 +37,7 @@ export default defineConfig([
     files: ["src/**/*.ts"],
     ignores: ["src/**/*.test.ts", "src/node-redis-driver.ts"],
     rules: {
-      "no-restricted-imports": ["error", { patterns: [IOREDIS_RESTRICTION, NODE_REDIS_RESTRICTION] }],
-    },
-  },
-  {
-    files: ["src/node-redis-driver.ts"],
-    rules: {
-      "no-restricted-imports": ["error", { patterns: [IOREDIS_RESTRICTION] }],
+      "no-restricted-imports": ["error", { patterns: [NODE_REDIS_RESTRICTION] }],
     },
   },
   {

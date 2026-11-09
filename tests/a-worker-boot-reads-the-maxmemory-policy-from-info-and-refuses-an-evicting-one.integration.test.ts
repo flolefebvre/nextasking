@@ -20,7 +20,17 @@ integrationTest(
 
     try {
       await withRedis(redisUrl, (redis) =>
-        redis.call("ACL", "SETUSER", userDeniedConfig, "on", ">denied-config-password", "~*", "&*", "+@all", "-config"),
+        redis.sendCommand([
+          "ACL",
+          "SETUSER",
+          userDeniedConfig,
+          "on",
+          ">denied-config-password",
+          "~*",
+          "&*",
+          "+@all",
+          "-config",
+        ]),
       );
       await nextasking.startWorker();
 
@@ -28,7 +38,7 @@ integrationTest(
       expect(lines.map((line) => line.message)).toContain("worker started");
     } finally {
       await closeNextaskingAndCheckItsDuration(nextasking);
-      await withRedis(redisUrl, (redis) => redis.call("ACL", "DELUSER", userDeniedConfig));
+      await withRedis(redisUrl, (redis) => redis.sendCommand(["ACL", "DELUSER", userDeniedConfig]));
     }
   },
 );

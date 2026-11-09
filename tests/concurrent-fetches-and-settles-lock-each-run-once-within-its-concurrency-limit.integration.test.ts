@@ -121,7 +121,7 @@ integrationTest(
       const sampleSlotSets = async () => {
         while (!isLoadOver) {
           for (const { slotSetKey, limit } of limitedSlotSets) {
-            const slotCount = await redis.scard(slotSetKey);
+            const slotCount = await redis.sCard(slotSetKey);
             slotSampleCount += 1;
             if (slotCount > limit) {
               slotCountsAboveTheLimit.push(
@@ -155,7 +155,7 @@ integrationTest(
         RUN_STATES.map(async (state) => {
           let runCount = 0;
           for (const task of TASKS) {
-            runCount += await redis.zcard(keys.runIndex(task, state));
+            runCount += await redis.zCard(keys.runIndex(task, state));
           }
           return [state, runCount] as const;
         }),

@@ -1,11 +1,18 @@
 import "server-only";
-import { Redis } from "ioredis";
+import { createClient } from "@redis/client";
 
-let recordsClient: Redis | undefined;
+let connectedRecordsClient: ReturnType<typeof connectRecordsClient> | undefined;
+
+function connectRecordsClient() {
+  return createClient({ url: process.env.REDIS_URL ?? "redis://localhost:6379", RESP: 2 })
+    .on("error", () => undefined)
+    .connect();
+}
 
 export async function writeRecord(taskName: string, record: unknown) {
-  recordsClient ??= new Redis(process.env.REDIS_URL ?? "redis://localhost:6379");
-  await recordsClient.rpush(
+  connectedRecordsClient ??= connectRecordsClient();
+  const recordsClient = await connectedRecordsClient;
+  await recordsClient.rPush(
     `${process.env.NEXTASKING_PREFIX ?? "nextasking"}records:${taskName}`,
     JSON.stringify(record),
   );

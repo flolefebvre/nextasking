@@ -52,11 +52,10 @@ integrationTest(
       await nextasking.emit("invoice.paid", { invoiceId: "inv-7" }, { eventId });
       const runsWithinTheWindow = await storedRunIdentities(redisUrl, keyPrefix);
       await withRedis(redisUrl, async (redis, client) => {
-        await redis.zadd(
+        await redis.zAdd(
           keys.eventDedup("invoice.paid"),
-          "XX",
-          (await serverInstantInMillisecondsOf(redis)) - 1,
-          eventId,
+          { score: (await serverInstantInMillisecondsOf(redis)) - 1, value: eventId },
+          { condition: "XX" },
         );
         await backdateEndedRun(
           engineTestContextOf(redis, client, keyPrefix),

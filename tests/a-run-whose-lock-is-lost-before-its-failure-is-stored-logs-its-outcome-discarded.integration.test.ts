@@ -45,7 +45,7 @@ integrationTest(
     expectInvariantViolation("run left executing", runLeftExecutingSentenceOf("charge-invoice", runId));
     await vi.waitUntil(() => isConnectionCut, { timeout: 10_000 });
     await withRedis(redisUrl, (redis) =>
-      redis.hset(engineKeysOf(keyPrefix).runRecord("charge-invoice", runId), "lockToken", "token-of-another-attempt"),
+      redis.hSet(engineKeysOf(keyPrefix).runRecord("charge-invoice", runId), "lockToken", "token-of-another-attempt"),
     );
     await proxy.restore();
     await waitForLogMessage(lines, "attempt outcome discarded: lock lost", { timeout: 15_000 });

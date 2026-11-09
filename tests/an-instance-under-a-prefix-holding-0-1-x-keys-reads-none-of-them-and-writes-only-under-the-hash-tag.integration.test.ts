@@ -1,4 +1,3 @@
-import { Redis } from "ioredis";
 import { expect, vi } from "vitest";
 import { z } from "zod";
 
@@ -7,18 +6,18 @@ import { createNextasking, defineScheduledTask, defineTask } from "../src/index.
 import { closeNextaskingAndCheckItsDuration } from "./close-nextasking-and-check-its-duration.js";
 import { integrationTest } from "./integration-test.js";
 import { createRecordingLogger, waitForLogMessage } from "./recording-logger.js";
-import { storedValuesByKeyOf } from "./engine-test.js";
+import { serializedValueOf, storedValuesByKeyOf } from "./engine-test.js";
+import { startCommandMonitor } from "./command-monitor.js";
 import { withRedis } from "./with-redis.js";
+import type { TestClient } from "./with-redis.js";
 
-type MonitoredCommand = { args: string[]; source: string };
-
-async function seedReleaseZeroOneKeys(redis: Redis, runsKeyStart: string): Promise<Map<string, Buffer | null>> {
-  await redis.hset(`${runsKeyStart}3f0c2d4e-run`, "name", "send-welcome-email", "data", '{"runId":"welcome-ada"}');
-  await redis.rpush(`${runsKeyStart}wait`, "3f0c2d4e-run");
-  await redis.zadd(`${runsKeyStart}delayed`, 1, "3f0c2d4e-delayed");
-  await redis.hset(`${runsKeyStart}meta`, "opts.maxLenEvents", "10000");
+async function seedReleaseZeroOneKeys(redis: TestClient, runsKeyStart: string): Promise<Map<string, Buffer | null>> {
+  await redis.hSet(`${runsKeyStart}3f0c2d4e-run`, { name: "send-welcome-email", data: '{"runId":"welcome-ada"}' });
+  await redis.rPush(`${runsKeyStart}wait`, "3f0c2d4e-run");
+  await redis.zAdd(`${runsKeyStart}delayed`, { score: 1, value: "3f0c2d4e-delayed" });
+  await redis.hSet(`${runsKeyStart}meta`, "opts.maxLenEvents", "10000");
   const seededKeys = (await redis.keys(`${runsKeyStart.replace(/[*?[\]\\]/g, "\\$&")}*`)).sort();
-  return new Map(await Promise.all(seededKeys.map(async (key) => [key, await redis.dumpBuffer(key)] as const)));
+  return new Map(await Promise.all(seededKeys.map(async (key) => [key, await serializedValueOf(redis, key)] as const)));
 }
 
 integrationTest(
@@ -40,25 +39,17 @@ integrationTest(
         }),
       ],
     });
-    const monitoredCommands: MonitoredCommand[] = [];
-    const monitorClient = new Redis(redisUrl, { lazyConnect: true, monitor: true });
-    monitorClient.on("error", () => undefined);
+    let stopCommandMonitor = () => undefined as void;
 
     try {
       await withRedis(redisUrl, async (redis) => {
         const seededValuesByKey = await seedReleaseZeroOneKeys(redis, runsKeyStart);
-        monitorClient.on("monitor", (_time: string, args: string[], source: string) => {
-          if (args.some((argument) => argument.includes(keyPrefix))) {
-            monitoredCommands.push({ args, source });
-          }
-        });
-        const monitoring = new Promise<void>((resolve) => {
-          monitorClient.once("monitoring", () => {
-            resolve();
-          });
-        });
-        await monitorClient.connect();
-        await monitoring;
+        const commandMonitor = await startCommandMonitor(redisUrl);
+        stopCommandMonitor = commandMonitor.stop;
+        const monitoredCommands = () =>
+          commandMonitor
+            .monitoredCommands()
+            .filter(({ args }) => args.some((argument) => argument.includes(keyPrefix)));
 
         await nextasking.startWorker();
         const { runId } = await nextasking.dispatch("send-welcome-email", { email: "ada@example.com" });
@@ -67,20 +58,20 @@ integrationTest(
         await nextasking.listRuns({ state: "completed" });
         await nextasking.countRuns();
         await nextasking.listSchedules();
-        await vi.waitFor(() => expect(monitoredCommands.some(({ source }) => source.includes("lua"))).toBe(true), {
+        await vi.waitFor(() => expect(monitoredCommands().some(({ source }) => source.includes("lua"))).toBe(true), {
           timeout: 5_000,
         });
-        monitorClient.disconnect();
+        commandMonitor.stop();
         const keysUnderThePrefix = (await redis.keys(`*${keyPrefix.replace(/[*?[\]\\]/g, "\\$&")}*`)).sort();
         const seededValuesAfter = new Map(
           [...seededValuesByKey.keys()].map((key) => [key, null as Buffer | null] as const),
         );
         for (const key of seededValuesAfter.keys()) {
-          seededValuesAfter.set(key, await redis.dumpBuffer(key));
+          seededValuesAfter.set(key, await serializedValueOf(redis, key));
         }
 
         expect(
-          monitoredCommands.filter(({ args }) => args.some((argument) => argument.startsWith(`${keyPrefix}:`))),
+          monitoredCommands().filter(({ args }) => args.some((argument) => argument.startsWith(`${keyPrefix}:`))),
         ).toEqual([]);
         expect(keysUnderThePrefix.filter((key) => !key.startsWith(hashTaggedKeyStart))).toEqual([
           ...seededValuesByKey.keys(),
@@ -90,7 +81,7 @@ integrationTest(
         expect((await storedValuesByKeyOf(redis, keyPrefix)).size).toBeGreaterThan(0);
       });
     } finally {
-      monitorClient.disconnect();
+      stopCommandMonitor();
       await closeNextaskingAndCheckItsDuration(nextasking);
     }
   },

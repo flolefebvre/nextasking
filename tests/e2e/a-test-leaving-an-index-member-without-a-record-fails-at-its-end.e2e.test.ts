@@ -11,7 +11,10 @@ testFailingWith(
   ],
   async ({ redisUrl, keyPrefix }) => {
     await withRedis(redisUrl, (redis) =>
-      redis.zadd(engineKeysOf(keyPrefix).pending, 7, storedRunIdOf("send-welcome-email", "ghost-run")),
+      redis.zAdd(engineKeysOf(keyPrefix).pending, {
+        score: 7,
+        value: storedRunIdOf("send-welcome-email", "ghost-run"),
+      }),
     );
   },
 );

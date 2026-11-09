@@ -22,7 +22,7 @@ integrationTest(
           defineTask("archive-invoice", {
             schema: z.object({ invoiceId: z.string() }),
             handler: async ({ runId }) => {
-              await redis.hset(
+              await redis.hSet(
                 engineKeysOf(keyPrefix).runRecord("archive-invoice", runId),
                 "lockToken",
                 "token-of-another-attempt",
@@ -46,12 +46,12 @@ integrationTest(
           },
         ]);
         expect(lines.filter((line) => line.message === "run completed")).toEqual([]);
-        expect(await redis.hgetall(engineKeysOf(keyPrefix).runRecord("archive-invoice", runId))).toMatchObject({
+        expect(await redis.hGetAll(engineKeysOf(keyPrefix).runRecord("archive-invoice", runId))).toMatchObject({
           state: "executing",
           lockToken: "token-of-another-attempt",
         });
         expect(
-          await redis.zscore(engineKeysOf(keyPrefix).locks, storedRunIdOf("archive-invoice", runId)),
+          await redis.zScore(engineKeysOf(keyPrefix).locks, storedRunIdOf("archive-invoice", runId)),
         ).not.toBeNull();
       } finally {
         await closeNextaskingAndCheckItsDuration(nextasking);

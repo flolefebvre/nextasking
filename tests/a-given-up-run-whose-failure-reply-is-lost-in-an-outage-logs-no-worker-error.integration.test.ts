@@ -48,7 +48,7 @@ integrationTest(
 
     const { runId } = await nextReleaseNextasking.dispatch("archive-account", { accountId: "account-7" });
     await withRedis(redisUrl, (redis) =>
-      redis.hset(
+      redis.hSet(
         engineKeysOf(keyPrefix).runRecord("archive-account", runId),
         "firstFoundUnknownAt",
         Date.now() - LONGER_AGO_THAN_THE_GIVE_UP_DELAY_IN_MILLISECONDS,

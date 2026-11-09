@@ -80,7 +80,7 @@ function createNextReleaseNextasking(redisUrl: string, keyPrefix: string, handle
 }
 
 integrationTest(
-  "a run of a task the worker doesn't define is handed back without using a retry, a stall or a slot, until a worker that defines it runs it",
+  "a run of a task the worker doesn't define is handed back without using a retry or a stall, frees its concurrency slot at each hand back, and runs first of its key on a worker that defines it",
   { timeout: 30_000 },
   async ({ redisUrl, keyPrefix }) => {
     await withNextReleaseAndOlderReleaseWorker(
@@ -96,14 +96,20 @@ integrationTest(
           },
           { timeout: 10_000 },
         );
+        await nextasking.dispatch("archive-account", { accountId: "account-8" });
+        olderReleaseWorker.kill("SIGTERM");
+        await olderReleaseWorker.exited;
         const runWhileHandedBack = await storedRun(redisUrl, keyPrefix, "archive-account", runId);
         const slotsHeldWhileHandedBack = await withRedis(redisUrl, (redis) =>
           redis.exists(engineKeysOf(keyPrefix).slotSet("archive-account", undefined)),
         );
-        olderReleaseWorker.kill("SIGTERM");
-        await olderReleaseWorker.exited;
         await nextasking.startWorker();
-        await waitForLogMessage(lines, "run completed");
+        await vi.waitFor(
+          () => {
+            expect(lines.filter((line) => line.message === "run completed")).toHaveLength(2);
+          },
+          { timeout: 10_000 },
+        );
 
         expect(olderReleaseWorker.logLines.find((line) => line.message === "run handed back: unknown task")).toEqual({
           level: "debug",
@@ -112,6 +118,9 @@ integrationTest(
         });
         expect(olderReleaseWorker.logLines.map((line) => line.message)).not.toContain("attempt stalled");
         expect(runWhileHandedBack).toMatchObject({
+          state: "pending",
+          attempt: "1",
+          stalls: "0",
           firstFoundUnknownAt: expect.stringMatching(EPOCH_MILLISECONDS),
           errors: [],
         });
@@ -121,7 +130,7 @@ integrationTest(
           runId,
           attempt: 1,
         });
-        expect(handledAccountIds).toEqual(["account-7"]);
+        expect(handledAccountIds).toEqual(["account-7", "account-8"]);
       },
     );
   },

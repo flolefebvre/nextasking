@@ -3,7 +3,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { expect, vi } from "vitest";
 import { z } from "zod";
 
-import { createNextasking, defineTask } from "../src/index.js";
+import { createNextasking, defineTask, RedisUnavailableError } from "../src/index.js";
 import { closeNextaskingAndCheckItsDuration } from "./close-nextasking-and-check-its-duration.js";
 import { createHandlerGate, gatedBetweenTwoSteps } from "./handler-gate.js";
 import { integrationTest } from "./integration-test.js";
@@ -24,7 +24,7 @@ const MAXMEMORY_BELOW_THE_USED_MEMORY = "1";
 const OUT_OF_MEMORY_STRETCH_IN_MILLISECONDS = 5000;
 
 integrationTest.skipIf(providedRedisUrl() !== undefined)(
-  "a worker whose server is out of memory while a step save is refused across several retries, its ticks answered meanwhile, logs one connection error naming the server's reply and one connection restored once memory is back, and the run completes",
+  "a server out of memory refuses a dispatch with RedisUnavailableError carrying its reply, and a worker whose step save it refuses across several retries, its ticks answered meanwhile, logs one connection error naming the reply and one connection restored once memory is back, and completes the run in its first attempt",
   {
     timeout:
       SERVER_CONTAINER_START_BOUND_IN_MILLISECONDS +
@@ -50,6 +50,12 @@ integrationTest.skipIf(providedRedisUrl() !== undefined)(
         await nextasking.dispatch("charge-card", {}, { runId: "charge-ada" });
         await vi.waitFor(() => expect(handlerGate.inFlightCount()).toBe(1), { timeout: 10_000 });
         await admin.sendCommand(["CONFIG", "SET", "maxmemory", MAXMEMORY_BELOW_THE_USED_MEMORY]);
+        const dispatchRejection = await nextasking
+          .dispatch("charge-card", {}, { runId: "charge-grace" })
+          .then(
+            () => undefined,
+            (error: unknown) => error,
+          );
 
         handlerGate.release(1);
         await delay(OUT_OF_MEMORY_STRETCH_IN_MILLISECONDS);
@@ -59,7 +65,15 @@ integrationTest.skipIf(providedRedisUrl() !== undefined)(
         await admin.sendCommand(["CONFIG", "SET", "maxmemory", "0"]);
         await waitForLogMessage(lines, "run completed", { timeout: 15_000 });
 
+        expect(dispatchRejection).toBeInstanceOf(RedisUnavailableError);
+        expect((dispatchRejection as RedisUnavailableError).cause).toEqual(
+          expect.objectContaining({ message: expect.stringMatching(OUT_OF_MEMORY_REPLY_PATTERN) }),
+        );
         expect(connectionLinesWhileOutOfMemory).toEqual(["connection error"]);
+        expect(lines.map(({ message }) => message)).not.toContain("attempt failed");
+        expect(lines.find(({ message }) => message === "run completed")?.fields).toEqual(
+          expect.objectContaining({ runId: "charge-ada", attempt: 1 }),
+        );
         expectOneConnectionErrorAndOneConnectionRestored(lines);
         expect(lines.find(({ message }) => message === "connection error")?.fields).toEqual({
           err: expect.objectContaining({ message: expect.stringMatching(OUT_OF_MEMORY_REPLY_PATTERN) }),

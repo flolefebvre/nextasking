@@ -43,6 +43,7 @@ pnpm typecheck            TypeScript with no emit
 pnpm test                 Vitest, once, the unit and integration projects (integration needs Docker)
 pnpm test:unit            Vitest, once, the unit project alone (no Docker)
 pnpm test:integration     Vitest, once, the integration project alone, against a Valkey container
+pnpm test:integration:contended  The integration project twice at once, each run on its own container, the second contending with the first; in neither check, gate nor CI (see docs/codebase/testing.md)
 pnpm test:changed         Vitest, once, only the unit and integration tests affected since $CHECK_BASE (default origin/main)
 pnpm test:e2e             Vitest, once, the e2e project: packs the package into a fixture Next app, builds it, runs the scenarios (needs pnpm build first, Docker and the npm registry)
 ```

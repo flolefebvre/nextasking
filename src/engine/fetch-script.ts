@@ -71,7 +71,8 @@ local freshLockTokens = {}
 for _, lockToken in ipairs(lockTokens) do
   local lockedRunId = redis.call("GET", lockKey(lockToken))
   if lockedRunId and isCurrentLockOf(lockedRunId, lockToken) then
-    table.insert(lockedRuns, lockedRunReplyOf(lockedRunId, lockToken, false, false))
+    local pickup = redis.call("HMGET", runRecordKey(lockedRunId), "isLockAResume", "lockSleepsWokenAt")
+    table.insert(lockedRuns, lockedRunReplyOf(lockedRunId, lockToken, pickup[1] == "1", pickup[2]))
   else
     table.insert(freshLockTokens, lockToken)
   end
@@ -85,7 +86,13 @@ local function lockRun(runId, task, concurrencyKey, lockToken)
   local isResume = redis.call("HEXISTS", recordKey, "resumesAt") == 1
   local sleepsWokenAt = redis.call("HGET", recordKey, "sleepsWokenAt")
   redis.call("HDEL", recordKey, "resumesAt", "sleepsWokenAt")
-  redis.call("HSET", recordKey, "state", "executing", "lockToken", lockToken, "lockedUntil", lockedUntil, "startedAt", now)
+  redis.call("HSET", recordKey, "state", "executing", "lockToken", lockToken, "lockedUntil", lockedUntil, "startedAt", now,
+    "isLockAResume", isResume and "1" or "0")
+  if sleepsWokenAt then
+    redis.call("HSET", recordKey, "lockSleepsWokenAt", sleepsWokenAt)
+  else
+    redis.call("HDEL", recordKey, "lockSleepsWokenAt")
+  end
   redis.call("ZADD", engineKeys.locks, lockedUntil, runId)
   redis.call("ZADD", runIndexKey(task, "executing"), now, runId)
   redis.call("SADD", slotSetKey(task, concurrencyKey), runId)

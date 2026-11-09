@@ -774,6 +774,84 @@ export function defineEngineContractTests(contractTest: EngineContractTest): voi
     },
   );
 
+  const pickupsOfALockResent: {
+    pickup: string;
+    pickedUpRunOf: (harness: EngineContractHarness) => Promise<void>;
+    expectedPickup: Partial<LockedRun>;
+  }[] = [
+    {
+      pickup: "after a suspend, as a resume",
+      pickedUpRunOf: async (harness) => {
+        const lockedRun = await onlyLockedRunOf(harness.engine, "run-1");
+        await harness.engine.settle({
+          ...lockedRun,
+          outcome: { kind: "suspend", resumesAt: await harness.pastInstant() },
+        });
+        await harness.engine.promote();
+      },
+      expectedPickup: { isResume: true },
+    },
+    {
+      pickup: "after a makeDue woke it, with the same sleepsWokenAt",
+      pickedUpRunOf: async ({ engine }) => {
+        await suspendedOnANapOf(engine, await onlyLockedRunOf(engine, "run-1"));
+        await engine.makeDue();
+      },
+      expectedPickup: { isResume: true, sleepsWokenAt: expect.any(Number) as number },
+    },
+    {
+      pickup: "after a retry of a woken lock, as a new attempt with nothing of the previous lock",
+      pickedUpRunOf: async ({ engine }) => {
+        await suspendedOnANapOf(engine, await onlyLockedRunOf(engine, "run-1"));
+        await engine.makeDue();
+        const [wokenRun] = await lockedRunsOf(engine, 1);
+        await engine.settle({
+          ...wokenRun!,
+          outcome: { kind: "retry", error: ATTEMPT_ERROR, backoffInMilliseconds: 0 },
+        });
+        await engine.promote();
+      },
+      expectedPickup: { isResume: false, attempt: 2 },
+    },
+    {
+      pickup: "after a stall of a woken lock, with nothing of the previous lock",
+      pickedUpRunOf: async (harness) => {
+        const { engine } = harness;
+        await suspendedOnANapOf(engine, await onlyLockedRunOf(engine, "run-1"));
+        await engine.makeDue();
+        await lockedRunsOf(engine, 1);
+        await harness.expireLock("run-1");
+        await engine.promote();
+      },
+      expectedPickup: { isResume: false, attempt: 1 },
+    },
+  ];
+  for (const { pickup, pickedUpRunOf, expectedPickup } of pickupsOfALockResent) {
+    contractTest(
+      `a fetch resent with the same tokens answers a pickup ${pickup}, as its first send did`,
+      async (harness) => {
+        const { engine } = harness;
+        await pickedUpRunOf(harness);
+        const request = {
+          lockTokens: freshLockTokensOf(1),
+          concurrencyLimitsByTask: {},
+          lockDurationInMilliseconds: LOCK_DURATION_IN_MILLISECONDS,
+        };
+
+        const firstReply = await engine.fetch(request);
+        const resentReply = await engine.fetch(request);
+
+        expect(firstReply).toMatchObject({ kind: "fetched", lockedRuns: [{ runId: "run-1", ...expectedPickup }] });
+        expect(resentReply).toEqual(firstReply);
+        if (expectedPickup.sleepsWokenAt === undefined) {
+          expect(firstReply.kind === "fetched" ? firstReply.lockedRuns[0] : undefined).not.toHaveProperty(
+            "sleepsWokenAt",
+          );
+        }
+      },
+    );
+  }
+
   contractTest("the server instant is the engine's clock, after an instant already past", async (harness) => {
     const pastInstant = await harness.pastInstant();
 

@@ -95,6 +95,8 @@ export type InMemoryStoredRun = {
   scheduledAt: EpochMilliseconds | undefined;
   firstFoundUnknownAt: EpochMilliseconds | undefined;
   sleepsWokenAt: EpochMilliseconds | undefined;
+  isLockAResume: boolean | undefined;
+  lockSleepsWokenAt: EpochMilliseconds | undefined;
   errors: string[];
   steps: Map<StepId, SerializedStepValue>;
 };
@@ -301,6 +303,8 @@ export function createInMemoryEngine({ now = () => Date.now() }: InMemoryEngineO
       scheduledAt: undefined,
       firstFoundUnknownAt: undefined,
       sleepsWokenAt: undefined,
+      isLockAResume: undefined,
+      lockSleepsWokenAt: undefined,
       errors: [],
       steps: new Map(),
     };
@@ -448,7 +452,9 @@ export function createInMemoryEngine({ now = () => Date.now() }: InMemoryEngineO
           ? currentlyLockedRunOf(lockedRun.runId, lockToken)
           : undefined;
       if (lockedRun !== undefined && storedRun !== undefined) {
-        lockedRuns.push(lockedRunReplyOf(lockedRun.runId, storedRun, false, undefined));
+        lockedRuns.push(
+          lockedRunReplyOf(lockedRun.runId, storedRun, storedRun.isLockAResume === true, storedRun.lockSleepsWokenAt),
+        );
       } else {
         freshLockTokens.push(lockToken);
       }
@@ -472,6 +478,8 @@ export function createInMemoryEngine({ now = () => Date.now() }: InMemoryEngineO
         const { sleepsWokenAt } = storedRun;
         storedRun.resumesAt = undefined;
         storedRun.sleepsWokenAt = undefined;
+        storedRun.isLockAResume = isResume;
+        storedRun.lockSleepsWokenAt = sleepsWokenAt;
         storedRun.state = "executing";
         storedRun.lockToken = lockToken;
         storedRun.lockedUntil = instant + lockDurationInMilliseconds;

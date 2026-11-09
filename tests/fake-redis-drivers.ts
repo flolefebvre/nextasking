@@ -185,6 +185,7 @@ export class FakeRedisDriver implements RedisDriver {
     }
     const sentCommand = [command.name, ...command.commandArguments].join(" ");
     const replyByCommandName: Record<string, () => Promise<unknown>> = {
+      PING: () => Promise.resolve("PONG"),
       INFO: this.infoReply,
       CONFIG: this.configReply,
     };

@@ -5,6 +5,7 @@ import type { RedisCallIds } from "./errors.js";
 import type { Logger } from "./logger.js";
 import {
   createNodeRedisDriver,
+  isErrorReply,
   isOutOfMemoryReply,
   isReadOnlyReply,
   isUnansweredCommandError,
@@ -13,6 +14,7 @@ import {
 } from "./node-redis-driver.js";
 import type { CreateRedisDriver, RedisDriver } from "./node-redis-driver.js";
 import { createRefusedWriteStretch } from "./refused-write-stretch.js";
+import { builtInCommandOf } from "./redis-client.js";
 import type { CommandResult, RedisClient, RedisCommand } from "./redis-client.js";
 import { delayUnlessAborted, untilAborted } from "./redis-outage.js";
 import type { RedisOutage } from "./redis-outage.js";
@@ -24,6 +26,8 @@ export type ConnectionConfig = {
 };
 
 const DEFAULT_GIVE_UP_AFTER: Duration = "5s";
+
+const ANSWER_CHECK_COMMAND = builtInCommandOf("PING");
 
 export const READ_ONLY_RECONNECT_PAUSE_IN_MILLISECONDS: DurationInMilliseconds = 250;
 
@@ -73,41 +77,66 @@ export function createRedisOutage({
 }
 
 export type ConnectionOutageTracker = {
+  trackClient: (client: object, checkAnswering: () => Promise<void>) => void;
   reportClientError: (client: object, error: unknown) => void;
+  reportClientGaveUp: (client: object, error: unknown) => void;
   reportClientReady: (client: object) => void;
   forgetClient: (client: object) => void;
-  onConnectionRestored: (listener: () => void) => () => void;
 };
 
+type OutageHold = { kind: "down" } | { kind: "suspect" };
+
 export function createConnectionOutageTracker(logger: Logger): ConnectionOutageTracker {
-  const clientsDown = new Set<object>();
-  const connectionRestoredListeners = new Set<() => void>();
+  const holdBySubject = new Map<object, OutageHold>();
+  const checkAnsweringByClient = new Map<object, () => Promise<void>>();
+
+  const holdDown = (subject: object, error: unknown) => {
+    if (holdBySubject.size === 0) {
+      logger.error({ err: error }, "connection error");
+    }
+    holdBySubject.set(subject, { kind: "down" });
+  };
+
+  const release = (subject: object) => {
+    if (holdBySubject.delete(subject) && holdBySubject.size === 0) {
+      logger.info({}, "connection restored");
+    }
+  };
+
+  const suspect = (client: object, checkAnswering: () => Promise<void>) => {
+    const suspectHold: OutageHold = { kind: "suspect" };
+    holdBySubject.set(client, suspectHold);
+    checkAnswering().then(
+      () => {
+        if (holdBySubject.get(client) === suspectHold) {
+          release(client);
+        }
+      },
+      () => undefined,
+    );
+  };
+
   return {
-    reportClientError: (client, error) => {
-      if (clientsDown.size === 0) {
-        logger.error({ err: error }, "connection error");
-      }
-      clientsDown.add(client);
+    trackClient: (client, checkAnswering) => {
+      checkAnsweringByClient.set(client, checkAnswering);
     },
-    reportClientReady: (client) => {
-      if (clientsDown.delete(client) && clientsDown.size === 0) {
-        logger.info({}, "connection restored");
-        for (const listener of connectionRestoredListeners) {
-          listener();
+    reportClientError: holdDown,
+    reportClientGaveUp: (client, error) => {
+      holdDown(client, error);
+      for (const [otherClient, checkAnswering] of checkAnsweringByClient) {
+        if (!holdBySubject.has(otherClient)) {
+          suspect(otherClient, checkAnswering);
         }
       }
     },
+    reportClientReady: release,
     forgetClient: (client) => {
-      clientsDown.delete(client);
-    },
-    onConnectionRestored: (listener) => {
-      const subscribedListener = () => {
-        listener();
-      };
-      connectionRestoredListeners.add(subscribedListener);
-      return () => {
-        connectionRestoredListeners.delete(subscribedListener);
-      };
+      checkAnsweringByClient.delete(client);
+      if (holdBySubject.get(client)?.kind === "suspect") {
+        release(client);
+        return;
+      }
+      holdBySubject.delete(client);
     },
   };
 }
@@ -128,7 +157,6 @@ export type RedisConnections = {
     outOfMemoryRetryDelayInMilliseconds: DurationInMilliseconds,
   ) => RedisOutage;
   callOnRedis: <Result>(callIds: RedisCallIds, call: () => Promise<Result>) => Promise<Result>;
-  onConnectionRestored: (listener: () => void) => () => void;
 };
 
 type ReadyWait = { promise: Promise<void>; markReady: () => void; markClosed: () => void };
@@ -287,7 +315,7 @@ export function createRedisConnections(
     state.isReconnectingByForce = true;
     clearTimeout(state.handshakeTimer);
     state.errorWhileDown = cause;
-    outageTracker.reportClientError(state.subject, cause);
+    outageTracker.reportClientGaveUp(state.subject, cause);
     state.driver.forceReconnect();
   };
 
@@ -329,6 +357,20 @@ export function createRedisConnections(
         state.watchdogTimer = undefined;
       }
     });
+  };
+
+  const answeredCheckOf = (state: ConnectionState): Promise<void> => {
+    if (isClosed(state) || !state.driver.isReady) {
+      return Promise.reject(new Error("A Redis connection that is not ready is not checked"));
+    }
+    return answeredWithinTheAnswerBound(state, () => state.driver.send(ANSWER_CHECK_COMMAND)).then(
+      () => undefined,
+      (error: unknown) => {
+        if (!isErrorReply(error)) {
+          throw error;
+        }
+      },
+    );
   };
 
   const unansweredErrorAtTheDeadline = (state: ConnectionState, lastReadOnlyReply: Error | undefined): Error =>
@@ -537,6 +579,7 @@ export function createRedisConnections(
     };
     opened.state = state;
     stateByConnection.set(redisConnection, state);
+    outageTracker.trackClient(subject, () => answeredCheckOf(state));
     openConnectionCount += 1;
     driver.connect();
     return redisConnection;
@@ -575,7 +618,6 @@ export function createRedisConnections(
       }
       state.driver.destroy();
     },
-    onConnectionRestored: outageTracker.onConnectionRestored,
     callOnRedis: async (callIds, call) => {
       try {
         return await call();

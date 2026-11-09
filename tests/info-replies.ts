@@ -7,6 +7,22 @@ export const infoMemoryReplyWith = (policy: string) =>
     "\r\n",
   );
 
+export type InfoReplyFields = { valkeyVersion?: string; redisVersion?: string; maxmemoryPolicy?: string };
+
+export function infoReplyWith({ valkeyVersion, redisVersion, maxmemoryPolicy }: InfoReplyFields): string {
+  return [
+    "# Server",
+    ...(redisVersion === undefined ? [] : [`redis_version:${redisVersion}`]),
+    "redis_mode:standalone",
+    ...(valkeyVersion === undefined ? [] : [`server_name:valkey`, `valkey_version:${valkeyVersion}`]),
+    "",
+    "# Memory",
+    "used_memory:1048576",
+    ...(maxmemoryPolicy === undefined ? [] : [`maxmemory_policy:${maxmemoryPolicy}`]),
+    "",
+  ].join("\r\n");
+}
+
 export const INFO_MEMORY_REPLY_WITHOUT_POLICY = ["# Memory", "used_memory:1048576", "maxmemory:0"].join("\r\n");
 
 export const CONFIG_DISABLED = () => new ReplyError("ERR unknown command 'CONFIG', with args beginning with: 'GET'");

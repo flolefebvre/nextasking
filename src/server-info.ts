@@ -93,6 +93,82 @@ export async function readMaxmemoryPolicy(
   };
 }
 
+export type ServerName = "Valkey" | "Redis";
+
+export type ServerVersionReading =
+  { kind: "read"; serverName: ServerName; version: string } | { kind: "unreadable"; error: unknown };
+
+const VERSION_FIELD_BY_SERVER_NAME: readonly (readonly [ServerName, string])[] = [
+  ["Valkey", "valkey_version"],
+  ["Redis", "redis_version"],
+];
+
+const FLOOR_VERSION_BY_SERVER_NAME: Record<ServerName, readonly [major: number, minor: number]> = {
+  Valkey: [8, 0],
+  Redis: [7, 4],
+};
+
+const SHOWN_FLOOR = "Valkey 8 or Redis 7.4";
+
+const VERSION_PATTERN = /^(\d+)\.(\d+)/;
+
+export function serverVersionReadingOf(infoReply: string): ServerVersionReading {
+  for (const [serverName, versionField] of VERSION_FIELD_BY_SERVER_NAME) {
+    const version = infoFieldOf(infoReply, versionField);
+    if (version === undefined) {
+      continue;
+    }
+    return VERSION_PATTERN.test(version)
+      ? { kind: "read", serverName, version }
+      : {
+          kind: "unreadable",
+          error: new Error(`INFO reports ${versionField} ${JSON.stringify(version)}, which is not a version`),
+        };
+  }
+  return { kind: "unreadable", error: new Error("INFO has neither a valkey_version nor a redis_version line") };
+}
+
+export function serverFloorRejectionOf({
+  serverName,
+  version,
+}: Extract<ServerVersionReading, { kind: "read" }>): Error | undefined {
+  const [, major = "0", minor = "0"] = VERSION_PATTERN.exec(version) ?? [];
+  const [floorMajor, floorMinor] = FLOOR_VERSION_BY_SERVER_NAME[serverName];
+  const isAtTheFloor = Number(major) > floorMajor || (Number(major) === floorMajor && Number(minor) >= floorMinor);
+  return isAtTheFloor ? undefined : new Error(`${serverName} ${version} is below the floor: ${SHOWN_FLOOR}`);
+}
+
+export type ServerInfoReading = {
+  maxmemoryPolicyReading: MaxmemoryPolicyReading;
+  serverVersionReading: ServerVersionReading;
+};
+
+export async function readServerInfo(source: MaxmemoryPolicySource): Promise<ServerInfoReading> {
+  const infoReply = source.info();
+  infoReply.catch(() => undefined);
+  const maxmemoryPolicyReading = await readMaxmemoryPolicy(source, () => infoReply);
+  const serverVersionReading = await infoReply.then(serverVersionReadingOf, (error: unknown): ServerVersionReading => ({
+    kind: "unreadable",
+    error,
+  }));
+  return { maxmemoryPolicyReading, serverVersionReading };
+}
+
+export function checkServerInfoReading(
+  { maxmemoryPolicyReading, serverVersionReading }: ServerInfoReading,
+  logger: Logger,
+): void {
+  checkMaxmemoryPolicyReading(maxmemoryPolicyReading, logger);
+  if (serverVersionReading.kind === "unreadable") {
+    logger.warn({ err: serverVersionReading.error }, "server version unreadable");
+    return;
+  }
+  const rejection = serverFloorRejectionOf(serverVersionReading);
+  if (rejection !== undefined) {
+    throw rejection;
+  }
+}
+
 export function checkMaxmemoryPolicyReading(reading: MaxmemoryPolicyReading, logger: Logger): void {
   if (reading.kind === "unreadable") {
     logger.warn({ err: reading.error }, "maxmemory-policy unreadable");

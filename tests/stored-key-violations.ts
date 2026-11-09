@@ -1,8 +1,8 @@
 import type { Redis } from "ioredis";
-import { expect } from "vitest";
 
-import { engineKeysOf, hashTaggedPrefixOf, runIdentityOf } from "../src/engine/engine-keys.js";
-import type { EngineKeys } from "../src/engine/engine-keys.js";
+import { engineKeysOf, hashTaggedPrefixOf, runIdentityOf, storedRunIdOf } from "../src/engine/engine-keys.js";
+import type { RunId } from "../src/ids.js";
+import type { EngineKeys, LockToken } from "../src/engine/engine-keys.js";
 import type { EpochMilliseconds } from "../src/durations.js";
 import { isRunState } from "../src/run-states.js";
 import type { RunState } from "../src/run-states.js";
@@ -278,19 +278,28 @@ export function storedKeyViolationsIn(snapshot: StoredKeysSnapshot, keyPrefix: s
   return violations;
 }
 
-export function runLeftExecutingSentenceOf(storedRunId: string): string {
+function runLeftExecutingSentenceOfStoredRunId(storedRunId: string): string {
   return `run "${storedRunId}" is still executing under a lock that has not lapsed`;
 }
 
-export function runsLeftExecutingIn(snapshot: StoredKeysSnapshot, keyPrefix: string): string[] {
+export function runLeftExecutingSentenceOf(task: string, runId: RunId): string {
+  return runLeftExecutingSentenceOfStoredRunId(storedRunIdOf(task, runId));
+}
+
+export function runsLeftExecutingIn(
+  snapshot: StoredKeysSnapshot,
+  keyPrefix: string,
+  lockTokensMadeByTheTest: ReadonlySet<LockToken> = new Set(),
+): string[] {
   const runsLeftExecuting: string[] = [];
   for (const [storedKey, storedValue] of snapshot.storedValuesByKey) {
     const record = hashFieldsOf(storedValue);
     if (keyKindOf(storedKey, keyPrefix).kind !== "record" || record?.["state"] !== "executing") {
       continue;
     }
-    if (Number(record["lockedUntil"]) > snapshot.serverInstantInMilliseconds) {
-      runsLeftExecuting.push(runLeftExecutingSentenceOf(decodeURIComponent(storedKey.split(":").at(-1)!)));
+    const isUnderALockTheTestMade = lockTokensMadeByTheTest.has(record["lockToken"] ?? "");
+    if (Number(record["lockedUntil"]) > snapshot.serverInstantInMilliseconds && !isUnderALockTheTestMade) {
+      runsLeftExecuting.push(runLeftExecutingSentenceOfStoredRunId(decodeURIComponent(storedKey.split(":").at(-1)!)));
     }
   }
   return runsLeftExecuting;
@@ -298,9 +307,4 @@ export function runsLeftExecutingIn(snapshot: StoredKeysSnapshot, keyPrefix: str
 
 export async function storedKeyViolationsOf(redis: Redis, keyPrefix: string): Promise<string[]> {
   return storedKeyViolationsIn(await storedKeysSnapshotOf(redis, keyPrefix), keyPrefix);
-}
-
-export async function expectNoStoredKeyViolations(redis: Redis, keyPrefix: string): Promise<void> {
-  const violations = await storedKeyViolationsOf(redis, keyPrefix);
-  expect(violations, `stored key violations:\n${violations.join("\n")}`).toEqual([]);
 }

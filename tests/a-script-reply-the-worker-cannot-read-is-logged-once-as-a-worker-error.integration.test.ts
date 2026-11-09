@@ -1,7 +1,7 @@
 import { expect, vi } from "vitest";
 import { z } from "zod";
 
-import { engineKeysOf } from "../src/engine/engine-keys.js";
+import { engineKeysOf, storedRunIdOf } from "../src/engine/engine-keys.js";
 import { createNextasking, defineTask, NonRetriableError } from "../src/index.js";
 import { closeNextasking } from "../src/registry.js";
 import { integrationTest } from "./integration-test.js";
@@ -10,7 +10,7 @@ import { withRedis } from "./with-redis.js";
 
 integrationTest(
   "a script error the worker meets while it fails a run is logged once as a worker error, and the worker goes on",
-  async ({ redisUrl, keyPrefix }) => {
+  async ({ redisUrl, keyPrefix, expectInvariantViolation }) => {
     const { logger, lines } = createRecordingLogger();
     const completedOrderIds: string[] = [];
     const nextasking = createNextasking({
@@ -35,11 +35,15 @@ integrationTest(
 
     try {
       await nextasking.startWorker();
-      await withRedis(redisUrl, (redis) =>
-        redis.set(engineKeysOf(keyPrefix).runIndex("charge-card", "failed"), "not a sorted set"),
-      );
+      const failedIndexKey = engineKeysOf(keyPrefix).runIndex("charge-card", "failed");
+      await withRedis(redisUrl, (redis) => redis.set(failedIndexKey, "not a sorted set"));
 
-      await nextasking.dispatch("charge-card", { cardId: "card-1" });
+      const { runId } = await nextasking.dispatch("charge-card", { cardId: "card-1" });
+      expectInvariantViolation("stored keys", `${failedIndexKey} is a string, not a zset`);
+      expectInvariantViolation(
+        "stored keys",
+        `run "${storedRunIdOf("charge-card", runId)}" is failed but missing from ${failedIndexKey}`,
+      );
       await waitForLogMessage(lines, "worker error");
       await nextasking.dispatch("ship-order", { orderId: "order-1" });
       await vi.waitFor(() => expect(completedOrderIds).toEqual(["order-1"]), { timeout: 10_000 });

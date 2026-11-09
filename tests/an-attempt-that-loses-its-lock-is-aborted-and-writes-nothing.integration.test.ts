@@ -3,7 +3,9 @@ import { expect, vi } from "vitest";
 import { fixtureRecordsOf } from "./fixture-records.js";
 import { integrationTest } from "./integration-test.js";
 import { waitForLogMessage } from "./recording-logger.js";
+import { serverInstantInMillisecondsOf } from "./server-instant.js";
 import { storedRun } from "./stored-run.js";
+import { withRedis } from "./with-redis.js";
 import { startWorkerProcess } from "./worker-process.js";
 import { createWorkerProcessNextasking } from "./worker-process-nextasking.js";
 
@@ -39,6 +41,16 @@ integrationTest(
       });
       expect(run).toMatchObject({ errors: [] });
       expect(run).not.toHaveProperty("reason");
+
+      await workerProcess.stop();
+      await vi.waitFor(
+        async () => {
+          const lockedUntil = (await storedRun(redisUrl, keyPrefix, "record-abort-after-blocking", runId))?.lockedUntil;
+          const serverInstant = await withRedis(redisUrl, (redis) => serverInstantInMillisecondsOf(redis));
+          expect(Number(lockedUntil)).toBeLessThan(serverInstant);
+        },
+        { timeout: 5_000, interval: 200 },
+      );
     } finally {
       await workerProcess.stop();
       await nextasking.close();

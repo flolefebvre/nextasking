@@ -5,12 +5,7 @@ import { engineKeysOf, storedRunIdOf } from "../src/engine/engine-keys.js";
 import type { EngineKeys } from "../src/engine/engine-keys.js";
 import { integrationTest } from "./integration-test.js";
 import { serverInstantInMillisecondsOf } from "./server-instant.js";
-import {
-  runLeftExecutingSentenceOf,
-  runsLeftExecutingIn,
-  storedKeysSnapshotOf,
-  storedKeyViolationsOf,
-} from "./stored-key-violations.js";
+import { runsLeftExecutingIn, storedKeysSnapshotOf, storedKeyViolationsOf } from "./stored-key-violations.js";
 import { withRedis } from "./with-redis.js";
 
 const PENDING_RUN = storedRunIdOf("send-email", "pending-run");
@@ -193,17 +188,23 @@ const CORRUPTIONS: {
 ];
 
 for (const { name, corrupt, expectedViolationsOf } of CORRUPTIONS) {
-  integrationTest(`the invariant checker reports ${name}`, async ({ redisUrl, keyPrefix }) => {
-    await withRedis(redisUrl, async (redis) => {
-      const keys = engineKeysOf(keyPrefix);
-      await writeConsistentRuns(redis, keys);
-      await corrupt(redis, keys);
+  integrationTest(
+    `the invariant checker reports ${name}`,
+    async ({ redisUrl, keyPrefix, expectInvariantViolation }) => {
+      await withRedis(redisUrl, async (redis) => {
+        const keys = engineKeysOf(keyPrefix);
+        for (const expectedViolation of expectedViolationsOf(keys)) {
+          expectInvariantViolation("stored keys", expectedViolation);
+        }
+        await writeConsistentRuns(redis, keys);
+        await corrupt(redis, keys);
 
-      const violations = await storedKeyViolationsOf(redis, keyPrefix);
+        const violations = await storedKeyViolationsOf(redis, keyPrefix);
 
-      expect([...violations].sort()).toEqual([...expectedViolationsOf(keys)].sort());
-    });
-  });
+        expect([...violations].sort()).toEqual([...expectedViolationsOf(keys)].sort());
+      });
+    },
+  );
 }
 
 integrationTest(
@@ -220,7 +221,9 @@ integrationTest(
       await writeConsistentRuns(redis, keys);
       const runsLeftExecutingOnceLapsed = runsLeftExecutingIn(await storedKeysSnapshotOf(redis, keyPrefix), keyPrefix);
 
-      expect(runsLeftExecuting).toEqual([runLeftExecutingSentenceOf(EXECUTING_RUN)]);
+      expect(runsLeftExecuting).toEqual([
+        'run "rebuild-index:executing-run" is still executing under a lock that has not lapsed',
+      ]);
       expect(runsLeftExecutingOnceLapsed).toEqual([]);
     });
   },

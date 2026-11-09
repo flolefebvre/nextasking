@@ -17,4 +17,22 @@ export default defineConfig([
       "no-comments/disallowComments": ["error", { allow: ["eslint", "global", "@ts-", "prettier-ignore"] }],
     },
   },
+  {
+    files: ["**/*.integration.test.ts", "**/*.e2e.test.ts"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          paths: [
+            {
+              name: "vitest",
+              importNames: ["test", "it"],
+              message:
+                "Write an integration test with integrationTest (tests/integration-test.ts) and an e2e test with e2eTest (tests/e2e/e2e-test.ts): they check the invariants after every test.",
+            },
+          ],
+        },
+      ],
+    },
+  },
 ]);

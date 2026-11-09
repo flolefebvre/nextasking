@@ -103,12 +103,13 @@ engineTest("countRuns counts both runs sharing a run id, one under each task", a
 
 integrationTest(
   "listRuns throws naming the index and the member when a run index holds a member that is not a stored run id",
-  async ({ redisUrl, keyPrefix }) => {
+  async ({ redisUrl, keyPrefix, expectInvariantViolation }) => {
     await withRedis(redisUrl, async (redis) => {
       const keys = engineKeysOf(keyPrefix);
       const engine = createEngine(redis, keyPrefix);
       await endRuns(engine, "send-receipt", ["order-1"], "complete");
       const indexKey = keys.runIndex("send-receipt", "completed");
+      expectInvariantViolation("stored keys", `run "order-2" sits in ${indexKey} but has no record with a known state`);
       await redis.zadd(indexKey, 0, "order-2");
 
       const listing = readerOf({ redis, keyPrefix }).listRuns({ state: "completed" });

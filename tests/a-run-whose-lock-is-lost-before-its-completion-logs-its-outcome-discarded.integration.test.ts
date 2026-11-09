@@ -6,11 +6,12 @@ import { createNextasking, defineTask } from "../src/index.js";
 import { closeNextasking } from "../src/registry.js";
 import { integrationTest } from "./integration-test.js";
 import { createRecordingLogger, waitForLogMessage } from "./recording-logger.js";
+import { runLeftExecutingSentenceOf } from "./stored-key-violations.js";
 import { withRedis } from "./with-redis.js";
 
 integrationTest(
   "a run whose lock is taken over when its handler returns, while its record still says executing, logs its outcome discarded and no run completed",
-  async ({ redisUrl, keyPrefix }) => {
+  async ({ redisUrl, keyPrefix, expectInvariantViolation }) => {
     await withRedis(redisUrl, async (redis) => {
       const { logger, lines } = createRecordingLogger();
       const nextasking = createNextasking({
@@ -34,6 +35,7 @@ integrationTest(
       try {
         await nextasking.startWorker();
         const { runId } = await nextasking.dispatch("archive-invoice", { invoiceId: "invoice-1" });
+        expectInvariantViolation("run left executing", runLeftExecutingSentenceOf("archive-invoice", runId));
         await waitForLogMessage(lines, "attempt outcome discarded: lock lost");
 
         expect(lines.filter((line) => line.message === "attempt outcome discarded: lock lost")).toEqual([

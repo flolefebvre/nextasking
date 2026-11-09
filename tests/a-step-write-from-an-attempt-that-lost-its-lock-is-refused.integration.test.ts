@@ -6,11 +6,12 @@ import { createNextasking, defineTask } from "../src/index.js";
 import { closeNextasking } from "../src/registry.js";
 import { integrationTest } from "./integration-test.js";
 import { savedSteps } from "./saved-steps.js";
+import { runLeftExecutingSentenceOf } from "./stored-key-violations.js";
 import { withRedis } from "./with-redis.js";
 
 integrationTest(
   "a step is refused, read or write, once the run's record holds another attempt's lock token",
-  async ({ redisUrl, keyPrefix }) => {
+  async ({ redisUrl, keyPrefix, expectInvariantViolation }) => {
     const stepErrors: unknown[] = [];
     const sendNewsletter = defineTask("send-newsletter", {
       schema: z.object({ issueId: z.string() }),
@@ -18,6 +19,7 @@ integrationTest(
       handler: async ({ step, runId }) => {
         await step.run("pick-recipients", () => ["ada@example.com"]);
         const recordKey = engineKeysOf(keyPrefix).runRecord("send-newsletter", runId);
+        expectInvariantViolation("run left executing", runLeftExecutingSentenceOf("send-newsletter", runId));
         await withRedis(redisUrl, (redis) => redis.hset(recordKey, "lockToken", "token-of-another-attempt"));
         await step
           .run("send", () => "sent")

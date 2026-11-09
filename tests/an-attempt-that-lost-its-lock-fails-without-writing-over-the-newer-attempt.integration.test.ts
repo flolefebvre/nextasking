@@ -6,13 +6,14 @@ import { createNextasking, defineTask } from "../src/index.js";
 import { closeNextasking } from "../src/registry.js";
 import { integrationTest } from "./integration-test.js";
 import { createRecordingLogger, waitForLogMessage } from "./recording-logger.js";
+import { runLeftExecutingSentenceOf } from "./stored-key-violations.js";
 import { storedRun } from "./stored-run.js";
 import { withRedis } from "./with-redis.js";
 
 integrationTest(
   "a failed attempt whose run's record holds another attempt's lock token leaves that attempt's errors and state untouched",
   { timeout: 15_000 },
-  async ({ redisUrl, keyPrefix }) => {
+  async ({ redisUrl, keyPrefix, expectInvariantViolation }) => {
     const { logger, lines } = createRecordingLogger();
     const newerAttemptError = {
       attempt: 1,
@@ -26,6 +27,7 @@ integrationTest(
       schema: z.object({ issueId: z.string() }),
       retries: 1,
       handler: async ({ runId }) => {
+        expectInvariantViolation("run left executing", runLeftExecutingSentenceOf("send-newsletter", runId));
         await withRedis(redisUrl, async (redis) => {
           await redis.hset(keys.runRecord("send-newsletter", runId), "lockToken", "token-of-the-newer-attempt");
           await redis.rpush(keys.runErrors("send-newsletter", runId), JSON.stringify(newerAttemptError));

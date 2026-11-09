@@ -7,18 +7,26 @@ import { createEngine } from "../src/engine/engine.js";
 import type { Engine, LockedRun } from "../src/engine/engine.js";
 import type { RunId } from "../src/ids.js";
 import { integrationTest } from "./integration-test.js";
-import { expectNoStoredKeyViolations } from "./stored-key-violations.js";
+import type { ExpectInvariantViolation } from "./invariant-violations.js";
 import { freshLockTokensOf } from "./lock-tokens.js";
 import { serverInstantInMillisecondsOf } from "./server-instant.js";
 import { withRedis } from "./with-redis.js";
 
 export type EngineTestContext = { engine: Engine; redis: Redis; keys: EngineKeys; keyPrefix: string };
 
-export function engineTest(name: string, body: (context: EngineTestContext) => Promise<void>): void {
-  integrationTest(name, async ({ redisUrl, keyPrefix }) => {
+export function engineTest(
+  name: string,
+  body: (context: EngineTestContext & { expectInvariantViolation: ExpectInvariantViolation }) => Promise<void>,
+): void {
+  integrationTest(name, async ({ redisUrl, keyPrefix, expectInvariantViolation }) => {
     await withRedis(redisUrl, async (redis) => {
-      await body({ engine: createEngine(redis, keyPrefix), redis, keys: engineKeysOf(keyPrefix), keyPrefix });
-      await expectNoStoredKeyViolations(redis, keyPrefix);
+      await body({
+        engine: createEngine(redis, keyPrefix),
+        redis,
+        keys: engineKeysOf(keyPrefix),
+        keyPrefix,
+        expectInvariantViolation,
+      });
     });
   });
 }

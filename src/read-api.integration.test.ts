@@ -715,7 +715,7 @@ engineTest(
 
 integrationTest(
   "listRuns silently drops an index entry without its record, of a newer record version or of another state",
-  async ({ redisUrl, keyPrefix }) => {
+  async ({ redisUrl, keyPrefix, expectInvariantViolation }) => {
     await withRedis(redisUrl, async (redis) => {
       const keys = engineKeysOf(keyPrefix);
       const context: EngineTestContext = { engine: createEngine(redis, keyPrefix), redis, keys, keyPrefix };
@@ -730,18 +730,19 @@ integrationTest(
         storedRunIdOf("send-email", "pending-run"),
       ];
       await redis.zadd(completedIndexKey, latestScore, ghostStoredRunId, latestScore, pendingStoredRunId);
+      const corruptions = [
+        `run "${ghostStoredRunId}" sits in ${completedIndexKey} but has no record with a known state`,
+        `run "${pendingStoredRunId}" sits in ${completedIndexKey} though its record is pending`,
+      ];
+      for (const corruption of corruptions) {
+        expectInvariantViolation("stored keys", corruption);
+      }
 
       const pages = await walkedPagesOf(readerOf(context), { state: "completed" }, [2]);
 
       expect(pages[0]).toEqual([]);
       expect([...runIdsOfPages(pages)].sort()).toEqual(keptRunIds);
-      expect(await storedKeyViolationsOf(redis, keyPrefix)).toEqual(
-        expect.arrayContaining([
-          `run "${ghostStoredRunId}" sits in ${completedIndexKey} but has no record with a known state`,
-          `run "${pendingStoredRunId}" sits in ${completedIndexKey} though its record is pending`,
-        ]),
-      );
-      expect(await storedKeyViolationsOf(redis, keyPrefix)).toHaveLength(2);
+      expect([...(await storedKeyViolationsOf(redis, keyPrefix))].sort()).toEqual([...corruptions].sort());
     });
   },
 );

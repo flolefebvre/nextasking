@@ -4,7 +4,6 @@ import { expect, vi } from "vitest";
 import { fetchedLockedRunsOf } from "../tests/engine-test.js";
 import type { EngineTestContext } from "../tests/engine-test.js";
 import { integrationTest } from "../tests/integration-test.js";
-import { expectNoStoredKeyViolations } from "../tests/stored-key-violations.js";
 import { serverInstantInMillisecondsOf } from "../tests/server-instant.js";
 import { withRedis } from "../tests/with-redis.js";
 import { engineKeysOf, hashTaggedPrefixOf } from "./engine/engine-keys.js";
@@ -23,7 +22,6 @@ function controlTest(name: string, body: (context: ControlTestContext) => Promis
     await withRedis(redisUrl, async (redis) => {
       await using control = createNextaskingControl({ connection: { url: redisUrl }, prefix: keyPrefix });
       await body({ engine: createEngine(redis, keyPrefix), redis, keys: engineKeysOf(keyPrefix), keyPrefix, control });
-      await expectNoStoredKeyViolations(redis, keyPrefix);
     });
   });
 }

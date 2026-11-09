@@ -2,6 +2,7 @@ import { expect } from "vitest";
 
 import { runFailed } from "../src/built-in-events.js";
 import type { DurationInMilliseconds, EpochMilliseconds } from "../src/durations.js";
+import type { RunIdentity } from "../src/engine/engine-keys.js";
 import { MOST_RUNS_PRUNED_PER_PRUNE } from "../src/engine/engine.js";
 import type {
   Engine,
@@ -48,11 +49,15 @@ export type ContractEngine = Pick<
 
 export type EngineContractHarness = {
   engine: ContractEngine;
-  expireLock: (runId: RunId) => Promise<void>;
-  backdateEndedRun: (runId: RunId, durationInMilliseconds: DurationInMilliseconds) => Promise<void>;
-  backdateFirstFoundUnknownAt: (runId: RunId, durationInMilliseconds: DurationInMilliseconds) => Promise<void>;
+  expireLock: (task: string, runId: RunId) => Promise<void>;
+  backdateEndedRun: (task: string, runId: RunId, durationInMilliseconds: DurationInMilliseconds) => Promise<void>;
+  backdateFirstFoundUnknownAt: (
+    task: string,
+    runId: RunId,
+    durationInMilliseconds: DurationInMilliseconds,
+  ) => Promise<void>;
   pastInstant: () => Promise<EpochMilliseconds>;
-  stateOf: (runId: RunId) => Promise<RunState | undefined>;
+  stateOf: (task: string, runId: RunId) => Promise<RunState | undefined>;
   isWakeUpMarkerArmed: () => Promise<boolean>;
   disarmWakeUpMarker: () => Promise<void>;
 };
@@ -71,6 +76,14 @@ function sendEmailRunsOf(runIds: readonly RunId[], extraFields: Partial<RunToCre
     retries: 3,
     ...extraFields,
   }));
+}
+
+function sendEmailRunIdentitiesOf(runIds: readonly RunId[]): RunIdentity[] {
+  return runIds.map((runId) => ({ task: "send-email", runId }));
+}
+
+function orderRunsOf(task: string, runIds: readonly RunId[], extraFields: Partial<RunToCreate> = {}): RunToCreate[] {
+  return runIds.map((runId) => ({ runId, task, payload: `{"task":"${task}"}`, retries: 3, ...extraFields }));
 }
 
 async function fetchedOf(
@@ -118,10 +131,14 @@ function failureNoticeOf(runId: RunId, listenerRunIds: readonly RunId[]): Failur
   };
 }
 
-async function statesOf(harness: EngineContractHarness, runIds: readonly RunId[]): Promise<(RunState | undefined)[]> {
+async function statesOf(
+  harness: EngineContractHarness,
+  task: string,
+  runIds: readonly RunId[],
+): Promise<(RunState | undefined)[]> {
   const states: (RunState | undefined)[] = [];
   for (const runId of runIds) {
-    states.push(await harness.stateOf(runId));
+    states.push(await harness.stateOf(task, runId));
   }
   return states;
 }
@@ -144,6 +161,7 @@ function firingOf({ task, nextFiringAt }: ScheduleToSync): FireRequest {
 
 async function suspendedOnANapOf(engine: ContractEngine, lockedRun: LockedRun): Promise<EpochMilliseconds> {
   const saveReply = await engine.saveStep({
+    task: lockedRun.task,
     runId: lockedRun.runId,
     lockToken: lockedRun.lockToken,
     stepId: "nap",
@@ -156,11 +174,12 @@ async function suspendedOnANapOf(engine: ContractEngine, lockedRun: LockedRun): 
 
 async function backdateEndedRuns(
   harness: EngineContractHarness,
+  task: string,
   runIds: readonly RunId[],
   durationInMilliseconds: DurationInMilliseconds,
 ): Promise<void> {
   for (const runId of runIds) {
-    await harness.backdateEndedRun(runId, durationInMilliseconds);
+    await harness.backdateEndedRun(task, runId, durationInMilliseconds);
   }
 }
 
@@ -178,7 +197,7 @@ export function defineEngineContractTests(contractTest: EngineContractTest): voi
         ["run-2", 1, false],
       ]);
       expect(lockedRuns[0]!.lockedUntil).toBe(lockedRuns[0]!.startedAt + LOCK_DURATION_IN_MILLISECONDS);
-      expect(await harness.stateOf("run-3")).toBe("pending");
+      expect(await harness.stateOf("send-email", "run-3")).toBe("pending");
     },
   );
 
@@ -195,7 +214,7 @@ export function defineEngineContractTests(contractTest: EngineContractTest): voi
     const resentReply = await engine.fetch(request);
 
     expect(resentReply).toEqual(firstReply);
-    expect(await harness.stateOf("run-2")).toBe("pending");
+    expect(await harness.stateOf("send-email", "run-2")).toBe("pending");
   });
 
   contractTest(
@@ -210,7 +229,7 @@ export function defineEngineContractTests(contractTest: EngineContractTest): voi
 
       expect(fetched.lockedRuns.map(({ runId }) => runId)).toEqual(["run-1"]);
       expect(fetched.parkedRuns).toEqual([{ runId: "run-2", task: "send-email", attempt: 1 }]);
-      expect(await harness.stateOf("run-2")).toBe("pending");
+      expect(await harness.stateOf("send-email", "run-2")).toBe("pending");
     },
   );
 
@@ -227,7 +246,7 @@ export function defineEngineContractTests(contractTest: EngineContractTest): voi
     expect(reply.kind === "completed" ? reply.finishedAt : 0).toBeGreaterThan(instantBefore);
     expect(resentReply).toEqual({ kind: "already" });
     expect(staleReply).toEqual({ kind: "stale" });
-    expect(await harness.stateOf("run-1")).toBe("completed");
+    expect(await harness.stateOf("send-email", "run-1")).toBe("completed");
   });
 
   contractTest("a retry backs off, then comes back pending at the next attempt once due", async (harness) => {
@@ -238,7 +257,7 @@ export function defineEngineContractTests(contractTest: EngineContractTest): voi
       ...lockedRun,
       outcome: { kind: "retry", error: ATTEMPT_ERROR, backoffInMilliseconds: 0 },
     });
-    const stateAfterSettle = await harness.stateOf("run-1");
+    const stateAfterSettle = await harness.stateOf("send-email", "run-1");
     const promoteReply = await engine.promote();
     const [retriedRun] = await lockedRunsOf(engine, 1);
 
@@ -280,7 +299,7 @@ export function defineEngineContractTests(contractTest: EngineContractTest): voi
 
       expect(reply).toEqual({ kind: "failed", reason: "retries exhausted", finishedAt: expect.any(Number) });
       const finishedAt = reply.kind === "failed" ? reply.finishedAt : 0;
-      expect(await harness.stateOf("run-1")).toBe("failed");
+      expect(await harness.stateOf("send-email", "run-1")).toBe("failed");
       expect(noticeRun).toMatchObject({
         runId: "listener-run-1",
         task: "alert-on-call",
@@ -347,13 +366,14 @@ export function defineEngineContractTests(contractTest: EngineContractTest): voi
           },
         });
       await handBack(await onlyLockedRunOf(engine, "run-1"));
-      await harness.backdateFirstFoundUnknownAt("run-1", 30 * MINUTE_IN_MILLISECONDS);
+      await harness.backdateFirstFoundUnknownAt("send-email", "run-1", 30 * MINUTE_IN_MILLISECONDS);
       const [lockedRun] = await lockedRunsOf(engine, 1);
 
       const reply = await handBack(lockedRun!);
 
       expect(reply).toEqual({ kind: "failed", reason: "unknown task", finishedAt: expect.any(Number) });
-      expect(await statesOf(harness, ["run-1", "listener-run-1"])).toEqual(["failed", "pending"]);
+      expect(await statesOf(harness, "send-email", ["run-1"])).toEqual(["failed"]);
+      expect(await statesOf(harness, "alert-on-call", ["listener-run-1"])).toEqual(["pending"]);
     },
   );
 
@@ -364,7 +384,7 @@ export function defineEngineContractTests(contractTest: EngineContractTest): voi
     await engine.settle({ ...settledRun!, outcome: { kind: "complete" } });
 
     const renewals = await engine.renew({
-      heldLocks: [heldRun!, settledRun!].map(({ runId, lockToken }) => ({ runId, lockToken })),
+      heldLocks: [heldRun!, settledRun!].map(({ task, runId, lockToken }) => ({ task, runId, lockToken })),
       lockDurationInMilliseconds: LOCK_DURATION_IN_MILLISECONDS,
     });
 
@@ -379,12 +399,12 @@ export function defineEngineContractTests(contractTest: EngineContractTest): voi
       const stallsByPromote: unknown[] = [];
       let lockedRun = (await lockedRunsOf(engine, 1))[0]!;
       for (const expectedStalls of [1, 2]) {
-        await harness.expireLock("run-1");
+        await harness.expireLock("send-email", "run-1");
         stallsByPromote.push(await engine.promote());
         lockedRun = (await lockedRunsOf(engine, 1))[0]!;
         expect(lockedRun.runId, `the fetch after stall ${String(expectedStalls)}`).toBe("run-1");
       }
-      await harness.expireLock("run-1");
+      await harness.expireLock("send-email", "run-1");
 
       const thirdPromoteReply = await engine.promote();
 
@@ -412,7 +432,7 @@ export function defineEngineContractTests(contractTest: EngineContractTest): voi
           },
         ],
       });
-      expect(await harness.stateOf("run-1")).toBe("executing");
+      expect(await harness.stateOf("send-email", "run-1")).toBe("executing");
     },
   );
 
@@ -423,12 +443,12 @@ export function defineEngineContractTests(contractTest: EngineContractTest): voi
     const stalledRuns: unknown[] = [];
     for (let stallCount = 0; stallCount < 2; stallCount += 1) {
       await lockedRunsOf(engine, 1);
-      await harness.expireLock("run-1");
+      await harness.expireLock("send-email", "run-1");
       const reply = await engine.promote();
       stalledRuns.push(...(reply.kind === "promoted" ? reply.stalledRuns : []));
     }
     await lockedRunsOf(engine, 1);
-    await harness.expireLock("run-1");
+    await harness.expireLock("send-email", "run-1");
 
     const thirdPromoteReply = await engine.promote();
 
@@ -443,14 +463,15 @@ export function defineEngineContractTests(contractTest: EngineContractTest): voi
       await engine.enqueue({ runs: sendEmailRunsOf(["run-1"]) });
       for (let stallCount = 0; stallCount < 2; stallCount += 1) {
         await lockedRunsOf(engine, 1);
-        await harness.expireLock("run-1");
+        await harness.expireLock("send-email", "run-1");
         await engine.promote();
       }
       await lockedRunsOf(engine, 1);
-      await harness.expireLock("run-1");
+      await harness.expireLock("send-email", "run-1");
       const promoteReply = await engine.promote();
       const [thirdStall] = promoteReply.kind === "promoted" ? promoteReply.thirdStalls : [];
       const failStalled = {
+        task: thirdStall!.task,
         runId: thirdStall!.runId,
         lockToken: thirdStall!.expiredLockToken,
         outcome: {
@@ -466,7 +487,8 @@ export function defineEngineContractTests(contractTest: EngineContractTest): voi
 
       expect(firstReply).toEqual({ kind: "failed", reason: "stalled", finishedAt: expect.any(Number) });
       expect(secondReply).toEqual({ kind: "already" });
-      expect(await statesOf(harness, ["run-1", "listener-run-1"])).toEqual(["failed", "pending"]);
+      expect(await statesOf(harness, "send-email", ["run-1"])).toEqual(["failed"]);
+      expect(await statesOf(harness, "alert-on-call", ["listener-run-1"])).toEqual(["pending"]);
       expect(await engine.promote()).toEqual({
         kind: "promoted",
         promotedRunCount: 0,
@@ -485,10 +507,10 @@ export function defineEngineContractTests(contractTest: EngineContractTest): voi
         const { engine } = harness;
         await engine.enqueue({ runs: sendEmailRunsOf(["held-run", "stalled-run"]) });
         const [heldRun] = await lockedRunsOf(engine, 2);
-        await harness.expireLock("stalled-run");
+        await harness.expireLock("send-email", "stalled-run");
 
         const reply = await engine.tick({
-          heldLocks: [{ runId: heldRun!.runId, lockToken: heldRun!.lockToken }],
+          heldLocks: [{ task: heldRun!.task, runId: heldRun!.runId, lockToken: heldRun!.lockToken }],
           lockDurationInMilliseconds: LOCK_DURATION_IN_MILLISECONDS,
           isPromoteIncluded,
         });
@@ -506,7 +528,7 @@ export function defineEngineContractTests(contractTest: EngineContractTest): voi
           prune: undefined,
           taskNames: repliedOf(["send-email"]),
         });
-        expect(await harness.stateOf("stalled-run")).toBe(isPromoteIncluded ? "pending" : "executing");
+        expect(await harness.stateOf("send-email", "stalled-run")).toBe(isPromoteIncluded ? "pending" : "executing");
       },
     );
   }
@@ -516,7 +538,7 @@ export function defineEngineContractTests(contractTest: EngineContractTest): voi
     async (harness) => {
       const { engine } = harness;
       const lockedRun = await onlyLockedRunOf(engine, "run-1");
-      const fence = { runId: lockedRun.runId, lockToken: lockedRun.lockToken, stepId: "charge" };
+      const fence = { task: lockedRun.task, runId: lockedRun.runId, lockToken: lockedRun.lockToken, stepId: "charge" };
 
       const saveReply = await engine.saveStep({ ...fence, step: { kind: "value", value: '["paid"]' } });
       const readReply = await engine.readStep(fence);
@@ -540,8 +562,16 @@ export function defineEngineContractTests(contractTest: EngineContractTest): voi
       const firstEmitReply = await engine.enqueue({ runs: sendEmailRunsOf(["listener-run"]), eventDedup });
       const repeatedEmitReply = await engine.enqueue({ runs: sendEmailRunsOf(["listener-run"]), eventDedup });
 
-      expect(repeatedRunReply).toEqual({ kind: "enqueued", createdRunIds: ["run-2"], skippedRunIds: ["run-1"] });
-      expect(firstEmitReply).toEqual({ kind: "enqueued", createdRunIds: ["listener-run"], skippedRunIds: [] });
+      expect(repeatedRunReply).toEqual({
+        kind: "enqueued",
+        createdRuns: sendEmailRunIdentitiesOf(["run-2"]),
+        skippedRuns: sendEmailRunIdentitiesOf(["run-1"]),
+      });
+      expect(firstEmitReply).toEqual({
+        kind: "enqueued",
+        createdRuns: sendEmailRunIdentitiesOf(["listener-run"]),
+        skippedRuns: [],
+      });
       expect(repeatedEmitReply).toEqual({ kind: "duplicate" });
     },
   );
@@ -571,18 +601,26 @@ export function defineEngineContractTests(contractTest: EngineContractTest): voi
       const { engine } = harness;
       await endRuns(engine, "send-email", ["completed-run", "younger-completed-run"], "complete");
       await endRuns(engine, "send-email", ["failed-run"], "fail");
-      await backdateEndedRuns(harness, ["completed-run", "failed-run"], DAY_IN_MILLISECONDS);
-      await harness.backdateEndedRun("younger-completed-run", DAY_IN_MILLISECONDS - MINUTE_IN_MILLISECONDS);
+      await backdateEndedRuns(harness, "send-email", ["completed-run", "failed-run"], DAY_IN_MILLISECONDS);
+      await harness.backdateEndedRun(
+        "send-email",
+        "younger-completed-run",
+        DAY_IN_MILLISECONDS - MINUTE_IN_MILLISECONDS,
+      );
 
       const dayReply = await engine.prune(SEND_EMAIL_PRUNE_REQUEST);
-      const statesAfterADay = await statesOf(harness, ["completed-run", "younger-completed-run", "failed-run"]);
-      await harness.backdateEndedRun("failed-run", 13 * DAY_IN_MILLISECONDS);
+      const statesAfterADay = await statesOf(harness, "send-email", [
+        "completed-run",
+        "younger-completed-run",
+        "failed-run",
+      ]);
+      await harness.backdateEndedRun("send-email", "failed-run", 13 * DAY_IN_MILLISECONDS);
       const fortnightReply = await engine.prune(SEND_EMAIL_PRUNE_REQUEST);
 
       expect(dayReply).toEqual({ kind: "pruned", prunedRunCount: 1 });
       expect(statesAfterADay).toEqual([undefined, "completed", "failed"]);
       expect(fortnightReply).toEqual({ kind: "pruned", prunedRunCount: 1 });
-      expect(await harness.stateOf("failed-run")).toBeUndefined();
+      expect(await harness.stateOf("send-email", "failed-run")).toBeUndefined();
     },
   );
 
@@ -600,8 +638,12 @@ export function defineEngineContractTests(contractTest: EngineContractTest): voi
     });
 
     expect(reply).toEqual({ kind: "pruned", prunedRunCount: 4 });
-    expect(await statesOf(harness, completedRunIds)).toEqual([undefined, undefined, ...Array(3).fill("completed")]);
-    expect(await statesOf(harness, failedRunIds)).toEqual([undefined, undefined, "failed", "failed"]);
+    expect(await statesOf(harness, "send-email", completedRunIds)).toEqual([
+      undefined,
+      undefined,
+      ...Array(3).fill("completed"),
+    ]);
+    expect(await statesOf(harness, "send-email", failedRunIds)).toEqual([undefined, undefined, "failed", "failed"]);
   });
 
   contractTest(
@@ -615,26 +657,31 @@ export function defineEngineContractTests(contractTest: EngineContractTest): voi
       await endRuns(engine, "send-email", agedFailedRunIds, "fail");
       await endRuns(engine, "send-email", completedRunIdsOverTheCap, "complete");
       await engine.enqueue({ runs: [{ runId: "other-task-run", task: "resize-image", payload: "{}", retries: 0 }] });
-      await backdateEndedRuns(harness, [...agedCompletedRunIds, ...agedFailedRunIds], 15 * DAY_IN_MILLISECONDS);
+      await backdateEndedRuns(
+        harness,
+        "send-email",
+        [...agedCompletedRunIds, ...agedFailedRunIds],
+        15 * DAY_IN_MILLISECONDS,
+      );
       const pruneRequest = {
         ...SEND_EMAIL_PRUNE_REQUEST,
         completedRetention: { ...SEND_EMAIL_PRUNE_REQUEST.completedRetention, maxRunCount: 0 },
       };
 
       const firstReply = await engine.prune(pruneRequest);
-      const failedStatesAfterTheFirstPrune = await statesOf(harness, agedFailedRunIds);
-      const completedStatesAfterTheFirstPrune = await statesOf(harness, completedRunIdsOverTheCap);
+      const failedStatesAfterTheFirstPrune = await statesOf(harness, "send-email", agedFailedRunIds);
+      const completedStatesAfterTheFirstPrune = await statesOf(harness, "send-email", completedRunIdsOverTheCap);
       const secondReply = await engine.prune(pruneRequest);
 
       expect(firstReply).toEqual({ kind: "pruned", prunedRunCount: MOST_RUNS_PRUNED_PER_PRUNE });
-      expect(await statesOf(harness, agedCompletedRunIds)).toEqual(Array(150).fill(undefined));
+      expect(await statesOf(harness, "send-email", agedCompletedRunIds)).toEqual(Array(150).fill(undefined));
       expect(failedStatesAfterTheFirstPrune).toEqual([...Array(50).fill(undefined), ...Array(50).fill("failed")]);
       expect(completedStatesAfterTheFirstPrune).toEqual(Array(50).fill("completed"));
       expect(secondReply).toEqual({ kind: "pruned", prunedRunCount: 100 });
-      expect(await statesOf(harness, [...agedFailedRunIds, ...completedRunIdsOverTheCap])).toEqual(
+      expect(await statesOf(harness, "send-email", [...agedFailedRunIds, ...completedRunIdsOverTheCap])).toEqual(
         Array(150).fill(undefined),
       );
-      expect(await harness.stateOf("other-task-run")).toBe("pending");
+      expect(await harness.stateOf("resize-image", "other-task-run")).toBe("pending");
     },
   );
 
@@ -643,8 +690,8 @@ export function defineEngineContractTests(contractTest: EngineContractTest): voi
     async (harness) => {
       const { engine } = harness;
       await endRuns(engine, "send-email", ["run-ended-24h01-ago", "run-ended-23h59-ago"], "complete");
-      await harness.backdateEndedRun("run-ended-24h01-ago", DAY_IN_MILLISECONDS + MINUTE_IN_MILLISECONDS);
-      await harness.backdateEndedRun("run-ended-23h59-ago", DAY_IN_MILLISECONDS - MINUTE_IN_MILLISECONDS);
+      await harness.backdateEndedRun("send-email", "run-ended-24h01-ago", DAY_IN_MILLISECONDS + MINUTE_IN_MILLISECONDS);
+      await harness.backdateEndedRun("send-email", "run-ended-23h59-ago", DAY_IN_MILLISECONDS - MINUTE_IN_MILLISECONDS);
       await engine.prune({
         ...SEND_EMAIL_PRUNE_REQUEST,
         completedRetention: { ...SEND_EMAIL_PRUNE_REQUEST.completedRetention, maxRunCount: 0 },
@@ -654,8 +701,8 @@ export function defineEngineContractTests(contractTest: EngineContractTest): voi
 
       expect(reply).toEqual({
         kind: "enqueued",
-        createdRunIds: ["run-ended-24h01-ago"],
-        skippedRunIds: ["run-ended-23h59-ago"],
+        createdRuns: sendEmailRunIdentitiesOf(["run-ended-24h01-ago"]),
+        skippedRuns: sendEmailRunIdentitiesOf(["run-ended-23h59-ago"]),
       });
     },
   );
@@ -784,7 +831,7 @@ export function defineEngineContractTests(contractTest: EngineContractTest): voi
       });
 
       const reply = await engine.makeDue();
-      const states = await statesOf(harness, ["sleeping-run", "delayed-run"]);
+      const states = await statesOf(harness, "send-email", ["sleeping-run", "delayed-run"]);
       const wokenRun = (await lockedRunsOf(engine, 2)).find(({ runId }) => runId === "sleeping-run");
 
       expect(reply).toEqual({
@@ -800,6 +847,20 @@ export function defineEngineContractTests(contractTest: EngineContractTest): voi
         kind: "read",
         savedValue: String(wokenRun!.sleepsWokenAt),
       });
+    },
+  );
+
+  contractTest(
+    "a makeDue hands back runs due at the same instant in the byte order of their stored ids, as Redis orders them",
+    async (harness) => {
+      const { engine } = harness;
+      await engine.enqueue({
+        runs: sendEmailRunsOf(["\u{1F680}", "～"], { delayInMilliseconds: HOUR_IN_MILLISECONDS }),
+      });
+
+      const reply = await engine.makeDue();
+
+      expect(reply).toEqual({ kind: "madeDue", madeDueRuns: sendEmailRunIdentitiesOf(["～", "\u{1F680}"]) });
     },
   );
 
@@ -827,7 +888,8 @@ export function defineEngineContractTests(contractTest: EngineContractTest): voi
       const reply = await engine.makeDue({ task: "build-report" });
 
       expect(reply).toEqual({ kind: "madeDue", madeDueRuns: [{ task: "build-report", runId: "report-run" }] });
-      expect(await statesOf(harness, ["report-run", "email-run-0"])).toEqual(["pending", "delayed"]);
+      expect(await statesOf(harness, "build-report", ["report-run"])).toEqual(["pending"]);
+      expect(await statesOf(harness, "send-email", ["email-run-0"])).toEqual(["delayed"]);
     },
   );
 
@@ -877,7 +939,7 @@ export function defineEngineContractTests(contractTest: EngineContractTest): voi
         await suspendedOnANapOf(engine, await onlyLockedRunOf(engine, "run-1"));
         await engine.makeDue();
         await lockedRunsOf(engine, 1);
-        await harness.expireLock("run-1");
+        await harness.expireLock("send-email", "run-1");
         await engine.promote();
       },
       expectedPickup: { isResume: false, attempt: 1 },
@@ -921,7 +983,7 @@ export function defineEngineContractTests(contractTest: EngineContractTest): voi
   contractTest("a tick carrying a prune prunes its task and returns the prune's reply", async (harness) => {
     const { engine } = harness;
     await endRuns(engine, "send-email", ["aged-run"], "complete");
-    await harness.backdateEndedRun("aged-run", DAY_IN_MILLISECONDS);
+    await harness.backdateEndedRun("send-email", "aged-run", DAY_IN_MILLISECONDS);
 
     const reply = await engine.tick({
       heldLocks: [],
@@ -935,6 +997,156 @@ export function defineEngineContractTests(contractTest: EngineContractTest): voi
       prune: repliedOf({ kind: "pruned", prunedRunCount: 1 }),
       taskNames: repliedOf(["send-email"]),
     });
-    expect(await harness.stateOf("aged-run")).toBeUndefined();
+    expect(await harness.stateOf("send-email", "aged-run")).toBeUndefined();
   });
+
+  const SHARED_RUN_IDENTITIES: RunIdentity[] = [
+    { task: "send-receipt", runId: "order-1" },
+    { task: "update-stock", runId: "order-1" },
+  ];
+
+  const sharedRunsOf = (extraFields: Partial<RunToCreate> = {}): RunToCreate[] =>
+    SHARED_RUN_IDENTITIES.flatMap(({ task, runId }) => orderRunsOf(task, [runId], extraFields));
+
+  const lockedSharedRunsOf = async (engine: ContractEngine): Promise<[LockedRun, LockedRun]> => {
+    await engine.enqueue({ runs: sharedRunsOf() });
+    const lockedRuns = await lockedRunsOf(engine, 2);
+    const lockedRunOfTask = (task: string) => lockedRuns.find((lockedRun) => lockedRun.task === task)!;
+    return [lockedRunOfTask("send-receipt"), lockedRunOfTask("update-stock")];
+  };
+
+  contractTest(
+    "the same run id on two tasks is two runs, and a repeat on either task is skipped while its run exists",
+    async (harness) => {
+      const { engine } = harness;
+
+      const firstReply = await engine.enqueue({ runs: sharedRunsOf() });
+      const repeatedReply = await engine.enqueue({ runs: sharedRunsOf() });
+
+      expect(firstReply).toEqual({ kind: "enqueued", createdRuns: SHARED_RUN_IDENTITIES, skippedRuns: [] });
+      expect(repeatedReply).toEqual({ kind: "enqueued", createdRuns: [], skippedRuns: SHARED_RUN_IDENTITIES });
+      expect(await harness.stateOf("send-receipt", "order-1")).toBe("pending");
+      expect(await harness.stateOf("update-stock", "order-1")).toBe("pending");
+    },
+  );
+
+  contractTest(
+    "two runs sharing an id on two tasks are each fetched, renewed, given a step and settled on their own",
+    async (harness) => {
+      const { engine } = harness;
+      const [receiptRun, stockRun] = await lockedSharedRunsOf(engine);
+      const receiptFence = { ...receiptRun, stepId: "charge" };
+      const stockFence = { ...stockRun, stepId: "charge" };
+
+      const renewals = await engine.renew({
+        heldLocks: [receiptRun, stockRun],
+        lockDurationInMilliseconds: LOCK_DURATION_IN_MILLISECONDS,
+      });
+      await engine.saveStep({ ...receiptFence, step: { kind: "value", value: '["receipt"]' } });
+      await engine.saveStep({ ...stockFence, step: { kind: "value", value: '["stock"]' } });
+      const readReplies = [await engine.readStep(receiptFence), await engine.readStep(stockFence)];
+      const crossedReadReply = await engine.readStep({ ...receiptFence, lockToken: stockRun.lockToken });
+      const receiptSettleReply = await engine.settle({ ...receiptRun, outcome: { kind: "complete" } });
+      const stockStateAfterTheReceipt = await harness.stateOf("update-stock", "order-1");
+      const stockReadReply = await engine.readStep(stockFence);
+      const stockSettleReply = await engine.settle({
+        ...stockRun,
+        outcome: { kind: "fail", reason: "non-retriable", error: ATTEMPT_ERROR, failureNotice: undefined },
+      });
+
+      expect([receiptRun, stockRun].map(({ task, runId }) => ({ task, runId }))).toEqual(SHARED_RUN_IDENTITIES);
+      expect(renewals).toEqual([
+        { kind: "renewed", lockedUntil: expect.any(Number) },
+        { kind: "renewed", lockedUntil: expect.any(Number) },
+      ]);
+      expect(readReplies).toEqual([
+        { kind: "read", savedValue: '["receipt"]' },
+        { kind: "read", savedValue: '["stock"]' },
+      ]);
+      expect(crossedReadReply).toEqual({ kind: "stale" });
+      expect(receiptSettleReply).toMatchObject({ kind: "completed" });
+      expect(stockStateAfterTheReceipt).toBe("executing");
+      expect(stockReadReply).toEqual({ kind: "read", savedValue: '["stock"]' });
+      expect(stockSettleReply).toMatchObject({ kind: "failed", reason: "non-retriable" });
+      expect(await harness.stateOf("send-receipt", "order-1")).toBe("completed");
+    },
+  );
+
+  contractTest(
+    "a promote reports the stalls of two tasks sharing a run id, each under its task and the consumer's run id",
+    async (harness) => {
+      const { engine } = harness;
+      await lockedSharedRunsOf(engine);
+      for (const { task, runId } of SHARED_RUN_IDENTITIES) {
+        await harness.expireLock(task, runId);
+      }
+
+      const reply = await engine.promote();
+
+      expect(reply.kind === "promoted" ? reply.stalledRuns : []).toEqual(
+        expect.arrayContaining(SHARED_RUN_IDENTITIES.map((identity) => ({ ...identity, attempt: 1, stalls: 1 }))),
+      );
+      expect(reply).toMatchObject({ stalledRuns: [{}, {}] });
+    },
+  );
+
+  contractTest(
+    "a shared run id is skipped on the task whose dedup entry is live and starts a run on the task whose entry expired",
+    async (harness) => {
+      const { engine } = harness;
+      for (const { task, runId } of SHARED_RUN_IDENTITIES) {
+        await endRuns(engine, task, [runId], "complete");
+      }
+      await harness.backdateEndedRun("send-receipt", "order-1", DAY_IN_MILLISECONDS + MINUTE_IN_MILLISECONDS);
+      await harness.backdateEndedRun("update-stock", "order-1", DAY_IN_MILLISECONDS - MINUTE_IN_MILLISECONDS);
+      for (const { task } of SHARED_RUN_IDENTITIES) {
+        await engine.prune({
+          ...SEND_EMAIL_PRUNE_REQUEST,
+          task,
+          completedRetention: { ...SEND_EMAIL_PRUNE_REQUEST.completedRetention, maxRunCount: 0 },
+        });
+      }
+
+      const reply = await engine.enqueue({ runs: sharedRunsOf() });
+
+      expect(reply).toEqual({
+        kind: "enqueued",
+        createdRuns: [SHARED_RUN_IDENTITIES[0]],
+        skippedRuns: [SHARED_RUN_IDENTITIES[1]],
+      });
+    },
+  );
+
+  contractTest(
+    "a send fenced by a parent of one task hears stale under the lock token of another task's run of the same id",
+    async (harness) => {
+      const { engine } = harness;
+      const [receiptRun, stockRun] = await lockedSharedRunsOf(engine);
+      const childRuns = orderRunsOf("notify-customer", ["child-run"]);
+      const parentFence = {
+        parentTask: receiptRun.task,
+        parentRunId: receiptRun.runId,
+        stepId: "send-1",
+        stepValue: '"child-run"',
+      };
+
+      const crossedReply = await engine.enqueue({
+        runs: childRuns,
+        parentFence: { ...parentFence, lockToken: stockRun.lockToken },
+      });
+      const childStateAfterTheCrossedSend = await harness.stateOf("notify-customer", "child-run");
+      const fencedReply = await engine.enqueue({
+        runs: childRuns,
+        parentFence: { ...parentFence, lockToken: receiptRun.lockToken },
+      });
+
+      expect(crossedReply).toEqual({ kind: "stale" });
+      expect(childStateAfterTheCrossedSend).toBeUndefined();
+      expect(fencedReply).toEqual({
+        kind: "enqueued",
+        createdRuns: [{ task: "notify-customer", runId: "child-run" }],
+        skippedRuns: [],
+      });
+    },
+  );
 }

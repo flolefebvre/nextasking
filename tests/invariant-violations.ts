@@ -1,7 +1,7 @@
 import type { Redis } from "ioredis";
 import { expect } from "vitest";
 
-import { engineKeysOf, hashTaggedPrefixOf } from "../src/engine/engine-keys.js";
+import { engineKeysOf, hashTaggedPrefixOf, runIdentityOf } from "../src/engine/engine-keys.js";
 import type { EngineKeys } from "../src/engine/engine-keys.js";
 import { isRunState } from "../src/run-states.js";
 import type { RunState } from "../src/run-states.js";
@@ -11,8 +11,8 @@ type RunRecord = Record<string, string>;
 type IndexMembership = { indexKey: string; score: string };
 
 type StoredKeysByKind = {
-  recordKeysByRunId: Map<string, string>;
-  sideKeys: { runId: string; side: string }[];
+  recordKeysByStoredRunId: Map<string, string>;
+  sideKeys: { storedRunId: string; side: string }[];
   sortedIndexKeys: string[];
   slotSetKeys: string[];
   scheduleKeys: string[];
@@ -43,7 +43,7 @@ async function storedKeysOf(redis: Redis, keyPrefix: string): Promise<string[]> 
 function storedKeysByKindOf(storedKeys: readonly string[], keyPrefix: string): StoredKeysByKind {
   const prefixLength = hashTaggedPrefixOf(keyPrefix).length + 1;
   const storedKeysByKind: StoredKeysByKind = {
-    recordKeysByRunId: new Map(),
+    recordKeysByStoredRunId: new Map(),
     sideKeys: [],
     sortedIndexKeys: [],
     slotSetKeys: [],
@@ -52,9 +52,9 @@ function storedKeysByKindOf(storedKeys: readonly string[], keyPrefix: string): S
   for (const storedKey of storedKeys) {
     const [kind, ...segments] = storedKey.slice(prefixLength).split(":");
     if (kind === "run" && segments.length === 1) {
-      storedKeysByKind.recordKeysByRunId.set(decodeURIComponent(segments[0]!), storedKey);
+      storedKeysByKind.recordKeysByStoredRunId.set(decodeURIComponent(segments[0]!), storedKey);
     } else if (kind === "run" && segments.length === 2) {
-      storedKeysByKind.sideKeys.push({ runId: decodeURIComponent(segments[0]!), side: segments[1]! });
+      storedKeysByKind.sideKeys.push({ storedRunId: decodeURIComponent(segments[0]!), side: segments[1]! });
     } else if (kind === "runs" || kind === "waiting") {
       storedKeysByKind.sortedIndexKeys.push(storedKey);
     } else if (kind === "pending" || kind === "due" || kind === "locks") {
@@ -91,84 +91,96 @@ function haveEqualScores(storedScore: string, expectedScore: string | undefined)
 
 export async function invariantViolationsOf(redis: Redis, keyPrefix: string): Promise<string[]> {
   const keys = engineKeysOf(keyPrefix);
-  const { recordKeysByRunId, sideKeys, sortedIndexKeys, slotSetKeys, scheduleKeys } = storedKeysByKindOf(
+  const { recordKeysByStoredRunId, sideKeys, sortedIndexKeys, slotSetKeys, scheduleKeys } = storedKeysByKindOf(
     await storedKeysOf(redis, keyPrefix),
     keyPrefix,
   );
-  const recordsByRunId = new Map<string, RunRecord>();
-  for (const [runId, recordKey] of recordKeysByRunId) {
-    recordsByRunId.set(runId, await redis.hgetall(recordKey));
+  const recordsByStoredRunId = new Map<string, RunRecord>();
+  for (const [storedRunId, recordKey] of recordKeysByStoredRunId) {
+    recordsByStoredRunId.set(storedRunId, await redis.hgetall(recordKey));
   }
-  const membershipsByRunId = new Map<string, IndexMembership[]>();
+  const membershipsByStoredRunId = new Map<string, IndexMembership[]>();
   for (const indexKey of sortedIndexKeys) {
     const membersWithScores = await redis.zrange(indexKey, 0, -1, "WITHSCORES");
     for (let position = 0; position < membersWithScores.length; position += 2) {
-      const runId = membersWithScores[position]!;
-      const memberships = membershipsByRunId.get(runId) ?? [];
+      const storedRunId = membersWithScores[position]!;
+      const memberships = membershipsByStoredRunId.get(storedRunId) ?? [];
       memberships.push({ indexKey, score: membersWithScores[position + 1]! });
-      membershipsByRunId.set(runId, memberships);
+      membershipsByStoredRunId.set(storedRunId, memberships);
     }
   }
   const taskNames = new Set(await redis.smembers(keys.tasks));
   const violations: string[] = [];
 
-  for (const [runId, memberships] of membershipsByRunId) {
-    const record = recordsByRunId.get(runId);
+  for (const [storedRunId, memberships] of membershipsByStoredRunId) {
+    const record = recordsByStoredRunId.get(storedRunId);
     if (record === undefined || !isRunState(record["state"])) {
       violations.push(
-        ...memberships.map(({ indexKey }) => `run "${runId}" sits in ${indexKey} but has no record with a known state`),
+        ...memberships.map(
+          ({ indexKey }) => `run "${storedRunId}" sits in ${indexKey} but has no record with a known state`,
+        ),
       );
       continue;
     }
     const expectedIndexScores = expectedIndexScoresOf(keys, record);
     for (const { indexKey, score } of memberships) {
       if (!expectedIndexScores.has(indexKey)) {
-        violations.push(`run "${runId}" sits in ${indexKey} though its record is ${record["state"]}`);
+        violations.push(`run "${storedRunId}" sits in ${indexKey} though its record is ${record["state"]}`);
       } else if (!haveEqualScores(score, expectedIndexScores.get(indexKey))) {
         violations.push(
-          `run "${runId}" has score ${score} in ${indexKey} but ${String(expectedIndexScores.get(indexKey))} in its record`,
+          `run "${storedRunId}" has score ${score} in ${indexKey} but ${String(expectedIndexScores.get(indexKey))} in its record`,
         );
       }
     }
   }
 
-  for (const [runId, record] of recordsByRunId) {
+  for (const [storedRunId, record] of recordsByStoredRunId) {
+    const runIdentity = runIdentityOf(storedRunId);
+    if (runIdentity === undefined) {
+      violations.push(`run "${storedRunId}" has a record under an id that is not a stored run id`);
+    } else if (runIdentity.task !== record["task"]) {
+      violations.push(
+        `run "${storedRunId}" has a record of task "${String(record["task"])}" under an id of task "${runIdentity.task}"`,
+      );
+    }
     if (!isRunState(record["state"])) {
-      violations.push(`run "${runId}" has a record with no known state: ${String(record["state"])}`);
+      violations.push(`run "${storedRunId}" has a record with no known state: ${String(record["state"])}`);
       continue;
     }
-    const indexKeysHoldingTheRun = new Set((membershipsByRunId.get(runId) ?? []).map(({ indexKey }) => indexKey));
+    const indexKeysHoldingTheRun = new Set(
+      (membershipsByStoredRunId.get(storedRunId) ?? []).map(({ indexKey }) => indexKey),
+    );
     for (const expectedIndexKey of expectedIndexScoresOf(keys, record).keys()) {
       if (!indexKeysHoldingTheRun.has(expectedIndexKey)) {
-        violations.push(`run "${runId}" is ${record["state"]} but missing from ${expectedIndexKey}`);
+        violations.push(`run "${storedRunId}" is ${record["state"]} but missing from ${expectedIndexKey}`);
       }
     }
     if (!taskNames.has(record["task"] ?? "")) {
-      violations.push(`run "${runId}" is of task "${String(record["task"])}", missing from ${keys.tasks}`);
+      violations.push(`run "${storedRunId}" is of task "${String(record["task"])}", missing from ${keys.tasks}`);
     }
   }
 
-  for (const { runId, side } of sideKeys) {
-    if (!recordsByRunId.has(runId)) {
-      violations.push(`run "${runId}" has its ${side} key but no record`);
+  for (const { storedRunId, side } of sideKeys) {
+    if (!recordsByStoredRunId.has(storedRunId)) {
+      violations.push(`run "${storedRunId}" has its ${side} key but no record`);
     }
   }
 
-  for (const [runId, record] of recordsByRunId) {
+  for (const [storedRunId, record] of recordsByStoredRunId) {
     const slotSetKey = keys.slotSet(record["task"] ?? "", record["concurrencyKey"]);
-    if (record["state"] === "executing" && (await redis.sismember(slotSetKey, runId)) === 0) {
-      violations.push(`run "${runId}" is executing but holds no slot in ${slotSetKey}`);
+    if (record["state"] === "executing" && (await redis.sismember(slotSetKey, storedRunId)) === 0) {
+      violations.push(`run "${storedRunId}" is executing but holds no slot in ${slotSetKey}`);
     }
   }
 
   for (const slotSetKey of slotSetKeys) {
-    for (const runId of await redis.smembers(slotSetKey)) {
-      const record = recordsByRunId.get(runId);
+    for (const storedRunId of await redis.smembers(slotSetKey)) {
+      const record = recordsByStoredRunId.get(storedRunId);
       const isHolderOfThisSlotSet =
         record?.["state"] === "executing" &&
         keys.slotSet(record["task"] ?? "", record["concurrencyKey"]) === slotSetKey;
       if (!isHolderOfThisSlotSet) {
-        violations.push(`run "${runId}" holds a slot in ${slotSetKey} but is not an executing run of that key`);
+        violations.push(`run "${storedRunId}" holds a slot in ${slotSetKey} but is not an executing run of that key`);
       }
     }
   }

@@ -36,6 +36,7 @@ export type ResumeTime = {
 };
 
 export type SendFence = {
+  parentTask: string;
   parentRunId: RunId;
   lockToken: LockToken;
   stepId: HandlerSendId;
@@ -268,7 +269,9 @@ export function openStepEngine(config: StepEngineConfig): StepEngine {
     const stepId = deriveHandlerSendId(config.taskName, config.runId, enclosingStepId, positionInScope);
     return trackInFlight(
       (async () => {
-        const sent = await noteLockLoss(send({ parentRunId: config.runId, lockToken: config.lockToken, stepId }));
+        const sent = await noteLockLoss(
+          send({ parentTask: config.taskName, parentRunId: config.runId, lockToken: config.lockToken, stepId }),
+        );
         countSavedStep(serializeStepValue(sentIdOf(sent)));
         return sent;
       })(),

@@ -1,24 +1,29 @@
-import type { IndexPosition } from "./engine/index-page-script.js";
+import { storedRunIdOf } from "./engine/engine-keys.js";
+import type { RunIdentity } from "./engine/engine-keys.js";
+import type { IndexScore } from "./engine/index-page-script.js";
 import { INVALID_CURSOR_MESSAGE, cursorFieldsOf, cursorOfFields, otherStateCursorMessageOf } from "./read-api.js";
 import type { RunListCursor } from "./read-api.js";
 import { isRunState } from "./run-states.js";
 import type { RunState } from "./run-states.js";
 
-export type ListedIndexes = { state: RunState; task: string | null };
+export type ListedIndexes = { state: RunState; listedTask: string | null };
 
-export type EngineRunListPosition = ListedIndexes & { indexPosition: IndexPosition };
+export type LastListedRun = RunIdentity & { score: IndexScore };
+
+export type EngineRunListPosition = ListedIndexes & { lastListedRun: LastListedRun };
 
 const CURSOR_FORMAT_VERSION = 2;
 
-export function encodeEngineRunListCursor({ state, task, indexPosition }: EngineRunListPosition): RunListCursor {
-  return cursorOfFields([CURSOR_FORMAT_VERSION, state, task, indexPosition.score, indexPosition.runId]);
+export function encodeEngineRunListCursor({ state, listedTask, lastListedRun }: EngineRunListPosition): RunListCursor {
+  const { score, task, runId } = lastListedRun;
+  return cursorOfFields([CURSOR_FORMAT_VERSION, state, listedTask, score, task, runId]);
 }
 
-function shownTaskOf(task: string | null): string {
-  return task === null ? "every task" : `task ${JSON.stringify(task)}`;
+function shownTaskOf(listedTask: string | null): string {
+  return listedTask === null ? "every task" : `task ${JSON.stringify(listedTask)}`;
 }
 
-export function decodeEngineRunListCursor(cursor: unknown, listedIndexes: ListedIndexes): IndexPosition {
+export function decodeEngineRunListCursor(cursor: unknown, listedIndexes: ListedIndexes): LastListedRun {
   const position = positionIn(cursor);
   if (position === undefined) {
     throw new Error(INVALID_CURSOR_MESSAGE);
@@ -26,32 +31,47 @@ export function decodeEngineRunListCursor(cursor: unknown, listedIndexes: Listed
   if (position.state !== listedIndexes.state) {
     throw new Error(otherStateCursorMessageOf(position.state, listedIndexes.state));
   }
-  if (position.task !== listedIndexes.task) {
+  if (position.listedTask !== listedIndexes.listedTask) {
     throw new Error(
-      `Invalid listRuns cursor: it pages through ${shownTaskOf(position.task)}, not ${shownTaskOf(listedIndexes.task)}`,
+      `Invalid listRuns cursor: it pages through ${shownTaskOf(position.listedTask)}, not ${shownTaskOf(listedIndexes.listedTask)}`,
     );
   }
-  return position.indexPosition;
+  return position.lastListedRun;
 }
 
 function isScoreSentExactly(score: unknown): score is number {
   return typeof score === "number" && Number.isFinite(score) && Number(String(score)) === score;
 }
 
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value !== "";
+}
+
+function isStorableRun(task: string, runId: string): boolean {
+  try {
+    storedRunIdOf(task, runId);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function positionIn(cursor: unknown): EngineRunListPosition | undefined {
-  const fields = cursorFieldsOf(cursor, CURSOR_FORMAT_VERSION, 5);
+  const fields = cursorFieldsOf(cursor, CURSOR_FORMAT_VERSION, 6);
   if (fields === undefined) {
     return undefined;
   }
-  const [, state, task, score, runId] = fields;
+  const [, state, listedTask, score, task, runId] = fields;
   if (
     !isRunState(state) ||
-    (task !== null && typeof task !== "string") ||
+    (listedTask !== null && typeof listedTask !== "string") ||
     !isScoreSentExactly(score) ||
-    typeof runId !== "string" ||
-    runId === ""
+    !isNonEmptyString(task) ||
+    !isNonEmptyString(runId) ||
+    !isStorableRun(task, runId) ||
+    (listedTask !== null && task !== listedTask)
   ) {
     return undefined;
   }
-  return { state, task, indexPosition: { score, runId } };
+  return { state, listedTask, lastListedRun: { score, task, runId } };
 }

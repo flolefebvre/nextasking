@@ -1,6 +1,7 @@
 import type { ConcurrencyKey } from "../src/definitions.js";
 import type { DurationInMilliseconds, EpochMilliseconds } from "../src/durations.js";
-import type { LockToken } from "../src/engine/engine-keys.js";
+import { compareInSortedSetMemberOrder, storedRunIdOf } from "../src/engine/engine-keys.js";
+import type { LockToken, RunIdentity, StoredRunId } from "../src/engine/engine-keys.js";
 import {
   DEDUP_WINDOW_IN_MILLISECONDS,
   errorTextCutOf,
@@ -74,6 +75,7 @@ export type InMemoryEngineCall = { method: InMemoryEngineMethod; request: unknow
 
 export type InMemoryStoredRun = {
   task: string;
+  runId: RunId;
   state: RunState;
   attempt: number;
   retries: number;
@@ -116,12 +118,12 @@ export type InMemoryEngine = Pick<Engine, InMemoryEngineMethod> & {
   holdCalls: (method: InMemoryEngineMethod) => HeldCalls;
   waitForWakeUp: (timeoutInMilliseconds: DurationInMilliseconds, stopSignal?: AbortSignal) => Promise<void>;
   isWakeUpMarkerArmed: () => boolean;
-  storedRunOf: (runId: RunId) => Readonly<InMemoryStoredRun> | undefined;
+  storedRunOf: (task: string, runId: RunId) => Readonly<InMemoryStoredRun> | undefined;
   storedScheduleOf: (task: string) => Readonly<InMemoryStoredSchedule> | undefined;
   runIdsInState: (state: RunState) => RunId[];
-  expireLock: (runId: RunId) => void;
-  backdateEndedRun: (runId: RunId, durationInMilliseconds: DurationInMilliseconds) => void;
-  backdateFirstFoundUnknownAt: (runId: RunId, durationInMilliseconds: DurationInMilliseconds) => void;
+  expireLock: (task: string, runId: RunId) => void;
+  backdateEndedRun: (task: string, runId: RunId, durationInMilliseconds: DurationInMilliseconds) => void;
+  backdateFirstFoundUnknownAt: (task: string, runId: RunId, durationInMilliseconds: DurationInMilliseconds) => void;
 };
 
 export type InMemoryEngineOptions = { now?: () => EpochMilliseconds };
@@ -148,14 +150,8 @@ function concurrencyScopeOf(task: string, concurrencyKey: ConcurrencyKey | undef
   return JSON.stringify([task, concurrencyKey ?? ""]);
 }
 
-function byScoreThenRunId<Entry extends { score: number; runId: RunId }>(left: Entry, right: Entry): number {
-  if (left.score !== right.score) {
-    return left.score - right.score;
-  }
-  if (left.runId === right.runId) {
-    return 0;
-  }
-  return left.runId < right.runId ? -1 : 1;
+function byScoreThenMember<Entry extends { score: number; member: string }>(left: Entry, right: Entry): number {
+  return left.score - right.score || compareInSortedSetMemberOrder(left.member, right.member);
 }
 
 function errorWithTextsCutOf(error: ErrorRecord): ErrorRecord {
@@ -167,10 +163,10 @@ function invalidArgumentError(message: string): Error {
 }
 
 export function createInMemoryEngine({ now = () => Date.now() }: InMemoryEngineOptions = {}): InMemoryEngine {
-  const runsById = new Map<RunId, InMemoryStoredRun>();
-  const lockedRunByToken = new Map<LockToken, { runId: RunId; expiresAt: EpochMilliseconds }>();
-  const slotSetsByScope = new Map<string, Set<RunId>>();
-  const dedupExpiryByRunIdByTask = new Map<string, Map<RunId, EpochMilliseconds>>();
+  const runsByStoredRunId = new Map<StoredRunId, InMemoryStoredRun>();
+  const lockedRunByToken = new Map<LockToken, { storedRunId: StoredRunId; expiresAt: EpochMilliseconds }>();
+  const slotSetsByScope = new Map<string, Set<StoredRunId>>();
+  const dedupExpiryByStoredRunIdByTask = new Map<string, Map<StoredRunId, EpochMilliseconds>>();
   const dedupExpiryByEventIdByEventName = new Map<string, Map<string, EpochMilliseconds>>();
   const taskNames = new Set<string>();
   const schedulesByTask = new Map<string, InMemoryStoredSchedule>();
@@ -180,18 +176,20 @@ export function createInMemoryEngine({ now = () => Date.now() }: InMemoryEngineO
   let lastOrder = 0;
   let isWakeUpMarkerArmed = false;
 
-  const slotSetOf = (task: string, concurrencyKey: ConcurrencyKey | undefined): Set<RunId> => {
+  const slotSetOf = (task: string, concurrencyKey: ConcurrencyKey | undefined): Set<StoredRunId> => {
     const scope = concurrencyScopeOf(task, concurrencyKey);
-    const slotSet = slotSetsByScope.get(scope) ?? new Set<RunId>();
+    const slotSet = slotSetsByScope.get(scope) ?? new Set<StoredRunId>();
     slotSetsByScope.set(scope, slotSet);
     return slotSet;
   };
 
+  const storedRunOf = (task: string, runId: RunId) => runsByStoredRunId.get(storedRunIdOf(task, runId));
+
   const runEntriesInState = (state: RunState, scoreOf: (storedRun: InMemoryStoredRun) => number | undefined) =>
-    [...runsById.entries()]
+    [...runsByStoredRunId.entries()]
       .filter(([, storedRun]) => storedRun.state === state)
-      .map(([runId, storedRun]) => ({ runId, storedRun, score: scoreOf(storedRun) ?? 0 }))
-      .sort(byScoreThenRunId);
+      .map(([storedRunId, storedRun]) => ({ member: storedRunId, storedRun, score: scoreOf(storedRun) ?? 0 }))
+      .sort(byScoreThenMember);
 
   const pendingRunEntries = () => runEntriesInState("pending", ({ order }) => order);
 
@@ -220,10 +218,10 @@ export function createInMemoryEngine({ now = () => Date.now() }: InMemoryEngineO
   ) => {
     const expiredMembers = [...(expiryByMember?.entries() ?? [])]
       .filter(([, expiresAt]) => expiresAt <= instant)
-      .map(([member, expiresAt]) => ({ runId: member, score: expiresAt }))
-      .sort(byScoreThenRunId)
+      .map(([member, expiresAt]) => ({ member, score: expiresAt }))
+      .sort(byScoreThenMember)
       .slice(0, mostTrimmed);
-    for (const { runId: member } of expiredMembers) {
+    for (const { member } of expiredMembers) {
       expiryByMember?.delete(member);
     }
   };
@@ -243,12 +241,11 @@ export function createInMemoryEngine({ now = () => Date.now() }: InMemoryEngineO
   };
 
   const releaseSlotAndWakeParkedRuns = (
-    runId: RunId,
-    { task, concurrencyKey }: InMemoryStoredRun,
+    { task, runId, concurrencyKey }: InMemoryStoredRun,
     concurrencyLimit: number | undefined,
   ) => {
     const slotSet = slotSetOf(task, concurrencyKey);
-    slotSet.delete(runId);
+    slotSet.delete(storedRunIdOf(task, runId));
     let wokenRunCount = Number.POSITIVE_INFINITY;
     if (concurrencyLimit !== undefined) {
       wokenRunCount = concurrencyLimit - slotSet.size;
@@ -264,12 +261,7 @@ export function createInMemoryEngine({ now = () => Date.now() }: InMemoryEngineO
     }
   };
 
-  const endLock = (
-    runId: RunId,
-    storedRun: InMemoryStoredRun,
-    endedAs: string,
-    concurrencyLimit: number | undefined,
-  ) => {
+  const endLock = (storedRun: InMemoryStoredRun, endedAs: string, concurrencyLimit: number | undefined) => {
     if (storedRun.lockToken !== undefined) {
       lockedRunByToken.delete(storedRun.lockToken);
     }
@@ -277,12 +269,13 @@ export function createInMemoryEngine({ now = () => Date.now() }: InMemoryEngineO
     storedRun.endedAs = endedAs;
     storedRun.lockToken = undefined;
     storedRun.lockedUntil = undefined;
-    releaseSlotAndWakeParkedRuns(runId, storedRun, concurrencyLimit);
+    releaseSlotAndWakeParkedRuns(storedRun, concurrencyLimit);
   };
 
   const createRun = (run: RunToCreate, instant: EpochMilliseconds) => {
     const storedRun: InMemoryStoredRun = {
       task: run.task,
+      runId: run.runId,
       state: "pending",
       attempt: 1,
       retries: run.retries,
@@ -311,7 +304,7 @@ export function createInMemoryEngine({ now = () => Date.now() }: InMemoryEngineO
       errors: [],
       steps: new Map(),
     };
-    runsById.set(run.runId, storedRun);
+    runsByStoredRunId.set(storedRunIdOf(run.task, run.runId), storedRun);
     taskNames.add(run.task);
     const delayInMilliseconds = run.delayInMilliseconds ?? 0;
     if (delayInMilliseconds > 0) {
@@ -332,14 +325,19 @@ export function createInMemoryEngine({ now = () => Date.now() }: InMemoryEngineO
     eventDedup: SourceEvent | undefined,
     instant: EpochMilliseconds,
   ) => {
-    const createdRunIds: RunId[] = [];
-    const skippedRunIds: RunId[] = [];
+    const createdRuns: RunIdentity[] = [];
+    const skippedRuns: RunIdentity[] = [];
     for (const run of runs) {
-      if (runsById.has(run.runId) || isLiveDedupEntry(dedupExpiryByRunIdByTask.get(run.task), run.runId, instant)) {
-        skippedRunIds.push(run.runId);
+      const storedRunId = storedRunIdOf(run.task, run.runId);
+      const runIdentity = { task: run.task, runId: run.runId };
+      if (
+        runsByStoredRunId.has(storedRunId) ||
+        isLiveDedupEntry(dedupExpiryByStoredRunIdByTask.get(run.task), storedRunId, instant)
+      ) {
+        skippedRuns.push(runIdentity);
       } else {
         createRun(run, instant);
-        createdRunIds.push(run.runId);
+        createdRuns.push(runIdentity);
       }
     }
     if (eventDedup !== undefined) {
@@ -348,22 +346,22 @@ export function createInMemoryEngine({ now = () => Date.now() }: InMemoryEngineO
         instant + DEDUP_WINDOW_IN_MILLISECONDS,
       );
     }
-    return { createdRunIds, skippedRunIds };
+    return { createdRuns, skippedRuns };
   };
 
-  const currentlyLockedRunOf = (runId: RunId, lockToken: LockToken): InMemoryStoredRun | undefined => {
-    const storedRun = runsById.get(runId);
-    return storedRun?.state === "executing" && storedRun.lockToken === lockToken ? storedRun : undefined;
-  };
+  const currentlyLockedRunOf = (
+    storedRun: InMemoryStoredRun | undefined,
+    lockToken: LockToken,
+  ): InMemoryStoredRun | undefined =>
+    storedRun?.state === "executing" && storedRun.lockToken === lockToken ? storedRun : undefined;
 
   const lockedRunReplyOf = (
-    runId: RunId,
     storedRun: InMemoryStoredRun,
     isResume: boolean,
     sleepsWokenAt: EpochMilliseconds | undefined,
   ): LockedRun => ({
     lockToken: storedRun.lockToken ?? "",
-    runId,
+    runId: storedRun.runId,
     task: storedRun.task,
     payload: storedRun.payload,
     attempt: storedRun.attempt,
@@ -383,8 +381,8 @@ export function createInMemoryEngine({ now = () => Date.now() }: InMemoryEngineO
     ...(storedRun.sourceEvent === undefined ? {} : { sourceEvent: storedRun.sourceEvent }),
   });
 
-  const parkedRunReplyOf = (runId: RunId, storedRun: InMemoryStoredRun): ParkedRun => ({
-    runId,
+  const parkedRunReplyOf = (storedRun: InMemoryStoredRun): ParkedRun => ({
+    runId: storedRun.runId,
     task: storedRun.task,
     attempt: storedRun.attempt,
     ...runOriginOf(storedRun),
@@ -394,8 +392,11 @@ export function createInMemoryEngine({ now = () => Date.now() }: InMemoryEngineO
     if (runs.length === 0) {
       throw invalidArgumentError("an enqueue creates at least one run");
     }
+    const parentRun =
+      parentFence === undefined
+        ? undefined
+        : currentlyLockedRunOf(storedRunOf(parentFence.parentTask, parentFence.parentRunId), parentFence.lockToken);
     if (parentFence !== undefined) {
-      const parentRun = currentlyLockedRunOf(parentFence.parentRunId, parentFence.lockToken);
       if (parentRun === undefined) {
         return { kind: "stale" };
       }
@@ -419,15 +420,14 @@ export function createInMemoryEngine({ now = () => Date.now() }: InMemoryEngineO
       );
     }
     for (const task of new Set(runs.map((run) => run.task))) {
-      trimExpiredDedupEntries(dedupExpiryByRunIdByTask.get(task), instant, EXPIRED_DEDUP_ENTRIES_TRIMMED_PER_SET);
+      trimExpiredDedupEntries(dedupExpiryByStoredRunIdByTask.get(task), instant, EXPIRED_DEDUP_ENTRIES_TRIMMED_PER_SET);
     }
-    const { createdRunIds, skippedRunIds } = enqueueRuns(runs, eventDedup, instant);
-    if (parentFence !== undefined) {
-      const parentRun = runsById.get(parentFence.parentRunId)!;
+    const { createdRuns, skippedRuns } = enqueueRuns(runs, eventDedup, instant);
+    if (parentFence !== undefined && parentRun !== undefined) {
       parentRun.steps.set(parentFence.stepId, parentFence.stepValue);
       parentRun.stalls = 0;
     }
-    return { kind: "enqueued", createdRunIds, skippedRunIds };
+    return { kind: "enqueued", createdRuns, skippedRuns };
   };
 
   const fetch = async ({
@@ -452,12 +452,10 @@ export function createInMemoryEngine({ now = () => Date.now() }: InMemoryEngineO
       const lockedRun = lockedRunByToken.get(lockToken);
       const storedRun =
         lockedRun !== undefined && lockedRun.expiresAt > instant
-          ? currentlyLockedRunOf(lockedRun.runId, lockToken)
+          ? currentlyLockedRunOf(runsByStoredRunId.get(lockedRun.storedRunId), lockToken)
           : undefined;
-      if (lockedRun !== undefined && storedRun !== undefined) {
-        lockedRuns.push(
-          lockedRunReplyOf(lockedRun.runId, storedRun, storedRun.isLockAResume === true, storedRun.lockSleepsWokenAt),
-        );
+      if (storedRun !== undefined) {
+        lockedRuns.push(lockedRunReplyOf(storedRun, storedRun.isLockAResume === true, storedRun.lockSleepsWokenAt));
       } else {
         freshLockTokens.push(lockToken);
       }
@@ -468,12 +466,12 @@ export function createInMemoryEngine({ now = () => Date.now() }: InMemoryEngineO
       if (headEntry === undefined) {
         break;
       }
-      const { runId, storedRun } = headEntry;
+      const { member: storedRunId, storedRun } = headEntry;
       const concurrencyLimit = concurrencyLimitsByTask[storedRun.task];
       const slotSet = slotSetOf(storedRun.task, storedRun.concurrencyKey);
       if (concurrencyLimit !== undefined && slotSet.size >= concurrencyLimit) {
         storedRun.state = "waitingForConcurrencySlot";
-        parkedRuns.push(parkedRunReplyOf(runId, storedRun));
+        parkedRuns.push(parkedRunReplyOf(storedRun));
       } else {
         const lockToken = freshLockTokens[usedLockTokenCount]!;
         usedLockTokenCount += 1;
@@ -487,9 +485,9 @@ export function createInMemoryEngine({ now = () => Date.now() }: InMemoryEngineO
         storedRun.lockToken = lockToken;
         storedRun.lockedUntil = instant + lockDurationInMilliseconds;
         storedRun.startedAt = instant;
-        slotSet.add(runId);
-        lockedRunByToken.set(lockToken, { runId, expiresAt: instant + lockDurationInMilliseconds });
-        lockedRuns.push(lockedRunReplyOf(runId, storedRun, isResume, sleepsWokenAt));
+        slotSet.add(storedRunId);
+        lockedRunByToken.set(lockToken, { storedRunId, expiresAt: instant + lockDurationInMilliseconds });
+        lockedRuns.push(lockedRunReplyOf(storedRun, isResume, sleepsWokenAt));
       }
     }
     if (pendingRunEntries().length > 0) {
@@ -501,19 +499,18 @@ export function createInMemoryEngine({ now = () => Date.now() }: InMemoryEngineO
   const renew = async ({ heldLocks, lockDurationInMilliseconds }: RenewRequest): Promise<LockRenewal[]> => {
     const instant = now();
     const lockedUntil = instant + lockDurationInMilliseconds;
-    return heldLocks.map(({ runId, lockToken }) => {
-      const storedRun = currentlyLockedRunOf(runId, lockToken);
+    return heldLocks.map(({ task, runId, lockToken }) => {
+      const storedRun = currentlyLockedRunOf(storedRunOf(task, runId), lockToken);
       if (storedRun === undefined) {
         return { kind: "stale" };
       }
       storedRun.lockedUntil = lockedUntil;
-      lockedRunByToken.set(lockToken, { runId, expiresAt: lockedUntil });
+      lockedRunByToken.set(lockToken, { storedRunId: storedRunIdOf(task, runId), expiresAt: lockedUntil });
       return { kind: "renewed", lockedUntil };
     });
   };
 
   const failRun = (
-    runId: RunId,
     storedRun: InMemoryStoredRun,
     reason: FailureReason,
     error: ErrorRecord,
@@ -521,7 +518,7 @@ export function createInMemoryEngine({ now = () => Date.now() }: InMemoryEngineO
     instant: EpochMilliseconds,
   ): SettleReply => {
     const failedAt = new Date(instant).toISOString();
-    endRun(runId, storedRun, "failed", instant);
+    endRun(storedRun, "failed", instant);
     storedRun.reason = reason;
     storedRun.errors.push(JSON.stringify({ ...errorWithTextsCutOf(error), failedAt }));
     if (failureNotice !== undefined && failureNotice.runs.length > 0) {
@@ -544,14 +541,17 @@ export function createInMemoryEngine({ now = () => Date.now() }: InMemoryEngineO
     return { kind: "failed", reason, finishedAt: instant };
   };
 
-  const endRun = (runId: RunId, storedRun: InMemoryStoredRun, finalState: "completed" | "failed", instant: number) => {
-    dedupExpiryByMemberOf(dedupExpiryByRunIdByTask, storedRun.task).set(runId, instant + DEDUP_WINDOW_IN_MILLISECONDS);
+  const endRun = (storedRun: InMemoryStoredRun, finalState: "completed" | "failed", instant: number) => {
+    dedupExpiryByMemberOf(dedupExpiryByStoredRunIdByTask, storedRun.task).set(
+      storedRunIdOf(storedRun.task, storedRun.runId),
+      instant + DEDUP_WINDOW_IN_MILLISECONDS,
+    );
     storedRun.state = finalState;
     storedRun.finishedAt = instant;
   };
 
-  const settle = async ({ runId, lockToken, outcome, concurrencyLimit }: SettleRequest): Promise<SettleReply> => {
-    const storedRun = runsById.get(runId);
+  const settle = async ({ task, runId, lockToken, outcome, concurrencyLimit }: SettleRequest): Promise<SettleReply> => {
+    const storedRun = storedRunOf(task, runId);
     if (storedRun === undefined) {
       return { kind: "stale" };
     }
@@ -561,7 +561,7 @@ export function createInMemoryEngine({ now = () => Date.now() }: InMemoryEngineO
         : { kind: "stale" };
     }
     const instant = now();
-    endLock(runId, storedRun, outcome.kind, concurrencyLimit);
+    endLock(storedRun, outcome.kind, concurrencyLimit);
     if (outcome.kind !== "handBack") {
       storedRun.firstFoundUnknownAt = undefined;
     }
@@ -573,10 +573,10 @@ export function createInMemoryEngine({ now = () => Date.now() }: InMemoryEngineO
     switch (outcome.kind) {
       case "complete":
         storedRun.steps.clear();
-        endRun(runId, storedRun, "completed", instant);
+        endRun(storedRun, "completed", instant);
         return { kind: "completed", finishedAt: instant };
       case "fail":
-        return failRun(runId, storedRun, outcome.reason, outcome.error, outcome.failureNotice, instant);
+        return failRun(storedRun, outcome.reason, outcome.error, outcome.failureNotice, instant);
       case "retry": {
         appendError(outcome.error);
         const nextAttemptAt = instant + outcome.backoffInMilliseconds;
@@ -593,7 +593,7 @@ export function createInMemoryEngine({ now = () => Date.now() }: InMemoryEngineO
           storedRun.firstFoundUnknownAt !== undefined &&
           instant - storedRun.firstFoundUnknownAt >= UNKNOWN_TASK_FAILURE_DELAY_IN_MILLISECONDS
         ) {
-          return failRun(runId, storedRun, "unknown task", outcome.error, outcome.failureNotice, instant);
+          return failRun(storedRun, "unknown task", outcome.error, outcome.failureNotice, instant);
         }
         storedRun.firstFoundUnknownAt ??= instant;
         enterPending(storedRun, storedRun.order);
@@ -611,10 +611,10 @@ export function createInMemoryEngine({ now = () => Date.now() }: InMemoryEngineO
     const expiredLockEntries = runEntriesInState("executing", ({ lockedUntil }) => lockedUntil).filter(
       ({ score }) => score <= instant,
     );
-    for (const { runId, storedRun } of expiredLockEntries) {
+    for (const { storedRun } of expiredLockEntries) {
       if (storedRun.stalls >= 2) {
         thirdStalls.push({
-          runId,
+          runId: storedRun.runId,
           task: storedRun.task,
           attempt: storedRun.attempt,
           expiredLockToken: storedRun.lockToken ?? "",
@@ -624,11 +624,11 @@ export function createInMemoryEngine({ now = () => Date.now() }: InMemoryEngineO
           ...runOriginOf(storedRun),
         });
       } else {
-        endLock(runId, storedRun, "stalled", undefined);
+        endLock(storedRun, "stalled", undefined);
         storedRun.stalls += 1;
         enterPending(storedRun, storedRun.order);
         stalledRuns.push({
-          runId,
+          runId: storedRun.runId,
           task: storedRun.task,
           attempt: storedRun.attempt,
           stalls: storedRun.stalls,
@@ -645,13 +645,13 @@ export function createInMemoryEngine({ now = () => Date.now() }: InMemoryEngineO
     task: string | undefined,
     beforePromotingSuspendedRun: (storedRun: InMemoryStoredRun) => void,
   ): MadeDueRun[] => {
-    const dueRunEntries = [...runsById.entries()]
+    const dueRunEntries = [...runsByStoredRunId.entries()]
       .filter(([, storedRun]) => task === undefined || storedRun.task === task)
-      .map(([runId, storedRun]) => ({ runId, storedRun, score: dueInstantOf(storedRun) }))
+      .map(([storedRunId, storedRun]) => ({ member: storedRunId, storedRun, score: dueInstantOf(storedRun) }))
       .filter(
         (entry): entry is typeof entry & { score: number } => entry.score !== undefined && entry.score <= dueBefore,
       )
-      .sort(byScoreThenRunId)
+      .sort(byScoreThenMember)
       .slice(0, MOST_DUE_RUNS_PROMOTED_PER_PROMOTE);
     for (const { storedRun } of dueRunEntries) {
       if (storedRun.state === "suspended") {
@@ -661,7 +661,7 @@ export function createInMemoryEngine({ now = () => Date.now() }: InMemoryEngineO
       storedRun.nextAttemptAt = undefined;
       enterPending(storedRun, undefined);
     }
-    return dueRunEntries.map(({ runId, storedRun }) => ({ task: storedRun.task, runId }));
+    return dueRunEntries.map(({ storedRun }) => ({ task: storedRun.task, runId: storedRun.runId }));
   };
 
   const makeDue = async ({ task }: MakeDueRequest = {}): Promise<MakeDueReply> => {
@@ -678,11 +678,11 @@ export function createInMemoryEngine({ now = () => Date.now() }: InMemoryEngineO
     return { kind: "madeDue", madeDueRuns };
   };
 
-  const saveStep = async ({ runId, lockToken, stepId, step }: SaveStepRequest): Promise<SaveStepReply> => {
+  const saveStep = async ({ task, runId, lockToken, stepId, step }: SaveStepRequest): Promise<SaveStepReply> => {
     if (stepId === "") {
       throw invalidArgumentError("stepId must not be empty");
     }
-    const storedRun = currentlyLockedRunOf(runId, lockToken);
+    const storedRun = currentlyLockedRunOf(storedRunOf(task, runId), lockToken);
     if (storedRun === undefined) {
       return { kind: "stale" };
     }
@@ -708,8 +708,8 @@ export function createInMemoryEngine({ now = () => Date.now() }: InMemoryEngineO
     return { kind: "saved", resumesAt, isDue: resumesAt <= instant };
   };
 
-  const readStep = async ({ runId, lockToken, stepId }: ReadStepRequest): Promise<ReadStepReply> => {
-    const storedRun = currentlyLockedRunOf(runId, lockToken);
+  const readStep = async ({ task, runId, lockToken, stepId }: ReadStepRequest): Promise<ReadStepReply> => {
+    const storedRun = currentlyLockedRunOf(storedRunOf(task, runId), lockToken);
     if (storedRun === undefined) {
       return { kind: "stale" };
     }
@@ -718,14 +718,14 @@ export function createInMemoryEngine({ now = () => Date.now() }: InMemoryEngineO
 
   const prune = async ({ task, completedRetention, failedRetention }: PruneRequest): Promise<PruneReply> => {
     const instant = now();
-    const prunedRunIds = new Set<RunId>();
+    const prunedStoredRunIds = new Set<StoredRunId>();
     const endedRunEntriesOf = (state: "completed" | "failed") =>
       runEntriesInState(state, ({ finishedAt }) => finishedAt).filter(
-        ({ runId, storedRun }) => storedRun.task === task && !prunedRunIds.has(runId),
+        ({ member, storedRun }) => storedRun.task === task && !prunedStoredRunIds.has(member),
       );
-    const pruneUpToTheBound = (runIds: readonly RunId[]) => {
-      for (const runId of runIds.slice(0, MOST_RUNS_PRUNED_PER_PRUNE - prunedRunIds.size)) {
-        prunedRunIds.add(runId);
+    const pruneUpToTheBound = (storedRunIds: readonly StoredRunId[]) => {
+      for (const storedRunId of storedRunIds.slice(0, MOST_RUNS_PRUNED_PER_PRUNE - prunedStoredRunIds.size)) {
+        prunedStoredRunIds.add(storedRunId);
       }
     };
     const retentionByState: [state: "completed" | "failed", retention: RetentionLimit][] = [
@@ -736,20 +736,20 @@ export function createInMemoryEngine({ now = () => Date.now() }: InMemoryEngineO
       pruneUpToTheBound(
         endedRunEntriesOf(state)
           .filter(({ score }) => score + maxAgeInMilliseconds <= instant)
-          .map(({ runId }) => runId),
+          .map(({ member }) => member),
       );
     }
     for (const [state, { maxRunCount }] of retentionByState) {
       const keptRunEntries = endedRunEntriesOf(state);
       pruneUpToTheBound(
-        keptRunEntries.slice(0, Math.max(0, keptRunEntries.length - maxRunCount)).map(({ runId }) => runId),
+        keptRunEntries.slice(0, Math.max(0, keptRunEntries.length - maxRunCount)).map(({ member }) => member),
       );
     }
-    for (const runId of prunedRunIds) {
-      runsById.delete(runId);
+    for (const storedRunId of prunedStoredRunIds) {
+      runsByStoredRunId.delete(storedRunId);
     }
-    trimExpiredDedupEntries(dedupExpiryByRunIdByTask.get(task), instant, EXPIRED_DEDUP_ENTRIES_TRIMMED_PER_PRUNE);
-    return { kind: "pruned", prunedRunCount: prunedRunIds.size };
+    trimExpiredDedupEntries(dedupExpiryByStoredRunIdByTask.get(task), instant, EXPIRED_DEDUP_ENTRIES_TRIMMED_PER_PRUNE);
+    return { kind: "pruned", prunedRunCount: prunedStoredRunIds.size };
   };
 
   const fire = async ({ task, instant, instantAfter, runId, retries }: FireRequest): Promise<FireReply> => {
@@ -770,10 +770,10 @@ export function createInMemoryEngine({ now = () => Date.now() }: InMemoryEngineO
     if (instant > firedAt) {
       return { kind: "notDue" };
     }
-    const { createdRunIds } = enqueueRuns([{ runId, task, payload: "", retries }], undefined, firedAt);
-    const isRunCreated = createdRunIds.length === 1;
+    const { createdRuns } = enqueueRuns([{ runId, task, payload: "", retries }], undefined, firedAt);
+    const isRunCreated = createdRuns.length === 1;
     if (isRunCreated) {
-      runsById.get(runId)!.scheduledAt = instant;
+      storedRunOf(task, runId)!.scheduledAt = instant;
     }
     storedSchedule.nextFiringAt = instantAfter;
     storedSchedule.previousFiringAt = instant;
@@ -792,8 +792,8 @@ export function createInMemoryEngine({ now = () => Date.now() }: InMemoryEngineO
       listedTasks.add(task);
     }
     const storedSchedules = [...schedulesByTask.values()]
-      .map((storedSchedule) => ({ runId: storedSchedule.task, score: storedSchedule.nextFiringAt, storedSchedule }))
-      .sort(byScoreThenRunId)
+      .map((storedSchedule) => ({ member: storedSchedule.task, score: storedSchedule.nextFiringAt, storedSchedule }))
+      .sort(byScoreThenMember)
       .map(({ storedSchedule }) => storedSchedule);
     const added: ScheduleSummary[] = [];
     const changed: ScheduleSummary[] = [];
@@ -910,33 +910,33 @@ export function createInMemoryEngine({ now = () => Date.now() }: InMemoryEngineO
         stopSignal?.addEventListener("abort", stopWait, { once: true });
       }),
     isWakeUpMarkerArmed: () => isWakeUpMarkerArmed,
-    storedRunOf: (runId) => runsById.get(runId),
+    storedRunOf,
     storedScheduleOf: (task) => schedulesByTask.get(task),
-    runIdsInState: (state) => runEntriesInState(state, ({ order }) => order).map(({ runId }) => runId),
-    expireLock: (runId) => {
-      const storedRun = runsById.get(runId);
+    runIdsInState: (state) => runEntriesInState(state, ({ order }) => order).map(({ storedRun }) => storedRun.runId),
+    expireLock: (task, runId) => {
+      const storedRun = storedRunOf(task, runId);
       if (storedRun?.state !== "executing") {
         throw new Error(`run "${runId}" holds no lock to expire`);
       }
       storedRun.lockedUntil = now() - 1;
     },
-    backdateFirstFoundUnknownAt: (runId, durationInMilliseconds) => {
-      const storedRun = runsById.get(runId);
+    backdateFirstFoundUnknownAt: (task, runId, durationInMilliseconds) => {
+      const storedRun = storedRunOf(task, runId);
       if (storedRun?.firstFoundUnknownAt === undefined) {
         throw new Error(`run "${runId}" was never found unknown`);
       }
       storedRun.firstFoundUnknownAt -= durationInMilliseconds;
     },
-    backdateEndedRun: (runId, durationInMilliseconds) => {
-      const storedRun = runsById.get(runId);
+    backdateEndedRun: (task, runId, durationInMilliseconds) => {
+      const storedRun = storedRunOf(task, runId);
       if (storedRun?.finishedAt === undefined || (storedRun.state !== "completed" && storedRun.state !== "failed")) {
         throw new Error(`run "${runId}" has not ended`);
       }
       storedRun.finishedAt -= durationInMilliseconds;
-      const dedupExpiryByRunId = dedupExpiryByRunIdByTask.get(storedRun.task);
-      const dedupExpiresAt = dedupExpiryByRunId?.get(runId);
+      const dedupExpiryByStoredRunId = dedupExpiryByStoredRunIdByTask.get(task);
+      const dedupExpiresAt = dedupExpiryByStoredRunId?.get(storedRunIdOf(task, runId));
       if (dedupExpiresAt !== undefined) {
-        dedupExpiryByRunId?.set(runId, dedupExpiresAt - durationInMilliseconds);
+        dedupExpiryByStoredRunId?.set(storedRunIdOf(task, runId), dedupExpiresAt - durationInMilliseconds);
       }
     },
   };

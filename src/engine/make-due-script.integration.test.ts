@@ -5,6 +5,7 @@ import type { EngineTestContext } from "../../tests/engine-test.js";
 import { serverInstantInMillisecondsOf } from "../../tests/server-instant.js";
 import { RECORD_VERSION } from "./engine.js";
 import type { RunToCreate } from "./engine.js";
+import { storedRunIdOf } from "./engine-keys.js";
 import { MOST_DUE_RUNS_PROMOTED_PER_PROMOTE } from "./promote-script.js";
 
 const ONE_HOUR_IN_MILLISECONDS = 3_600_000;
@@ -57,10 +58,15 @@ engineTest("makeDue moves every delayed, suspended and backingOff run to pending
   });
   expect(await redis.zcard(keys.due)).toBe(0);
   const pendingRunIds = await redis.zrange(keys.pending, 0, -1);
-  expect(pendingRunIds[0]).toBe("pending-run");
-  expect(new Set(pendingRunIds.slice(1))).toEqual(new Set(["delayed-run", "suspended-run", "backing-off-run"]));
-  expect(await redis.hmget(keys.runRecord("delayed-run"), "startsAt", "nextAttemptAt")).toEqual([null, null]);
-  expect(await redis.hget(keys.runRecord("backing-off-run"), "nextAttemptAt")).toBeNull();
+  expect(pendingRunIds[0]).toBe(storedRunIdOf("send-email", "pending-run"));
+  expect(new Set(pendingRunIds.slice(1))).toEqual(
+    new Set(["delayed-run", "suspended-run", "backing-off-run"].map((runId) => storedRunIdOf("send-email", runId))),
+  );
+  expect(await redis.hmget(keys.runRecord("send-email", "delayed-run"), "startsAt", "nextAttemptAt")).toEqual([
+    null,
+    null,
+  ]);
+  expect(await redis.hget(keys.runRecord("send-email", "backing-off-run"), "nextAttemptAt")).toBeNull();
 });
 
 engineTest(
@@ -73,16 +79,20 @@ engineTest(
     await engine.makeDue();
 
     const instantAfter = await serverInstantInMillisecondsOf(redis);
-    const [resumesAt, sleepsWokenAt] = await redis.hmget(keys.runRecord("suspended-run"), "resumesAt", "sleepsWokenAt");
+    const [resumesAt, sleepsWokenAt] = await redis.hmget(
+      keys.runRecord("send-email", "suspended-run"),
+      "resumesAt",
+      "sleepsWokenAt",
+    );
     expect(Number(sleepsWokenAt)).toBeGreaterThanOrEqual(instantBefore);
     expect(Number(sleepsWokenAt)).toBeLessThanOrEqual(instantAfter);
     expect(resumesAt).toBe(sleepsWokenAt);
-    expect(await redis.hgetall(keys.runSteps("suspended-run"))).toEqual({
+    expect(await redis.hgetall(keys.runSteps("send-email", "suspended-run"))).toEqual({
       "charge-card": '"charged"',
       "wait-for-2030": sleepsWokenAt,
       "wait-for-2031": String(NEW_YEAR_2031),
     });
-    expect(await redis.hget(keys.runRecord("backing-off-run"), "sleepsWokenAt")).toBeNull();
+    expect(await redis.hget(keys.runRecord("send-email", "backing-off-run"), "sleepsWokenAt")).toBeNull();
   },
 );
 
@@ -115,13 +125,13 @@ engineTest("makeDue passes over a record of a newer version and leaves it in pla
       sendEmailRunOf(runId, { delayInMilliseconds: ONE_HOUR_IN_MILLISECONDS }),
     ),
   });
-  await redis.hset(keys.runRecord("newer-run"), "version", RECORD_VERSION + 1);
+  await redis.hset(keys.runRecord("send-email", "newer-run"), "version", RECORD_VERSION + 1);
 
   const reply = await engine.makeDue();
 
   expect(reply).toEqual({ kind: "madeDue", madeDueRuns: [{ task: "send-email", runId: "older-run" }] });
-  expect(await redis.zrange(keys.due, 0, -1)).toEqual(["newer-run"]);
-  expect(await redis.hget(keys.runRecord("older-run"), "state")).toBe("pending");
+  expect(await redis.zrange(keys.due, 0, -1)).toEqual([storedRunIdOf("send-email", "newer-run")]);
+  expect(await redis.hget(keys.runRecord("send-email", "older-run"), "state")).toBe("pending");
 });
 
 engineTest(`makeDue moves at most ${String(MOST_DUE_RUNS_PROMOTED_PER_PROMOTE)} runs per call`, async (context) => {
@@ -160,7 +170,7 @@ engineTest("makeDue given a task moves only that task's timed runs and names eac
     ],
   });
   expect(new Set(await redis.zrange(keys.due, 0, -1))).toEqual(
-    new Set(["suspended-run", "backing-off-run", "delayed-run"]),
+    new Set(["suspended-run", "backing-off-run", "delayed-run"].map((runId) => storedRunIdOf("send-email", runId))),
   );
 });
 

@@ -6,11 +6,54 @@ export type LockToken = string;
 
 export type HashTaggedPrefix = `{${string}}`;
 
+export type StoredRunId = `${string}:${string}`;
+
+export type RunIdentity = { task: string; runId: RunId };
+
+const STORED_RUN_ID_SEPARATOR = ":";
+
+export function storedRunIdOf(task: string, runId: RunId): StoredRunId {
+  if (task === "" || runId === "") {
+    throw new Error("invalid argument: a run is identified by a task and a run id, neither empty");
+  }
+  return `${encodeURIComponent(task)}${STORED_RUN_ID_SEPARATOR}${runId}`;
+}
+
+function decodedTaskOf(encodedTask: string): string | undefined {
+  try {
+    return decodeURIComponent(encodedTask);
+  } catch {
+    return undefined;
+  }
+}
+
+export function runIdentityOf(storedRunId: string): RunIdentity | undefined {
+  const separatorPosition = storedRunId.indexOf(STORED_RUN_ID_SEPARATOR);
+  if (separatorPosition === -1) {
+    return undefined;
+  }
+  const task = decodedTaskOf(storedRunId.slice(0, separatorPosition));
+  const runId = storedRunId.slice(separatorPosition + 1);
+  if (
+    task === undefined ||
+    task === "" ||
+    runId === "" ||
+    encodeURIComponent(task) !== storedRunId.slice(0, separatorPosition)
+  ) {
+    return undefined;
+  }
+  return { task, runId };
+}
+
+export function compareInSortedSetMemberOrder(leftMember: string, rightMember: string): number {
+  return Buffer.compare(Buffer.from(leftMember, "utf8"), Buffer.from(rightMember, "utf8"));
+}
+
 export type EngineKeys = {
-  runRecord: (runId: RunId) => string;
-  runPayload: (runId: RunId) => string;
-  runErrors: (runId: RunId) => string;
-  runSteps: (runId: RunId) => string;
+  runRecord: (task: string, runId: RunId) => string;
+  runPayload: (task: string, runId: RunId) => string;
+  runErrors: (task: string, runId: RunId) => string;
+  runSteps: (task: string, runId: RunId) => string;
   pending: string;
   due: string;
   locks: string;
@@ -39,14 +82,14 @@ function concurrencyScopeOf(task: string, concurrencyKey: ConcurrencyKey | undef
 
 export function engineKeysOf(prefix: string): EngineKeys {
   const keyOf = (...segments: string[]) => [hashTaggedPrefixOf(prefix), ...segments].join(":");
-  const runRecord = (runId: RunId) => keyOf("run", encodeURIComponent(runId));
+  const runRecord = (task: string, runId: RunId) => keyOf("run", encodeURIComponent(storedRunIdOf(task, runId)));
   const schedules = keyOf("schedules");
   const scheduleRecordKeyStart = `${keyOf("schedule")}:`;
   return {
     runRecord,
-    runPayload: (runId) => `${runRecord(runId)}:payload`,
-    runErrors: (runId) => `${runRecord(runId)}:errors`,
-    runSteps: (runId) => `${runRecord(runId)}:steps`,
+    runPayload: (task, runId) => `${runRecord(task, runId)}:payload`,
+    runErrors: (task, runId) => `${runRecord(task, runId)}:errors`,
+    runSteps: (task, runId) => `${runRecord(task, runId)}:steps`,
     pending: keyOf("pending"),
     due: keyOf("due"),
     locks: keyOf("locks"),

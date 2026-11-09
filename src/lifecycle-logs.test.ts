@@ -106,13 +106,23 @@ describe("the lines of a dispatch and an emit", () => {
   };
 
   test("a created run of a dispatch writes run dispatched", () => {
-    expect(enqueueLinesOf(dispatchRequest, { kind: "enqueued", createdRunIds: ["run-1"], skippedRunIds: [] })).toEqual([
-      { level: "debug", message: "run dispatched", fields: { task: "send-email", runId: "run-1" } },
-    ]);
+    expect(
+      enqueueLinesOf(dispatchRequest, {
+        kind: "enqueued",
+        createdRuns: [{ task: "send-email", runId: "run-1" }],
+        skippedRuns: [],
+      }),
+    ).toEqual([{ level: "debug", message: "run dispatched", fields: { task: "send-email", runId: "run-1" } }]);
   });
 
   test("a skipped run of a dispatch writes duplicate dispatch dropped with the task and run id", () => {
-    expect(enqueueLinesOf(dispatchRequest, { kind: "enqueued", createdRunIds: [], skippedRunIds: ["run-1"] })).toEqual([
+    expect(
+      enqueueLinesOf(dispatchRequest, {
+        kind: "enqueued",
+        createdRuns: [],
+        skippedRuns: [{ task: "send-email", runId: "run-1" }],
+      }),
+    ).toEqual([
       { level: "debug", message: "duplicate dispatch dropped", fields: { task: "send-email", runId: "run-1" } },
     ]);
   });
@@ -127,8 +137,8 @@ describe("the lines of a dispatch and an emit", () => {
     expect(
       enqueueLinesOf(emitRequest, {
         kind: "enqueued",
-        createdRunIds: ["listener-run-1"],
-        skippedRunIds: ["listener-run-2"],
+        createdRuns: [{ task: "send-email", runId: "listener-run-1" }],
+        skippedRuns: [{ task: "sync-crm", runId: "listener-run-2" }],
       }),
     ).toEqual([
       {

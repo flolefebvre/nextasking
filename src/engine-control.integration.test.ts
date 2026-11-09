@@ -134,7 +134,7 @@ controlTest(
 
     const { runId } = await control.fireSchedule("build-report");
 
-    const [retries, scheduledAt] = await redis.hmget(keys.runRecord(runId), "retries", "scheduledAt");
+    const [retries, scheduledAt] = await redis.hmget(keys.runRecord("build-report", runId), "retries", "scheduledAt");
     expect(retries).toBe("4");
     expect(runId).toBe(deriveFiringRunId("build-report", Number(scheduledAt)));
     expect(Number(scheduledAt)).toBeGreaterThanOrEqual(instantBefore);
@@ -205,7 +205,7 @@ controlTest("reset waits for the attempts still executing and times out naming h
   const reset = control.reset({ timeout: "1s" });
 
   await expect(reset).rejects.toThrow("reset() found attempts still executing after 1s: 1 executing");
-  expect(await redis.exists(keys.runRecord("executing-run"))).toBe(1);
+  expect(await redis.exists(keys.runRecord("send-email", "executing-run"))).toBe(1);
 });
 
 controlTest("reset refuses under NODE_ENV=production before touching anything", async (context) => {
@@ -218,7 +218,7 @@ controlTest("reset refuses under NODE_ENV=production before touching anything", 
     await expect(reset).rejects.toThrow(
       "reset() removes every key under the prefix, so it refuses to run in a process whose NODE_ENV is production",
     );
-    expect(await redis.exists(keys.runRecord("pending-run"))).toBe(1);
+    expect(await redis.exists(keys.runRecord("send-email", "pending-run"))).toBe(1);
   } finally {
     vi.unstubAllEnvs();
   }

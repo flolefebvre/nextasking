@@ -227,7 +227,7 @@ test("a failing attempt built for a third stall carries the notice and the liste
   expect(listenersLeftOut.map(({ listenerName }) => listenerName)).toEqual(["broken-key-listener"]);
 });
 
-test("a settle request carries the run's fence, the outcome with its error recorded for the attempt, and the task's limit", async () => {
+test("a settle request carries the run's task and fence, the outcome with its error recorded for the attempt, and the task's limit", async () => {
   const engine = createInMemoryEngine();
   const sendEmail = defineTask("send-email", {
     schema: v.object({}),
@@ -245,6 +245,7 @@ test("a settle request carries the run's fence, the outcome with its error recor
   });
 
   expect(request).toEqual({
+    task: "send-email",
     runId: "run-1",
     lockToken: lockedRun.lockToken,
     concurrencyLimit: 3,

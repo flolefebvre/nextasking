@@ -10,8 +10,8 @@ import type { ErrorRecord, FailureReason, SourceEvent } from "../run-queue.js";
 import { isRunState } from "../run-states.js";
 import type { RunState } from "../run-states.js";
 import { ENQUEUE_SCRIPT, enqueueKeysOf } from "./enqueue-script.js";
-import { engineKeysOf, hashTaggedPrefixOf } from "./engine-keys.js";
-import type { LockToken } from "./engine-keys.js";
+import { engineKeysOf, hashTaggedPrefixOf, runIdentityOf, storedRunIdOf } from "./engine-keys.js";
+import type { LockToken, RunIdentity } from "./engine-keys.js";
 import {
   FETCH_SCRIPT,
   fetchKeysOf,
@@ -75,6 +75,7 @@ export type RunToCreate = {
 };
 
 export type ParentFence = {
+  parentTask: string;
   parentRunId: RunId;
   lockToken: LockToken;
   stepId: StepId;
@@ -105,7 +106,7 @@ export type NoScheduleReply = { kind: "noSchedule" };
 
 export type NotDueReply = { kind: "notDue" };
 
-export type EnqueuedReply = { kind: "enqueued"; createdRunIds: RunId[]; skippedRunIds: RunId[] };
+export type EnqueuedReply = { kind: "enqueued"; createdRuns: RunIdentity[]; skippedRuns: RunIdentity[] };
 
 export type AlreadySentReply = { kind: "alreadySent"; savedValue: SerializedStepValue };
 
@@ -146,7 +147,7 @@ export type FetchedReply = {
 
 export type FetchReply = FetchedReply | UnknownVersionReply;
 
-export type HeldLock = { runId: RunId; lockToken: LockToken };
+export type HeldLock = RunIdentity & { lockToken: LockToken };
 
 export type RenewRequest = {
   heldLocks: readonly HeldLock[];
@@ -169,9 +170,7 @@ export type SettleOutcome =
   | { kind: "yield" }
   | { kind: "handBack"; error: ErrorRecord; failureNotice: FailureNotice | undefined };
 
-export type SettleRequest = {
-  runId: RunId;
-  lockToken: LockToken;
+export type SettleRequest = HeldLock & {
   outcome: SettleOutcome;
   concurrencyLimit?: number;
 };
@@ -214,9 +213,7 @@ export type StepToSave =
   | { kind: "sleep"; durationInMilliseconds: DurationInMilliseconds }
   | { kind: "sleepUntil"; resumesAt: EpochMilliseconds };
 
-export type SaveStepRequest = {
-  runId: RunId;
-  lockToken: LockToken;
+export type SaveStepRequest = HeldLock & {
   stepId: StepId;
   step: StepToSave;
 };
@@ -226,7 +223,7 @@ export type SavedSleepReply = { kind: "saved"; resumesAt: EpochMilliseconds; isD
 export type SaveStepReply =
   { kind: "saved"; resumesAt: undefined } | SavedSleepReply | StaleReply | UnknownVersionReply;
 
-export type ReadStepRequest = { runId: RunId; lockToken: LockToken; stepId: StepId };
+export type ReadStepRequest = HeldLock & { stepId: StepId };
 
 export type ReadStepReply =
   { kind: "read"; savedValue: SerializedStepValue | undefined } | StaleReply | UnknownVersionReply;
@@ -263,13 +260,13 @@ export type PruneRequest = { task: string; completedRetention: RetentionLimit; f
 
 export type PruneReply = { kind: "pruned"; prunedRunCount: number };
 
-export type ReplayRequest = { runId: RunId };
+export type ReplayRequest = RunIdentity;
 
 export type ReplayReply = { kind: "replayed"; task: string } | NotFoundReply | WrongStateReply | UnknownVersionReply;
 
 export type MakeDueRequest = { task?: string };
 
-export type MadeDueRun = { task: string; runId: RunId };
+export type MadeDueRun = RunIdentity;
 
 export type MakeDueReply = { kind: "madeDue"; madeDueRuns: MadeDueRun[] };
 
@@ -376,23 +373,35 @@ function storedIntegersByFieldOf<Field extends string>(
   return integersByField as Record<Field, number>;
 }
 
+function runIdentityOfStoredRun(
+  storedRunId: string | null | undefined,
+  task: string | null | undefined,
+): RunIdentity | undefined {
+  const runIdentity = storedRunId == null ? undefined : runIdentityOf(storedRunId);
+  return runIdentity?.task === task ? runIdentity : undefined;
+}
+
+function runIdentitiesOf(storedRunIds: readonly string[]): RunIdentity[] | undefined {
+  return definedElementsOf(storedRunIds.map(runIdentityOf));
+}
+
 function lockedRunOf(reply: unknown): LockedRun | undefined {
   if (!isStoredValueList(reply) || reply.length !== 16) {
     return undefined;
   }
-  const [lockToken, runId, task, payload, ...storedFields] = reply.map(nullIfAbsent);
+  const [lockToken, storedRunId, task, payload, ...storedFields] = reply.map(nullIfAbsent);
   const [attempt, retries, replays, isResume, dispatchedAt, startedAt, lockedUntil] = storedFields;
   const [scheduledAt, eventName, eventId, concurrencyKey, sleepsWokenAt] = storedFields.slice(7);
   const integersByField = storedIntegersByFieldOf({ attempt, retries, replays, dispatchedAt, startedAt, lockedUntil });
-  if (lockToken == null || runId == null || task == null || payload == null || integersByField === undefined) {
+  const runIdentity = runIdentityOfStoredRun(storedRunId, task);
+  if (lockToken == null || runIdentity === undefined || payload == null || integersByField === undefined) {
     return undefined;
   }
   const storedScheduledAt = storedIntegerOf(nullIfAbsent(scheduledAt));
   const storedSleepsWokenAt = storedIntegerOf(nullIfAbsent(sleepsWokenAt));
   return {
     lockToken,
-    runId,
-    task,
+    ...runIdentity,
     payload,
     ...integersByField,
     isResume: isResume === "1",
@@ -416,12 +425,13 @@ function parkedRunOf(reply: unknown): ParkedRun | undefined {
   if (!isStoredValueList(reply) || reply.length !== 6) {
     return undefined;
   }
-  const [runId, task, storedAttempt, ...storedOrigin] = reply.map(nullIfAbsent);
+  const [storedRunId, task, storedAttempt, ...storedOrigin] = reply.map(nullIfAbsent);
   const attempt = storedIntegerOf(nullIfAbsent(storedAttempt));
-  if (runId == null || task == null || attempt === undefined) {
+  const runIdentity = runIdentityOfStoredRun(storedRunId, task);
+  if (runIdentity === undefined || attempt === undefined) {
     return undefined;
   }
-  return { runId, task, attempt, ...runOriginOf(storedOrigin) };
+  return { ...runIdentity, attempt, ...runOriginOf(storedOrigin) };
 }
 
 function definedElementsOf<Element>(elements: readonly (Element | undefined)[]): Element[] | undefined {
@@ -531,23 +541,25 @@ function stalledRunOf(reply: unknown): StalledRun | undefined {
   if (!isStoredValueList(reply) || reply.length !== 7) {
     return undefined;
   }
-  const [runId, task, storedAttempt, storedStalls, ...storedOrigin] = reply.map(nullIfAbsent);
+  const [storedRunId, task, storedAttempt, storedStalls, ...storedOrigin] = reply.map(nullIfAbsent);
   const integersByField = storedIntegersByFieldOf({ attempt: storedAttempt, stalls: storedStalls });
-  return runId == null || task == null || integersByField === undefined
+  const runIdentity = runIdentityOfStoredRun(storedRunId, task);
+  return runIdentity === undefined || integersByField === undefined
     ? undefined
-    : { runId, task, ...integersByField, ...runOriginOf(storedOrigin) };
+    : { ...runIdentity, ...integersByField, ...runOriginOf(storedOrigin) };
 }
 
 function thirdStallOf(reply: unknown): ThirdStall | undefined {
   if (!isStoredValueList(reply) || reply.length !== 10) {
     return undefined;
   }
-  const [runId, task, attempt, expiredLockToken, replays, dispatchedAt, startedAt, ...storedOrigin] =
+  const [storedRunId, task, attempt, expiredLockToken, replays, dispatchedAt, startedAt, ...storedOrigin] =
     reply.map(nullIfAbsent);
   const integersByField = storedIntegersByFieldOf({ attempt, replays, dispatchedAt, startedAt });
-  return runId == null || task == null || expiredLockToken == null || integersByField === undefined
+  const runIdentity = runIdentityOfStoredRun(storedRunId, task);
+  return runIdentity === undefined || expiredLockToken == null || integersByField === undefined
     ? undefined
-    : { runId, task, expiredLockToken, ...integersByField, ...runOriginOf(storedOrigin) };
+    : { ...runIdentity, expiredLockToken, ...integersByField, ...runOriginOf(storedOrigin) };
 }
 
 function promoteReplyOf(reply: unknown): PromoteReply {
@@ -620,7 +632,7 @@ const FIRE_REFUSALS_BY_KIND: Readonly<Record<string, FireReply>> = {
   noSchedule: { kind: "noSchedule" },
 };
 
-function fireReplyOf(reply: unknown): FireReply {
+function fireReplyOf(reply: unknown, task: string): FireReply {
   const unknownVersionReply = unknownVersionReplyOf(reply);
   if (unknownVersionReply !== undefined) {
     return unknownVersionReply;
@@ -631,10 +643,10 @@ function fireReplyOf(reply: unknown): FireReply {
       return fireRefusal;
     }
   }
-  return firedReplyOf(reply) ?? throwUnreadableReply("fire", reply);
+  return firedReplyOf(reply, task) ?? throwUnreadableReply("fire", reply);
 }
 
-function firedReplyOf(reply: unknown): FiredReply | undefined {
+function firedReplyOf(reply: unknown, task: string): FiredReply | undefined {
   if (
     Array.isArray(reply) &&
     reply.length === 3 &&
@@ -642,7 +654,10 @@ function firedReplyOf(reply: unknown): FiredReply | undefined {
     typeof reply[1] === "string" &&
     (reply[2] === 0 || reply[2] === 1)
   ) {
-    return { kind: "fired", runId: reply[1], isRunCreated: reply[2] === 1 };
+    const runIdentity = runIdentityOfStoredRun(reply[1], task);
+    return runIdentity === undefined
+      ? undefined
+      : { kind: "fired", runId: runIdentity.runId, isRunCreated: reply[2] === 1 };
   }
   return undefined;
 }
@@ -651,7 +666,7 @@ function throwUnreadableReply(scriptName: string, reply: unknown): never {
   throw unreadableReplyError(scriptName, reply);
 }
 
-function fireNowReplyOf(reply: unknown): FireNowReply {
+function fireNowReplyOf(reply: unknown, task: string): FireNowReply {
   const unknownVersionReply = unknownVersionReplyOf(reply);
   if (unknownVersionReply !== undefined) {
     return unknownVersionReply;
@@ -659,7 +674,7 @@ function fireNowReplyOf(reply: unknown): FireNowReply {
   if (Array.isArray(reply) && reply.length === 1 && reply[0] === "noSchedule") {
     return { kind: "noSchedule" };
   }
-  return firedReplyOf(reply) ?? throwUnreadableReply("fireNow", reply);
+  return firedReplyOf(reply, task) ?? throwUnreadableReply("fireNow", reply);
 }
 
 function scheduleSummaryOf(reply: unknown): ScheduleSummary | undefined {
@@ -731,8 +746,8 @@ function madeDueRunOf(reply: unknown): MadeDueRun | undefined {
   if (!isStringList(reply) || reply.length !== 2) {
     return undefined;
   }
-  const [task, runId] = reply as [string, RunId];
-  return { task, runId };
+  const [task, storedRunId] = reply as [string, string];
+  return runIdentityOfStoredRun(storedRunId, task);
 }
 
 function makeDueReplyOf(reply: unknown): MakeDueReply {
@@ -758,8 +773,10 @@ function enqueueReplyOf(reply: unknown): EnqueueReply {
   }
   if (Array.isArray(reply) && reply.length === 3 && reply[0] === "enqueued") {
     const [, createdRunIds, skippedRunIds]: unknown[] = reply;
-    if (isStringList(createdRunIds) && isStringList(skippedRunIds)) {
-      return { kind: "enqueued", createdRunIds, skippedRunIds };
+    const createdRuns = isStringList(createdRunIds) ? runIdentitiesOf(createdRunIds) : undefined;
+    const skippedRuns = isStringList(skippedRunIds) ? runIdentitiesOf(skippedRunIds) : undefined;
+    if (createdRuns !== undefined && skippedRuns !== undefined) {
+      return { kind: "enqueued", createdRuns, skippedRuns };
     }
   }
   throw unreadableReplyError("enqueue", reply);
@@ -767,7 +784,7 @@ function enqueueReplyOf(reply: unknown): EnqueueReply {
 
 function runArgumentsOf(run: RunToCreate): ScriptArgument[] {
   return [
-    run.runId,
+    storedRunIdOf(run.task, run.runId),
     run.task,
     run.payload,
     run.retries,
@@ -857,7 +874,7 @@ function renewArgumentsOf({ heldLocks, lockDurationInMilliseconds }: RenewReques
   return [
     lockDurationInMilliseconds,
     heldLocks.length,
-    ...heldLocks.flatMap(({ runId, lockToken }) => [runId, lockToken]),
+    ...heldLocks.flatMap(({ task, runId, lockToken }) => [storedRunIdOf(task, runId), lockToken]),
   ];
 }
 
@@ -1033,13 +1050,13 @@ export function createEngine(client: Redis, prefix: string): Engine {
   const runPruneScript = scriptRunnerWithKeysOf("nextaskingPrune", PRUNE_SCRIPT, 3);
   return {
     serverInstant: async () => serverInstantOf(await client.time()),
-    replay: async ({ runId }) => replayReplyOf(await runReplayScript([runId])),
+    replay: async ({ task, runId }) => replayReplyOf(await runReplayScript([storedRunIdOf(task, runId)])),
     prune: async (request) =>
       pruneReplyOf(await runPruneScript(pruneKeysOf(keys, request.task), pruneArgumentsOf(request))),
     fire: async ({ task, instant, instantAfter, runId, retries }) =>
-      fireReplyOf(await runFireScript([task, instant, instantAfter, runId, retries])),
+      fireReplyOf(await runFireScript([task, instant, instantAfter, storedRunIdOf(task, runId), retries]), task),
     fireNow: async ({ task, instant, runId, defaultRetries }) =>
-      fireNowReplyOf(await runFireNowScript([task, instant, runId, defaultRetries])),
+      fireNowReplyOf(await runFireNowScript([task, instant, storedRunIdOf(task, runId), defaultRetries]), task),
     syncSchedules: async ({ schedulesToSync }) =>
       syncSchedulesReplyOf(
         await runSyncSchedulesScript([
@@ -1062,18 +1079,20 @@ export function createEngine(client: Redis, prefix: string): Engine {
           task ?? "",
         ]),
       ),
-    saveStep: async ({ runId, lockToken, stepId, step }) =>
+    saveStep: async ({ task, runId, lockToken, stepId, step }) =>
       saveStepReplyOf(
-        await runSaveStepScript(saveStepKeysOf(keys, runId), [
-          runId,
+        await runSaveStepScript(saveStepKeysOf(keys, task, runId), [
+          storedRunIdOf(task, runId),
           lockToken,
           stepId,
           step.kind,
           stepArgumentOf(step),
         ]),
       ),
-    readStep: async ({ runId, lockToken, stepId }) =>
-      readStepReplyOf(await runReadStepScript(readStepKeysOf(keys, runId), [runId, lockToken, stepId])),
+    readStep: async ({ task, runId, lockToken, stepId }) =>
+      readStepReplyOf(
+        await runReadStepScript(readStepKeysOf(keys, task, runId), [storedRunIdOf(task, runId), lockToken, stepId]),
+      ),
     promote: async () => promoteReplyOf(await runPromoteScript(PROMOTE_ARGUMENTS)),
     tick: async (request) => {
       const pipeline = client.pipeline();
@@ -1094,10 +1113,10 @@ export function createEngine(client: Redis, prefix: string): Engine {
       }
       return tickReplyOf(await pipeline.exec(), request);
     },
-    settle: async ({ runId, lockToken, outcome, concurrencyLimit }) =>
+    settle: async ({ task, runId, lockToken, outcome, concurrencyLimit }) =>
       settleReplyOf(
         await runSettleScript([
-          runId,
+          storedRunIdOf(task, runId),
           lockToken,
           outcome.kind,
           DEDUP_WINDOW_IN_MILLISECONDS,
@@ -1128,7 +1147,7 @@ export function createEngine(client: Redis, prefix: string): Engine {
           EXPIRED_DEDUP_ENTRIES_TRIMMED_PER_SET,
           eventDedup?.eventName ?? "",
           eventDedup?.eventId ?? "",
-          parentFence?.parentRunId ?? "",
+          parentFence === undefined ? "" : storedRunIdOf(parentFence.parentTask, parentFence.parentRunId),
           parentFence?.lockToken ?? "",
           parentFence?.stepId ?? "",
           parentFence?.stepValue ?? "",

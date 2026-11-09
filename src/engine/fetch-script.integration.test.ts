@@ -4,6 +4,7 @@ import { engineTest, storedValuesByKeyOf } from "../../tests/engine-test.js";
 import type { EngineTestContext } from "../../tests/engine-test.js";
 import { freshLockTokensOf } from "../../tests/lock-tokens.js";
 import { serverInstantInMillisecondsOf } from "../../tests/server-instant.js";
+import { storedRunIdOf } from "./engine-keys.js";
 import type { EngineKeys } from "./engine-keys.js";
 import type { FetchedReply, FetchReply, FetchRequest, LockedRun, RunToCreate } from "./engine.js";
 import { MOST_LOCK_TOKENS_PER_FETCH, MOST_RUNS_PARKED_PER_FETCH } from "./fetch-script.js";
@@ -40,7 +41,7 @@ function fetchedReplyOf(reply: FetchReply): FetchedReply {
 
 async function markRecordsNewer(context: EngineTestContext, runIds: readonly string[]): Promise<void> {
   for (const runId of runIds) {
-    await context.redis.hset(context.keys.runRecord(runId), "version", 2);
+    await context.redis.hset(context.keys.runRecord("send-email", runId), "version", 2);
   }
 }
 
@@ -73,17 +74,17 @@ engineTest(
       expect(startedAt).toBeGreaterThanOrEqual(instantBefore);
       expect(startedAt).toBeLessThanOrEqual(instantAfter);
       expect(lockedUntil).toBe(startedAt + LOCK_DURATION_IN_MILLISECONDS);
-      expect(await redis.hmget(keys.runRecord(runId), "state", "lockToken", "lockedUntil", "startedAt")).toEqual([
-        "executing",
-        lockToken,
-        String(lockedUntil),
-        String(startedAt),
-      ]);
-      expect(await redis.get(keys.lock(lockToken))).toBe(runId);
+      expect(
+        await redis.hmget(keys.runRecord("send-email", runId), "state", "lockToken", "lockedUntil", "startedAt"),
+      ).toEqual(["executing", lockToken, String(lockedUntil), String(startedAt)]);
+      expect(await redis.get(keys.lock(lockToken))).toBe(storedRunIdOf("send-email", runId));
       expect(await redis.pttl(keys.lock(lockToken))).toBeGreaterThan(0);
       expect(await redis.pttl(keys.lock(lockToken))).toBeLessThanOrEqual(LOCK_DURATION_IN_MILLISECONDS);
     }
-    expect((await redis.smembers(keys.slotSet("send-email", undefined))).sort()).toEqual(["run-1", "run-2"]);
+    expect((await redis.smembers(keys.slotSet("send-email", undefined))).sort()).toEqual([
+      storedRunIdOf("send-email", "run-1"),
+      storedRunIdOf("send-email", "run-2"),
+    ]);
     expect(await sortedSetMembersOf(context, ({ pending }) => pending)).toEqual([]);
   },
 );
@@ -95,7 +96,7 @@ engineTest("a fetch of fewer tokens than pending runs locks one run per token", 
   const lockedRunIds = await lockedRunIdsOf(engine.fetch(fetchRequestOf(2)));
 
   expect(lockedRunIds).toEqual(["run-1", "run-2"]);
-  expect(await sortedSetMembersOf(context, ({ pending }) => pending)).toEqual(["run-3"]);
+  expect(await sortedSetMembersOf(context, ({ pending }) => pending)).toEqual([storedRunIdOf("send-email", "run-3")]);
 });
 
 engineTest("a locked run carries what its attempt needs to execute", async ({ engine }) => {
@@ -150,12 +151,14 @@ engineTest(
       { runId: "account-7-2", task: "send-email", attempt: 1 },
       { runId: "account-7-3", task: "send-email", attempt: 1 },
     ]);
-    expect(await redis.hget(keys.runRecord("account-7-2"), "state")).toBe("waitingForConcurrencySlot");
+    expect(await redis.hget(keys.runRecord("send-email", "account-7-2"), "state")).toBe("waitingForConcurrencySlot");
     expect(await sortedSetMembersOf(context, ({ waitingList }) => waitingList("send-email", "account-7"))).toEqual([
-      "account-7-2",
-      "account-7-3",
+      storedRunIdOf("send-email", "account-7-2"),
+      storedRunIdOf("send-email", "account-7-3"),
     ]);
-    expect(await redis.smembers(keys.slotSet("send-email", "account-7"))).toEqual(["account-7-1"]);
+    expect(await redis.smembers(keys.slotSet("send-email", "account-7"))).toEqual([
+      storedRunIdOf("send-email", "account-7-1"),
+    ]);
   },
 );
 
@@ -268,7 +271,7 @@ async function resumedRunFetchedTwiceOf(
   resumeFields: Record<string, number>,
 ): Promise<{ lockedRun: LockedRun | undefined; resentLockedRun: LockedRun | undefined }> {
   await engine.enqueue({ runs: sendEmailRunsOf(1) });
-  await redis.hset(keys.runRecord("run-1"), resumeFields);
+  await redis.hset(keys.runRecord("send-email", "run-1"), resumeFields);
   const request = fetchRequestOf(1);
   const [lockedRun] = fetchedReplyOf(await engine.fetch(request)).lockedRuns;
   const [resentLockedRun] = fetchedReplyOf(await engine.fetch(request)).lockedRuns;
@@ -283,8 +286,11 @@ engineTest(
     const { lockedRun, resentLockedRun } = await resumedRunFetchedTwiceOf(context, { resumesAt: 1000 });
 
     expect(lockedRun?.isResume).toBe(true);
-    expect(await redis.hexists(keys.runRecord("run-1"), "resumesAt")).toBe(0);
-    expect(await redis.hmget(keys.runRecord("run-1"), "isLockAResume", "lockSleepsWokenAt")).toEqual(["1", null]);
+    expect(await redis.hexists(keys.runRecord("send-email", "run-1"), "resumesAt")).toBe(0);
+    expect(await redis.hmget(keys.runRecord("send-email", "run-1"), "isLockAResume", "lockSleepsWokenAt")).toEqual([
+      "1",
+      null,
+    ]);
     expect(resentLockedRun).toEqual(lockedRun);
   },
 );
@@ -300,8 +306,8 @@ engineTest(
     });
 
     expect(lockedRun?.sleepsWokenAt).toBe(1000);
-    expect(await redis.hexists(keys.runRecord("run-1"), "sleepsWokenAt")).toBe(0);
-    expect(await redis.hget(keys.runRecord("run-1"), "lockSleepsWokenAt")).toBe("1000");
+    expect(await redis.hexists(keys.runRecord("send-email", "run-1"), "sleepsWokenAt")).toBe(0);
+    expect(await redis.hget(keys.runRecord("send-email", "run-1"), "lockSleepsWokenAt")).toBe("1000");
     expect(resentLockedRun).toEqual(lockedRun);
   },
 );
@@ -313,7 +319,10 @@ engineTest("a fresh lock overwrites the pickup fields a previous lock left on th
 
   expect(lockedRun).toMatchObject({ isResume: false });
   expect(lockedRun).not.toHaveProperty("sleepsWokenAt");
-  expect(await redis.hmget(keys.runRecord("run-1"), "isLockAResume", "lockSleepsWokenAt")).toEqual(["0", null]);
+  expect(await redis.hmget(keys.runRecord("send-email", "run-1"), "isLockAResume", "lockSleepsWokenAt")).toEqual([
+    "0",
+    null,
+  ]);
 });
 
 engineTest(
@@ -346,7 +355,11 @@ engineTest(
 
     expect(reply.lockedRuns.map(({ runId }) => runId)).toEqual(["run-3", "run-5"]);
     expect(reply.passedOverRecordVersions).toEqual([2, 2, 2]);
-    expect(await sortedSetMembersOf(context, ({ pending }) => pending)).toEqual(["run-1", "run-2", "run-4"]);
+    expect(await sortedSetMembersOf(context, ({ pending }) => pending)).toEqual([
+      storedRunIdOf("send-email", "run-1"),
+      storedRunIdOf("send-email", "run-2"),
+      storedRunIdOf("send-email", "run-4"),
+    ]);
   },
 );
 

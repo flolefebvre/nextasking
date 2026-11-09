@@ -679,7 +679,7 @@ function topLevelSendId(positionInScope: number): string {
 }
 
 describe("handler dispatch and emit", () => {
-  test("hand the sender the parent's fence: the run, its lock token and the derived send id", async () => {
+  test("hand the sender the parent's fence: the run and its task, its lock token and the derived send id", async () => {
     const fences: SendFence[] = [];
     const sender: HandlerSender = {
       dispatch: async (fence, _name, _payload, options) => {
@@ -699,8 +699,9 @@ describe("handler dispatch and emit", () => {
     });
 
     expect(fences).toStrictEqual([
-      { parentRunId: "run-7", lockToken: LOCK_TOKEN, stepId: topLevelSendId(0) },
+      { parentTask: "send-invoice", parentRunId: "run-7", lockToken: LOCK_TOKEN, stepId: topLevelSendId(0) },
       {
+        parentTask: "send-invoice",
         parentRunId: "run-7",
         lockToken: LOCK_TOKEN,
         stepId: deriveHandlerSendId("send-invoice", "run-7", "notify", 0),

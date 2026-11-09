@@ -10,7 +10,7 @@ import { serverInstantInMillisecondsOf } from "../tests/server-instant.js";
 import { withRedis } from "../tests/with-redis.js";
 import { defineScheduledTask } from "./definitions.js";
 import type { AnyTaskDefinition } from "./definitions.js";
-import { engineKeysOf } from "./engine/engine-keys.js";
+import { engineKeysOf, runIdentityOf, storedRunIdOf } from "./engine/engine-keys.js";
 import { createEngine, RECORD_VERSION } from "./engine/engine.js";
 import type { LockedRun, RunToCreate, SettleOutcome } from "./engine/engine.js";
 import { createEngineReader } from "./engine-reader.js";
@@ -94,8 +94,8 @@ async function settleEach(
   }
 }
 
-async function recordFieldOf(context: EngineTestContext, runId: RunId, field: string): Promise<Date> {
-  return new Date(Number(await context.redis.hget(context.keys.runRecord(runId), field)));
+async function recordFieldOf(context: EngineTestContext, task: string, runId: RunId, field: string): Promise<Date> {
+  return new Date(Number(await context.redis.hget(context.keys.runRecord(task, runId), field)));
 }
 
 engineTest(
@@ -175,7 +175,7 @@ engineTest("getRun reads each state with its own field and attempt", async (cont
   expect(runsByRunId["backing-off-run"]).toMatchObject({
     state: "backingOff",
     attempt: 2,
-    nextAttemptAt: await recordFieldOf(context, "backing-off-run", "nextAttemptAt"),
+    nextAttemptAt: await recordFieldOf(context, "send-email", "backing-off-run", "nextAttemptAt"),
   });
   expect(runsByRunId["suspended-run"]).toMatchObject({
     state: "suspended",
@@ -186,12 +186,12 @@ engineTest("getRun reads each state with its own field and attempt", async (cont
     state: "failed",
     attempt: 1,
     reason: "non-retriable",
-    finishedAt: await recordFieldOf(context, "failed-run", "finishedAt"),
+    finishedAt: await recordFieldOf(context, "send-email", "failed-run", "finishedAt"),
   });
   expect(runsByRunId["completed-run"]).toMatchObject({
     state: "completed",
     attempt: 1,
-    finishedAt: await recordFieldOf(context, "completed-run", "finishedAt"),
+    finishedAt: await recordFieldOf(context, "send-email", "completed-run", "finishedAt"),
     steps: [],
   });
   expect(runsByRunId["parked-run"]).toMatchObject({ state: "waitingForConcurrencySlot", attempt: 1 });
@@ -199,7 +199,7 @@ engineTest("getRun reads each state with its own field and attempt", async (cont
   expect(runsByRunId["delayed-run"]).toMatchObject({
     state: "delayed",
     attempt: 1,
-    startsAt: await recordFieldOf(context, "delayed-run", "startsAt"),
+    startsAt: await recordFieldOf(context, "send-email", "delayed-run", "startsAt"),
   });
   expect(runsByRunId["pending-run"]).not.toHaveProperty("finishedAt");
 });
@@ -213,20 +213,21 @@ engineTest("getRun reads a run stored without a payload with an undefined payloa
 });
 
 engineTest(
-  "getRun reads as undefined a run never dispatched, a run of another task and a run of a newer record version",
+  "getRun reads as undefined a run never dispatched, an empty run id, a run of another task and a run of a newer record version",
   async (context) => {
     const { redis, keys } = context;
     await enqueueRuns(context, [runOf("other-task-run", "build-report"), runOf("newer-run", "send-email")]);
-    await redis.hset(keys.runRecord("newer-run"), "version", RECORD_VERSION + 1);
+    await redis.hset(keys.runRecord("send-email", "newer-run"), "version", RECORD_VERSION + 1);
     const reader = readerOf(context);
 
     const runs = [
       await reader.getRun("send-email", "never-dispatched-run"),
+      await reader.getRun("send-email", ""),
       await reader.getRun("send-email", "other-task-run"),
       await reader.getRun("send-email", "newer-run"),
     ];
 
-    expect(runs).toEqual([undefined, undefined, undefined]);
+    expect(runs).toEqual([undefined, undefined, undefined, undefined]);
   },
 );
 
@@ -246,7 +247,7 @@ engineTest(
       runOf("delayed-run", "build-report", { delayInMilliseconds: 60_000 }),
       runOf("removed-task-run", "removed-task"),
     ]);
-    await redis.hset(keys.runRecord("newer-run"), "version", RECORD_VERSION + 1);
+    await redis.hset(keys.runRecord("send-email", "newer-run"), "version", RECORD_VERSION + 1);
     const reader = readerOf(context);
 
     const runCounts = await reader.countRuns();
@@ -305,7 +306,12 @@ engineTest("getEvent reads every listener as undefined once retention removed it
   });
   await settleEach(context, await fetchedLockedRunsOf(context, LISTENER_NAMES.length), { kind: "complete" });
   for (const listenerName of LISTENER_NAMES) {
-    await backdateEndedRun(context, deriveListenerRunId("event-1", listenerName), 2 * DAY_IN_MILLISECONDS);
+    await backdateEndedRun(
+      context,
+      listenerName,
+      deriveListenerRunId("event-1", listenerName),
+      2 * DAY_IN_MILLISECONDS,
+    );
     await engine.prune({
       task: listenerName,
       completedRetention: DEFAULT_WORKER_TIMING.completedRunRetention,
@@ -437,17 +443,17 @@ async function runIdsInPromisedOrderOf(
   taskNames: readonly string[],
   state: RunState,
 ): Promise<RunId[]> {
-  const indexEntries: { runId: RunId; score: number }[] = [];
+  const indexEntries: { storedRunId: string; score: number }[] = [];
   for (const taskName of taskNames) {
     const membersWithScores = await redis.zrange(keys.runIndex(taskName, state), 0, -1, "WITHSCORES");
     for (let position = 0; position < membersWithScores.length; position += 2) {
-      indexEntries.push({ runId: membersWithScores[position]!, score: Number(membersWithScores[position + 1]) });
+      indexEntries.push({ storedRunId: membersWithScores[position]!, score: Number(membersWithScores[position + 1]) });
     }
   }
-  const compareAsciiRunIds = (left: RunId, right: RunId) => (left < right ? -1 : Number(left > right));
+  const compareAsciiStoredRunIds = (left: string, right: string) => (left < right ? -1 : Number(left > right));
   return indexEntries
-    .sort((left, right) => right.score - left.score || compareAsciiRunIds(right.runId, left.runId))
-    .map(({ runId }) => runId);
+    .sort((left, right) => right.score - left.score || compareAsciiStoredRunIds(right.storedRunId, left.storedRunId))
+    .map(({ storedRunId }) => runIdentityOf(storedRunId)!.runId);
 }
 
 async function endRunsOfEachTask(context: EngineTestContext, runCountPerTask: number): Promise<RunId[]> {
@@ -577,12 +583,12 @@ engineTest("a walk goes on past a cursor whose run was pruned between two pages"
   const reader = readerOf(context);
   const firstPage = await reader.listRuns({ state: "completed", limit: 2 });
   const cursorRunId = firstPage.runs.at(-1)!.runId;
-  await backdateEndedRun(context, cursorRunId, 2 * DAY_IN_MILLISECONDS);
+  await backdateEndedRun(context, "send-email", cursorRunId, 2 * DAY_IN_MILLISECONDS);
   await context.engine.prune(SEND_EMAIL_PRUNE_REQUEST);
 
   const nextPages = await walkedPagesOf(reader, { state: "completed" }, [2], firstPage.nextCursor);
 
-  expect(await context.redis.exists(context.keys.runRecord(cursorRunId))).toBe(0);
+  expect(await context.redis.exists(context.keys.runRecord("send-email", cursorRunId))).toBe(0);
   expect([...firstPage.runs.map(({ runId }) => runId), ...runIdsOfPages(nextPages)].sort()).toEqual(runIds);
   expect(runIdsOfPages(nextPages)).toEqual(
     (await runIdsInPromisedOrderOf(context, ["send-email"], "completed")).slice(1),
@@ -595,7 +601,7 @@ engineTest("a walk goes on past a cursor whose run was replayed between two page
   const reader = readerOf(context);
   const firstPage = await reader.listRuns({ state: "failed", limit: 2 });
   const remainingRunIds = (await runIdsInPromisedOrderOf(context, ["send-email"], "failed")).slice(2);
-  await context.engine.replay({ runId: firstPage.runs.at(-1)!.runId });
+  await context.engine.replay({ task: "send-email", runId: firstPage.runs.at(-1)!.runId });
 
   const nextPages = await walkedPagesOf(reader, { state: "failed" }, [2], firstPage.nextCursor);
 
@@ -715,11 +721,15 @@ integrationTest(
       const context: EngineTestContext = { engine: createEngine(redis, keyPrefix), redis, keys, keyPrefix };
       const keptRunIds = runIdsOf("kept-run", 3);
       await endRuns(context.engine, "send-email", [...keptRunIds, "newer-run"], "complete");
-      await redis.hset(keys.runRecord("newer-run"), "version", RECORD_VERSION + 1);
+      await redis.hset(keys.runRecord("send-email", "newer-run"), "version", RECORD_VERSION + 1);
       await enqueueRuns(context, [runOf("pending-run", "send-email")]);
       const latestScore = (await serverInstantInMillisecondsOf(redis)) + 60_000;
       const completedIndexKey = keys.runIndex("send-email", "completed");
-      await redis.zadd(completedIndexKey, latestScore, "ghost-run", latestScore, "pending-run");
+      const [ghostStoredRunId, pendingStoredRunId] = [
+        storedRunIdOf("send-email", "ghost-run"),
+        storedRunIdOf("send-email", "pending-run"),
+      ];
+      await redis.zadd(completedIndexKey, latestScore, ghostStoredRunId, latestScore, pendingStoredRunId);
 
       const pages = await walkedPagesOf(readerOf(context), { state: "completed" }, [2]);
 
@@ -727,8 +737,8 @@ integrationTest(
       expect([...runIdsOfPages(pages)].sort()).toEqual(keptRunIds);
       expect(await invariantViolationsOf(redis, keyPrefix)).toEqual(
         expect.arrayContaining([
-          `run "ghost-run" sits in ${completedIndexKey} but has no record with a known state`,
-          `run "pending-run" sits in ${completedIndexKey} though its record is pending`,
+          `run "${ghostStoredRunId}" sits in ${completedIndexKey} but has no record with a known state`,
+          `run "${pendingStoredRunId}" sits in ${completedIndexKey} though its record is pending`,
         ]),
       );
       expect(await invariantViolationsOf(redis, keyPrefix)).toHaveLength(2);

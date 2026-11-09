@@ -1,4 +1,5 @@
 import type { DurationInMilliseconds, EpochMilliseconds } from "./durations.js";
+import type { RunIdentity } from "./engine/engine-keys.js";
 import { RECORD_VERSION } from "./engine/engine.js";
 import type {
   DispatchOrEmitRequest,
@@ -63,16 +64,15 @@ export function enqueueLinesOf(request: DispatchOrEmitRequest, reply: EnqueueRep
   if (reply?.kind !== "enqueued") {
     return [];
   }
-  const taskByRunId = new Map(runs.map(({ runId, task }) => [runId, task]));
-  const runLinesOf = (runIds: readonly string[], message: string): LifecycleLine[] =>
-    runIds.map((runId) => ({
+  const runLinesOf = (runIdentities: readonly RunIdentity[], message: string): LifecycleLine[] =>
+    runIdentities.map(({ task, runId }) => ({
       level: "debug",
       message,
-      fields: { task: taskByRunId.get(runId), runId, ...eventDedup },
+      fields: { task, runId, ...eventDedup },
     }));
   return [
-    ...(eventDedup === undefined ? runLinesOf(reply.createdRunIds, "run dispatched") : []),
-    ...runLinesOf(reply.skippedRunIds, "duplicate dispatch dropped"),
+    ...(eventDedup === undefined ? runLinesOf(reply.createdRuns, "run dispatched") : []),
+    ...runLinesOf(reply.skippedRuns, "duplicate dispatch dropped"),
   ];
 }
 

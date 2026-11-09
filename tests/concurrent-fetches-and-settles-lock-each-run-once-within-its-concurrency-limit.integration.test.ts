@@ -71,6 +71,7 @@ integrationTest(
         const outcome = random() < 0.7 ? COMPLETE : YIELD;
         holderTokenByRunId.delete(lockedRun.runId);
         const reply = await engine.settle({
+          task: lockedRun.task,
           runId: lockedRun.runId,
           lockToken: lockedRun.lockToken,
           outcome,

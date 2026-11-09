@@ -1,0 +1,389 @@
+════════ valkey/valkey:8 ════════
+── A. Handshake and reply shapes
+  RESP2 handshake sent: CLIENT SETINFO | CLIENT SETINFO
+  RESP2 raw HGETALL: ["a","1","b","2"]
+  RESP2 typed hGetAll: {"a":"1","b":"2"}
+  RESP2 raw HMGET (one missing): ["1",null]
+  RESP2 raw ZRANGE REV WITHSCORES: ["m2","2","m1","1.5"]
+  RESP2 script ZRANGE WITHSCORES: ["m2","2","m1","1.5"]
+  RESP2 raw TIME: ["1794207121","134029"]
+  RESP2 raw SMEMBERS: ["x"]
+  RESP2 raw SCAN: ["0",["h"]]
+  RESP2 raw BZPOPMIN hit: ["z","m1","1.5"]
+  RESP2 raw BZPOPMIN miss: null
+  RESP2 INFO version lines: redis_version:7.2.4, valkey_version:8.1.11
+  RESP3 handshake sent: HELLO 3 | CLIENT SETINFO | CLIENT SETINFO
+  RESP3 raw HGETALL: {"a":"1","b":"2"}
+  RESP3 typed hGetAll: {"a":"1","b":"2"}
+  RESP3 raw HMGET (one missing): ["1",null]
+  RESP3 raw ZRANGE REV WITHSCORES: [["m2",2],["m1",1.5]]
+  RESP3 script ZRANGE WITHSCORES: ["m2","2","m1","1.5"]
+  RESP3 raw TIME: ["1794207121","385636"]
+  RESP3 raw SMEMBERS: ["x"]
+  RESP3 raw SCAN: ["0",["h"]]
+  RESP3 raw BZPOPMIN hit: ["z","m1",1.5]
+  RESP3 raw BZPOPMIN miss: null
+  RESP3 INFO version lines: redis_version:7.2.4, valkey_version:8.1.11
+── B. A connection reset with a command in flight, and commands sent while disconnected
+  in-flight GET at the reset: rejected in 1 ms → Error[ECONNRESET]: read ECONNRESET
+  isOpen=true isReady=false while down
+  command sent while down, after restore: resolved in 322 ms → "sent-while-down"
+  events: error(Error[ECONNRESET]: read ECONNRESET)@104ms, reconnecting@104ms, error(Error[ECONNREFUSED]: connect ECONNREFUSED 127.0.0.1:45999)@105ms, reconnecting@282ms, error(Error[ECONNREFUSED]: connect ECONNREFUSED 127.0.0.1:45999)@284ms, reconnecting@571ms, error(Error[ECONNREFUSED]: connect ECONNREFUSED 127.0.0.1:45999)@572ms, reconnecting@1126ms, connect@1127ms
+  B2 in-flight command when the server closes the connection (no reset): rejected in 1 ms → SocketClosedUnexpectedlyError: Socket closed unexpectedly
+  B2 events: error(SocketClosedUnexpectedlyError: Socket closed unexpectedly)@155ms, reconnecting@155ms, connect@155ms, ready@158ms
+── C. A black-holed connection (no reset): who notices an unanswered command?
+  C1 in-flight GET, commandOptions.timeout 1000, no socketTimeout: STILL PENDING after 3000 ms
+  C1 destroy() returned in 0 ms, isOpen=false
+  C1 the in-flight GET after destroy(): rejected in 0 ms → DisconnectsClientError: Disconnects client
+  C1 connect() again on the same client: resolved in 2 ms → "connected"
+  C1 a command on the re-connected client: resolved in 1 ms → "back"
+  C1 events: end@3014ms, connect@3015ms, ready@3016ms
+  C2 healthy idle 2.6 s, socketTimeout 1000, default strategy → events: terminated@1006ms, error(SocketTimeoutError: Socket timeout timeout. Expecting data, )@1006ms
+  C2 isOpen=false isReady=false
+  C2 a command afterwards: rejected in 0 ms → ClientClosedError: The client is closed
+  C3 healthy idle 3.6 s, socketTimeout 1000, strategy always reconnects → events: error(SocketTimeoutError: Socket timeout timeout. Expecting data, )@1009ms, reconnecting@1009ms, connect@1010ms, ready@1012ms, error(SocketTimeoutError: Socket timeout timeout. Expecting data, )@2013ms, reconnecting@2013ms, connect@2014ms, ready@2016ms, error(SocketTimeoutError: Socket timeout timeout. Expecting data, )@3016ms, reconnecting@3016ms, connect@3018ms, ready@3023ms
+  C4a frozen, one in-flight GET, nothing else written: rejected in 1002 ms → SocketTimeoutError: Socket timeout timeout. Expecting data, but didn't receive any in 1000ms.
+  C4a events: error(SocketTimeoutError: Socket timeout timeout. Expecting data, )@1003ms, reconnecting@1004ms
+  C4b frozen, in-flight GET, another command written every 300 ms: STILL PENDING after 3500 ms
+  C4b events: (none)
+── D. READONLY from a demoted primary whose connection stays open
+  SET on the demoted server: rejected in 1 ms → SimpleError: READONLY You can't write against a read only replica.
+  isReady=true after the READONLY reply; events: (none)
+  destroy() then connect(), server promoted again: resolved in 2 ms → "connected"
+  SET after the forced reconnect: resolved in 1 ms → "OK"
+── E. Scripts and pipelines
+  E1 defineScript, single call after SCRIPT FLUSH: resolved in 1 ms → 1
+  E1 sent: EVALSHA <sha> | EVAL <body 45 bytes>
+  E1 the same single call again: resolved in 1 ms → 2
+  E1 sent: EVALSHA <sha>
+  E2 defineScript twice in a pipeline, round 1: resolved in 1 ms → [3,4,["1794207137","214255"]]
+  E2 sent: EVAL <body 45 bytes> | EVALSHA <sha> | TIME
+  E2 defineScript twice in a pipeline, round 2: resolved in 1 ms → [5,6,["1794207137","214974"]]
+  E2 sent: EVAL <body 45 bytes> | EVALSHA <sha> | TIME
+  E3 raw EVALSHA pipeline, script loaded: resolved in 0 ms → [7,["1794207137","216100"],8]
+  E3 sent: EVALSHA <sha> | TIME | EVALSHA <sha>
+  E4 raw EVALSHA pipeline after SCRIPT FLUSH: SimpleError: NOSCRIPT No matching script.
+  E4 errorIndexes=undefined
+  E4 replies=undefined
+  E4 counter before=8 after=8 (nothing ran)
+  E4 the same pipeline after SCRIPT LOAD: resolved in 0 ms → [9,["1794207137","219127"],10]
+  E5 one failing command in a pipeline: SimpleError, errorIndexes=undefined, replies=undefined
+  E6 four commands issued in one tick, one failing → 1 socket write(s): [["TIME","LRANGE","EVALSHA <sha>","GET"]]
+  E6 per-command results: [["1794207137","220554"],"<SimpleError: WRONGTYPE Operation against a key holding the wrong kind of value>",11,"v"]
+── F. BZPOPMIN on a dedicated client
+  F1 BZPOPMIN 6.5 s under the default 5 s command timeout: resolved in 6524 ms → null
+  F2 blocked BZPOPMIN at a reset: rejected in 0 ms → Error[ECONNRESET]: read ECONNRESET
+  F2 events: error(Error[ECONNRESET]: read ECONNRESET)@6727ms, reconnecting@6727ms, error(Error[ECONNREFUSED]: connect ECONNREFUSED 127.0.0.1:45999)@6728ms, reconnecting@6869ms, connect@6871ms, ready@6875ms
+  F3 BZPOPMIN after the reconnect, marker armed: resolved in 0 ms → ["wake","marker",1]
+  F4 blocked BZPOPMIN at destroy(): rejected in 0 ms → DisconnectsClientError: Disconnects client
+  F4 events: end@7279ms
+── G. Closing during a reconnect
+  G1 close() while reconnecting: resolved in 0 ms → "closed"
+  G1 isOpen=false; events in the next 1.5 s: end@4ms
+  G2 destroy() while reconnecting returned in 0 ms
+  G2 events in the next 2.5 s: end@6ms; new connections after restore: 0
+  G3 close() with an unanswered command in flight: STILL PENDING after 1000 ms
+  G3 close() after destroy(): resolved in 0 ms → "closed"
+  G3 the in-flight GET after destroy(): rejected in 0 ms → DisconnectsClientError: Disconnects client
+  G3 events: end@1009ms
+  G4 restore() just before close() in the reconnect window: resolved in 0 ms → "closed"
+  G4 isOpen=false; events: end@12ms; connections after destroy: 0
+── H. The server unreachable at boot
+  H0 a command before connect() is called: rejected in 0 ms → ClientClosedError: The client is closed
+  H1 connect() while unreachable: STILL PENDING after 1200 ms
+  H2 a command while unreachable, commandOptions.timeout 1000: rejected in 1000 ms → TimeoutError: 
+  H3 connect() after restore: resolved in 1822 ms → "connected"
+  H3 the command queued with no timeout: resolved in 0 ms → "queued-unbounded"
+  H events: error(Error[ECONNREFUSED]: connect ECONNREFUSED 127.0.0.1:45999)@1ms, reconnecting@65ms, error(Error[ECONNREFUSED]: connect ECONNREFUSED 127.0.0.1:45999)@67ms, reconnecting@209ms … reconnecting@5523ms, connect@5524ms, ready@5526ms (16 total)
+════════ valkey/valkey:9 ════════
+── A. Handshake and reply shapes
+  RESP2 handshake sent: CLIENT SETINFO | CLIENT SETINFO
+  RESP2 raw HGETALL: ["a","1","b","2"]
+  RESP2 typed hGetAll: {"a":"1","b":"2"}
+  RESP2 raw HMGET (one missing): ["1",null]
+  RESP2 raw ZRANGE REV WITHSCORES: ["m2","2","m1","1.5"]
+  RESP2 script ZRANGE WITHSCORES: ["m2","2","m1","1.5"]
+  RESP2 raw TIME: ["1794207157","800378"]
+  RESP2 raw SMEMBERS: ["x"]
+  RESP2 raw SCAN: ["0",["h"]]
+  RESP2 raw BZPOPMIN hit: ["z","m1","1.5"]
+  RESP2 raw BZPOPMIN miss: null
+  RESP2 INFO version lines: redis_version:7.2.4, valkey_version:9.1.3
+  RESP3 handshake sent: HELLO 3 | CLIENT SETINFO | CLIENT SETINFO
+  RESP3 raw HGETALL: {"a":"1","b":"2"}
+  RESP3 typed hGetAll: {"a":"1","b":"2"}
+  RESP3 raw HMGET (one missing): ["1",null]
+  RESP3 raw ZRANGE REV WITHSCORES: [["m2",2],["m1",1.5]]
+  RESP3 script ZRANGE WITHSCORES: ["m2","2","m1","1.5"]
+  RESP3 raw TIME: ["1794207158","72789"]
+  RESP3 raw SMEMBERS: ["x"]
+  RESP3 raw SCAN: ["0",["h"]]
+  RESP3 raw BZPOPMIN hit: ["z","m1",1.5]
+  RESP3 raw BZPOPMIN miss: null
+  RESP3 INFO version lines: redis_version:7.2.4, valkey_version:9.1.3
+── B. A connection reset with a command in flight, and commands sent while disconnected
+  in-flight GET at the reset: rejected in 1 ms → Error[ECONNRESET]: read ECONNRESET
+  isOpen=true isReady=false while down
+  command sent while down, after restore: resolved in 375 ms → "sent-while-down"
+  events: error(Error[ECONNRESET]: read ECONNRESET)@103ms, reconnecting@103ms, error(Error[ECONNREFUSED]: connect ECONNREFUSED 127.0.0.1:46541)@105ms, reconnecting@404ms, error(Error[ECONNREFUSED]: connect ECONNREFUSED 127.0.0.1:46541)@407ms, reconnecting@749ms, error(Error[ECONNREFUSED]: connect ECONNREFUSED 127.0.0.1:46541)@750ms, reconnecting@1173ms, connect@1175ms
+  B2 in-flight command when the server closes the connection (no reset): rejected in 0 ms → SocketClosedUnexpectedlyError: Socket closed unexpectedly
+  B2 events: error(SocketClosedUnexpectedlyError: Socket closed unexpectedly)@155ms, reconnecting@155ms, connect@156ms, ready@157ms
+── C. A black-holed connection (no reset): who notices an unanswered command?
+  C1 in-flight GET, commandOptions.timeout 1000, no socketTimeout: STILL PENDING after 3000 ms
+  C1 destroy() returned in 0 ms, isOpen=false
+  C1 the in-flight GET after destroy(): rejected in 0 ms → DisconnectsClientError: Disconnects client
+  C1 connect() again on the same client: resolved in 3 ms → "connected"
+  C1 a command on the re-connected client: resolved in 1 ms → "back"
+  C1 events: end@3012ms, connect@3013ms, ready@3015ms
+  C2 healthy idle 2.6 s, socketTimeout 1000, default strategy → events: terminated@1003ms, error(SocketTimeoutError: Socket timeout timeout. Expecting data, )@1003ms
+  C2 isOpen=false isReady=false
+  C2 a command afterwards: rejected in 0 ms → ClientClosedError: The client is closed
+  C3 healthy idle 3.6 s, socketTimeout 1000, strategy always reconnects → events: error(SocketTimeoutError: Socket timeout timeout. Expecting data, )@1003ms, reconnecting@1003ms, connect@1004ms, ready@1015ms, error(SocketTimeoutError: Socket timeout timeout. Expecting data, )@2015ms, reconnecting@2015ms, connect@2016ms, ready@2018ms, error(SocketTimeoutError: Socket timeout timeout. Expecting data, )@3018ms, reconnecting@3018ms, connect@3018ms, ready@3020ms
+  C4a frozen, one in-flight GET, nothing else written: rejected in 1001 ms → SocketTimeoutError: Socket timeout timeout. Expecting data, but didn't receive any in 1000ms.
+  C4a events: error(SocketTimeoutError: Socket timeout timeout. Expecting data, )@1003ms, reconnecting@1003ms
+  C4b frozen, in-flight GET, another command written every 300 ms: STILL PENDING after 3500 ms
+  C4b events: (none)
+── D. READONLY from a demoted primary whose connection stays open
+  SET on the demoted server: rejected in 1 ms → SimpleError: READONLY You can't write against a read only replica.
+  isReady=true after the READONLY reply; events: (none)
+  destroy() then connect(), server promoted again: resolved in 3 ms → "connected"
+  SET after the forced reconnect: resolved in 1 ms → "OK"
+── E. Scripts and pipelines
+  E1 defineScript, single call after SCRIPT FLUSH: resolved in 1 ms → 1
+  E1 sent: EVALSHA <sha> | EVAL <body 45 bytes>
+  E1 the same single call again: resolved in 0 ms → 2
+  E1 sent: EVALSHA <sha>
+  E2 defineScript twice in a pipeline, round 1: resolved in 1 ms → [3,4,["1794207173","924319"]]
+  E2 sent: EVAL <body 45 bytes> | EVALSHA <sha> | TIME
+  E2 defineScript twice in a pipeline, round 2: resolved in 0 ms → [5,6,["1794207173","924825"]]
+  E2 sent: EVAL <body 45 bytes> | EVALSHA <sha> | TIME
+  E3 raw EVALSHA pipeline, script loaded: resolved in 0 ms → [7,["1794207173","925727"],8]
+  E3 sent: EVALSHA <sha> | TIME | EVALSHA <sha>
+  E4 raw EVALSHA pipeline after SCRIPT FLUSH: SimpleError: NOSCRIPT No matching script.
+  E4 errorIndexes=undefined
+  E4 replies=undefined
+  E4 counter before=8 after=8 (nothing ran)
+  E4 the same pipeline after SCRIPT LOAD: resolved in 0 ms → [9,["1794207173","928533"],10]
+  E5 one failing command in a pipeline: SimpleError, errorIndexes=undefined, replies=undefined
+  E6 four commands issued in one tick, one failing → 1 socket write(s): [["TIME","LRANGE","EVALSHA <sha>","GET"]]
+  E6 per-command results: [["1794207173","929883"],"<SimpleError: WRONGTYPE Operation against a key holding the wrong kind of value>",11,"v"]
+── F. BZPOPMIN on a dedicated client
+  F1 BZPOPMIN 6.5 s under the default 5 s command timeout: resolved in 6505 ms → null
+  F2 blocked BZPOPMIN at a reset: rejected in 1 ms → Error[ECONNRESET]: read ECONNRESET
+  F2 events: error(Error[ECONNRESET]: read ECONNRESET)@6709ms, reconnecting@6709ms, error(Error[ECONNREFUSED]: connect ECONNREFUSED 127.0.0.1:46541)@6711ms, reconnecting@6987ms, connect@6988ms, ready@6993ms
+  F3 BZPOPMIN after the reconnect, marker armed: resolved in 0 ms → ["wake","marker",1]
+  F4 blocked BZPOPMIN at destroy(): rejected in 0 ms → DisconnectsClientError: Disconnects client
+  F4 events: end@7397ms
+── G. Closing during a reconnect
+  G1 close() while reconnecting: resolved in 0 ms → "closed"
+  G1 isOpen=false; events in the next 1.5 s: end@3ms
+  G2 destroy() while reconnecting returned in 0 ms
+  G2 events in the next 2.5 s: end@3ms; new connections after restore: 0
+  G3 close() with an unanswered command in flight: STILL PENDING after 1000 ms
+  G3 close() after destroy(): resolved in 0 ms → "closed"
+  G3 the in-flight GET after destroy(): rejected in 0 ms → DisconnectsClientError: Disconnects client
+  G3 events: end@1009ms
+  G4 restore() just before close() in the reconnect window: resolved in 0 ms → "closed"
+  G4 isOpen=false; events: end@12ms; connections after destroy: 0
+── H. The server unreachable at boot
+  H0 a command before connect() is called: rejected in 0 ms → ClientClosedError: The client is closed
+  H1 connect() while unreachable: STILL PENDING after 1200 ms
+  H2 a command while unreachable, commandOptions.timeout 1000: rejected in 1000 ms → TimeoutError: 
+  H3 connect() after restore: resolved in 213 ms → "connected"
+  H3 the command queued with no timeout: resolved in 0 ms → "queued-unbounded"
+  H events: error(Error[ECONNREFUSED]: connect ECONNREFUSED 127.0.0.1:46541)@1ms, reconnecting@233ms, error(Error[ECONNREFUSED]: connect ECONNREFUSED 127.0.0.1:46541)@234ms, reconnecting@466ms … reconnecting@3905ms, connect@3906ms, ready@3918ms (14 total)
+════════ redis:7.4 ════════
+── A. Handshake and reply shapes
+  RESP2 handshake sent: CLIENT SETINFO | CLIENT SETINFO
+  RESP2 raw HGETALL: ["a","1","b","2"]
+  RESP2 typed hGetAll: {"a":"1","b":"2"}
+  RESP2 raw HMGET (one missing): ["1",null]
+  RESP2 raw ZRANGE REV WITHSCORES: ["m2","2","m1","1.5"]
+  RESP2 script ZRANGE WITHSCORES: ["m2","2","m1","1.5"]
+  RESP2 raw TIME: ["1794207192","942959"]
+  RESP2 raw SMEMBERS: ["x"]
+  RESP2 raw SCAN: ["0",["h"]]
+  RESP2 raw BZPOPMIN hit: ["z","m1","1.5"]
+  RESP2 raw BZPOPMIN miss: null
+  RESP2 INFO version lines: redis_version:7.4.12
+  RESP3 handshake sent: HELLO 3 | CLIENT SETINFO | CLIENT SETINFO
+  RESP3 raw HGETALL: {"a":"1","b":"2"}
+  RESP3 typed hGetAll: {"a":"1","b":"2"}
+  RESP3 raw HMGET (one missing): ["1",null]
+  RESP3 raw ZRANGE REV WITHSCORES: [["m2",2],["m1",1.5]]
+  RESP3 script ZRANGE WITHSCORES: ["m2","2","m1","1.5"]
+  RESP3 raw TIME: ["1794207193","223157"]
+  RESP3 raw SMEMBERS: ["x"]
+  RESP3 raw SCAN: ["0",["h"]]
+  RESP3 raw BZPOPMIN hit: ["z","m1",1.5]
+  RESP3 raw BZPOPMIN miss: null
+  RESP3 INFO version lines: redis_version:7.4.12
+── B. A connection reset with a command in flight, and commands sent while disconnected
+  in-flight GET at the reset: rejected in 1 ms → Error[ECONNRESET]: read ECONNRESET
+  isOpen=true isReady=false while down
+  command sent while down, after restore: resolved in 325 ms → "sent-while-down"
+  events: error(Error[ECONNRESET]: read ECONNRESET)@108ms, reconnecting@109ms, error(Error[ECONNREFUSED]: connect ECONNREFUSED 127.0.0.1:45399)@109ms, reconnecting@255ms, error(Error[ECONNREFUSED]: connect ECONNREFUSED 127.0.0.1:45399)@256ms, reconnecting@545ms, error(Error[ECONNREFUSED]: connect ECONNREFUSED 127.0.0.1:45399)@546ms, reconnecting@1133ms, connect@1133ms
+  B2 in-flight command when the server closes the connection (no reset): rejected in 0 ms → SocketClosedUnexpectedlyError: Socket closed unexpectedly
+  B2 events: error(SocketClosedUnexpectedlyError: Socket closed unexpectedly)@161ms, reconnecting@161ms, connect@162ms, ready@164ms
+── C. A black-holed connection (no reset): who notices an unanswered command?
+  C1 in-flight GET, commandOptions.timeout 1000, no socketTimeout: STILL PENDING after 3000 ms
+  C1 destroy() returned in 0 ms, isOpen=false
+  C1 the in-flight GET after destroy(): rejected in 0 ms → DisconnectsClientError: Disconnects client
+  C1 connect() again on the same client: resolved in 3 ms → "connected"
+  C1 a command on the re-connected client: resolved in 1 ms → "back"
+  C1 events: end@3003ms, connect@3003ms, ready@3005ms
+  C2 healthy idle 2.6 s, socketTimeout 1000, default strategy → events: terminated@1002ms, error(SocketTimeoutError: Socket timeout timeout. Expecting data, )@1002ms
+  C2 isOpen=false isReady=false
+  C2 a command afterwards: rejected in 0 ms → ClientClosedError: The client is closed
+  C3 healthy idle 3.6 s, socketTimeout 1000, strategy always reconnects → events: error(SocketTimeoutError: Socket timeout timeout. Expecting data, )@1003ms, reconnecting@1003ms, connect@1004ms, ready@1006ms, error(SocketTimeoutError: Socket timeout timeout. Expecting data, )@2006ms, reconnecting@2006ms, connect@2007ms, ready@2009ms, error(SocketTimeoutError: Socket timeout timeout. Expecting data, )@3009ms, reconnecting@3009ms, connect@3010ms, ready@3011ms
+  C4a frozen, one in-flight GET, nothing else written: rejected in 1002 ms → SocketTimeoutError: Socket timeout timeout. Expecting data, but didn't receive any in 1000ms.
+  C4a events: error(SocketTimeoutError: Socket timeout timeout. Expecting data, )@1008ms, reconnecting@1008ms
+  C4b frozen, in-flight GET, another command written every 300 ms: STILL PENDING after 3500 ms
+  C4b events: (none)
+── D. READONLY from a demoted primary whose connection stays open
+  SET on the demoted server: rejected in 1 ms → SimpleError: READONLY You can't write against a read only replica.
+  isReady=true after the READONLY reply; events: (none)
+  destroy() then connect(), server promoted again: resolved in 8 ms → "connected"
+  SET after the forced reconnect: resolved in 1 ms → "OK"
+── E. Scripts and pipelines
+  E1 defineScript, single call after SCRIPT FLUSH: resolved in 1 ms → 1
+  E1 sent: EVALSHA <sha> | EVAL <body 45 bytes>
+  E1 the same single call again: resolved in 0 ms → 2
+  E1 sent: EVALSHA <sha>
+  E2 defineScript twice in a pipeline, round 1: resolved in 1 ms → [3,4,["1794207209","33931"]]
+  E2 sent: EVAL <body 45 bytes> | EVALSHA <sha> | TIME
+  E2 defineScript twice in a pipeline, round 2: resolved in 0 ms → [5,6,["1794207209","34519"]]
+  E2 sent: EVAL <body 45 bytes> | EVALSHA <sha> | TIME
+  E3 raw EVALSHA pipeline, script loaded: resolved in 1 ms → [7,["1794207209","35596"],8]
+  E3 sent: EVALSHA <sha> | TIME | EVALSHA <sha>
+  E4 raw EVALSHA pipeline after SCRIPT FLUSH: SimpleError: NOSCRIPT No matching script. Please use EVAL.
+  E4 errorIndexes=undefined
+  E4 replies=undefined
+  E4 counter before=8 after=8 (nothing ran)
+  E4 the same pipeline after SCRIPT LOAD: resolved in 1 ms → [9,["1794207209","39121"],10]
+  E5 one failing command in a pipeline: SimpleError, errorIndexes=undefined, replies=undefined
+  E6 four commands issued in one tick, one failing → 1 socket write(s): [["TIME","LRANGE","EVALSHA <sha>","GET"]]
+  E6 per-command results: [["1794207209","40748"],"<SimpleError: WRONGTYPE Operation against a key holding the wrong kind of value>",11,"v"]
+── F. BZPOPMIN on a dedicated client
+  F1 BZPOPMIN 6.5 s under the default 5 s command timeout: resolved in 6532 ms → null
+  F2 blocked BZPOPMIN at a reset: rejected in 1 ms → Error[ECONNRESET]: read ECONNRESET
+  F2 events: error(Error[ECONNRESET]: read ECONNRESET)@6743ms, reconnecting@6743ms, error(Error[ECONNREFUSED]: connect ECONNREFUSED 127.0.0.1:45399)@6745ms, reconnecting@7005ms, connect@7006ms, ready@7010ms
+  F3 BZPOPMIN after the reconnect, marker armed: resolved in 0 ms → ["wake","marker",1]
+  F4 blocked BZPOPMIN at destroy(): rejected in 0 ms → DisconnectsClientError: Disconnects client
+  F4 events: end@7416ms
+── G. Closing during a reconnect
+  G1 close() while reconnecting: resolved in 0 ms → "closed"
+  G1 isOpen=false; events in the next 1.5 s: end@6ms
+  G2 destroy() while reconnecting returned in 0 ms
+  G2 events in the next 2.5 s: end@14ms; new connections after restore: 0
+  G3 close() with an unanswered command in flight: STILL PENDING after 1000 ms
+  G3 close() after destroy(): resolved in 0 ms → "closed"
+  G3 the in-flight GET after destroy(): rejected in 0 ms → DisconnectsClientError: Disconnects client
+  G3 events: end@1005ms
+  G4 restore() just before close() in the reconnect window: resolved in 0 ms → "closed"
+  G4 isOpen=false; events: end@12ms; connections after destroy: 0
+── H. The server unreachable at boot
+  H0 a command before connect() is called: rejected in 0 ms → ClientClosedError: The client is closed
+  H1 connect() while unreachable: STILL PENDING after 1200 ms
+  H2 a command while unreachable, commandOptions.timeout 1000: rejected in 1000 ms → TimeoutError: 
+  H3 connect() after restore: resolved in 2088 ms → "connected"
+  H3 the command queued with no timeout: resolved in 0 ms → "queued-unbounded"
+  H events: error(Error[ECONNREFUSED]: connect ECONNREFUSED 127.0.0.1:45399)@5ms, reconnecting@229ms, error(Error[ECONNREFUSED]: connect ECONNREFUSED 127.0.0.1:45399)@230ms, reconnecting@350ms … reconnecting@5787ms, connect@5788ms, ready@5791ms (16 total)
+════════ redis:8 ════════
+── A. Handshake and reply shapes
+  RESP2 handshake sent: CLIENT SETINFO | CLIENT SETINFO
+  RESP2 raw HGETALL: ["a","1","b","2"]
+  RESP2 typed hGetAll: {"a":"1","b":"2"}
+  RESP2 raw HMGET (one missing): ["1",null]
+  RESP2 raw ZRANGE REV WITHSCORES: ["m2","2","m1","1.5"]
+  RESP2 script ZRANGE WITHSCORES: ["m2","2","m1","1.5"]
+  RESP2 raw TIME: ["1794207230","98332"]
+  RESP2 raw SMEMBERS: ["x"]
+  RESP2 raw SCAN: ["0",["h"]]
+  RESP2 raw BZPOPMIN hit: ["z","m1","1.5"]
+  RESP2 raw BZPOPMIN miss: null
+  RESP2 INFO version lines: redis_version:8.10.3
+  RESP3 handshake sent: HELLO 3 | CLIENT SETINFO | CLIENT SETINFO
+  RESP3 raw HGETALL: {"a":"1","b":"2"}
+  RESP3 typed hGetAll: {"a":"1","b":"2"}
+  RESP3 raw HMGET (one missing): ["1",null]
+  RESP3 raw ZRANGE REV WITHSCORES: [["m2",2],["m1",1.5]]
+  RESP3 script ZRANGE WITHSCORES: ["m2","2","m1","1.5"]
+  RESP3 raw TIME: ["1794207230","363985"]
+  RESP3 raw SMEMBERS: ["x"]
+  RESP3 raw SCAN: ["0",["h"]]
+  RESP3 raw BZPOPMIN hit: ["z","m1",1.5]
+  RESP3 raw BZPOPMIN miss: null
+  RESP3 INFO version lines: redis_version:8.10.3
+── B. A connection reset with a command in flight, and commands sent while disconnected
+  in-flight GET at the reset: rejected in 1 ms → Error[ECONNRESET]: read ECONNRESET
+  isOpen=true isReady=false while down
+  command sent while down, after restore: resolved in 420 ms → "sent-while-down"
+  events: error(Error[ECONNRESET]: read ECONNRESET)@104ms, reconnecting@104ms, error(Error[ECONNREFUSED]: connect ECONNREFUSED 127.0.0.1:44775)@105ms, reconnecting@358ms, error(Error[ECONNREFUSED]: connect ECONNREFUSED 127.0.0.1:44775)@360ms, reconnecting@736ms, error(Error[ECONNREFUSED]: connect ECONNREFUSED 127.0.0.1:44775)@737ms, reconnecting@1225ms, connect@1226ms
+  B2 in-flight command when the server closes the connection (no reset): rejected in 2 ms → SocketClosedUnexpectedlyError: Socket closed unexpectedly
+  B2 events: error(SocketClosedUnexpectedlyError: Socket closed unexpectedly)@163ms, reconnecting@163ms, connect@164ms, ready@169ms
+── C. A black-holed connection (no reset): who notices an unanswered command?
+  C1 in-flight GET, commandOptions.timeout 1000, no socketTimeout: STILL PENDING after 3000 ms
+  C1 destroy() returned in 0 ms, isOpen=false
+  C1 the in-flight GET after destroy(): rejected in 0 ms → DisconnectsClientError: Disconnects client
+  C1 connect() again on the same client: resolved in 4 ms → "connected"
+  C1 a command on the re-connected client: resolved in 1 ms → "back"
+  C1 events: end@3003ms, connect@3004ms, ready@3007ms
+  C2 healthy idle 2.6 s, socketTimeout 1000, default strategy → events: terminated@1008ms, error(SocketTimeoutError: Socket timeout timeout. Expecting data, )@1008ms
+  C2 isOpen=false isReady=false
+  C2 a command afterwards: rejected in 0 ms → ClientClosedError: The client is closed
+  C3 healthy idle 3.6 s, socketTimeout 1000, strategy always reconnects → events: error(SocketTimeoutError: Socket timeout timeout. Expecting data, )@1006ms, reconnecting@1006ms, connect@1006ms, ready@1008ms, error(SocketTimeoutError: Socket timeout timeout. Expecting data, )@2008ms, reconnecting@2008ms, connect@2009ms, ready@2011ms, error(SocketTimeoutError: Socket timeout timeout. Expecting data, )@3011ms, reconnecting@3011ms, connect@3012ms, ready@3014ms
+  C4a frozen, one in-flight GET, nothing else written: rejected in 1002 ms → SocketTimeoutError: Socket timeout timeout. Expecting data, but didn't receive any in 1000ms.
+  C4a events: error(SocketTimeoutError: Socket timeout timeout. Expecting data, )@1004ms, reconnecting@1004ms
+  C4b frozen, in-flight GET, another command written every 300 ms: STILL PENDING after 3500 ms
+  C4b events: (none)
+── D. READONLY from a demoted primary whose connection stays open
+  SET on the demoted server: rejected in 1 ms → SimpleError: READONLY You can't write against a read only replica.
+  isReady=true after the READONLY reply; events: (none)
+  destroy() then connect(), server promoted again: resolved in 40 ms → "connected"
+  SET after the forced reconnect: resolved in 1 ms → "OK"
+── E. Scripts and pipelines
+  E1 defineScript, single call after SCRIPT FLUSH: resolved in 2 ms → 1
+  E1 sent: EVALSHA <sha> | EVAL <body 45 bytes>
+  E1 the same single call again: resolved in 1 ms → 2
+  E1 sent: EVALSHA <sha>
+  E2 defineScript twice in a pipeline, round 1: resolved in 1 ms → [3,4,["1794207246","384122"]]
+  E2 sent: EVAL <body 45 bytes> | EVALSHA <sha> | TIME
+  E2 defineScript twice in a pipeline, round 2: resolved in 1 ms → [5,6,["1794207246","384821"]]
+  E2 sent: EVAL <body 45 bytes> | EVALSHA <sha> | TIME
+  E3 raw EVALSHA pipeline, script loaded: resolved in 1 ms → [7,["1794207246","386045"],8]
+  E3 sent: EVALSHA <sha> | TIME | EVALSHA <sha>
+  E4 raw EVALSHA pipeline after SCRIPT FLUSH: SimpleError: NOSCRIPT No matching script. Please use EVAL.
+  E4 errorIndexes=undefined
+  E4 replies=undefined
+  E4 counter before=8 after=8 (nothing ran)
+  E4 the same pipeline after SCRIPT LOAD: resolved in 1 ms → [9,["1794207246","390585"],10]
+  E5 one failing command in a pipeline: SimpleError, errorIndexes=undefined, replies=undefined
+  E6 four commands issued in one tick, one failing → 1 socket write(s): [["TIME","LRANGE","EVALSHA <sha>","GET"]]
+  E6 per-command results: [["1794207246","392638"],"<SimpleError: WRONGTYPE Operation against a key holding the wrong kind of value>",11,"v"]
+── F. BZPOPMIN on a dedicated client
+  F1 BZPOPMIN 6.5 s under the default 5 s command timeout: resolved in 6559 ms → null
+  F2 blocked BZPOPMIN at a reset: rejected in 0 ms → Error[ECONNRESET]: read ECONNRESET
+  F2 events: error(Error[ECONNRESET]: read ECONNRESET)@6797ms, reconnecting@6797ms, error(Error[ECONNREFUSED]: connect ECONNREFUSED 127.0.0.1:44775)@6914ms, reconnecting@7106ms, connect@7107ms, ready@7245ms
+  F3 BZPOPMIN after the reconnect, marker armed: resolved in 0 ms → ["wake","marker",1]
+  F4 blocked BZPOPMIN at destroy(): rejected in 0 ms → DisconnectsClientError: Disconnects client
+  F4 events: end@7647ms
+── G. Closing during a reconnect
+  G1 close() while reconnecting: resolved in 0 ms → "closed"
+  G1 isOpen=false; events in the next 1.5 s: end@121ms
+  G2 destroy() while reconnecting returned in 0 ms
+  G2 events in the next 2.5 s: end@149ms; new connections after restore: 0
+  G3 close() with an unanswered command in flight: STILL PENDING after 1000 ms
+  G3 close() after destroy(): resolved in 0 ms → "closed"
+  G3 the in-flight GET after destroy(): rejected in 0 ms → DisconnectsClientError: Disconnects client
+  G3 events: end@1003ms
+  G4 restore() just before close() in the reconnect window: resolved in 0 ms → "closed"
+  G4 isOpen=false; events: end@16ms; connections after destroy: 0
+── H. The server unreachable at boot
+  H0 a command before connect() is called: rejected in 0 ms → ClientClosedError: The client is closed
+  H1 connect() while unreachable: STILL PENDING after 1200 ms
+  H2 a command while unreachable, commandOptions.timeout 1000: rejected in 1001 ms → TimeoutError: 
+  H3 connect() after restore: resolved in 1796 ms → "connected"
+  H3 the command queued with no timeout: resolved in 0 ms → "queued-unbounded"
+  H events: error(Error[ECONNREFUSED]: connect ECONNREFUSED 127.0.0.1:44775)@1ms, reconnecting@70ms, error(Error[ECONNREFUSED]: connect ECONNREFUSED 127.0.0.1:44775)@72ms, reconnecting@196ms … reconnecting@5513ms, connect@5513ms, ready@5515ms (16 total)
+--prototype done--

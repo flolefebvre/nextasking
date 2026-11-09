@@ -1,7 +1,6 @@
+import type { RunListCursor } from "./read-api.js";
 import { BULLMQ_SETS_BY_RUN_STATE, RUN_STATES } from "./run-states.js";
 import type { RunState } from "./run-states.js";
-
-export type RunListCursor = string;
 
 export type RunListPosition = {
   state: RunState;

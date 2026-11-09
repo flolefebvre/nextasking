@@ -19,16 +19,15 @@ import type { EventId, RunId } from "./ids.js";
 import { silentLogger } from "./logger.js";
 import type { Logger } from "./logger.js";
 import { createQueueReader } from "./queue-reader.js";
+import type { EventWithFanOutOf, QueueReader } from "./queue-reader.js";
 import type {
-  QueueReader,
-  EventWithRunsOf,
   ListRunsOptionsOf,
   ListedRunOfTask,
   ListedScheduleOf,
   RunCountsOf,
   RunOfTask,
   RunPageOf,
-} from "./queue-reader.js";
+} from "./read-api.js";
 import { eventDefinitionSummariesOf, taskDefinitionSummariesOf } from "./definition-summaries.js";
 import type { EventDefinitionSummary, TaskDefinitionSummary } from "./definition-summaries.js";
 import { createRunQueue } from "./run-queue.js";
@@ -82,7 +81,7 @@ export type RunPage = RunPageOf<ListedRun>;
 
 export type RunCounts = RunCountsOf<TaskName>;
 
-export type EventWithRuns = EventWithRunsOf<RegisteredTask, RegisteredEvent>;
+export type EventWithRuns = EventWithFanOutOf<RegisteredTask, RegisteredEvent>;
 
 export type ListedSchedule = ListedScheduleOf<ScheduledTaskNameOf<RegisteredTask>>;
 
@@ -136,7 +135,7 @@ export type Nextasking<Task extends AnyTaskDefinition, Event extends EventDefini
   readonly getEvent: <Name extends Event["name"]>(
     name: Name,
     eventId: EventId,
-  ) => Promise<EventWithRunsOf<Task, Extract<Event, { name: Name }>>>;
+  ) => Promise<EventWithFanOutOf<Task, Extract<Event, { name: Name }>>>;
   readonly listSchedules: () => Promise<ListedScheduleOf<ScheduledTaskNameOf<Task>>[]>;
   readonly taskDefinitions: readonly TaskDefinitionSummary<Task["name"], Event["name"]>[];
   readonly eventDefinitions: readonly EventDefinitionSummary<Event["name"], Task["name"]>[];

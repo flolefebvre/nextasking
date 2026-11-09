@@ -1,12 +1,20 @@
 import { randomBytes } from "node:crypto";
 
 import { AttemptAbortedError } from "./attempt-abort.js";
+import type { AttemptAbortCause } from "./attempt-abort.js";
 import type { AnyTaskDefinition } from "./definitions.js";
 import type { DurationInMilliseconds, EpochMilliseconds } from "./durations.js";
 import type { LockToken } from "./engine/engine-keys.js";
 import type { Engine, LockedRun, PruneRequest } from "./engine/engine.js";
 import type { WorkerDefinitions } from "./engine-failure-notice.js";
-import { parkLineOf, pickupLineOf, settleLinesOf, workerErrorLineOf, writeLifecycleLines } from "./lifecycle-logs.js";
+import {
+  lockLostAbortLineOf,
+  parkLineOf,
+  pickupLineOf,
+  settleLinesOf,
+  workerErrorLineOf,
+  writeLifecycleLines,
+} from "./lifecycle-logs.js";
 import { executeLockedRunAttempt, settleRequestOf } from "./locked-run-attempt.js";
 import type { Logger } from "./logger.js";
 import type { HandlerSender } from "./step-engine.js";
@@ -35,6 +43,8 @@ export type WorkerLoop = {
 type AttemptInFlight = {
   lockedRun: LockedRun;
   lockExpiresAtByWorkerClock: EpochMilliseconds;
+  abortController: AbortController;
+  isExecuting: boolean;
   settlement: Promise<void>;
 };
 
@@ -103,8 +113,32 @@ export function startWorkerLoop(config: WorkerLoopConfig): WorkerLoop {
     );
   };
 
-  const executeAttempt = async (task: AnyTaskDefinition, lockedRun: LockedRun, fetchRepliedAt: EpochMilliseconds) => {
-    const abortController = new AbortController();
+  const abortAttempt = (attemptInFlight: AttemptInFlight, abortCause: AttemptAbortCause) => {
+    const { abortController, lockedRun } = attemptInFlight;
+    if (abortController.signal.aborted || !attemptInFlight.isExecuting) {
+      return;
+    }
+    abortController.abort(new AttemptAbortedError(abortCause, lockedRun.runId));
+    if (abortCause === "lock lost") {
+      writeLifecycleLines(logger, [lockLostAbortLineOf(lockedRun)]);
+    }
+  };
+
+  const stopAttemptsPastTheirLock = () => {
+    const now = Date.now();
+    for (const attemptInFlight of attemptsInFlightByLockToken.values()) {
+      if (now >= attemptInFlight.lockExpiresAtByWorkerClock) {
+        abortAttempt(attemptInFlight, "lock lost");
+      }
+    }
+  };
+
+  const executeAttempt = async (
+    task: AnyTaskDefinition,
+    attemptInFlight: AttemptInFlight,
+    fetchRepliedAt: EpochMilliseconds,
+  ) => {
+    const { lockedRun, abortController } = attemptInFlight;
     const { attemptOutcome, listenersLeftOut } = await executeLockedRunAttempt({
       engine,
       task,
@@ -114,10 +148,14 @@ export function startWorkerLoop(config: WorkerLoopConfig): WorkerLoop {
       logger,
       abortSignal: abortController.signal,
       abortAttempt: (abortCause) => {
-        abortController.abort(new AttemptAbortedError(abortCause, lockedRun.runId));
+        abortAttempt(attemptInFlight, abortCause);
       },
       isWorkerDraining: () => false,
     });
+    attemptInFlight.isExecuting = false;
+    if (abortController.signal.aborted) {
+      return;
+    }
     writeLifecycleLines(
       logger,
       listenersLeftOut.map(({ error }) => workerErrorLineOf(error)),
@@ -140,17 +178,20 @@ export function startWorkerLoop(config: WorkerLoopConfig): WorkerLoop {
       return;
     }
     writeLifecycleLines(logger, [pickupLineOf(lockedRun)]);
-    const settlement = executeAttempt(task, lockedRun, fetchRepliedAt)
+    const attemptInFlight: AttemptInFlight = {
+      lockedRun,
+      lockExpiresAtByWorkerClock: fetchSentAt + lockDurationInMilliseconds,
+      abortController: new AbortController(),
+      isExecuting: true,
+      settlement: Promise.resolve(),
+    };
+    attemptsInFlightByLockToken.set(lockedRun.lockToken, attemptInFlight);
+    attemptInFlight.settlement = executeAttempt(task, attemptInFlight, fetchRepliedAt)
       .catch(() => undefined)
       .finally(() => {
         attemptsInFlightByLockToken.delete(lockedRun.lockToken);
         cueFetch();
       });
-    attemptsInFlightByLockToken.set(lockedRun.lockToken, {
-      lockedRun,
-      lockExpiresAtByWorkerClock: fetchSentAt + lockDurationInMilliseconds,
-      settlement,
-    });
   };
 
   const fetchOnce = async () => {
@@ -198,7 +239,8 @@ export function startWorkerLoop(config: WorkerLoopConfig): WorkerLoop {
     const tickSentAt = Date.now();
     const lockRenewalDeadline = tickSentAt + timing.lockTimeLeftThatTriggersRenewalInMilliseconds;
     const renewedAttempts = [...attemptsInFlightByLockToken.values()].filter(
-      ({ lockExpiresAtByWorkerClock }) => lockExpiresAtByWorkerClock < lockRenewalDeadline,
+      ({ lockExpiresAtByWorkerClock, abortController }) =>
+        lockExpiresAtByWorkerClock < lockRenewalDeadline && !abortController.signal.aborted,
     );
     const prune = pruneRequestOfThisTick();
     const reply = await engine.tick({
@@ -210,8 +252,13 @@ export function startWorkerLoop(config: WorkerLoopConfig): WorkerLoop {
     if (reply.renewals.kind === "replied") {
       for (const [position, renewal] of reply.renewals.reply.entries()) {
         const renewedAttempt = renewedAttempts[position];
-        if (renewal.kind === "renewed" && renewedAttempt !== undefined) {
+        if (renewedAttempt === undefined) {
+          continue;
+        }
+        if (renewal.kind === "renewed") {
           renewedAttempt.lockExpiresAtByWorkerClock = tickSentAt + lockDurationInMilliseconds;
+        } else {
+          abortAttempt(renewedAttempt, "lock lost");
         }
       }
     }
@@ -227,6 +274,7 @@ export function startWorkerLoop(config: WorkerLoopConfig): WorkerLoop {
   };
 
   const tickTimer = setInterval(() => {
+    stopAttemptsPastTheirLock();
     if (tickInProgress !== undefined) {
       return;
     }

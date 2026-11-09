@@ -79,6 +79,10 @@ export function pickupLineOf(lockedRun: LockedRun): LifecycleLine {
   };
 }
 
+export function lockLostAbortLineOf(lockedRun: LockedRun): LifecycleLine {
+  return { level: "debug", message: "attempt aborted: lock lost", fields: runFieldsOf(lockedRun) };
+}
+
 export function parkLineOf(parkedRun: ParkedRun): LifecycleLine {
   return { level: "debug", message: "run waiting for a concurrency slot", fields: runFieldsOf(parkedRun) };
 }
@@ -151,7 +155,14 @@ export function settleLinesOf(settledAttempt: SettledAttempt): LifecycleLine[] {
     ];
   }
   if (settleReply.kind === "unknownVersion") {
-    return [];
+    const shownVersion = settleReply.recordVersion === undefined ? "a version" : `version ${settleReply.recordVersion}`;
+    return [
+      workerErrorLineOf(
+        new Error(
+          `The ${attemptOutcome.kind} settle of run "${lockedRun.runId}" was refused: a newer release rewrote its record to ${shownVersion} this release cannot read.`,
+        ),
+      ),
+    ];
   }
   const finishedAt = finishedAtOf(settledAttempt);
   const durationFields = {

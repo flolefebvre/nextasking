@@ -101,6 +101,21 @@ function linesWithMessage(lines: readonly RecordedLogLine[], message: string): R
   return lines.filter((line) => line.message === message);
 }
 
+async function scenarioOfALockTakenOverWhileGated(
+  sendEmail: AnyTaskDefinition,
+  handlerGate: HandlerGate,
+): Promise<LoopScenario> {
+  const engine = createInMemoryEngine();
+  await engine.enqueue({ runs: runsOf("send-email", 1) });
+  const scenario = startedLoopOf([sendEmail], { engine, concurrency: 1 });
+  await vi.advanceTimersByTimeAsync(0);
+  engine.expireLock("send-email-1");
+  await engine.promote();
+  handlerGate.release(1);
+  await vi.advanceTimersByTimeAsync(0);
+  return scenario;
+}
+
 beforeEach(() => {
   vi.useFakeTimers({ now: Date.UTC(2030, 0, 1) });
 });
@@ -258,15 +273,8 @@ test("a listener whose key throws costs its own notice run and writes one worker
 test("a settle answered stale writes attempt outcome discarded: lock lost with the kind as outcome", async () => {
   const handlerGate = createHandlerGate();
   const sendEmail = defineTask("send-email", { schema: v.object({}), handler: handlerGate.enter });
-  const engine = createInMemoryEngine();
-  await engine.enqueue({ runs: runsOf("send-email", 1) });
-  const { lines } = startedLoopOf([sendEmail] as AnyTaskDefinition[], { engine, concurrency: 1 });
-  await vi.advanceTimersByTimeAsync(0);
-  engine.expireLock("send-email-1");
-  await engine.promote();
 
-  handlerGate.release(1);
-  await vi.advanceTimersByTimeAsync(0);
+  const { lines } = await scenarioOfALockTakenOverWhileGated(sendEmail as AnyTaskDefinition, handlerGate);
 
   expect(linesWithMessage(lines, "attempt outcome discarded: lock lost")).toEqual([
     {
@@ -307,6 +315,98 @@ test("a settle answered already writes the normal completion line", async () => 
     },
   ]);
   expect(linesWithMessage(lines, "attempt outcome discarded: lock lost")).toEqual([]);
+});
+
+function abortableTaskOf(name: string, abortedSignals: AbortSignal[] = []): AnyTaskDefinition {
+  return defineTask(name, {
+    schema: v.object({}),
+    handler: ({ abortSignal }) =>
+      new Promise<void>((_resolve, reject) => {
+        abortSignal.addEventListener("abort", () => {
+          abortedSignals.push(abortSignal);
+          reject(abortSignal.reason as Error);
+        });
+      }),
+  }) as AnyTaskDefinition;
+}
+
+const LOCK_LOST_ABORT_LINE = {
+  level: "debug",
+  message: "attempt aborted: lock lost",
+  fields: { task: "send-email", runId: "send-email-1", attempt: 1 },
+};
+
+test("an attempt whose renewals never answer is aborted with lock lost at 2 minutes by the worker's clock, and sends no settle", async () => {
+  const abortedSignals: AbortSignal[] = [];
+  const engine = createInMemoryEngine();
+  await engine.enqueue({ runs: runsOf("send-email", 1) });
+  const heldTicks = engine.holdCalls("tick");
+  const { lines } = startedLoopOf([abortableTaskOf("send-email", abortedSignals)], { engine });
+
+  await vi.advanceTimersByTimeAsync(2 * MINUTE_IN_MILLISECONDS - 1);
+  const linesBeforeTheLockExpires = linesWithMessage(lines, "attempt aborted: lock lost");
+  await vi.advanceTimersByTimeAsync(1);
+  heldTicks.release();
+  await vi.advanceTimersByTimeAsync(0);
+
+  expect(linesBeforeTheLockExpires).toEqual([]);
+  expect(linesWithMessage(lines, "attempt aborted: lock lost")).toEqual([LOCK_LOST_ABORT_LINE]);
+  expect(abortedSignals.map(({ reason }) => (reason as Error).name)).toEqual(["AttemptAbortedError"]);
+  expect(requestsOf(engine, "settle")).toEqual([]);
+});
+
+test("an attempt whose renewal replies stale is aborted with lock lost and sends no settle", async () => {
+  const engine = createInMemoryEngine();
+  await engine.enqueue({ runs: runsOf("send-email", 1) });
+  const tickRenewingStale: WorkerLoopEngine["tick"] = async (request) => ({
+    ...(await engine.tick(request)),
+    renewals: { kind: "replied", reply: request.heldLocks.map(() => ({ kind: "stale" })) },
+  });
+  const { lines } = startedLoopOf([abortableTaskOf("send-email")], {
+    engine,
+    loopEngine: { ...engine, tick: tickRenewingStale },
+  });
+
+  await vi.advanceTimersByTimeAsync(MINUTE_IN_MILLISECONDS + 1_000);
+
+  expect(linesWithMessage(lines, "attempt aborted: lock lost")).toEqual([LOCK_LOST_ABORT_LINE]);
+  expect(requestsOf(engine, "settle")).toEqual([]);
+});
+
+test("a step refused for a lost lock aborts the attempt with lock lost, and it sends no settle", async () => {
+  const handlerGate = createHandlerGate();
+  const sendEmail = defineTask("send-email", {
+    schema: v.object({}),
+    handler: async ({ step }) => {
+      await handlerGate.enter();
+      await step.run("charge", () => "paid");
+    },
+  }) as AnyTaskDefinition;
+
+  const { engine, lines } = await scenarioOfALockTakenOverWhileGated(sendEmail, handlerGate);
+
+  expect(linesWithMessage(lines, "attempt aborted: lock lost")).toEqual([LOCK_LOST_ABORT_LINE]);
+  expect(requestsOf(engine, "settle")).toEqual([]);
+});
+
+test("a settle answered unknownVersion writes one worker error and no lost-lock line", async () => {
+  const sendEmail = defineTask("send-email", { schema: v.object({}), handler: async () => undefined });
+  const engine = createInMemoryEngine();
+  await engine.enqueue({ runs: runsOf("send-email", 1) });
+
+  const { lines } = startedLoopOf([sendEmail] as AnyTaskDefinition[], {
+    engine,
+    loopEngine: { ...engine, settle: async () => ({ kind: "unknownVersion", recordVersion: 2 }) },
+  });
+  await vi.advanceTimersByTimeAsync(0);
+
+  expect(lines).toContainEqual({
+    level: "error",
+    message: "worker error",
+    fields: { err: expect.objectContaining({ message: expect.stringContaining("version 2") }) },
+  });
+  expect(linesWithMessage(lines, "worker error")).toHaveLength(1);
+  expect(lines.filter(({ message }) => message.includes("lock lost"))).toEqual([]);
 });
 
 test("every tick is one round trip to the engine, and a tick still running when the next is due is skipped", async () => {

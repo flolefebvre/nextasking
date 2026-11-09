@@ -1,5 +1,5 @@
 import { isUnansweredError } from "./connection.js";
-import type { OwnedRedisClient, RedisConnections } from "./connection.js";
+import type { RedisConnection, RedisConnections } from "./connection.js";
 import type { DurationInMilliseconds } from "./durations.js";
 import type { Engine } from "./engine/engine.js";
 import type { WorkerDefinitions } from "./definitions.js";
@@ -19,7 +19,7 @@ import {
   isSignalHandlingLeftToTheApp,
 } from "./shutdown-signals.js";
 import type { HandlerSender } from "./step-engine.js";
-import { startWorkerLoop } from "./worker-loop.js";
+import { startWorkerLoop, wakeUpBlockInMillisecondsOf } from "./worker-loop.js";
 import type { WaitForWakeUp, WorkerLoop } from "./worker-loop.js";
 import { callOnWorkerNotStarted, workerOptionsFrom } from "./worker-options.js";
 import type { StartWorkerOptions, WorkerOptions } from "./worker-options.js";
@@ -28,7 +28,7 @@ import type { WorkerTiming } from "./worker-timing.js";
 
 export type InstanceLifecycleConfig = {
   connections: RedisConnections;
-  engineOn: (commandClient: RedisClient) => Engine;
+  engineOn: (client: RedisClient) => Engine;
   wakeUpWaitOn: (blockingClient: RedisClient) => WaitForWakeUp;
   senderOn: (engine: Engine) => HandlerSender;
   definitions: WorkerDefinitions;
@@ -37,23 +37,29 @@ export type InstanceLifecycleConfig = {
   env?: NodeJS.ProcessEnv;
 };
 
-export type OpenedCommandClient = { commandClient: OwnedRedisClient; engine: Engine };
+export type InstanceCalls = { client: RedisClient; engine: Engine };
+
+type OpenedCommandConnection = {
+  commandConnection: RedisConnection;
+  instanceCalls: InstanceCalls;
+  workerEngine: Engine;
+};
 
 export type InstanceLifecycle = {
-  callWhileOpen: <Result>(call: (openedCommandClient: OpenedCommandClient) => Promise<Result>) => Promise<Result>;
+  callWhileOpen: <Result>(call: (instanceCalls: InstanceCalls) => Promise<Result>) => Promise<Result>;
   startWorker: (options?: StartWorkerOptions) => Promise<void>;
   close: () => Promise<void>;
 };
 
 type RunningWorker = {
   loop: WorkerLoop;
-  blockingClient: OwnedRedisClient;
+  blockingConnection: RedisConnection;
   timing: WorkerTiming;
   shutdownTimeoutInMilliseconds: DurationInMilliseconds;
 };
 
 type WorkerBoot = {
-  opened: OpenedCommandClient;
+  opened: OpenedCommandConnection;
   timing: WorkerTiming;
   workerOptions: WorkerOptions;
   redisOutage: RedisOutage;
@@ -68,8 +74,8 @@ function ignoreRejection(promise: Promise<unknown>): void {
 export function createInstanceLifecycle(config: InstanceLifecycleConfig): InstanceLifecycle {
   const { connections, definitions, logger, env = process.env } = config;
   const closeController = new AbortController();
-  const commandClientClosedController = new AbortController();
-  let openedCommandClient: OpenedCommandClient | undefined;
+  const commandConnectionClosedController = new AbortController();
+  let openedCommandConnection: OpenedCommandConnection | undefined;
   let runningWorker: RunningWorker | undefined;
   let isThisInstanceTheProcessWorker = false;
   let stopExitingOnShutdownSignals: (() => void) | undefined;
@@ -81,12 +87,17 @@ export function createInstanceLifecycle(config: InstanceLifecycleConfig): Instan
     }
   };
 
-  const openCommandClient = (): OpenedCommandClient => {
-    if (openedCommandClient === undefined) {
-      const commandClient = connections.createClient("instance");
-      openedCommandClient = { commandClient, engine: config.engineOn(commandClient) };
+  const openCommandConnection = (): OpenedCommandConnection => {
+    if (openedCommandConnection === undefined) {
+      const commandConnection = connections.createCommandConnection();
+      const { instanceCalls, workerCalls } = commandConnection;
+      openedCommandConnection = {
+        commandConnection,
+        instanceCalls: { client: instanceCalls, engine: config.engineOn(instanceCalls) },
+        workerEngine: config.engineOn(workerCalls),
+      };
     }
-    return openedCommandClient;
+    return openedCommandConnection;
   };
 
   const releaseTheProcessWorker = () => {
@@ -96,15 +107,11 @@ export function createInstanceLifecycle(config: InstanceLifecycleConfig): Instan
     }
   };
 
-  const callWhileOpen = async <Result>(
-    call: (openedCommandClient: OpenedCommandClient) => Promise<Result>,
-  ): Promise<Result> => {
+  const callWhileOpen = async <Result>(call: (instanceCalls: InstanceCalls) => Promise<Result>): Promise<Result> => {
     rejectIfClosed();
-    const opened = openCommandClient();
-    await untilAborted(connections.waitUntilReadyWithinGiveUpAfter(opened.commandClient), closeController.signal);
-    rejectIfClosed();
+    const { instanceCalls } = openCommandConnection();
     try {
-      return await untilAborted(call(opened), commandClientClosedController.signal);
+      return await untilAborted(call(instanceCalls), commandConnectionClosedController.signal);
     } catch (error) {
       if (closeController.signal.aborted && isUnansweredError(error)) {
         throw new InstanceClosedError();
@@ -113,8 +120,8 @@ export function createInstanceLifecycle(config: InstanceLifecycleConfig): Instan
     }
   };
 
-  const startTheWorker = ({ opened: { engine }, timing, workerOptions, redisOutage }: WorkerBoot) => {
-    const blockingClient = connections.createClient("worker");
+  const startTheWorker = ({ opened: { workerEngine: engine }, timing, workerOptions, redisOutage }: WorkerBoot) => {
+    const blockingConnection = connections.createBlockingConnection(wakeUpBlockInMillisecondsOf(timing));
     const loop = startWorkerLoop({
       engine,
       definitions,
@@ -122,12 +129,12 @@ export function createInstanceLifecycle(config: InstanceLifecycleConfig): Instan
       logger,
       concurrency: workerOptions.concurrency,
       sender: config.senderOn(engine),
-      waitForWakeUp: config.wakeUpWaitOn(blockingClient),
+      waitForWakeUp: config.wakeUpWaitOn(blockingConnection.workerCalls),
       redisOutage,
     });
     runningWorker = {
       loop,
-      blockingClient,
+      blockingConnection,
       timing,
       shutdownTimeoutInMilliseconds: workerOptions.shutdownTimeoutInMilliseconds,
     };
@@ -145,8 +152,8 @@ export function createInstanceLifecycle(config: InstanceLifecycleConfig): Instan
     checkServerInfoReading(await serverInfoReading, logger);
     await syncDeclaredSchedules({
       engine: {
-        serverInstant: () => answeredUnlessClosed(redisOutage, () => opened.engine.serverInstant()),
-        syncSchedules: (request) => answeredUnlessClosed(redisOutage, () => opened.engine.syncSchedules(request)),
+        serverInstant: () => answeredUnlessClosed(redisOutage, () => opened.workerEngine.serverInstant()),
+        syncSchedules: (request) => answeredUnlessClosed(redisOutage, () => opened.workerEngine.syncSchedules(request)),
       },
       definitions,
       logger,
@@ -180,9 +187,11 @@ export function createInstanceLifecycle(config: InstanceLifecycleConfig): Instan
     isWorkerStartedInThisProcess = true;
     isThisInstanceTheProcessWorker = true;
     const timing = config.timing ?? workerTiming();
-    const opened = openCommandClient();
-    const redisOutage = connections.workerRedisOutageOf(opened.commandClient, timing.tickIntervalInMilliseconds);
-    const serverInfoReading = answeredUnlessClosed(redisOutage, () => readServerInfo(opened.commandClient));
+    const opened = openCommandConnection();
+    const redisOutage = connections.workerRedisOutageOf(opened.commandConnection, timing.tickIntervalInMilliseconds);
+    const serverInfoReading = answeredUnlessClosed(redisOutage, () =>
+      readServerInfo(opened.commandConnection.workerCalls),
+    );
     ignoreRejection(serverInfoReading);
     const boot = bootTheWorker({ opened, timing, workerOptions, redisOutage }, serverInfoReading);
     ignoreRejection(boot);
@@ -207,10 +216,10 @@ export function createInstanceLifecycle(config: InstanceLifecycleConfig): Instan
     }
   };
 
-  const shutDownWorker = async ({ loop, blockingClient, timing, shutdownTimeoutInMilliseconds }: RunningWorker) => {
+  const shutDownWorker = async ({ loop, blockingConnection, timing, shutdownTimeoutInMilliseconds }: RunningWorker) => {
     loop.startDraining();
     const fetchingStopped = loop.stopFetching();
-    await connections.closeClient(blockingClient);
+    await connections.closeConnection(blockingConnection);
     const drained = fetchingStopped.then(() => loop.waitForAttemptsInFlight());
     if (!(await isSettledWithin(drained, shutdownTimeoutInMilliseconds))) {
       if (loop.abortAttemptsAtShutdownDeadline() > 0) {
@@ -229,13 +238,16 @@ export function createInstanceLifecycle(config: InstanceLifecycleConfig): Instan
     const timing = worker?.timing ?? config.timing ?? workerTiming();
     const closeStartedAt = Date.now();
     const { loopStopped } = worker === undefined ? { loopStopped: Promise.resolve() } : await shutDownWorker(worker);
-    if (openedCommandClient !== undefined) {
-      await connections.closeClient(openedCommandClient.commandClient, timing.commandClientQuitBoundInMilliseconds);
+    if (openedCommandConnection !== undefined) {
+      await connections.closeConnection(
+        openedCommandConnection.commandConnection,
+        timing.commandConnectionCloseBoundInMilliseconds,
+      );
     }
-    commandClientClosedController.abort(new InstanceClosedError());
+    commandConnectionClosedController.abort(new InstanceClosedError());
     const closeBoundInMilliseconds =
       (worker === undefined ? 0 : worker.shutdownTimeoutInMilliseconds + timing.abortedAttemptsGraceInMilliseconds) +
-      timing.commandClientQuitBoundInMilliseconds;
+      timing.commandConnectionCloseBoundInMilliseconds;
     const closeTimeLeftInMilliseconds = closeStartedAt + closeBoundInMilliseconds - Date.now();
     if (closeTimeLeftInMilliseconds > 0) {
       await isSettledWithin(loopStopped, closeTimeLeftInMilliseconds);

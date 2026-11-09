@@ -1,7 +1,7 @@
 import { setTimeout as sleep } from "node:timers/promises";
 
-import { closeRedisClient, createRedisConnections } from "./connection.js";
-import type { ConnectionConfig, OwnedRedisClient } from "./connection.js";
+import { createRedisConnections } from "./connection.js";
+import type { ConnectionConfig, RedisConnection } from "./connection.js";
 import { retriesOf } from "./definitions.js";
 import { parseDuration } from "./durations.js";
 import type { Duration, DurationInMilliseconds } from "./durations.js";
@@ -30,7 +30,9 @@ export type NextaskingControl = {
   readonly [Symbol.asyncDispose]: () => Promise<void>;
 };
 
-type OpenEngine = { client: OwnedRedisClient; engine: Engine };
+type OpenEngine = { connection: RedisConnection; engine: Engine };
+
+const CLOSE_BOUND_IN_MILLISECONDS: DurationInMilliseconds = 1000;
 
 function timeoutInMillisecondsOf(callName: string, timeout: Duration): DurationInMilliseconds {
   try {
@@ -57,10 +59,9 @@ export function createNextaskingControl(options: NextaskingControlOptions): Next
   const callOnEngine = <Result>(call: (opened: OpenEngine) => Promise<Result>): Promise<Result> =>
     connections.callOnRedis({}, async () => {
       if (openEngine === undefined) {
-        const client = connections.createClient("instance");
-        openEngine = { client, engine: createEngine(client, prefix) };
+        const connection = connections.createCommandConnection();
+        openEngine = { connection, engine: createEngine(connection.instanceCalls, prefix) };
       }
-      await connections.waitUntilReadyWithinGiveUpAfter(openEngine.client);
       return call(openEngine);
     });
 
@@ -83,10 +84,10 @@ export function createNextaskingControl(options: NextaskingControlOptions): Next
   };
 
   const close = async () => {
-    const closedClient = openEngine?.client;
+    const closedConnection = openEngine?.connection;
     openEngine = undefined;
-    if (closedClient !== undefined) {
-      await closeRedisClient(closedClient);
+    if (closedConnection !== undefined) {
+      await connections.closeConnection(closedConnection, CLOSE_BOUND_IN_MILLISECONDS);
     }
   };
 
@@ -137,7 +138,7 @@ export function createNextaskingControl(options: NextaskingControlOptions): Next
         ({ executingRunCount }) =>
           `reset() found attempts still executing after ${timeout}: ${String(executingRunCount)} executing`,
       );
-      await callOnEngine(({ client }) => unlinkKeysOtherThanTheSchedules(client, keys, prefix));
+      await callOnEngine(({ connection }) => unlinkKeysOtherThanTheSchedules(connection.instanceCalls, keys, prefix));
     },
 
     close,

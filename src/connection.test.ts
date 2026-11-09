@@ -1,8 +1,13 @@
-import { once } from "node:events";
+import {
+  ClientClosedError,
+  ConnectionTimeoutError,
+  DisconnectsClientError,
+  ErrorReply,
+  SocketClosedUnexpectedlyError,
+  TimeoutError,
+} from "@redis/client";
 
-import { ReplyError } from "ioredis";
-
-import { afterEach, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import {
   createConnectionOutageTracker,
@@ -10,145 +15,516 @@ import {
   createRedisOutage,
   isRedisAwayError,
   isUnansweredError,
-  reconnectDecisionOn,
+  READ_ONLY_RECONNECT_PAUSE_IN_MILLISECONDS,
 } from "./connection.js";
-import type { OwnedRedisClient, RedisConnections } from "./connection.js";
-import { FakeRedisClient } from "../tests/fake-redis-clients.js";
+import type { RedisConnection, RedisConnections } from "./connection.js";
+import { createFakeRedisDrivers, fakeReplyCommandOf } from "../tests/fake-redis-drivers.js";
+import type { FakeRedisDriver } from "../tests/fake-redis-drivers.js";
 import { createRecordingLogger } from "../tests/recording-logger.js";
+import type { RecordedLogLine } from "../tests/recording-logger.js";
 
-const CONCURRENT_CALLER_COUNT = 20;
+const GIVE_UP_AFTER_IN_MILLISECONDS = 1000;
+
+const BURST_CALLER_COUNT = 20;
 
 function networkError(code: string): Error {
   return Object.assign(new Error(`connect ${code} 127.0.0.1:6379`), { code });
 }
 
-async function withNeverConnectingClient(
-  body: (connections: RedisConnections, client: OwnedRedisClient) => Promise<void>,
-): Promise<void> {
+type ConnectionScenario = {
+  connections: RedisConnections;
+  connection: RedisConnection;
+  driver: FakeRedisDriver;
+  lines: RecordedLogLine[];
+};
+
+function connectionScenarioOf(prepareDriver: (driver: FakeRedisDriver) => void = () => undefined): ConnectionScenario {
+  const { logger, lines } = createRecordingLogger();
+  const fakeRedisDrivers = createFakeRedisDrivers();
+  fakeRedisDrivers.onCreate(prepareDriver);
   const connections = createRedisConnections(
     { url: "redis://127.0.0.1:1", giveUpAfter: "1s" },
-    createRecordingLogger().logger,
+    logger,
+    fakeRedisDrivers.createDriver,
   );
-  const client = connections.createClient("instance");
-  const ended = once(client, "end");
-  client.disconnect();
-  await ended;
-  try {
-    await body(connections, client);
-  } finally {
-    client.disconnect();
+  const connection = connections.createCommandConnection();
+  const [driver] = fakeRedisDrivers.createdDrivers();
+  if (driver === undefined) {
+    throw new Error("no driver was created");
   }
+  return { connections, connection, driver, lines };
 }
 
-function waitsOfConcurrentCallers(
-  connections: RedisConnections,
-  client: OwnedRedisClient,
-): Promise<PromiseSettledResult<void>[]> {
-  return Promise.allSettled(
-    Array.from({ length: CONCURRENT_CALLER_COUNT }, () => connections.waitUntilReadyWithinGiveUpAfter(client)),
+function answered(reply: unknown) {
+  return fakeReplyCommandOf("GET", () => Promise.resolve(reply));
+}
+
+function settledAtOf(
+  promise: Promise<unknown>,
+  startedAt: number,
+): Promise<{ outcome: unknown; afterMilliseconds: number }> {
+  return promise.then(
+    (outcome: unknown) => ({ outcome, afterMilliseconds: Date.now() - startedAt }),
+    (outcome: unknown) => ({ outcome, afterMilliseconds: Date.now() - startedAt }),
   );
 }
 
-function fulfilledResultsOfAllCallers(): PromiseSettledResult<void>[] {
-  return Array.from({ length: CONCURRENT_CALLER_COUNT }, () => ({ status: "fulfilled", value: undefined }));
+async function forceReconnectCountsAround(
+  driver: FakeRedisDriver | undefined,
+  instantInMilliseconds: number,
+): Promise<[before: number | undefined, at: number | undefined]> {
+  await vi.advanceTimersByTimeAsync(instantInMilliseconds - 1);
+  const forceReconnectCountBefore = driver?.forceReconnectCount;
+  await vi.advanceTimersByTimeAsync(1);
+  return [forceReconnectCountBefore, driver?.forceReconnectCount];
 }
 
-function rejectedResultsOfAllCallersWithCause(cause: unknown): PromiseSettledResult<void>[] {
-  return Array.from({ length: CONCURRENT_CALLER_COUNT }, () => ({
-    status: "rejected",
-    reason: expect.objectContaining({ name: "ConnectionNotReadyError", cause }),
-  }));
-}
+beforeEach(() => {
+  vi.useFakeTimers({ now: Date.UTC(2030, 0, 1) });
+});
 
-describe("waitUntilReadyWithinGiveUpAfter", () => {
-  afterEach(() => {
-    vi.useRealTimers();
+afterEach(() => {
+  vi.useRealTimers();
+});
+
+describe("the instance calls", () => {
+  test("a burst of calls before the first ready each reject at giveUpAfter counted from its own start, leaving no timer", async () => {
+    const { connection, driver } = connectionScenarioOf();
+    const startedAt = Date.now();
+    const firstBurst = Array.from({ length: BURST_CALLER_COUNT / 2 }, () =>
+      settledAtOf(connection.instanceCalls.send(answered("OK")), startedAt),
+    );
+    await vi.advanceTimersByTimeAsync(GIVE_UP_AFTER_IN_MILLISECONDS / 2);
+    const secondBurst = Array.from({ length: BURST_CALLER_COUNT / 2 }, () =>
+      settledAtOf(connection.instanceCalls.send(answered("OK")), startedAt),
+    );
+    const timerCountWhileHeld = vi.getTimerCount();
+
+    await vi.advanceTimersByTimeAsync(GIVE_UP_AFTER_IN_MILLISECONDS);
+    const outcomes = await Promise.all([...firstBurst, ...secondBurst]);
+
+    expect(timerCountWhileHeld).toBe(BURST_CALLER_COUNT);
+    expect(outcomes.map(({ afterMilliseconds }) => afterMilliseconds)).toEqual([
+      ...Array.from({ length: BURST_CALLER_COUNT / 2 }, () => GIVE_UP_AFTER_IN_MILLISECONDS),
+      ...Array.from({ length: BURST_CALLER_COUNT / 2 }, () => 1.5 * GIVE_UP_AFTER_IN_MILLISECONDS),
+    ]);
+    expect(outcomes.every(({ outcome }) => outcome instanceof TimeoutError)).toBe(true);
+    expect(vi.getTimerCount()).toBe(0);
+    expect(driver.sentCommands).toHaveLength(BURST_CALLER_COUNT);
   });
 
-  test("shares one ready listener between concurrent callers, resolves them all on one ready event, and removes it", async () => {
-    await withNeverConnectingClient(async (connections, client) => {
-      const readyListenerCountBefore = client.listenerCount("ready");
+  test("a call rejected at the deadline carries the connection's last error while it is down", async () => {
+    const { connection, driver } = connectionScenarioOf();
+    const connectionRefused = networkError("ECONNREFUSED");
+    driver.loseConnection(connectionRefused);
 
-      const waits = waitsOfConcurrentCallers(connections, client);
-      const readyListenerCountWhileWaiting = client.listenerCount("ready");
-      client.emit("ready");
+    const outcome = connection.instanceCalls.send(answered("OK")).catch((error: unknown) => error);
+    await vi.advanceTimersByTimeAsync(GIVE_UP_AFTER_IN_MILLISECONDS);
 
-      expect(readyListenerCountWhileWaiting).toBe(readyListenerCountBefore + 1);
-      expect(await waits).toEqual(fulfilledResultsOfAllCallers());
-      expect(client.listenerCount("ready")).toBe(readyListenerCountBefore);
-    });
+    expect(await outcome).toBe(connectionRefused);
   });
 
-  test("rejects every concurrent caller with the client's last error as cause after giveUpAfter, and removes the listener", async () => {
-    await withNeverConnectingClient(async (connections, client) => {
-      vi.useFakeTimers();
-      const connectionRefused = networkError("ECONNREFUSED");
-      client.emit("error", connectionRefused);
-      const readyListenerCountBefore = client.listenerCount("ready");
+  test("a burst of calls held before the first ready are each written once at the ready, and answered", async () => {
+    const { connection, driver } = connectionScenarioOf();
+    const replies = Array.from({ length: BURST_CALLER_COUNT }, (_, position) =>
+      connection.instanceCalls.send(answered(position)),
+    );
 
-      const waits = waitsOfConcurrentCallers(connections, client);
-      const readyListenerCountWhileWaiting = client.listenerCount("ready");
-      await vi.advanceTimersByTimeAsync(connections.giveUpAfterInMilliseconds);
+    await vi.advanceTimersByTimeAsync(GIVE_UP_AFTER_IN_MILLISECONDS - 1);
+    driver.becomeReady();
 
-      expect(readyListenerCountWhileWaiting).toBe(readyListenerCountBefore + 1);
-      expect(await waits).toEqual(rejectedResultsOfAllCallersWithCause(connectionRefused));
-      expect(client.listenerCount("ready")).toBe(readyListenerCountBefore);
-      expect(vi.getTimerCount()).toBe(0);
-    });
+    expect(await Promise.all(replies)).toEqual(Array.from({ length: BURST_CALLER_COUNT }, (_, position) => position));
+    expect(driver.sentCommands).toHaveLength(BURST_CALLER_COUNT);
+    expect(vi.getTimerCount()).toBe(0);
   });
 
-  test("starts a fresh wait with a full giveUpAfter after a wait that gave up", async () => {
-    await withNeverConnectingClient(async (connections, client) => {
-      vi.useFakeTimers();
-      const firstWaits = waitsOfConcurrentCallers(connections, client);
-      await vi.advanceTimersByTimeAsync(connections.giveUpAfterInMilliseconds);
-      await firstWaits;
-
-      const secondWaits = waitsOfConcurrentCallers(connections, client);
-      await vi.advanceTimersByTimeAsync(connections.giveUpAfterInMilliseconds - 1);
-      client.emit("ready");
-
-      expect(await secondWaits).toEqual(fulfilledResultsOfAllCallers());
+  test("a call rejected by a reset is resent once the connection is ready again, within its deadline", async () => {
+    const { connection, driver } = connectionScenarioOf((fakeRedisDriver) => {
+      fakeRedisDriver.becomeReady();
     });
+    driver.isAnswering = false;
+    const reply = connection.instanceCalls.send(answered("resent"));
+    await vi.advanceTimersByTimeAsync(0);
+
+    driver.loseConnection(networkError("ECONNRESET"));
+    driver.isAnswering = true;
+    await vi.advanceTimersByTimeAsync(GIVE_UP_AFTER_IN_MILLISECONDS / 2);
+    driver.becomeReady();
+
+    expect(await reply).toBe("resent");
+    expect(driver.sentCommands).toEqual(["GET", "GET"]);
   });
 
-  test("starts a fresh wait after a wait that resolved", async () => {
-    await withNeverConnectingClient(async (connections, client) => {
-      vi.useFakeTimers();
-      const firstWaits = waitsOfConcurrentCallers(connections, client);
-      client.emit("ready");
-      await firstWaits;
-
-      const secondWaits = waitsOfConcurrentCallers(connections, client);
-      await vi.advanceTimersByTimeAsync(connections.giveUpAfterInMilliseconds);
-
-      expect((await secondWaits).map((result) => result.status)).toEqual(
-        Array.from({ length: CONCURRENT_CALLER_COUNT }, () => "rejected"),
-      );
+  test("a batch with a command rejected by a reset is resent whole once the connection is ready again", async () => {
+    const { connection, driver } = connectionScenarioOf((fakeRedisDriver) => {
+      fakeRedisDriver.becomeReady();
     });
+    driver.isAnswering = false;
+    const results = connection.instanceCalls.sendBatch([answered("first"), answered("second")]);
+    await vi.advanceTimersByTimeAsync(0);
+
+    driver.loseConnection(networkError("ECONNRESET"));
+    driver.isAnswering = true;
+    driver.becomeReady();
+
+    expect(await results).toEqual([
+      { kind: "replied", reply: "first" },
+      { kind: "replied", reply: "second" },
+    ]);
+    expect(driver.sentCommands).toEqual(["GET", "GET", "GET", "GET"]);
   });
 
-  test("returns at once without a listener or a timer when the client is ready, with no wait pending or with one", async () => {
-    await withNeverConnectingClient(async (connections, client) => {
-      vi.useFakeTimers();
-      const readyListenerCountBefore = client.listenerCount("ready");
-      const pendingWait = connections.waitUntilReadyWithinGiveUpAfter(client);
-      client.status = "ready";
-
-      const resultsWithOnePending = await waitsOfConcurrentCallers(connections, client);
-      const readyListenerCountWithOnePending = client.listenerCount("ready");
-      const timerCountWithOnePending = vi.getTimerCount();
-      client.emit("ready");
-      await pendingWait;
-      const waitsWithNonePending = waitsOfConcurrentCallers(connections, client);
-
-      expect(readyListenerCountWithOnePending).toBe(readyListenerCountBefore + 1);
-      expect(timerCountWithOnePending).toBe(1);
-      expect(client.listenerCount("ready")).toBe(readyListenerCountBefore);
-      expect(vi.getTimerCount()).toBe(0);
-      expect(resultsWithOnePending).toEqual(fulfilledResultsOfAllCallers());
-      expect(await waitsWithNonePending).toEqual(fulfilledResultsOfAllCallers());
+  test("an error reply goes to the caller at once, without a resend", async () => {
+    const { connection, driver } = connectionScenarioOf((fakeRedisDriver) => {
+      fakeRedisDriver.becomeReady();
     });
+    const wrongType = new ErrorReply("WRONGTYPE Operation against a key holding the wrong kind of value");
+
+    const outcome = connection.instanceCalls
+      .send(fakeReplyCommandOf("LRANGE", () => Promise.reject(wrongType)))
+      .catch((error: unknown) => error);
+
+    expect(await outcome).toBe(wrongType);
+    expect(driver.sentCommands).toEqual(["LRANGE"]);
+  });
+});
+
+describe("the worker calls", () => {
+  test("a call held while the connection is down waits past giveUpAfter and is answered at the ready", async () => {
+    const { connection, driver } = connectionScenarioOf();
+
+    const reply = connection.workerCalls.send(answered("late"));
+    await vi.advanceTimersByTimeAsync(10 * GIVE_UP_AFTER_IN_MILLISECONDS);
+    const timerCountWhileHeld = vi.getTimerCount();
+    driver.becomeReady();
+
+    expect(await reply).toBe("late");
+    expect(timerCountWhileHeld).toBe(0);
+  });
+
+  test("a call rejected by a reset goes to the caller, for the outage seam to resend", async () => {
+    const { connection, driver } = connectionScenarioOf((fakeRedisDriver) => {
+      fakeRedisDriver.becomeReady();
+    });
+    driver.isAnswering = false;
+    const connectionReset = networkError("ECONNRESET");
+    const outcome = connection.workerCalls.send(answered("lost")).catch((error: unknown) => error);
+    await vi.advanceTimersByTimeAsync(0);
+
+    driver.loseConnection(connectionReset);
+
+    expect(await outcome).toBe(connectionReset);
+  });
+});
+
+describe("a connection that stops answering without closing", () => {
+  test("an instance call in flight rejects at giveUpAfter, and the connection is reconnected by force at that instant", async () => {
+    const { connection, driver, lines } = connectionScenarioOf((fakeRedisDriver) => {
+      fakeRedisDriver.becomeReady();
+    });
+    driver.isAnswering = false;
+    const startedAt = Date.now();
+
+    const outcome = settledAtOf(connection.instanceCalls.send(answered("lost")), startedAt);
+    const forceReconnectCounts = await forceReconnectCountsAround(driver, GIVE_UP_AFTER_IN_MILLISECONDS);
+
+    expect(forceReconnectCounts).toEqual([0, 1]);
+    expect(await outcome).toEqual({
+      outcome: expect.any(TimeoutError),
+      afterMilliseconds: GIVE_UP_AFTER_IN_MILLISECONDS,
+    });
+    expect(lines.map(({ message }) => message)).toEqual(["connection error"]);
+  });
+
+  test("a worker call in flight is rejected by the forced reconnect at giveUpAfter, as an away error", async () => {
+    const { connection, driver } = connectionScenarioOf((fakeRedisDriver) => {
+      fakeRedisDriver.becomeReady();
+    });
+    driver.isAnswering = false;
+
+    const outcome = connection.workerCalls.send(answered("lost")).catch((error: unknown) => error);
+    await vi.advanceTimersByTimeAsync(GIVE_UP_AFTER_IN_MILLISECONDS);
+
+    expect(driver.forceReconnectCount).toBe(1);
+    expect(isRedisAwayError(await outcome)).toBe(true);
+  });
+
+  test("a call written at the ready after a wait gets its full giveUpAfter from that ready", async () => {
+    const { connection, driver } = connectionScenarioOf();
+    driver.isAnswering = false;
+    const outcome = connection.workerCalls.send(answered("late")).catch((error: unknown) => error);
+    await vi.advanceTimersByTimeAsync(5 * GIVE_UP_AFTER_IN_MILLISECONDS);
+
+    driver.becomeReady();
+    const forceReconnectCounts = await forceReconnectCountsAround(driver, GIVE_UP_AFTER_IN_MILLISECONDS);
+
+    expect(forceReconnectCounts).toEqual([0, 1]);
+    expect(isRedisAwayError(await outcome)).toBe(true);
+  });
+
+  test("a blocking connection waits for its longest block plus giveUpAfter before it reconnects by force", async () => {
+    const { logger } = createRecordingLogger();
+    const fakeRedisDrivers = createFakeRedisDrivers();
+    fakeRedisDrivers.onCreate((fakeRedisDriver) => {
+      fakeRedisDriver.becomeReady();
+      fakeRedisDriver.isAnswering = false;
+    });
+    const connections = createRedisConnections(
+      { url: "redis://127.0.0.1:1", giveUpAfter: "1s" },
+      logger,
+      fakeRedisDrivers.createDriver,
+    );
+    const connection = connections.createBlockingConnection(3000);
+    const [driver] = fakeRedisDrivers.createdDrivers();
+
+    const outcome = connection.workerCalls.send(answered(null)).catch((error: unknown) => error);
+    const forceReconnectCounts = await forceReconnectCountsAround(driver, 3000 + GIVE_UP_AFTER_IN_MILLISECONDS);
+
+    expect(forceReconnectCounts).toEqual([0, 1]);
+    expect(isRedisAwayError(await outcome)).toBe(true);
+  });
+
+  test("a handshake left unanswered for giveUpAfter is reconnected by force, again for each new one", async () => {
+    const { driver } = connectionScenarioOf();
+
+    driver.startHandshake();
+    await vi.advanceTimersByTimeAsync(GIVE_UP_AFTER_IN_MILLISECONDS);
+    driver.startHandshake();
+    await vi.advanceTimersByTimeAsync(GIVE_UP_AFTER_IN_MILLISECONDS - 1);
+    const forceReconnectCountBeforeTheSecond = driver.forceReconnectCount;
+    driver.becomeReady();
+    await vi.advanceTimersByTimeAsync(10 * GIVE_UP_AFTER_IN_MILLISECONDS);
+
+    expect(forceReconnectCountBeforeTheSecond).toBe(1);
+    expect(driver.forceReconnectCount).toBe(1);
+  });
+
+  test("a handshake that fails with an error is left to the driver's own retries, never reconnected by force", async () => {
+    const { driver } = connectionScenarioOf();
+
+    driver.startHandshake();
+    driver.loseConnection(networkError("ECONNRESET"));
+    await vi.advanceTimersByTimeAsync(5 * GIVE_UP_AFTER_IN_MILLISECONDS);
+
+    expect(driver.forceReconnectCount).toBe(0);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  test("an answered connection idle for longer than giveUpAfter is never reconnected and logs nothing", async () => {
+    const { connection, driver, lines } = connectionScenarioOf((fakeRedisDriver) => {
+      fakeRedisDriver.becomeReady();
+    });
+
+    await connection.instanceCalls.send(answered("first"));
+    await vi.advanceTimersByTimeAsync(10 * GIVE_UP_AFTER_IN_MILLISECONDS);
+    const reply = await connection.instanceCalls.send(answered("next"));
+
+    expect(reply).toBe("next");
+    expect(driver.forceReconnectCount).toBe(0);
+    expect(lines).toEqual([]);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  test("none of its timers keeps the process alive, and none is left once the connection is closed", async () => {
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const { connections, connection, driver } = connectionScenarioOf((fakeRedisDriver) => {
+      fakeRedisDriver.becomeReady();
+    });
+    driver.isAnswering = false;
+    const outcomes = Promise.all([
+      connection.instanceCalls.send(answered("lost")).catch((error: unknown) => error),
+      connection.workerCalls.send(answered("lost")).catch((error: unknown) => error),
+    ]);
+    driver.startHandshake();
+    await vi.advanceTimersByTimeAsync(GIVE_UP_AFTER_IN_MILLISECONDS / 2);
+    const timers = setTimeoutSpy.mock.results.map(({ value }) => value as NodeJS.Timeout);
+
+    await connections.closeConnection(connection);
+    await outcomes;
+
+    expect(timers.length).toBeGreaterThanOrEqual(3);
+    expect(timers.map((timer) => timer.hasRef())).toEqual(timers.map(() => false));
+    expect(vi.getTimerCount()).toBe(0);
+  });
+});
+
+describe("a write answered READONLY, as during a failover", () => {
+  const READ_ONLY_STRETCH_IN_MILLISECONDS = 2000;
+
+  function demotedPrimaryScenarioOf(readOnlyStretchInMilliseconds: number) {
+    const scenario = connectionScenarioOf((fakeRedisDriver) => {
+      fakeRedisDriver.becomeReady();
+      fakeRedisDriver.onForceReconnect = () => {
+        setTimeout(() => {
+          fakeRedisDriver.becomeReady();
+        }, 5);
+      };
+    });
+    let isReadOnly = true;
+    setTimeout(() => {
+      isReadOnly = false;
+    }, readOnlyStretchInMilliseconds);
+    const write = () =>
+      fakeReplyCommandOf("SET", async () => {
+        if (isReadOnly) {
+          throw new ErrorReply("READONLY You can't write against a read only replica.");
+        }
+        return "OK";
+      });
+    return { ...scenario, write };
+  }
+
+  test("a worker write is answered once the server accepts writes again, the caller seeing no error, through a bounded number of reconnects", async () => {
+    const { connection, driver, lines, write } = demotedPrimaryScenarioOf(READ_ONLY_STRETCH_IN_MILLISECONDS);
+
+    const reply = connection.workerCalls.send(write());
+    await vi.advanceTimersByTimeAsync(READ_ONLY_STRETCH_IN_MILLISECONDS + READ_ONLY_RECONNECT_PAUSE_IN_MILLISECONDS);
+
+    expect(await reply).toBe("OK");
+    expect(driver.forceReconnectCount).toBeGreaterThan(0);
+    expect(driver.forceReconnectCount).toBeLessThanOrEqual(
+      READ_ONLY_STRETCH_IN_MILLISECONDS / READ_ONLY_RECONNECT_PAUSE_IN_MILLISECONDS + 1,
+    );
+    expect(lines).toEqual([]);
+  });
+
+  test("a worker batch with a write answered READONLY is resent whole once the server accepts writes again", async () => {
+    const { connection, write } = demotedPrimaryScenarioOf(READ_ONLY_STRETCH_IN_MILLISECONDS / 4);
+
+    const results = connection.workerCalls.sendBatch([answered("read"), write()]);
+    await vi.advanceTimersByTimeAsync(READ_ONLY_STRETCH_IN_MILLISECONDS);
+
+    expect(await results).toEqual([
+      { kind: "replied", reply: "read" },
+      { kind: "replied", reply: "OK" },
+    ]);
+  });
+
+  test("an instance write is answered when the stretch is shorter than giveUpAfter, and rejects as unanswered at giveUpAfter otherwise", async () => {
+    const shortStretch = demotedPrimaryScenarioOf(GIVE_UP_AFTER_IN_MILLISECONDS / 2);
+    const longStretch = demotedPrimaryScenarioOf(10 * GIVE_UP_AFTER_IN_MILLISECONDS);
+
+    const shortReply = shortStretch.connection.instanceCalls.send(shortStretch.write());
+    const longOutcome = longStretch.connection.instanceCalls.send(longStretch.write()).catch((error: unknown) => error);
+    await vi.advanceTimersByTimeAsync(GIVE_UP_AFTER_IN_MILLISECONDS);
+
+    expect(await shortReply).toBe("OK");
+    expect(isUnansweredError(await longOutcome)).toBe(true);
+  });
+});
+
+describe("closeConnection", () => {
+  test("closes a ready driver within the bound, then destroys it", async () => {
+    const { connections, connection, driver } = connectionScenarioOf((fakeRedisDriver) => {
+      fakeRedisDriver.becomeReady();
+    });
+
+    await connections.closeConnection(connection, 1000);
+
+    expect([driver.closeCount, driver.destroyCount]).toEqual([1, 1]);
+  });
+
+  test("gives up on a close never answered at the bound, and destroys", async () => {
+    const { connections, connection, driver } = connectionScenarioOf((fakeRedisDriver) => {
+      fakeRedisDriver.becomeReady();
+      fakeRedisDriver.closeReply = "never answered";
+    });
+    let isClosed = false;
+
+    const closing = connections.closeConnection(connection, 1000).then(() => {
+      isClosed = true;
+    });
+    await vi.advanceTimersByTimeAsync(999);
+    const isClosedBeforeTheBound = isClosed;
+    await vi.advanceTimersByTimeAsync(1);
+    await closing;
+
+    expect(isClosedBeforeTheBound).toBe(false);
+    expect(driver.destroyCount).toBe(1);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  test("destroys a driver that is not ready, or that has no close bound, without closing it", async () => {
+    const reconnecting = connectionScenarioOf();
+    const ready = connectionScenarioOf((fakeRedisDriver) => {
+      fakeRedisDriver.becomeReady();
+    });
+
+    await reconnecting.connections.closeConnection(reconnecting.connection, 1000);
+    await ready.connections.closeConnection(ready.connection);
+
+    expect([reconnecting.driver.closeCount, ready.driver.closeCount]).toEqual([0, 0]);
+    expect([reconnecting.driver.destroyCount, ready.driver.destroyCount]).toEqual([1, 1]);
+  });
+
+  test("rejects every call held or in flight and every wait for ready, leaving no timer", async () => {
+    const { connections, connection } = connectionScenarioOf();
+    const outcomes = Promise.all([
+      connection.instanceCalls.send(answered("held")).catch((error: unknown) => error),
+      connection.workerCalls.send(answered("held")).catch((error: unknown) => error),
+      connections.waitUntilReady(connection).catch((error: unknown) => error),
+    ]);
+
+    await connections.closeConnection(connection);
+
+    expect((await outcomes).map((outcome) => isUnansweredError(outcome))).toEqual([true, true, true]);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  test("makes a later call and a later wait for ready reject at once as unanswered", async () => {
+    const { connections, connection } = connectionScenarioOf();
+    await connections.closeConnection(connection);
+
+    const outcomes = await Promise.all([
+      connection.instanceCalls.send(answered("late")).catch((error: unknown) => error),
+      connections.waitUntilReady(connection).catch((error: unknown) => error),
+    ]);
+
+    expect(outcomes.map((outcome) => isUnansweredError(outcome))).toEqual([true, true]);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  test("ends the outage of a connection closed while down silently", async () => {
+    const { connections, connection, driver, lines } = connectionScenarioOf();
+    driver.loseConnection(networkError("ECONNREFUSED"));
+
+    await connections.closeConnection(connection);
+    driver.becomeReady();
+
+    expect(lines.map(({ message }) => message)).toEqual(["connection error"]);
+  });
+});
+
+describe("waitUntilReady", () => {
+  test("keeps waiting past giveUpAfter with no timer, and resolves every waiter on the ready", async () => {
+    const { connections, connection, driver } = connectionScenarioOf();
+    let readyWaiterCount = 0;
+    const waits = Array.from({ length: BURST_CALLER_COUNT }, () =>
+      connections.waitUntilReady(connection).then(() => {
+        readyWaiterCount += 1;
+      }),
+    );
+
+    await vi.advanceTimersByTimeAsync(3 * GIVE_UP_AFTER_IN_MILLISECONDS);
+    const readyWaiterCountBeforeTheReady = readyWaiterCount;
+    const timerCountWhileWaiting = vi.getTimerCount();
+    driver.becomeReady();
+    await Promise.all(waits);
+
+    expect(readyWaiterCountBeforeTheReady).toBe(0);
+    expect(timerCountWhileWaiting).toBe(0);
+    expect(readyWaiterCount).toBe(BURST_CALLER_COUNT);
+  });
+
+  test("ends on its stop signal", async () => {
+    const { connections, connection } = connectionScenarioOf();
+    const stopController = new AbortController();
+    const stopReason = new Error("stopped");
+
+    const wait = connections.waitUntilReady(connection, stopController.signal);
+    stopController.abort(stopReason);
+
+    expect(await wait.catch((error: unknown) => error)).toBe(stopReason);
   });
 });
 
@@ -236,39 +612,25 @@ describe("the connection outage tracker", () => {
   });
 });
 
-describe("reconnectDecisionOn", () => {
-  test("reconnects and resends the command on a READONLY reply, as during a failover", () => {
-    expect(reconnectDecisionOn(new ReplyError("READONLY You can't write against a read only replica."))).toBe(2);
-  });
-
-  test("leaves the connection alone on any other error", () => {
-    expect(reconnectDecisionOn(new ReplyError("ERR unknown command 'CONFIG'"))).toBe(false);
-  });
-});
-
 describe("isUnansweredError", () => {
   test.each([
-    ["a command timeout", new Error("Command timed out")],
-    ["a closed connection", new Error("Connection is closed.")],
-    ["a pipeline command aborted by a closed connection", new Error("Command aborted due to connection close")],
-    ["a socket timeout", new Error("Socket timeout. Expecting data, but didn't receive any in 5000ms.")],
+    ["a command timeout", new TimeoutError()],
+    ["a connection closed by the server", new SocketClosedUnexpectedlyError()],
+    ["a command rejected by a destroy", new DisconnectsClientError()],
+    ["a connect timeout", new ConnectionTimeoutError()],
+    ["a command sent on a closed client", new ClientClosedError()],
     ["a refused connection", networkError("ECONNREFUSED")],
     ["a reset connection", networkError("ECONNRESET")],
     ["an unknown host", networkError("ENOTFOUND")],
-    [
-      "exhausted retries",
-      Object.assign(new Error("Reached the max retries per request limit"), {
-        name: "MaxRetriesPerRequestError",
-      }),
-    ],
   ])("is true for %s", (_case, error) => {
     expect(isUnansweredError(error)).toBe(true);
   });
 
   test.each([
-    ["a reply error", new ReplyError("ERR wrong number of arguments")],
+    ["a reply error", new ErrorReply("ERR wrong number of arguments")],
     ["an error of the call itself", new Error("Job is not in failed state")],
-    ["a value that isn't an error", "Command timed out"],
+    ["an error that only words itself as a timeout", new Error("Command timed out")],
+    ["a value that isn't an error", "Socket closed unexpectedly"],
   ])("is false for %s", (_case, error) => {
     expect(isUnansweredError(error)).toBe(false);
   });
@@ -278,17 +640,17 @@ const OUT_OF_MEMORY_MESSAGE = "OOM command not allowed when used memory > 'maxme
 
 describe("isRedisAwayError", () => {
   test.each([
-    ["an unanswered command", new Error("Connection is closed.")],
-    ["the server's out-of-memory reply to a command", new ReplyError(OUT_OF_MEMORY_MESSAGE)],
+    ["an unanswered command", new SocketClosedUnexpectedlyError()],
+    ["the server's out-of-memory reply to a command", new ErrorReply(OUT_OF_MEMORY_MESSAGE)],
     [
       "the out-of-memory error a script's redis.call raises, as Redis 7.2 and later and Valkey wrap it",
-      new ReplyError(
+      new ErrorReply(
         `ERR Error running script (call to 71e6319f97b0fe8bdfa1c5df3ce4489946dda479): @user_script:1: ${OUT_OF_MEMORY_MESSAGE}`,
       ),
     ],
     [
       "the out-of-memory error a script's redis.call raises, as Redis 7.0 wraps it",
-      new ReplyError(
+      new ErrorReply(
         `ERR Error running script (call to 71e6319f97b0fe8bdfa1c5df3ce4489946dda479): @user_script:1: @user_script: 1: -${OUT_OF_MEMORY_MESSAGE}`,
       ),
     ],
@@ -297,9 +659,9 @@ describe("isRedisAwayError", () => {
   });
 
   test.each([
-    ["a server still loading its dataset", new ReplyError("LOADING Redis is loading the dataset in memory")],
-    ["a busy script", new ReplyError("BUSY Redis is busy running a script.")],
-    ["a key of the wrong type", new ReplyError("WRONGTYPE Operation against a key holding the wrong kind of value")],
+    ["a server still loading its dataset", new ErrorReply("LOADING Redis is loading the dataset in memory")],
+    ["a busy script", new ErrorReply("BUSY Redis is busy running a script.")],
+    ["a key of the wrong type", new ErrorReply("WRONGTYPE Operation against a key holding the wrong kind of value")],
     ["an error that is not a reply and only quotes the message", new Error(`handler saw: ${OUT_OF_MEMORY_MESSAGE}`)],
   ])("is false for %s", (_case, error) => {
     expect(isRedisAwayError(error)).toBe(false);
@@ -307,10 +669,6 @@ describe("isRedisAwayError", () => {
 });
 
 describe("the worker's Redis outage", () => {
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
   function outageOfRecordedLines(waitUntilReady = () => Promise.resolve()) {
     const { logger, lines } = createRecordingLogger();
     const redisOutage = createRedisOutage({
@@ -322,9 +680,8 @@ describe("the worker's Redis outage", () => {
   }
 
   test("an out-of-memory reply lasting several waits opens one connection error, closed by the first answer", async () => {
-    vi.useFakeTimers();
     const { redisOutage, lines } = outageOfRecordedLines();
-    const outOfMemoryReply = new ReplyError(OUT_OF_MEMORY_MESSAGE);
+    const outOfMemoryReply = new ErrorReply(OUT_OF_MEMORY_MESSAGE);
 
     for (let waitCount = 0; waitCount < 3; waitCount += 1) {
       const wait = redisOutage.waitForRedis(outOfMemoryReply);
@@ -339,14 +696,13 @@ describe("the worker's Redis outage", () => {
   });
 
   test("an out-of-memory wait lasts the retry delay, or ends on its stop signal", async () => {
-    vi.useFakeTimers();
     const { redisOutage } = outageOfRecordedLines();
     const stopController = new AbortController();
     let isWaitOver = false;
-    void redisOutage.waitForRedis(new ReplyError(OUT_OF_MEMORY_MESSAGE)).then(() => {
+    void redisOutage.waitForRedis(new ErrorReply(OUT_OF_MEMORY_MESSAGE)).then(() => {
       isWaitOver = true;
     });
-    const stoppedWait = redisOutage.waitForRedis(new ReplyError(OUT_OF_MEMORY_MESSAGE), stopController.signal);
+    const stoppedWait = redisOutage.waitForRedis(new ErrorReply(OUT_OF_MEMORY_MESSAGE), stopController.signal);
 
     stopController.abort();
     await stoppedWait;
@@ -358,11 +714,11 @@ describe("the worker's Redis outage", () => {
     expect(isWaitOver).toBe(true);
   });
 
-  test("an unanswered command waits for the client to be ready and writes no line itself", async () => {
+  test("an unanswered command waits for the connection to be ready and writes no line itself", async () => {
     const waitUntilReady = vi.fn(() => Promise.resolve());
     const { redisOutage, lines } = outageOfRecordedLines(waitUntilReady);
 
-    await redisOutage.waitForRedis(new Error("Connection is closed."));
+    await redisOutage.waitForRedis(new SocketClosedUnexpectedlyError());
     redisOutage.noteRedisAnswered();
 
     expect(waitUntilReady).toHaveBeenCalledTimes(1);
@@ -370,167 +726,18 @@ describe("the worker's Redis outage", () => {
   });
 });
 
-describe("waitUntilReadyWithoutDeadline", () => {
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
-  test("keeps waiting past giveUpAfter with one shared ready listener, and resolves on the ready event", async () => {
-    await withNeverConnectingClient(async (connections, client) => {
-      vi.useFakeTimers();
-      const readyListenerCountBefore = client.listenerCount("ready");
-      let isReady = false;
-      const waits = Array.from({ length: CONCURRENT_CALLER_COUNT }, () =>
-        connections.waitUntilReadyWithoutDeadline(client).then(() => {
-          isReady = true;
-        }),
-      );
-
-      await vi.advanceTimersByTimeAsync(3 * connections.giveUpAfterInMilliseconds);
-      const isReadyAfterThreeGiveUps = isReady;
-      const readyListenerCountWhileWaiting = client.listenerCount("ready");
-      client.emit("ready");
-      await Promise.all(waits);
-
-      expect(isReadyAfterThreeGiveUps).toBe(false);
-      expect(readyListenerCountWhileWaiting).toBe(readyListenerCountBefore + 1);
-      expect(client.listenerCount("ready")).toBe(readyListenerCountBefore);
-    });
-  });
-
-  test("ends on its stop signal, and its listener goes at the next giveUpAfter", async () => {
-    await withNeverConnectingClient(async (connections, client) => {
-      vi.useFakeTimers();
-      const readyListenerCountBefore = client.listenerCount("ready");
-      const stopController = new AbortController();
-      const stopReason = new Error("stopped");
-
-      const wait = connections.waitUntilReadyWithoutDeadline(client, stopController.signal);
-      stopController.abort(stopReason);
-      const outcome = await wait.catch((error: unknown) => error);
-      await vi.advanceTimersByTimeAsync(connections.giveUpAfterInMilliseconds);
-
-      expect(outcome).toBe(stopReason);
-      expect(client.listenerCount("ready")).toBe(readyListenerCountBefore);
-      expect(vi.getTimerCount()).toBe(0);
-    });
-  });
-
-  test("ends when the client is closed, without arming another wait", async () => {
-    await withNeverConnectingClient(async (connections, client) => {
-      vi.useFakeTimers();
-      const readyListenerCountBefore = client.listenerCount("ready");
-
-      const wait = connections.waitUntilReadyWithoutDeadline(client);
-      await vi.advanceTimersByTimeAsync(2 * connections.giveUpAfterInMilliseconds);
-      await connections.closeClient(client);
-      const outcome = await wait.catch((error: unknown) => error);
-
-      expect(outcome).toMatchObject({ name: "ClientClosedError" });
-      expect(client.listenerCount("ready")).toBe(readyListenerCountBefore);
-      expect(vi.getTimerCount()).toBe(0);
-    });
-  });
-});
-
-describe("closeClient", () => {
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
-  test("ends the pending ready-wait at once for every caller, with no listener or timer left", async () => {
-    await withNeverConnectingClient(async (connections, client) => {
-      vi.useFakeTimers();
-      const readyListenerCountBefore = client.listenerCount("ready");
-      const waits = waitsOfConcurrentCallers(connections, client);
-
-      await connections.closeClient(client);
-
-      expect((await waits).map((result) => result.status === "rejected" && (result.reason as Error).name)).toEqual(
-        Array.from({ length: CONCURRENT_CALLER_COUNT }, () => "ClientClosedError"),
-      );
-      expect(client.listenerCount("ready")).toBe(readyListenerCountBefore);
-      expect(vi.getTimerCount()).toBe(0);
-    });
-  });
-
-  test("makes a later ready-wait on the client reject at once, arming nothing", async () => {
-    await withNeverConnectingClient(async (connections, client) => {
-      vi.useFakeTimers();
-      const readyListenerCountBefore = client.listenerCount("ready");
-      await connections.closeClient(client);
-
-      const outcome = await connections.waitUntilReadyWithinGiveUpAfter(client).catch((error: unknown) => error);
-
-      expect(outcome).toMatchObject({ name: "ClientClosedError" });
-      expect(isUnansweredError(outcome)).toBe(true);
-      expect(client.listenerCount("ready")).toBe(readyListenerCountBefore);
-      expect(vi.getTimerCount()).toBe(0);
-    });
-  });
-
-  test("quits a ready client within the bound, then disconnects it", async () => {
-    const connections = createRedisConnections({ url: "redis://127.0.0.1:1" }, createRecordingLogger().logger);
-    const fakeRedisClient = new FakeRedisClient();
-    fakeRedisClient.becomeReady();
-
-    await connections.closeClient(fakeRedisClient, 1000);
-
-    expect(fakeRedisClient.sentCommands).toEqual(["QUIT"]);
-    expect(fakeRedisClient.disconnectCount).toBe(1);
-  });
-
-  test("gives up on a quit never answered at the bound, and disconnects", async () => {
-    vi.useFakeTimers();
-    const connections = createRedisConnections({ url: "redis://127.0.0.1:1" }, createRecordingLogger().logger);
-    const fakeRedisClient = new FakeRedisClient();
-    fakeRedisClient.becomeReady();
-    fakeRedisClient.quitReply = "never answered";
-    let isClosed = false;
-
-    const closing = connections.closeClient(fakeRedisClient, 1000).then(() => {
-      isClosed = true;
-    });
-    await vi.advanceTimersByTimeAsync(999);
-    const isClosedBeforeTheBound = isClosed;
-    await vi.advanceTimersByTimeAsync(1);
-    await closing;
-
-    expect(isClosedBeforeTheBound).toBe(false);
-    expect(fakeRedisClient.disconnectCount).toBe(1);
-    expect(vi.getTimerCount()).toBe(0);
-  });
-
-  test("disconnects a client that is not ready, or that has no quit bound, without sending QUIT", async () => {
-    const connections = createRedisConnections({ url: "redis://127.0.0.1:1" }, createRecordingLogger().logger);
-    const reconnectingClient = new FakeRedisClient();
-    reconnectingClient.startReconnecting();
-    const readyClient = new FakeRedisClient();
-    readyClient.becomeReady();
-
-    await connections.closeClient(reconnectingClient, 1000);
-    await connections.closeClient(readyClient);
-
-    expect([reconnectingClient.sentCommands, readyClient.sentCommands]).toEqual([[], []]);
-    expect([reconnectingClient.disconnectCount, readyClient.disconnectCount]).toEqual([1, 1]);
-  });
-});
-
 describe("callOnRedis", () => {
-  const connections = createRedisConnections(
-    { url: "redis://127.0.0.1:1", giveUpAfter: "2s" },
-    createRecordingLogger().logger,
-  );
+  const { connections } = connectionScenarioOf();
 
   test("turns an unanswered command into RedisUnavailableError naming giveUpAfter, with the call's ids", async () => {
-    const unanswered = new Error("Command timed out");
+    const unanswered = new TimeoutError();
 
     const call = connections.callOnRedis({ runId: "welcome-ada" }, () => Promise.reject(unanswered));
 
     await expect(call).rejects.toThrow(
       expect.objectContaining({
         name: "RedisUnavailableError",
-        message: "Redis didn't answer within 2s",
+        message: "Redis didn't answer within 1s",
         cause: unanswered,
         runId: "welcome-ada",
       }),
@@ -538,7 +745,7 @@ describe("callOnRedis", () => {
   });
 
   test("turns an out-of-memory reply into RedisUnavailableError saying so, with the reply as its cause", async () => {
-    const outOfMemoryReply = new ReplyError(OUT_OF_MEMORY_MESSAGE);
+    const outOfMemoryReply = new ErrorReply(OUT_OF_MEMORY_MESSAGE);
 
     const call = connections.callOnRedis({ eventId: "invoice-42-paid" }, () => Promise.reject(outOfMemoryReply));
 
@@ -553,7 +760,7 @@ describe("callOnRedis", () => {
   });
 
   test("lets any other error through untouched", async () => {
-    const scriptError = new ReplyError("ERR Error running script");
+    const scriptError = new ErrorReply("ERR Error running script");
 
     await expect(connections.callOnRedis({}, () => Promise.reject(scriptError))).rejects.toBe(scriptError);
   });

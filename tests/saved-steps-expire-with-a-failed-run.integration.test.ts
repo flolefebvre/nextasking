@@ -1,16 +1,14 @@
 import { expect, vi } from "vitest";
 import { z } from "zod";
 
-import { engineKeysOf } from "../src/engine/engine-keys.js";
-import { createEngine } from "../src/engine/engine.js";
 import { createNextasking, defineTask, NonRetriableError } from "../src/index.js";
 import { closeNextaskingAndCheckItsDuration } from "./close-nextasking-and-check-its-duration.js";
-import { backdateEndedRun } from "./engine-test.js";
+import { backdateEndedRun, engineTestContextOf } from "./engine-test.js";
 import { integrationTest } from "./integration-test.js";
 import { createRecordingLogger, waitForLogMessage } from "./recording-logger.js";
 import { savedSteps } from "./saved-steps.js";
 import { storedRun } from "./stored-run.js";
-import { redisClientOf, withRedis } from "./with-redis.js";
+import { withRedis } from "./with-redis.js";
 
 const FIFTEEN_DAYS_IN_MILLISECONDS = 15 * 24 * 60 * 60 * 1000;
 
@@ -38,9 +36,9 @@ integrationTest(
       const { runId } = await nextasking.dispatch("import-contacts", { fileId: "file-7" });
       await waitForLogMessage(lines, "run failed");
       const stepsOfTheFailedRun = await savedSteps(redisUrl, keyPrefix, "import-contacts", runId);
-      await withRedis(redisUrl, (redis) =>
+      await withRedis(redisUrl, (redis, client) =>
         backdateEndedRun(
-          { engine: createEngine(redisClientOf(redis), keyPrefix), redis, keys: engineKeysOf(keyPrefix), keyPrefix },
+          engineTestContextOf(redis, client, keyPrefix),
           "import-contacts",
           runId,
           FIFTEEN_DAYS_IN_MILLISECONDS,

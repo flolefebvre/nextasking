@@ -12,7 +12,7 @@ import type { DispatchedRun, DispatchOptions, EmitOptions, EmittedEvent, Replaye
 import type { RedisCallIds } from "./errors.js";
 import type { EventId, RunId } from "./ids.js";
 import { createInstanceLifecycle } from "./instance-lifecycle.js";
-import type { OpenedCommandClient } from "./instance-lifecycle.js";
+import type { InstanceCalls } from "./instance-lifecycle.js";
 import { silentLogger } from "./logger.js";
 import type { Logger } from "./logger.js";
 import type {
@@ -184,7 +184,7 @@ export function createNextasking<
   const requests = createEnqueueRequests({ tasksByName, eventsByName, listenerNamesByEventName });
   const lifecycle = createInstanceLifecycle({
     connections,
-    engineOn: (commandClient) => createEngine(commandClient, prefix),
+    engineOn: (client) => createEngine(client, prefix),
     wakeUpWaitOn: (blockingClient) => wakeUpWaitOf(blockingClient, prefix),
     senderOn: (engine) => handlerSenderOn(engine, requests, logger),
     definitions: { tasksByName, listenerNamesByEventName },
@@ -192,7 +192,7 @@ export function createNextasking<
   });
   const callOnRedisWhileOpen = <Result>(
     callIds: RedisCallIds,
-    call: (opened: OpenedCommandClient) => Promise<Result>,
+    call: (instanceCalls: InstanceCalls) => Promise<Result>,
   ): Promise<Result> => connections.callOnRedis(callIds, () => lifecycle.callWhileOpen(call));
   const engineSendTarget = engineSendTargetOf((callIds, call) =>
     callOnRedisWhileOpen(callIds, ({ engine }) => call(engine)),
@@ -215,9 +215,9 @@ export function createNextasking<
     read: (reader: ReadApi) => Promise<Result>,
   ): Promise<Result> =>
     recordingSendTarget === undefined
-      ? callOnRedisWhileOpen(callIds, ({ commandClient }) => {
+      ? callOnRedisWhileOpen(callIds, ({ client }) => {
           readApi ??= createReadApi({
-            client: commandClient,
+            client,
             prefix,
             tasksByName,
             listenerNamesByEventName,

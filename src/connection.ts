@@ -1,15 +1,17 @@
-import type { EventEmitter } from "node:events";
-
-import { Redis } from "ioredis";
-import type { RedisOptions } from "ioredis";
-
 import { parseDuration } from "./durations.js";
-import type { Duration, DurationInMilliseconds } from "./durations.js";
+import type { Duration, DurationInMilliseconds, EpochMilliseconds } from "./durations.js";
 import { RedisUnavailableError } from "./errors.js";
 import type { RedisCallIds } from "./errors.js";
-import { ioredisClientOf } from "./ioredis-client.js";
 import type { Logger } from "./logger.js";
-import type { RedisClient } from "./redis-client.js";
+import {
+  createNodeRedisDriver,
+  isOutOfMemoryReply,
+  isReadOnlyReply,
+  isUnansweredCommandError,
+  unansweredWithinDeadlineError,
+} from "./node-redis-driver.js";
+import type { CreateRedisDriver, RedisDriver } from "./node-redis-driver.js";
+import type { CommandResult, RedisClient, RedisCommand } from "./redis-client.js";
 import { delayUnlessAborted, untilAborted } from "./redis-outage.js";
 import type { RedisOutage } from "./redis-outage.js";
 import { isSettledWithin } from "./settled-within.js";
@@ -19,35 +21,9 @@ export type ConnectionConfig = {
   giveUpAfter?: Duration;
 };
 
-export type RedisClientRole = "instance" | "worker";
-
 const DEFAULT_GIVE_UP_AFTER: Duration = "5s";
 
-const KEEP_ALIVE_INITIAL_DELAY_IN_MILLISECONDS = 30_000;
-
-const RECONNECT_AND_RESEND = 2;
-
-const UNANSWERED_ERROR_MESSAGES = new Set([
-  "Command timed out",
-  "Connection is closed.",
-  "Command aborted due to connection close",
-]);
-
-const UNANSWERED_ERROR_MESSAGE_PREFIXES = ["Socket timeout"];
-
-const UNANSWERED_ERROR_NAMES = new Set(["MaxRetriesPerRequestError", "ConnectionNotReadyError", "ClientClosedError"]);
-
-const NETWORK_ERROR_CODES = new Set([
-  "ECONNREFUSED",
-  "ECONNRESET",
-  "ECONNABORTED",
-  "ETIMEDOUT",
-  "EPIPE",
-  "ENOTFOUND",
-  "EAI_AGAIN",
-  "EHOSTUNREACH",
-  "ENETUNREACH",
-]);
+export const READ_ONLY_RECONNECT_PAUSE_IN_MILLISECONDS: DurationInMilliseconds = 250;
 
 export function giveUpAfterInMillisecondsOf(connection: ConnectionConfig): DurationInMilliseconds {
   try {
@@ -57,27 +33,16 @@ export function giveUpAfterInMillisecondsOf(connection: ConnectionConfig): Durat
   }
 }
 
-export function reconnectDecisionOn(error: Error): false | typeof RECONNECT_AND_RESEND {
-  return error.message.includes("READONLY") ? RECONNECT_AND_RESEND : false;
+class ConnectionClosedError extends Error {
+  override readonly name = "ConnectionClosedError";
+
+  constructor() {
+    super("The Redis connection was closed by its nextasking instance");
+  }
 }
 
 export function isUnansweredError(error: unknown): boolean {
-  if (!(error instanceof Error)) {
-    return false;
-  }
-  const { code } = error as { code?: unknown };
-  return (
-    UNANSWERED_ERROR_MESSAGES.has(error.message) ||
-    UNANSWERED_ERROR_MESSAGE_PREFIXES.some((prefix) => error.message.startsWith(prefix)) ||
-    UNANSWERED_ERROR_NAMES.has(error.name) ||
-    (typeof code === "string" && NETWORK_ERROR_CODES.has(code))
-  );
-}
-
-const OUT_OF_MEMORY_REPLY_PATTERN = /(?:^|[\s:-])OOM command not allowed\b/;
-
-export function isOutOfMemoryReply(error: unknown): boolean {
-  return error instanceof Error && error.name === "ReplyError" && OUT_OF_MEMORY_REPLY_PATTERN.test(error.message);
+  return isUnansweredCommandError(error) || error instanceof ConnectionClosedError;
 }
 
 export function isRedisAwayError(error: unknown): boolean {
@@ -110,26 +75,6 @@ export function createRedisOutage({
       outageTracker.reportClientReady(outOfMemorySubject);
     },
   };
-}
-
-export function listenerLoggingAnsweredErrors(logger: Logger, message: string): (error: unknown) => void {
-  return (error) => {
-    if (!isUnansweredError(error)) {
-      logger.error({ err: error }, message);
-    }
-  };
-}
-
-class ConnectionNotReadyError extends Error {
-  override readonly name = "ConnectionNotReadyError";
-}
-
-class ClientClosedError extends Error {
-  override readonly name = "ClientClosedError";
-
-  constructor() {
-    super("The Redis client was closed by its nextasking instance");
-  }
 }
 
 export type ConnectionOutageTracker = {
@@ -172,165 +117,384 @@ export function createConnectionOutageTracker(logger: Logger): ConnectionOutageT
   };
 }
 
-export type OwnedRedisClient = RedisClient &
-  EventEmitter & {
-    status: string;
-    quit(): Promise<unknown>;
-    disconnect(): void;
-  };
-
-class OwnedIoredisClient extends Redis implements OwnedRedisClient {
-  readonly send: RedisClient["send"];
-  readonly sendBatch: RedisClient["sendBatch"];
-  private readonly url: string;
-  private readonly clientOptions: RedisOptions;
-  private readonly adopt: (client: OwnedIoredisClient) => void;
-
-  constructor(url: string, clientOptions: RedisOptions, adopt: (client: OwnedIoredisClient) => void) {
-    super(url, clientOptions);
-    ({ send: this.send, sendBatch: this.sendBatch } = ioredisClientOf(this));
-    this.url = url;
-    this.clientOptions = clientOptions;
-    this.adopt = adopt;
-    adopt(this);
-  }
-
-  override duplicate(override?: Partial<RedisOptions>): Redis {
-    return new OwnedIoredisClient(this.url, { ...this.clientOptions, ...override }, this.adopt);
-  }
-}
+export type RedisConnection = {
+  readonly instanceCalls: RedisClient;
+  readonly workerCalls: RedisClient;
+};
 
 export type RedisConnections = {
   readonly giveUpAfterInMilliseconds: DurationInMilliseconds;
-  createClient: (role: RedisClientRole) => OwnedRedisClient;
-  waitUntilReadyWithinGiveUpAfter: (client: OwnedRedisClient) => Promise<void>;
-  waitUntilReadyWithoutDeadline: (client: OwnedRedisClient, stopSignal?: AbortSignal) => Promise<void>;
-  closeClient: (client: OwnedRedisClient, quitBoundInMilliseconds?: DurationInMilliseconds) => Promise<void>;
+  createCommandConnection: () => RedisConnection;
+  createBlockingConnection: (longestBlockInMilliseconds: DurationInMilliseconds) => RedisConnection;
+  waitUntilReady: (connection: RedisConnection, stopSignal?: AbortSignal) => Promise<void>;
+  closeConnection: (connection: RedisConnection, closeBoundInMilliseconds?: DurationInMilliseconds) => Promise<void>;
   workerRedisOutageOf: (
-    client: OwnedRedisClient,
+    connection: RedisConnection,
     outOfMemoryRetryDelayInMilliseconds: DurationInMilliseconds,
   ) => RedisOutage;
   callOnRedis: <Result>(callIds: RedisCallIds, call: () => Promise<Result>) => Promise<Result>;
   onConnectionRestored: (listener: () => void) => () => void;
 };
 
-export function createRedisConnections(connection: ConnectionConfig, logger: Logger): RedisConnections {
+type ReadyWait = { promise: Promise<void>; markReady: () => void; markClosed: () => void };
+
+type ConnectionState = {
+  readonly driver: RedisDriver;
+  readonly subject: object;
+  readonly answerBoundInMilliseconds: DurationInMilliseconds;
+  readonly closedController: AbortController;
+  errorWhileDown: unknown;
+  readyWait: ReadyWait | undefined;
+  lastReadyAt: EpochMilliseconds;
+  isReconnectingByForce: boolean;
+  readOnlyReconnect: Promise<void> | undefined;
+  handshakeTimer: NodeJS.Timeout | undefined;
+  readonly callsInFlight: { sentAt: EpochMilliseconds }[];
+  watchdogTimer: NodeJS.Timeout | undefined;
+};
+
+type Send<Reply> = (abortSignal?: AbortSignal) => Promise<Reply>;
+
+function unrefTimer(timer: NodeJS.Timeout): NodeJS.Timeout {
+  timer.unref();
+  return timer;
+}
+
+function isRetriedError(error: unknown): boolean {
+  return isUnansweredError(error) || isReadOnlyReply(error);
+}
+
+function failedResultErrorOf(
+  isErrorToRetry: (error: unknown) => boolean,
+): (results: readonly CommandResult[]) => Error | undefined {
+  return (results) =>
+    results.find(
+      (result): result is { kind: "failed"; error: Error } => result.kind === "failed" && isErrorToRetry(result.error),
+    )?.error;
+}
+
+function unrefDelayUnlessAborted(delayInMilliseconds: DurationInMilliseconds, abortSignal: AbortSignal): Promise<void> {
+  return new Promise<void>((resolve) => {
+    const endDelay = () => {
+      clearTimeout(delayTimer);
+      abortSignal.removeEventListener("abort", endDelay);
+      resolve();
+    };
+    const delayTimer = unrefTimer(setTimeout(endDelay, delayInMilliseconds));
+    abortSignal.addEventListener("abort", endDelay, { once: true });
+    if (abortSignal.aborted) {
+      endDelay();
+    }
+  });
+}
+
+function noRetryError(): undefined {
+  return undefined;
+}
+
+export function createRedisConnections(
+  connection: ConnectionConfig,
+  logger: Logger,
+  createDriver: CreateRedisDriver = createNodeRedisDriver,
+): RedisConnections {
   const giveUpAfterInMilliseconds = giveUpAfterInMillisecondsOf(connection);
   const outageTracker = createConnectionOutageTracker(logger);
-  const lastErrorByClient = new WeakMap<OwnedRedisClient, unknown>();
+  const stateByConnection = new WeakMap<RedisConnection, ConnectionState>();
 
-  const adopt = (client: OwnedIoredisClient) => {
-    client.on("error", (error: unknown) => {
-      lastErrorByClient.set(client, error);
-      outageTracker.reportClientError(client, error);
-    });
-    client.on("ready", () => {
-      lastErrorByClient.delete(client);
-      outageTracker.reportClientReady(client);
-    });
-    client.on("end", () => {
-      outageTracker.forgetClient(client);
-    });
-    client.on("close", () => {
-      clearSocketTimeoutOfClosedStream(client);
-    });
-  };
-
-  const optionsByRole: Record<RedisClientRole, RedisOptions> = {
-    worker: {},
-    instance: { commandTimeout: giveUpAfterInMilliseconds, socketTimeout: giveUpAfterInMilliseconds },
-  };
-
-  const pendingReadyWaitByClient = new WeakMap<OwnedRedisClient, Promise<void>>();
-  const endPendingReadyWaitByClient = new WeakMap<OwnedRedisClient, () => void>();
-  const closedClients = new WeakSet<OwnedRedisClient>();
-
-  const startReadyWait = (client: OwnedRedisClient): Promise<void> => {
-    const readyWait = new Promise<void>((resolve, reject) => {
-      const endWait = () => {
-        clearTimeout(giveUpTimer);
-        client.removeListener("ready", markReady);
-        pendingReadyWaitByClient.delete(client);
-        endPendingReadyWaitByClient.delete(client);
-      };
-      const markReady = () => {
-        endWait();
-        resolve();
-      };
-      const giveUpTimer = setTimeout(() => {
-        endWait();
-        reject(
-          new ConnectionNotReadyError(`Redis isn't ready, its status is "${client.status}"`, {
-            cause: lastErrorByClient.get(client),
-          }),
-        );
-      }, giveUpAfterInMilliseconds);
-      client.once("ready", markReady);
-      endPendingReadyWaitByClient.set(client, () => {
-        endWait();
-        reject(new ClientClosedError());
-      });
-    });
-    readyWait.catch(() => undefined);
-    pendingReadyWaitByClient.set(client, readyWait);
-    return readyWait;
-  };
-
-  const waitUntilReadyWithinGiveUpAfter = (client: OwnedRedisClient): Promise<void> => {
-    if (closedClients.has(client)) {
-      return Promise.reject(new ClientClosedError());
+  const stateOf = (redisConnection: RedisConnection): ConnectionState => {
+    const state = stateByConnection.get(redisConnection);
+    if (state === undefined) {
+      throw new Error("This Redis connection was not opened by these connections");
     }
-    if (client.status === "ready") {
+    return state;
+  };
+
+  const isClosed = (state: ConnectionState) => state.closedController.signal.aborted;
+
+  const readyWaitOf = (state: ConnectionState): Promise<void> => {
+    if (isClosed(state)) {
+      return Promise.reject(new ConnectionClosedError());
+    }
+    if (state.driver.isReady) {
       return Promise.resolve();
     }
-    return pendingReadyWaitByClient.get(client) ?? startReadyWait(client);
+    if (state.readyWait === undefined) {
+      let markReady = () => undefined as void;
+      let markClosed = () => undefined as void;
+      const promise = new Promise<void>((resolve, reject) => {
+        markReady = resolve;
+        markClosed = () => {
+          reject(new ConnectionClosedError());
+        };
+      });
+      promise.catch(() => undefined);
+      state.readyWait = { promise, markReady, markClosed };
+    }
+    return state.readyWait.promise;
   };
 
-  const waitUntilReadyWithoutDeadline = async (client: OwnedRedisClient, stopSignal?: AbortSignal): Promise<void> => {
+  const throwIfClosed = (state: ConnectionState) => {
+    if (isClosed(state)) {
+      throw new ConnectionClosedError();
+    }
+  };
+
+  const reconnectByForce = (state: ConnectionState, cause: Error) => {
+    if (isClosed(state) || state.isReconnectingByForce) {
+      return;
+    }
+    state.isReconnectingByForce = true;
+    clearTimeout(state.handshakeTimer);
+    state.errorWhileDown = cause;
+    outageTracker.reportClientError(state.subject, cause);
+    state.driver.forceReconnect();
+  };
+
+  const overdueAtOf = (state: ConnectionState): EpochMilliseconds =>
+    Math.max(Math.min(...state.callsInFlight.map(({ sentAt }) => sentAt)), state.lastReadyAt) +
+    state.answerBoundInMilliseconds;
+
+  const watchTheCallsInFlight = (state: ConnectionState) => {
+    clearTimeout(state.watchdogTimer);
+    state.watchdogTimer = undefined;
+    if (isClosed(state) || !state.driver.isReady || state.callsInFlight.length === 0) {
+      return;
+    }
+    const overdueAt = overdueAtOf(state);
+    state.watchdogTimer = unrefTimer(
+      setTimeout(
+        () => {
+          state.watchdogTimer = undefined;
+          if (state.driver.isReady && state.callsInFlight.length > 0 && Date.now() >= overdueAtOf(state)) {
+            reconnectByForce(state, unansweredWithinDeadlineError());
+          }
+          watchTheCallsInFlight(state);
+        },
+        Math.max(overdueAt - Date.now(), 0),
+      ),
+    );
+  };
+
+  const answeredWithinTheAnswerBound = <Reply>(state: ConnectionState, send: () => Promise<Reply>): Promise<Reply> => {
+    const callInFlight = { sentAt: Date.now() };
+    state.callsInFlight.push(callInFlight);
+    if (state.watchdogTimer === undefined) {
+      watchTheCallsInFlight(state);
+    }
+    return send().finally(() => {
+      state.callsInFlight.splice(state.callsInFlight.indexOf(callInFlight), 1);
+      if (state.callsInFlight.length === 0) {
+        clearTimeout(state.watchdogTimer);
+        state.watchdogTimer = undefined;
+      }
+    });
+  };
+
+  const unansweredErrorAtTheDeadline = (state: ConnectionState): Error =>
+    !state.driver.isReady && isUnansweredCommandError(state.errorWhileDown)
+      ? (state.errorWhileDown as Error)
+      : unansweredWithinDeadlineError();
+
+  const reconnectedAfterReadOnly = (state: ConnectionState): Promise<void> => {
+    if (state.readOnlyReconnect === undefined) {
+      const readOnlyReconnect = (async () => {
+        await unrefDelayUnlessAborted(READ_ONLY_RECONNECT_PAUSE_IN_MILLISECONDS, state.closedController.signal);
+        throwIfClosed(state);
+        if (state.driver.isReady && !state.isReconnectingByForce) {
+          state.isReconnectingByForce = true;
+          state.driver.forceReconnect();
+        }
+        await readyWaitOf(state);
+      })().finally(() => {
+        state.readOnlyReconnect = undefined;
+      });
+      readOnlyReconnect.catch(() => undefined);
+      state.readOnlyReconnect = readOnlyReconnect;
+    }
+    return state.readOnlyReconnect;
+  };
+
+  const sentWithinTheDeadline = async <Reply>(
+    state: ConnectionState,
+    send: Send<Reply>,
+    retryErrorOf: (reply: Reply) => Error | undefined,
+  ): Promise<Reply> => {
+    const deadlineController = new AbortController();
+    const deadlineTimer = unrefTimer(
+      setTimeout(() => {
+        deadlineController.abort(unansweredErrorAtTheDeadline(state));
+      }, giveUpAfterInMilliseconds),
+    );
+    const deadlineSignal = deadlineController.signal;
+    try {
+      for (;;) {
+        throwIfClosed(state);
+        let retryError: Error | undefined;
+        try {
+          const reply = await untilAborted(
+            answeredWithinTheAnswerBound(state, () => send(deadlineSignal)),
+            deadlineSignal,
+          );
+          retryError = retryErrorOf(reply);
+          if (retryError === undefined) {
+            return reply;
+          }
+        } catch (error) {
+          if (deadlineSignal.aborted || !isRetriedError(error)) {
+            throw deadlineSignal.aborted ? (deadlineSignal.reason as Error) : error;
+          }
+          retryError = error as Error;
+        }
+        if (isClosed(state)) {
+          throw retryError;
+        }
+        await untilAborted(
+          isReadOnlyReply(retryError) ? reconnectedAfterReadOnly(state) : readyWaitOf(state),
+          deadlineSignal,
+        );
+      }
+    } finally {
+      clearTimeout(deadlineTimer);
+    }
+  };
+
+  const sentWithoutDeadline = async <Reply>(
+    state: ConnectionState,
+    send: Send<Reply>,
+    readOnlyReplyOf: (reply: Reply) => Error | undefined,
+  ): Promise<Reply> => {
     for (;;) {
+      throwIfClosed(state);
+      let readOnlyReply: Error | undefined;
       try {
-        await untilAborted(waitUntilReadyWithinGiveUpAfter(client), stopSignal);
-        return;
+        const reply = await answeredWithinTheAnswerBound(state, () => send());
+        readOnlyReply = readOnlyReplyOf(reply);
+        if (readOnlyReply === undefined) {
+          return reply;
+        }
       } catch (error) {
-        if (!(error instanceof ConnectionNotReadyError)) {
+        if (!isReadOnlyReply(error) || isClosed(state)) {
           throw error;
         }
       }
+      await untilAborted(reconnectedAfterReadOnly(state), state.closedController.signal);
     }
+  };
+
+  const instanceCallsOf = (state: ConnectionState): RedisClient => ({
+    send: (command: RedisCommand) =>
+      sentWithinTheDeadline(state, (abortSignal) => state.driver.send(command, abortSignal), noRetryError),
+    sendBatch: (commands: readonly RedisCommand[]) =>
+      sentWithinTheDeadline(
+        state,
+        (abortSignal) => state.driver.sendBatch(commands, abortSignal),
+        failedResultErrorOf(isRetriedError),
+      ),
+  });
+
+  const workerCallsOf = (state: ConnectionState): RedisClient => ({
+    send: (command: RedisCommand) => sentWithoutDeadline(state, () => state.driver.send(command), noRetryError),
+    sendBatch: (commands: readonly RedisCommand[]) =>
+      sentWithoutDeadline(state, () => state.driver.sendBatch(commands), failedResultErrorOf(isReadOnlyReply)),
+  });
+
+  const openConnection = (longestBlockInMilliseconds: DurationInMilliseconds): RedisConnection => {
+    const opened: { state?: ConnectionState } = {};
+    const openState = () => (opened.state === undefined || isClosed(opened.state) ? undefined : opened.state);
+    const driver = createDriver(connection.url, {
+      onConnect: () => {
+        const state = openState();
+        if (state === undefined) {
+          return;
+        }
+        state.isReconnectingByForce = false;
+        clearTimeout(state.handshakeTimer);
+        state.handshakeTimer = unrefTimer(
+          setTimeout(() => {
+            if (!state.driver.isReady) {
+              reconnectByForce(state, unansweredWithinDeadlineError());
+            }
+          }, giveUpAfterInMilliseconds),
+        );
+      },
+      onReady: () => {
+        const state = openState();
+        if (state === undefined) {
+          return;
+        }
+        clearTimeout(state.handshakeTimer);
+        state.isReconnectingByForce = false;
+        state.lastReadyAt = Date.now();
+        state.errorWhileDown = undefined;
+        state.readyWait?.markReady();
+        state.readyWait = undefined;
+        watchTheCallsInFlight(state);
+        outageTracker.reportClientReady(state.subject);
+      },
+      onError: (error) => {
+        const state = openState();
+        if (state === undefined) {
+          return;
+        }
+        clearTimeout(state.handshakeTimer);
+        state.errorWhileDown = error;
+        outageTracker.reportClientError(state.subject, error);
+      },
+    });
+    const subject = {};
+    const state: ConnectionState = {
+      driver,
+      subject,
+      answerBoundInMilliseconds: longestBlockInMilliseconds + giveUpAfterInMilliseconds,
+      closedController: new AbortController(),
+      errorWhileDown: undefined,
+      readyWait: undefined,
+      lastReadyAt: Date.now(),
+      isReconnectingByForce: false,
+      readOnlyReconnect: undefined,
+      handshakeTimer: undefined,
+      callsInFlight: [],
+      watchdogTimer: undefined,
+    };
+    const redisConnection: RedisConnection = {
+      instanceCalls: instanceCallsOf(state),
+      workerCalls: workerCallsOf(state),
+    };
+    opened.state = state;
+    stateByConnection.set(redisConnection, state);
+    driver.connect();
+    return redisConnection;
   };
 
   return {
     giveUpAfterInMilliseconds,
-    waitUntilReadyWithoutDeadline,
-    workerRedisOutageOf: (client, outOfMemoryRetryDelayInMilliseconds) =>
+    createCommandConnection: () => openConnection(0),
+    createBlockingConnection: openConnection,
+    waitUntilReady: (redisConnection, stopSignal) => untilAborted(readyWaitOf(stateOf(redisConnection)), stopSignal),
+    workerRedisOutageOf: (redisConnection, outOfMemoryRetryDelayInMilliseconds) =>
       createRedisOutage({
         outageTracker,
-        waitUntilReady: (stopSignal) => waitUntilReadyWithoutDeadline(client, stopSignal),
+        waitUntilReady: (stopSignal) => untilAborted(readyWaitOf(stateOf(redisConnection)), stopSignal),
         outOfMemoryRetryDelayInMilliseconds,
       }),
-    createClient: (role) =>
-      new OwnedIoredisClient(
-        connection.url,
-        {
-          keepAlive: KEEP_ALIVE_INITIAL_DELAY_IN_MILLISECONDS,
-          maxRetriesPerRequest: null,
-          reconnectOnError: reconnectDecisionOn,
-          ...optionsByRole[role],
-        },
-        adopt,
-      ),
-    waitUntilReadyWithinGiveUpAfter,
-    closeClient: async (client, quitBoundInMilliseconds) => {
-      closedClients.add(client);
-      endPendingReadyWaitByClient.get(client)?.();
-      if (quitBoundInMilliseconds !== undefined && client.status === "ready") {
-        const quitAnswered = client.quit().then(
-          () => undefined,
-          () => undefined,
-        );
-        await isSettledWithin(quitAnswered, quitBoundInMilliseconds);
+    closeConnection: async (redisConnection, closeBoundInMilliseconds) => {
+      const state = stateOf(redisConnection);
+      if (isClosed(state)) {
+        return;
       }
-      client.disconnect();
+      state.closedController.abort(new ConnectionClosedError());
+      clearTimeout(state.handshakeTimer);
+      clearTimeout(state.watchdogTimer);
+      state.readyWait?.markClosed();
+      state.readyWait = undefined;
+      outageTracker.forgetClient(state.subject);
+      if (closeBoundInMilliseconds !== undefined && state.driver.isReady) {
+        await isSettledWithin(
+          state.driver.close().catch(() => undefined),
+          closeBoundInMilliseconds,
+        );
+      }
+      state.driver.destroy();
     },
     onConnectionRestored: outageTracker.onConnectionRestored,
     callOnRedis: async (callIds, call) => {
@@ -338,7 +502,7 @@ export function createRedisConnections(connection: ConnectionConfig, logger: Log
         return await call();
       } catch (error) {
         if (isUnansweredError(error)) {
-          throw new RedisUnavailableError({ kind: "unanswered", giveUpAfterInMilliseconds }, callIds, causeOf(error));
+          throw new RedisUnavailableError({ kind: "unanswered", giveUpAfterInMilliseconds }, callIds, error);
         }
         if (isOutOfMemoryReply(error)) {
           throw new RedisUnavailableError({ kind: "outOfMemory" }, callIds, error);
@@ -347,26 +511,4 @@ export function createRedisConnections(connection: ConnectionConfig, logger: Log
       }
     },
   };
-}
-
-type ClientWithSocketTimeoutTimer = { socketTimeoutTimer: ReturnType<typeof setTimeout> | undefined };
-
-function clearSocketTimeoutOfClosedStream(client: Redis): void {
-  const clientWithTimer = client as unknown as ClientWithSocketTimeoutTimer;
-  clearTimeout(clientWithTimer.socketTimeoutTimer);
-  clientWithTimer.socketTimeoutTimer = undefined;
-}
-
-function causeOf(unansweredError: unknown): unknown {
-  return unansweredError instanceof ConnectionNotReadyError && unansweredError.cause !== undefined
-    ? unansweredError.cause
-    : unansweredError;
-}
-
-export async function closeRedisClient(client: OwnedRedisClient): Promise<void> {
-  if (client.status === "ready") {
-    await client.quit();
-    return;
-  }
-  client.disconnect();
 }

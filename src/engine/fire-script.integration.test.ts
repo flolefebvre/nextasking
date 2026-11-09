@@ -8,7 +8,7 @@ import { deriveFiringRunId } from "../ids.js";
 import { storedRunIdOf } from "./engine-keys.js";
 import { createEngine, RECORD_VERSION } from "./engine.js";
 import type { FireReply, FireRequest } from "./engine.js";
-import { redisClientOf } from "../../tests/with-redis.js";
+import { withRedisClient } from "../../tests/with-redis.js";
 
 const ONE_HOUR_IN_MILLISECONDS = 3_600_000;
 
@@ -55,21 +55,17 @@ engineTest(
 engineTest(
   "two callers firing the same instant end with one run and one advanced record, the loser hearing already",
   async (context) => {
-    const { engine, redis, keys, keyPrefix } = context;
+    const { engine, redis, keys, keyPrefix, redisUrl } = context;
     const firing = await scheduledFiringOf(context, -60_000);
-    const otherRedis = redis.duplicate();
-    otherRedis.on("error", () => undefined);
-    try {
-      const otherEngine = createEngine(redisClientOf(otherRedis), keyPrefix);
+    await withRedisClient(redisUrl, async (otherClient) => {
+      const otherEngine = createEngine(otherClient, keyPrefix);
 
       const replies = await Promise.all([engine.fire(firing), otherEngine.fire(firing)]);
 
       expect(replies.map(({ kind }) => kind).sort()).toEqual(["already", "fired"]);
       expect(await redis.zrange(keys.pending, 0, -1)).toEqual([storedRunIdOf("build-report", firing.runId)]);
       expect(await redis.hget(keys.schedule("build-report"), "nextFiringAt")).toBe(String(firing.instantAfter));
-    } finally {
-      otherRedis.disconnect();
-    }
+    });
   },
 );
 

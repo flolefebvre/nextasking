@@ -1,20 +1,20 @@
-import type { Redis } from "ioredis";
 import { expect, vi } from "vitest";
 
 import { DAY_IN_MILLISECONDS, endRuns, runIdsOf, SEND_EMAIL_PRUNE_REQUEST } from "../tests/ended-runs.js";
-import { backdateEndedRun, engineTest, fetchedLockedRunsOf } from "../tests/engine-test.js";
+import { backdateEndedRun, engineTest, engineTestContextOf, fetchedLockedRunsOf } from "../tests/engine-test.js";
 import type { EngineTestContext } from "../tests/engine-test.js";
 import { integrationTest } from "../tests/integration-test.js";
 import { storedKeyViolationsOf } from "../tests/stored-key-violations.js";
 import { serverInstantInMillisecondsOf } from "../tests/server-instant.js";
-import { redisClientOf, withRedis } from "../tests/with-redis.js";
+import { withRedis } from "../tests/with-redis.js";
 import { defineScheduledTask } from "./definitions.js";
 import type { AnyTaskDefinition } from "./definitions.js";
-import { engineKeysOf, runIdentityOf, storedRunIdOf } from "./engine/engine-keys.js";
-import { createEngine, RECORD_VERSION } from "./engine/engine.js";
+import { runIdentityOf, storedRunIdOf } from "./engine/engine-keys.js";
+import { RECORD_VERSION } from "./engine/engine.js";
 import type { LockedRun, RunToCreate, SettleOutcome } from "./engine/engine.js";
 import { createReadApi } from "./read-api.js";
 import type { ReadApi } from "./read-api.js";
+import type { RedisClient, RedisCommand } from "./redis-client.js";
 import { UnknownEventError, UnknownTaskError } from "./errors.js";
 import { deriveFiringRunId, deriveListenerRunId } from "./ids.js";
 import type { RunId } from "./ids.js";
@@ -46,10 +46,10 @@ function taskDefinitionOf(taskName: string): AnyTaskDefinition {
   return defineScheduledTask(taskName, { schedule: { cron: "0 * * * *" }, handler: async () => undefined });
 }
 
-function readerOf({ redis, keyPrefix }: EngineTestContext): ReadApi {
+function readerOf({ client, keyPrefix }: EngineTestContext): ReadApi {
   const taskNames = [...TASK_NAMES, ...LISTENER_NAMES];
   return createReadApi({
-    client: redisClientOf(redis),
+    client,
     prefix: keyPrefix,
     tasksByName: new Map(taskNames.map((taskName) => [taskName, taskDefinitionOf(taskName)])),
     listenerNamesByEventName: new Map([["invoice.paid", LISTENER_NAMES]]),
@@ -57,18 +57,27 @@ function readerOf({ redis, keyPrefix }: EngineTestContext): ReadApi {
   });
 }
 
-async function readTrafficOf(redis: Redis, read: () => Promise<unknown>): Promise<ReadTraffic> {
-  const streamWrite = vi.spyOn(redis.stream, "write");
-  const sendCommand = vi.spyOn(redis, "sendCommand");
+function sentCommandOf(command: RedisCommand): SentCommand {
+  return command.kind === "builtIn"
+    ? { name: command.name.toLowerCase(), args: [...command.commandArguments] }
+    : { name: "evalsha", args: [...command.keys, ...command.scriptArguments] };
+}
+
+async function readTrafficOf(client: RedisClient, read: () => Promise<unknown>): Promise<ReadTraffic> {
+  const send = vi.spyOn(client, "send");
+  const sendBatch = vi.spyOn(client, "sendBatch");
   try {
     await read();
     return {
-      roundTripCount: streamWrite.mock.calls.length,
-      sentCommands: sendCommand.mock.calls.map(([command]) => ({ name: command.name, args: command.args })),
+      roundTripCount: send.mock.calls.length + sendBatch.mock.calls.length,
+      sentCommands: [
+        ...send.mock.calls.map(([command]) => sentCommandOf(command)),
+        ...sendBatch.mock.calls.flatMap(([commands]) => commands.map(sentCommandOf)),
+      ],
     };
   } finally {
-    streamWrite.mockRestore();
-    sendCommand.mockRestore();
+    send.mockRestore();
+    sendBatch.mockRestore();
   }
 }
 
@@ -418,15 +427,15 @@ engineTest("listSchedules reads a schedule record of a newer version as no recor
 engineTest(
   "each read but listRuns is one round trip of bounded reads, and listSchedules never reads the schedules set",
   async (context) => {
-    const { redis, keys } = context;
+    const { client, keys } = context;
     await enqueueRuns(context, [runOf("run-1", "send-email")]);
     const reader = readerOf(context);
 
     const trafficByRead = {
-      getRun: await readTrafficOf(redis, () => reader.getRun("send-email", "run-1")),
-      countRuns: await readTrafficOf(redis, () => reader.countRuns()),
-      getEvent: await readTrafficOf(redis, () => reader.getEvent("invoice.paid", "event-1")),
-      listSchedules: await readTrafficOf(redis, () => reader.listSchedules()),
+      getRun: await readTrafficOf(client, () => reader.getRun("send-email", "run-1")),
+      countRuns: await readTrafficOf(client, () => reader.countRuns()),
+      getEvent: await readTrafficOf(client, () => reader.getEvent("invoice.paid", "event-1")),
+      listSchedules: await readTrafficOf(client, () => reader.listSchedules()),
     };
 
     for (const [read, traffic] of Object.entries(trafficByRead)) {
@@ -714,19 +723,19 @@ engineTest(
 engineTest(
   "listRuns is two round trips of bounded reads, never asking the index of a task the release does not define",
   async (context) => {
-    const { redis, keys } = context;
+    const { client, keys } = context;
     await endRunsOfEachTask(context, 3);
     await endRuns(context.engine, "removed-task", ["removed-task-run"], "complete");
     const reader = readerOf(context);
     const { nextCursor } = await reader.listRuns({ state: "completed", limit: 2 });
 
     const trafficByListing = {
-      firstPage: await readTrafficOf(redis, () => reader.listRuns({ state: "completed", limit: 2 })),
-      nextPage: await readTrafficOf(redis, () =>
+      firstPage: await readTrafficOf(client, () => reader.listRuns({ state: "completed", limit: 2 })),
+      nextPage: await readTrafficOf(client, () =>
         reader.listRuns({ state: "completed", limit: 2, cursor: nextCursor! }),
       ),
-      oneTask: await readTrafficOf(redis, () => reader.listRuns({ state: "completed", task: "send-email" })),
-      emptyState: await readTrafficOf(redis, () => reader.listRuns({ state: "failed" })),
+      oneTask: await readTrafficOf(client, () => reader.listRuns({ state: "completed", task: "send-email" })),
+      emptyState: await readTrafficOf(client, () => reader.listRuns({ state: "failed" })),
     };
 
     expect(trafficByListing.firstPage.roundTripCount).toBe(2);
@@ -745,14 +754,9 @@ engineTest(
 integrationTest(
   "listRuns silently drops an index entry without its record, of a newer record version or of another state",
   async ({ redisUrl, keyPrefix, expectInvariantViolation }) => {
-    await withRedis(redisUrl, async (redis) => {
-      const keys = engineKeysOf(keyPrefix);
-      const context: EngineTestContext = {
-        engine: createEngine(redisClientOf(redis), keyPrefix),
-        redis,
-        keys,
-        keyPrefix,
-      };
+    await withRedis(redisUrl, async (redis, client) => {
+      const context = engineTestContextOf(redis, client, keyPrefix);
+      const { keys } = context;
       const keptRunIds = runIdsOf("kept-run", 3);
       await endRuns(context.engine, "send-email", [...keptRunIds, "newer-run"], "complete");
       await redis.hset(keys.runRecord("send-email", "newer-run"), "version", RECORD_VERSION + 1);

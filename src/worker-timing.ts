@@ -6,7 +6,7 @@ export type WorkerTiming = {
   lockDurationInMilliseconds: DurationInMilliseconds;
   stallCountThatFailsARun: number;
   abortedAttemptsGraceInMilliseconds: DurationInMilliseconds;
-  commandClientQuitBoundInMilliseconds: DurationInMilliseconds;
+  commandConnectionCloseBoundInMilliseconds: DurationInMilliseconds;
   unknownNameHandBackDelayInMilliseconds: DurationInMilliseconds;
   tickIntervalInMilliseconds: DurationInMilliseconds;
   lockTimeLeftThatTriggersRenewalInMilliseconds: DurationInMilliseconds;
@@ -22,7 +22,7 @@ export const DEFAULT_WORKER_TIMING: WorkerTiming = {
   lockDurationInMilliseconds: 2 * 60 * 1000,
   stallCountThatFailsARun: 3,
   abortedAttemptsGraceInMilliseconds: 1000,
-  commandClientQuitBoundInMilliseconds: 1000,
+  commandConnectionCloseBoundInMilliseconds: 1000,
   unknownNameHandBackDelayInMilliseconds: 10 * 1000,
   tickIntervalInMilliseconds: 1000,
   lockTimeLeftThatTriggersRenewalInMilliseconds: 60 * 1000,

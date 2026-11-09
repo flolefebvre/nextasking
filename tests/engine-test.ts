@@ -6,27 +6,34 @@ import type { EngineKeys } from "../src/engine/engine-keys.js";
 import { createEngine } from "../src/engine/engine.js";
 import type { Engine, LockedRun } from "../src/engine/engine.js";
 import type { RunId } from "../src/ids.js";
+import type { RedisClient } from "../src/redis-client.js";
 import { integrationTest } from "./integration-test.js";
 import type { ExpectInvariantViolation } from "./invariant-violations.js";
 import { freshLockTokensOf } from "./lock-tokens.js";
 import { serverInstantInMillisecondsOf } from "./server-instant.js";
-import { redisClientOf, withRedis } from "./with-redis.js";
+import { withRedis } from "./with-redis.js";
 
-export type EngineTestContext = { engine: Engine; redis: Redis; keys: EngineKeys; keyPrefix: string };
+export type EngineTestContext = {
+  engine: Engine;
+  client: RedisClient;
+  redis: Redis;
+  keys: EngineKeys;
+  keyPrefix: string;
+};
+
+export function engineTestContextOf(redis: Redis, client: RedisClient, keyPrefix: string): EngineTestContext {
+  return { engine: createEngine(client, keyPrefix), client, redis, keys: engineKeysOf(keyPrefix), keyPrefix };
+}
 
 export function engineTest(
   name: string,
-  body: (context: EngineTestContext & { expectInvariantViolation: ExpectInvariantViolation }) => Promise<void>,
+  body: (
+    context: EngineTestContext & { redisUrl: string; expectInvariantViolation: ExpectInvariantViolation },
+  ) => Promise<void>,
 ): void {
   integrationTest(name, async ({ redisUrl, keyPrefix, expectInvariantViolation }) => {
-    await withRedis(redisUrl, async (redis) => {
-      await body({
-        engine: createEngine(redisClientOf(redis), keyPrefix),
-        redis,
-        keys: engineKeysOf(keyPrefix),
-        keyPrefix,
-        expectInvariantViolation,
-      });
+    await withRedis(redisUrl, async (redis, client) => {
+      await body({ ...engineTestContextOf(redis, client, keyPrefix), redisUrl, expectInvariantViolation });
     });
   });
 }

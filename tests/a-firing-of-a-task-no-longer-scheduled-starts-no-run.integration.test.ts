@@ -8,7 +8,7 @@ import { integrationTest } from "./integration-test.js";
 import { createRecordingLogger, waitForLogMessage } from "./recording-logger.js";
 import { storedRunIdentities } from "./stored-run-identities.js";
 import { storedSchedules } from "./stored-schedules.js";
-import { redisClientOf, withRedis } from "./with-redis.js";
+import { withRedisClient } from "./with-redis.js";
 
 integrationTest(
   "a due schedule left by an earlier release for a task this release no longer schedules is removed at boot and starts no run",
@@ -27,8 +27,8 @@ integrationTest(
       logger,
       tasks: [rebuildIndex],
     });
-    await withRedis(redisUrl, (redis) =>
-      createEngine(redisClientOf(redis), keyPrefix).syncSchedules({
+    await withRedisClient(redisUrl, (client) =>
+      createEngine(client, keyPrefix).syncSchedules({
         schedulesToSync: [
           {
             task: "rebuild-index",

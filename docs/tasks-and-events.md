@@ -311,8 +311,8 @@ export async function POST(request: Request) {
 ```
 
 - Every call on the instance throws `RedisUnavailableError` when Redis doesn't answer within `giveUpAfter`: `dispatch`, `emit`, `replay`, `replayEvent`, `getRun`, `listRuns`, `countRuns`, `getEvent` and `listSchedules`. It never hangs.
-- `giveUpAfter` bounds each wait, not the whole call: the first connection, then each round trip. Set it on `connection`: `connection: { url, giveUpAfter: "2s" }`. The default is `"5s"`.
-- `error.cause` is the original error, such as `connect ECONNREFUSED` or `Command timed out`. `error.runId` or `error.eventId` is the id the call used, yours or the random one; reads carry the id they were given.
+- `giveUpAfter` bounds each round trip, not the whole call, the wait for the connection included. Set it on `connection`: `connection: { url, giveUpAfter: "2s" }`. The default is `"5s"`.
+- `error.cause` is the original error, such as `connect ECONNREFUSED` while Redis is unreachable, or a `TimeoutError` when it holds the connection open but doesn't answer. `error.runId` or `error.eventId` is the id the call used, yours or the random one; reads carry the id they were given.
 - A `dispatch` or `emit` that threw may still be stored once Redis is back. Retry it with the id on the error, so the retry is deduplicated: `dispatch(name, payload, { runId: error.runId })`, `emit(name, payload, { eventId: error.eventId })`. See [Run once per business fact](#run-once-per-business-fact).
 - A failover shorter than `giveUpAfter` is a slow call, not an error: on a `READONLY` reply the library reconnects to the new primary and resends the command.
 - Validation errors come first: an unknown name or an invalid payload throws its own error, Redis down or not.

@@ -17,7 +17,7 @@ import { closeNextaskingAndCheckItsDuration } from "./close-nextasking-and-check
 import { integrationTest } from "./integration-test.js";
 import { createRecordingLogger } from "./recording-logger.js";
 import { createSimulatedRedisOutage } from "./simulated-redis-outage.js";
-import { redisClientOf, withRedis } from "./with-redis.js";
+import { withRedis } from "./with-redis.js";
 import { workerDefinitionsOf } from "./worker-definitions.js";
 
 const TRY_COUNT = 50;
@@ -48,9 +48,9 @@ integrationTest(
   `makeRunsDueNow then waitForIdle returns only once the delayed and the sleeping runs made due have ended, in ${String(TRY_COUNT)} tries`,
   { timeout: 120_000 },
   async ({ redisUrl, keyPrefix }) => {
-    await withRedis(redisUrl, async (redis) => {
+    await withRedis(redisUrl, async (redis, client) => {
       const keys = engineKeysOf(keyPrefix);
-      const engine = createEngine(redisClientOf(redis), keyPrefix);
+      const engine = createEngine(client, keyPrefix);
       const { logger, lines } = createRecordingLogger();
       const loop = startWorkerLoop({
         engine,

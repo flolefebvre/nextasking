@@ -3,7 +3,6 @@ import { expect, vi } from "vitest";
 import { engineTest, fetchedLockedRunsOf } from "../../tests/engine-test.js";
 import type { EngineTestContext } from "../../tests/engine-test.js";
 import { serverInstantInMillisecondsOf } from "../../tests/server-instant.js";
-import { redisClientOf } from "../../tests/with-redis.js";
 import type { EpochMilliseconds } from "../durations.js";
 import type { RunId } from "../ids.js";
 import { storedRunIdOf } from "./engine-keys.js";
@@ -54,12 +53,12 @@ async function twoGroupsOfExecutingRunsOf(context: EngineTestContext): Promise<T
 }
 
 async function indexPageAfter(
-  { redis }: EngineTestContext,
+  { client }: EngineTestContext,
   indexKey: string,
   limit: number,
   after: IndexPosition | undefined,
 ): Promise<IndexPosition[]> {
-  return indexPageOf(await redisClientOf(redis).send(indexPageCommandOf({ indexKey, limit, after })));
+  return indexPageOf(await client.send(indexPageCommandOf({ indexKey, limit, after })));
 }
 
 async function storedRunIdsAfter(

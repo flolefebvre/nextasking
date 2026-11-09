@@ -1,15 +1,12 @@
 import { expect } from "vitest";
 
 import { integrationTest } from "../tests/integration-test.js";
-import { redisClientOf, withRedis } from "../tests/with-redis.js";
+import { startTcpProxy } from "../tests/tcp-proxy.js";
+import { withRedisClient } from "../tests/with-redis.js";
 import { builtInCommandOf, scriptCommandOf } from "./redis-client.js";
 import type { RedisClient, RedisScript } from "./redis-client.js";
 
 const ECHO_SCRIPT: RedisScript = { name: "nextaskingTestEcho", lua: "return { KEYS[1], ARGV[1] }", keyCount: 1 };
-
-async function withRedisClient(redisUrl: string, use: (client: RedisClient) => Promise<void>): Promise<void> {
-  await withRedis(redisUrl, (redis) => use(redisClientOf(redis)));
-}
 
 function pairsOf(flatReply: unknown): [unknown, unknown][] {
   if (!Array.isArray(flatReply)) {
@@ -110,6 +107,33 @@ integrationTest(
         { kind: "replied", reply: ["two"] },
       ]);
     });
+  },
+);
+
+integrationTest(
+  "a batch of several commands, a script among them, reaches the server in one write",
+  async ({ redisUrl, keyPrefix }) => {
+    const proxy = await startTcpProxy(redisUrl);
+    try {
+      await withRedisClient(proxy.url, async (client) => {
+        const echoKey = `${keyPrefix}echo`;
+        await client.send(scriptCommandOf(ECHO_SCRIPT, [echoKey], ["loaded"]));
+        const requestChunks = proxy.recordRequestChunks();
+
+        await client.sendBatch([
+          builtInCommandOf("ECHO", "first"),
+          scriptCommandOf(ECHO_SCRIPT, [echoKey], ["in the batch"]),
+          builtInCommandOf("GET", echoKey),
+          builtInCommandOf("ECHO", "last"),
+        ]);
+
+        expect(requestChunks()).toEqual([
+          expect.stringMatching(/ECHO[\s\S]*first[\s\S]*EVALSHA[\s\S]*in the batch[\s\S]*GET[\s\S]*ECHO[\s\S]*last/),
+        ]);
+      });
+    } finally {
+      await proxy.stop();
+    }
   },
 );
 

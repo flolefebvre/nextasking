@@ -1,8 +1,10 @@
+import type { RedisClient } from "./redis-client.js";
 import * as v from "valibot";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
+import { SocketClosedUnexpectedlyError } from "@redis/client";
+
 import { createRedisConnections } from "./connection.js";
-import type { RedisClientRole } from "./connection.js";
 import { defineScheduledTask, defineTask } from "./definitions.js";
 import type { AnyTaskDefinition, TaskHandler } from "./definitions.js";
 import type { DispatchedRun } from "./enqueue-requests.js";
@@ -13,8 +15,8 @@ import type { InstanceLifecycle } from "./instance-lifecycle.js";
 import { MISSING_MANUAL_SIGNAL_HANDLING_WARNING } from "./shutdown-signals.js";
 import type { HandlerSender } from "./step-engine.js";
 import { DEFAULT_WORKER_TIMING } from "./worker-timing.js";
-import { createFakeRedisClients, engineOnFakeClient, wakeUpWaitOnFakeClient } from "../tests/fake-redis-clients.js";
-import type { FakeRedisClient, FakeRedisClients } from "../tests/fake-redis-clients.js";
+import { createFakeRedisDrivers, engineOnFakeDriver, wakeUpWaitOnFakeDriver } from "../tests/fake-redis-drivers.js";
+import type { FakeRedisDriver, FakeRedisDrivers } from "../tests/fake-redis-drivers.js";
 import { createHandlerGate, gatedBetweenTwoSteps, gatedWithNoStep } from "../tests/handler-gate.js";
 import type { HandlerGate } from "../tests/handler-gate.js";
 import { createInMemoryEngine } from "../tests/in-memory-engine.js";
@@ -39,25 +41,29 @@ const SHUTDOWN_TIMEOUT_IN_MILLISECONDS = 5000;
 const CLOSE_BOUND_IN_MILLISECONDS =
   SHUTDOWN_TIMEOUT_IN_MILLISECONDS +
   DEFAULT_WORKER_TIMING.abortedAttemptsGraceInMilliseconds +
-  DEFAULT_WORKER_TIMING.commandClientQuitBoundInMilliseconds;
+  DEFAULT_WORKER_TIMING.commandConnectionCloseBoundInMilliseconds;
 
 type LifecycleScenario = {
   lifecycle: InstanceLifecycle;
   engine: InMemoryEngine;
   lines: RecordedLogLine[];
-  fakeRedisClients: FakeRedisClients;
-  commandClient: () => FakeRedisClient;
-  blockingClients: () => FakeRedisClient[];
+  fakeRedisDrivers: FakeRedisDrivers;
+  commandDriver: () => FakeRedisDriver;
+  blockingDrivers: () => FakeRedisDriver[];
 };
 
 type LifecycleScenarioOptions = {
   tasks?: readonly AnyTaskDefinition[];
   engine?: InMemoryEngine;
-  prepareClient?: (fakeRedisClient: FakeRedisClient, role: RedisClientRole) => void;
-  engineOn?: (engine: InMemoryEngine, fakeRedisClient: FakeRedisClient) => Engine;
+  prepareDriver?: (fakeRedisDriver: FakeRedisDriver) => void;
+  engineOn?: (engine: InMemoryEngine, client: RedisClient, commandDriver: () => FakeRedisDriver) => Engine;
   senderOn?: (engine: Engine) => HandlerSender;
   env?: NodeJS.ProcessEnv;
 };
+
+function connectionResetError(): Error {
+  return Object.assign(new Error("read ECONNRESET"), { code: "ECONNRESET" });
+}
 
 const NO_SENDER: HandlerSender = {
   dispatch: () => Promise.reject(new Error("this scenario sends nothing")),
@@ -66,32 +72,38 @@ const NO_SENDER: HandlerSender = {
 
 const startedLifecycles: InstanceLifecycle[] = [];
 
-function readyAtTheFloor(fakeRedisClient: FakeRedisClient): void {
-  fakeRedisClient.infoReply = async () => infoReplyWith(VALKEY_AT_THE_FLOOR);
-  fakeRedisClient.becomeReady();
+function readyAtTheFloor(fakeRedisDriver: FakeRedisDriver): void {
+  fakeRedisDriver.infoReply = async () => infoReplyWith(VALKEY_AT_THE_FLOOR);
+  fakeRedisDriver.becomeReady();
 }
 
 function lifecycleScenarioOf({
   tasks = [],
   engine = createInMemoryEngine(),
-  prepareClient = readyAtTheFloor,
-  engineOn = (inMemoryEngine, fakeRedisClient) => engineOnFakeClient(inMemoryEngine, fakeRedisClient),
+  prepareDriver = readyAtTheFloor,
+  engineOn = (inMemoryEngine, client) => engineOnFakeDriver(inMemoryEngine, client),
   senderOn = () => NO_SENDER,
   env = { NODE_ENV: "development" },
 }: LifecycleScenarioOptions = {}): LifecycleScenario {
   const { logger, lines } = createRecordingLogger();
-  const fakeRedisClients = createFakeRedisClients({
-    instanceCommandTimeoutInMilliseconds: GIVE_UP_AFTER_IN_MILLISECONDS,
-  });
-  fakeRedisClients.onCreate(prepareClient);
-  const connections = {
-    ...createRedisConnections({ url: "redis://127.0.0.1:1", giveUpAfter: "5s" }, logger),
-    createClient: fakeRedisClients.createClient,
+  const fakeRedisDrivers = createFakeRedisDrivers();
+  fakeRedisDrivers.onCreate(prepareDriver);
+  const connections = createRedisConnections(
+    { url: "redis://127.0.0.1:1", giveUpAfter: "5s" },
+    logger,
+    fakeRedisDrivers.createDriver,
+  );
+  const commandDriver = () => {
+    const [firstDriver] = fakeRedisDrivers.createdDrivers();
+    if (firstDriver === undefined) {
+      throw new Error("no command connection was opened");
+    }
+    return firstDriver;
   };
   const lifecycle = createInstanceLifecycle({
     connections,
-    engineOn: (commandClient) => engineOn(engine, commandClient as unknown as FakeRedisClient),
-    wakeUpWaitOn: (blockingClient) => wakeUpWaitOnFakeClient(engine, blockingClient),
+    engineOn: (client) => engineOn(engine, client, commandDriver),
+    wakeUpWaitOn: (blockingClient) => wakeUpWaitOnFakeDriver(engine, blockingClient),
     senderOn,
     definitions: workerDefinitionsOf(tasks),
     logger,
@@ -103,15 +115,9 @@ function lifecycleScenarioOf({
     lifecycle,
     engine,
     lines,
-    fakeRedisClients,
-    commandClient: () => {
-      const [commandClient] = fakeRedisClients.clientsOfRole("instance");
-      if (commandClient === undefined) {
-        throw new Error("no command client was opened");
-      }
-      return commandClient;
-    },
-    blockingClients: () => fakeRedisClients.clientsOfRole("worker"),
+    fakeRedisDrivers,
+    commandDriver,
+    blockingDrivers: () => fakeRedisDrivers.createdDrivers().slice(1),
   };
 }
 
@@ -190,31 +196,31 @@ describe("the boot", () => {
       schedule: { cron: "0 6 * * *", timezone: "UTC" },
       handler: async () => undefined,
     }) as AnyTaskDefinition;
-    const { lifecycle, engine, lines, commandClient, blockingClients } = lifecycleScenarioOf({ tasks: [dailyReport] });
+    const { lifecycle, engine, lines, commandDriver, blockingDrivers } = lifecycleScenarioOf({ tasks: [dailyReport] });
 
     await lifecycle.startWorker();
     await vi.advanceTimersByTimeAsync(DEFAULT_WORKER_TIMING.tickIntervalInMilliseconds);
 
-    expect(commandClient().sentCommands.slice(0, 3)).toEqual(["INFO", "serverInstant", "syncSchedules"]);
-    expect(commandClient().sentCommands).toEqual(expect.arrayContaining(["fetch", "tick"]));
+    expect(commandDriver().sentCommands.slice(0, 3)).toEqual(["INFO", "serverInstant", "syncSchedules"]);
+    expect(commandDriver().sentCommands).toEqual(expect.arrayContaining(["fetch", "tick"]));
     expect(engine.storedScheduleOf("daily-report")).toBeDefined();
-    expect(blockingClients()).toHaveLength(1);
-    expect(blockingClients()[0]?.sentCommands).toContain("BZPOPMIN");
+    expect(blockingDrivers()).toHaveLength(1);
+    expect(blockingDrivers()[0]?.sentCommands).toContain("BZPOPMIN");
     expect(messagesOf(lines)).toEqual(["schedule added", "worker started"]);
   });
 
   test("refuses a server below the floor: startWorker rejects with the floor and no worker starts", async () => {
-    const { lifecycle, lines, engine, blockingClients } = lifecycleScenarioOf({
-      prepareClient: (fakeRedisClient) => {
-        readyAtTheFloor(fakeRedisClient);
-        fakeRedisClient.infoReply = async () => infoReplyWith({ redisVersion: "7.2.4", maxmemoryPolicy: "noeviction" });
+    const { lifecycle, lines, engine, blockingDrivers } = lifecycleScenarioOf({
+      prepareDriver: (fakeRedisDriver) => {
+        readyAtTheFloor(fakeRedisDriver);
+        fakeRedisDriver.infoReply = async () => infoReplyWith({ redisVersion: "7.2.4", maxmemoryPolicy: "noeviction" });
       },
     });
 
     await expect(lifecycle.startWorker()).rejects.toThrow(
       new Error("Redis 7.2.4 is below the floor: Valkey 8 or Redis 7.4"),
     );
-    expect(blockingClients()).toEqual([]);
+    expect(blockingDrivers()).toEqual([]);
     expect(engine.calls).toEqual([]);
     expect(messagesOf(lines)).toEqual([]);
     await expect(lifecycleScenarioOf().lifecycle.startWorker()).resolves.toBeUndefined();
@@ -222,9 +228,9 @@ describe("the boot", () => {
 
   test("warns server version unreadable and starts when INFO has no version line", async () => {
     const { lifecycle, lines } = lifecycleScenarioOf({
-      prepareClient: (fakeRedisClient) => {
-        readyAtTheFloor(fakeRedisClient);
-        fakeRedisClient.infoReply = async () => infoReplyWith({ maxmemoryPolicy: "noeviction" });
+      prepareDriver: (fakeRedisDriver) => {
+        readyAtTheFloor(fakeRedisDriver);
+        fakeRedisDriver.infoReply = async () => infoReplyWith({ maxmemoryPolicy: "noeviction" });
       },
     });
 
@@ -261,9 +267,9 @@ describe("the boot", () => {
   });
 
   test("while Redis is down, resolves once giveUpAfter has passed and starts the worker once Redis answers", async () => {
-    const { lifecycle, lines, commandClient } = lifecycleScenarioOf({
-      prepareClient: (fakeRedisClient) => {
-        fakeRedisClient.infoReply = async () => infoReplyWith(VALKEY_AT_THE_FLOOR);
+    const { lifecycle, lines, commandDriver } = lifecycleScenarioOf({
+      prepareDriver: (fakeRedisDriver) => {
+        fakeRedisDriver.infoReply = async () => infoReplyWith(VALKEY_AT_THE_FLOOR);
       },
     });
 
@@ -274,44 +280,49 @@ describe("the boot", () => {
     const isStartedAtGiveUpAfter = started.isSettled();
     await vi.advanceTimersByTimeAsync(3 * GIVE_UP_AFTER_IN_MILLISECONDS);
     const linesWhileDown = messagesOf(lines);
-    commandClient().becomeReady();
+    commandDriver().becomeReady();
     await vi.advanceTimersByTimeAsync(0);
 
     expect([isStartedBeforeGiveUpAfter, isStartedAtGiveUpAfter]).toEqual([false, true]);
     expect(linesWhileDown).toEqual([]);
-    expect(commandClient().sentCommands.filter((commandName) => commandName === "INFO").length).toBeGreaterThan(1);
+    expect(commandDriver().sentCommands.filter((commandName) => commandName === "INFO")).toEqual(["INFO"]);
     expect(messagesOf(lines)).toEqual(["worker started"]);
   });
 
   test("a connection lost between the INFO and the schedule sync waits for Redis, resends, and starts the worker", async () => {
-    const { lifecycle, lines, commandClient } = lifecycleScenarioOf({
-      prepareClient: (fakeRedisClient) => {
-        fakeRedisClient.infoReply = async () => {
-          fakeRedisClient.startReconnecting();
+    const { lifecycle, lines, commandDriver } = lifecycleScenarioOf({
+      prepareDriver: (fakeRedisDriver) => {
+        fakeRedisDriver.infoReply = async () => {
+          fakeRedisDriver.isAnswering = false;
+          setTimeout(() => {
+            fakeRedisDriver.loseConnection(connectionResetError());
+          }, 0);
           return infoReplyWith(VALKEY_AT_THE_FLOOR);
         };
-        fakeRedisClient.becomeReady();
+        fakeRedisDriver.becomeReady();
       },
     });
 
     const starting = lifecycle.startWorker();
     await vi.advanceTimersByTimeAsync(3 * GIVE_UP_AFTER_IN_MILLISECONDS);
     const linesWhileDown = messagesOf(lines);
-    commandClient().becomeReady();
+    commandDriver().isAnswering = true;
+    commandDriver().becomeReady();
     await vi.advanceTimersByTimeAsync(0);
     await starting;
 
-    expect(linesWhileDown).toEqual([]);
-    expect(
-      commandClient().sentCommands.filter((commandName) => commandName === "serverInstant").length,
-    ).toBeGreaterThan(1);
-    expect(messagesOf(lines)).toEqual(["worker started"]);
+    expect(linesWhileDown).toEqual(["connection error"]);
+    expect(commandDriver().sentCommands.filter((commandName) => commandName === "serverInstant")).toEqual([
+      "serverInstant",
+      "serverInstant",
+    ]);
+    expect(messagesOf(lines)).toEqual(["connection error", "connection restored", "worker started"]);
   });
 
   test("a background boot that fails writes worker not started and calls onWorkerNotStarted with the error", async () => {
-    const { lifecycle, lines, commandClient, blockingClients } = lifecycleScenarioOf({
-      prepareClient: (fakeRedisClient) => {
-        fakeRedisClient.infoReply = async () => infoReplyWith({ redisVersion: "7.2.4", maxmemoryPolicy: "noeviction" });
+    const { lifecycle, lines, commandDriver, blockingDrivers } = lifecycleScenarioOf({
+      prepareDriver: (fakeRedisDriver) => {
+        fakeRedisDriver.infoReply = async () => infoReplyWith({ redisVersion: "7.2.4", maxmemoryPolicy: "noeviction" });
       },
     });
     const onWorkerNotStarted = vi.fn();
@@ -320,41 +331,37 @@ describe("the boot", () => {
       lifecycle.startWorker({ onWorkerNotStarted }),
       vi.advanceTimersByTimeAsync(GIVE_UP_AFTER_IN_MILLISECONDS),
     ]);
-    commandClient().becomeReady();
+    commandDriver().becomeReady();
     await vi.advanceTimersByTimeAsync(0);
 
     const floorError = new Error("Redis 7.2.4 is below the floor: Valkey 8 or Redis 7.4");
     expect(lines).toEqual([{ level: "error", message: "worker not started", fields: { err: floorError } }]);
     expect(onWorkerNotStarted).toHaveBeenCalledWith(floorError);
-    expect(blockingClients()).toEqual([]);
+    expect(blockingDrivers()).toEqual([]);
   });
 
-  test.each(["rejects every command", "rejects nothing"] as const)(
-    "a close during a boot waiting for Redis resolves, and no worker starts, when the disconnect %s",
-    async (disconnectEffect) => {
-      const { lifecycle, lines, engine, commandClient, blockingClients } = lifecycleScenarioOf({
-        prepareClient: (fakeRedisClient) => {
-          fakeRedisClient.infoReply = async () => infoReplyWith(VALKEY_AT_THE_FLOOR);
-          fakeRedisClient.disconnectEffect = disconnectEffect;
-        },
-      });
-      await Promise.all([lifecycle.startWorker(), vi.advanceTimersByTimeAsync(GIVE_UP_AFTER_IN_MILLISECONDS)]);
+  test("a close during a boot waiting for Redis resolves, and no worker starts", async () => {
+    const { lifecycle, lines, engine, commandDriver, blockingDrivers } = lifecycleScenarioOf({
+      prepareDriver: (fakeRedisDriver) => {
+        fakeRedisDriver.infoReply = async () => infoReplyWith(VALKEY_AT_THE_FLOOR);
+      },
+    });
+    await Promise.all([lifecycle.startWorker(), vi.advanceTimersByTimeAsync(GIVE_UP_AFTER_IN_MILLISECONDS)]);
 
-      await lifecycle.close();
-      commandClient().becomeReady();
-      await vi.advanceTimersByTimeAsync(CLOSE_BOUND_IN_MILLISECONDS);
+    await lifecycle.close();
+    commandDriver().becomeReady();
+    await vi.advanceTimersByTimeAsync(CLOSE_BOUND_IN_MILLISECONDS);
 
-      expect(commandClient().disconnectCount).toBe(1);
-      expect(blockingClients()).toEqual([]);
-      expect(engine.calls).toEqual([]);
-      expect(messagesOf(lines)).toEqual([]);
-      expect(vi.getTimerCount()).toBe(0);
-      await expect(lifecycleScenarioOf().lifecycle.startWorker()).resolves.toBeUndefined();
-    },
-  );
+    expect(commandDriver().destroyCount).toBe(1);
+    expect(blockingDrivers()).toEqual([]);
+    expect(engine.calls).toEqual([]);
+    expect(messagesOf(lines)).toEqual([]);
+    expect(vi.getTimerCount()).toBe(0);
+    await expect(lifecycleScenarioOf().lifecycle.startWorker()).resolves.toBeUndefined();
+  });
 
   test("a close while startWorker still waits for Redis rejects it at once with InstanceClosedError", async () => {
-    const { lifecycle, lines } = lifecycleScenarioOf({ prepareClient: () => undefined });
+    const { lifecycle, lines } = lifecycleScenarioOf({ prepareDriver: () => undefined });
     const starting = lifecycle.startWorker();
     const startOutcome = starting.catch((error: unknown) => error);
     await vi.advanceTimersByTimeAsync(100);
@@ -369,7 +376,7 @@ describe("the boot", () => {
 
 describe("the closed instance", () => {
   test("rejects every later call with InstanceClosedError without opening a client, and a second close returns the first one's promise", async () => {
-    const { lifecycle, fakeRedisClients } = lifecycleScenarioOf();
+    const { lifecycle, fakeRedisDrivers } = lifecycleScenarioOf();
 
     const firstClose = lifecycle.close();
     await firstClose;
@@ -377,30 +384,31 @@ describe("the closed instance", () => {
     expect(lifecycle.close()).toBe(firstClose);
     await expect(lifecycle.callWhileOpen(async () => "answered")).rejects.toBeInstanceOf(InstanceClosedError);
     await expect(lifecycle.startWorker()).rejects.toBeInstanceOf(InstanceClosedError);
-    expect([...fakeRedisClients.clientsOfRole("instance"), ...fakeRedisClients.clientsOfRole("worker")]).toEqual([]);
+    expect(fakeRedisDrivers.createdDrivers()).toEqual([]);
   });
 
-  test("a call waiting for ready when close is issued rejects at once, and no ready listener or timer is left", async () => {
-    const { lifecycle, commandClient } = lifecycleScenarioOf({ prepareClient: () => undefined });
-    const callOutcome = lifecycle.callWhileOpen(async () => "answered").catch((error: unknown) => error);
+  test("a call held while the connection is not ready rejects at once when close is issued, and no timer is left", async () => {
+    const { lifecycle } = lifecycleScenarioOf({ prepareDriver: () => undefined });
+    const callOutcome = lifecycle
+      .callWhileOpen(({ engine: openedEngine }) => openedEngine.enqueue({ runs: runsOf("send-email", 1) }))
+      .catch((error: unknown) => error);
     await vi.advanceTimersByTimeAsync(100);
-    const readyListenerCountWhileWaiting = commandClient().listenerCount("ready");
+    const timerCountWhileHeld = vi.getTimerCount();
 
     const closing = lifecycle.close();
     const outcomeAtTheClose = await callOutcome;
     await closing;
 
-    expect(readyListenerCountWhileWaiting).toBe(1);
+    expect(timerCountWhileHeld).toBe(1);
     expect(outcomeAtTheClose).toBeInstanceOf(InstanceClosedError);
-    expect(commandClient().listenerCount("ready")).toBe(0);
     expect(vi.getTimerCount()).toBe(0);
   });
 
   test("a call already sent gets its answer when it arrives before the close closes the command client", async () => {
-    const { lifecycle, engine, commandClient } = lifecycleScenarioOf({
-      prepareClient: (fakeRedisClient) => {
-        readyAtTheFloor(fakeRedisClient);
-        fakeRedisClient.quitReply = "never answered";
+    const { lifecycle, engine, commandDriver } = lifecycleScenarioOf({
+      prepareDriver: (fakeRedisDriver) => {
+        readyAtTheFloor(fakeRedisDriver);
+        fakeRedisDriver.closeReply = "never answered";
       },
     });
     const heldEnqueues = engine.holdCalls("enqueue");
@@ -413,59 +421,53 @@ describe("the closed instance", () => {
     await vi.advanceTimersByTimeAsync(100);
     heldEnqueues.release();
     await vi.advanceTimersByTimeAsync(0);
-    const isClientDisconnectedAtTheAnswer = commandClient().isDisconnected;
-    await vi.advanceTimersByTimeAsync(DEFAULT_WORKER_TIMING.commandClientQuitBoundInMilliseconds);
+    const isDriverClosedAtTheAnswer = commandDriver().isClosed;
+    await vi.advanceTimersByTimeAsync(DEFAULT_WORKER_TIMING.commandConnectionCloseBoundInMilliseconds);
     await closing;
 
-    expect(isClientDisconnectedAtTheAnswer).toBe(false);
+    expect(isDriverClosedAtTheAnswer).toBe(false);
     await expect(enqueueReply).resolves.toMatchObject({
       kind: "enqueued",
       createdRuns: [{ task: "send-email", runId: "send-email-1" }],
     });
   });
 
-  test.each(["rejects every command", "rejects nothing"] as const)(
-    "a call already sent and unanswered rejects with InstanceClosedError once the close closes the command client, when the disconnect %s",
-    async (disconnectEffect) => {
-      const { lifecycle, engine } = lifecycleScenarioOf({
-        prepareClient: (fakeRedisClient) => {
-          readyAtTheFloor(fakeRedisClient);
-          fakeRedisClient.disconnectEffect = disconnectEffect;
-        },
-      });
-      engine.holdCalls("enqueue");
-      const callOutcome = lifecycle
-        .callWhileOpen(({ engine: openedEngine }) => openedEngine.enqueue({ runs: runsOf("send-email", 1) }))
-        .catch((error: unknown) => error);
-      await vi.advanceTimersByTimeAsync(0);
+  test("a call already sent and unanswered rejects with InstanceClosedError once the close closes the command connection", async () => {
+    const { lifecycle, engine } = lifecycleScenarioOf();
+    engine.holdCalls("enqueue");
+    const callOutcome = lifecycle
+      .callWhileOpen(({ engine: openedEngine }) => openedEngine.enqueue({ runs: runsOf("send-email", 1) }))
+      .catch((error: unknown) => error);
+    await vi.advanceTimersByTimeAsync(0);
 
-      await lifecycle.close();
+    const closing = lifecycle.close();
+    await vi.advanceTimersByTimeAsync(DEFAULT_WORKER_TIMING.commandConnectionCloseBoundInMilliseconds);
+    await closing;
 
-      expect(await callOutcome).toBeInstanceOf(InstanceClosedError);
-    },
-  );
+    expect(await callOutcome).toBeInstanceOf(InstanceClosedError);
+  });
 });
 
 describe("the close of a running worker", () => {
   test("resolves at the step boundary where the attempt yields, well before the deadline, with both clients closed", async () => {
-    const { lifecycle, engine, lines, handlerGate, commandClient, blockingClients } =
+    const { lifecycle, engine, lines, handlerGate, commandDriver, blockingDrivers } =
       await scenarioOfARunningWorker(gatedBetweenTwoSteps);
     const closeIssuedAt = Date.now();
 
     const closed = settlementOf(lifecycle.close());
     await vi.advanceTimersByTimeAsync(100);
-    const isBlockingClientDisconnectedAtOnce = blockingClients()[0]?.isDisconnected;
+    const isBlockingDriverClosedAtOnce = blockingDrivers()[0]?.isClosed;
     handlerGate.release(1);
     await vi.advanceTimersByTimeAsync(0);
 
-    expect(isBlockingClientDisconnectedAtOnce).toBe(true);
+    expect(isBlockingDriverClosedAtOnce).toBe(true);
     expect(closed.isSettled()).toBe(true);
     expect((closed.settledAt() ?? Infinity) - closeIssuedAt).toBeLessThan(SHUTDOWN_TIMEOUT_IN_MILLISECONDS);
     expect(settleOutcomeKindsOf(engine)).toEqual(["yield"]);
     expect(engine.storedRunOf("send-email", "send-email-1")?.state).toBe("pending");
     expect(messagesOf(lines).slice(-2)).toEqual(["run yielded at shutdown", "worker stopped"]);
-    expect(commandClient().sentCommands.at(-1)).toBe("QUIT");
-    expect(commandClient().disconnectCount).toBe(1);
+    expect(commandDriver().closeCount).toBe(1);
+    expect(commandDriver().destroyCount).toBe(1);
   });
 
   test("completes the run of a handler that ignores the deadline abort and finishes inside the grace", async () => {
@@ -488,7 +490,7 @@ describe("the close of a running worker", () => {
   });
 
   test("aborts the attempts still running at the deadline and resolves within the deadline plus 2 s, and a handler ending afterwards sends nothing", async () => {
-    const { lifecycle, engine, lines, handlerGate, commandClient, blockingClients } =
+    const { lifecycle, engine, lines, handlerGate, commandDriver, blockingDrivers } =
       await scenarioOfARunningWorker(gatedWithNoStep);
     const closeIssuedAt = Date.now();
 
@@ -512,7 +514,7 @@ describe("the close of a running worker", () => {
       "attempts aborted at shutdown deadline",
       "worker stopped",
     ]);
-    expect([commandClient().disconnectCount, blockingClients()[0]?.disconnectCount]).toEqual([1, 1]);
+    expect([commandDriver().destroyCount, blockingDrivers()[0]?.destroyCount]).toEqual([1, 1]);
     expect(engine.calls.length).toBe(callCountAtTheClose);
     expect(messagesOf(lines)).toEqual(linesAtTheClose);
     expect(unhandledRejections).toEqual([]);
@@ -520,24 +522,22 @@ describe("the close of a running worker", () => {
 
   test.each([
     {
-      clientState: "reconnecting, whose disconnect rejects nothing",
-      breakClient: (fakeRedisClient: FakeRedisClient) => {
-        fakeRedisClient.disconnectEffect = "rejects nothing";
-        fakeRedisClient.startReconnecting();
+      driverState: "reconnecting",
+      breakDriver: (fakeRedisDriver: FakeRedisDriver) => {
+        fakeRedisDriver.startReconnecting();
       },
     },
     {
-      clientState: "ready, whose quit is never answered and whose end never fires",
-      breakClient: (fakeRedisClient: FakeRedisClient) => {
-        fakeRedisClient.disconnectEffect = "rejects nothing";
-        fakeRedisClient.quitReply = "never answered";
+      driverState: "ready, whose close is never answered",
+      breakDriver: (fakeRedisDriver: FakeRedisDriver) => {
+        fakeRedisDriver.closeReply = "never answered";
       },
     },
-  ])("resolves within the bound while both clients are $clientState, leaving no timer", async ({ breakClient }) => {
-    const { lifecycle, commandClient, blockingClients } = await scenarioOfARunningWorker(gatedWithNoStep);
-    breakClient(commandClient());
-    for (const blockingClient of blockingClients()) {
-      breakClient(blockingClient);
+  ])("resolves within the bound while both drivers are $driverState, leaving no timer", async ({ breakDriver }) => {
+    const { lifecycle, commandDriver, blockingDrivers } = await scenarioOfARunningWorker(gatedWithNoStep);
+    breakDriver(commandDriver());
+    for (const blockingDriver of blockingDrivers()) {
+      breakDriver(blockingDriver);
     }
     await vi.advanceTimersByTimeAsync(3_000);
     const closeIssuedAt = Date.now();
@@ -550,32 +550,29 @@ describe("the close of a running worker", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  test("during an outage with an attempt waiting on its settle, resolves within the bound with no timer, ready listener or worker error left", async () => {
-    const { lifecycle, lines, handlerGate, commandClient } = await scenarioOfARunningWorker(gatedWithNoStep, {
-      engineOn: (engine, fakeRedisClient) => {
-        const engineOnTheClient = engineOnFakeClient(engine, fakeRedisClient);
+  test("during an outage with an attempt waiting on its settle, resolves within the bound with no timer or worker error left", async () => {
+    const { lifecycle, lines, handlerGate, commandDriver } = await scenarioOfARunningWorker(gatedWithNoStep, {
+      engineOn: (engine, client, driverOfTheCommandConnection) => {
+        const engineOnTheClient = engineOnFakeDriver(engine, client);
         return {
           ...engineOnTheClient,
           settle: (request) =>
-            fakeRedisClient.status === "ready"
+            driverOfTheCommandConnection().isReady
               ? engineOnTheClient.settle(request)
-              : Promise.reject(new Error("Command timed out")),
+              : Promise.reject(new SocketClosedUnexpectedlyError()),
         };
       },
     });
-    commandClient().startReconnecting();
+    commandDriver().startReconnecting();
     handlerGate.release(1);
     await vi.advanceTimersByTimeAsync(3 * GIVE_UP_AFTER_IN_MILLISECONDS);
-    const readyListenerCountDuringTheOutage = commandClient().listenerCount("ready");
     const closeIssuedAt = Date.now();
 
     const closed = settlementOf(lifecycle.close());
     await vi.advanceTimersByTimeAsync(CLOSE_BOUND_IN_MILLISECONDS);
 
-    expect(readyListenerCountDuringTheOutage).toBe(1);
     expect((closed.settledAt() ?? Infinity) - closeIssuedAt).toBeLessThanOrEqual(CLOSE_BOUND_IN_MILLISECONDS);
     expect(vi.getTimerCount()).toBe(0);
-    expect(commandClient().listenerCount("ready")).toBe(0);
     expect(messagesOf(lines)).not.toContain("worker error");
   });
 
@@ -636,50 +633,44 @@ describe("the close of a running worker", () => {
     expect(settleOutcomeKindsOf(engine)).toEqual(["complete"]);
   });
 
-  test.each(["rejects every command", "rejects nothing"] as const)(
-    "a close with commands queued or in flight leaves no rejection unhandled, when the disconnect %s",
-    async (disconnectEffect) => {
-      const unhandledRejections = await unhandledRejectionsDuring(async () => {
-        const booting = lifecycleScenarioOf({
-          prepareClient: (fakeRedisClient) => {
-            fakeRedisClient.disconnectEffect = disconnectEffect;
-            fakeRedisClient.infoReply = async () => infoReplyWith(VALKEY_AT_THE_FLOOR);
-          },
-        });
-        await Promise.all([
-          booting.lifecycle.startWorker(),
-          vi.advanceTimersByTimeAsync(GIVE_UP_AFTER_IN_MILLISECONDS),
-        ]);
-        const queuedCallOutcome = booting.lifecycle.callWhileOpen(async () => "answered").catch(() => undefined);
-        await booting.lifecycle.close();
-        await queuedCallOutcome;
-
-        const engine = createInMemoryEngine();
-        await engine.enqueue({ runs: runsOf("send-email", 1) });
-        const sendEmail = defineTask("send-email", { schema: v.object({}), handler: async () => undefined });
-        const running = lifecycleScenarioOf({
-          tasks: [sendEmail] as AnyTaskDefinition[],
-          engine,
-          prepareClient: (fakeRedisClient) => {
-            readyAtTheFloor(fakeRedisClient);
-            fakeRedisClient.disconnectEffect = disconnectEffect;
-          },
-        });
-        await running.lifecycle.startWorker({ shutdownTimeout: "5s" });
-        engine.holdCalls("fetch");
-        engine.holdCalls("enqueue");
-        await vi.advanceTimersByTimeAsync(DEFAULT_WORKER_TIMING.tickIntervalInMilliseconds);
-        const inFlightCallOutcome = running.lifecycle
-          .callWhileOpen(({ engine: openedEngine }) => openedEngine.enqueue({ runs: runsOf("send-email", 1) }))
-          .catch(() => undefined);
-        await vi.advanceTimersByTimeAsync(0);
-        const closing = running.lifecycle.close();
-        await vi.advanceTimersByTimeAsync(CLOSE_BOUND_IN_MILLISECONDS);
-        await closing;
-        await inFlightCallOutcome;
+  test("a close with commands queued or in flight leaves no rejection unhandled", async () => {
+    const unhandledRejections = await unhandledRejectionsDuring(async () => {
+      const booting = lifecycleScenarioOf({
+        prepareDriver: (fakeRedisDriver) => {
+          fakeRedisDriver.infoReply = async () => infoReplyWith(VALKEY_AT_THE_FLOOR);
+        },
       });
+      await Promise.all([booting.lifecycle.startWorker(), vi.advanceTimersByTimeAsync(GIVE_UP_AFTER_IN_MILLISECONDS)]);
+      const queuedCallOutcome = booting.lifecycle
+        .callWhileOpen(({ engine: openedEngine }) => openedEngine.enqueue({ runs: runsOf("send-email", 1) }))
+        .catch(() => undefined);
+      await booting.lifecycle.close();
+      await queuedCallOutcome;
 
-      expect(unhandledRejections).toEqual([]);
-    },
-  );
+      const engine = createInMemoryEngine();
+      await engine.enqueue({ runs: runsOf("send-email", 1) });
+      const sendEmail = defineTask("send-email", { schema: v.object({}), handler: async () => undefined });
+      const running = lifecycleScenarioOf({
+        tasks: [sendEmail] as AnyTaskDefinition[],
+        engine,
+        prepareDriver: (fakeRedisDriver) => {
+          readyAtTheFloor(fakeRedisDriver);
+        },
+      });
+      await running.lifecycle.startWorker({ shutdownTimeout: "5s" });
+      engine.holdCalls("fetch");
+      engine.holdCalls("enqueue");
+      await vi.advanceTimersByTimeAsync(DEFAULT_WORKER_TIMING.tickIntervalInMilliseconds);
+      const inFlightCallOutcome = running.lifecycle
+        .callWhileOpen(({ engine: openedEngine }) => openedEngine.enqueue({ runs: runsOf("send-email", 1) }))
+        .catch(() => undefined);
+      await vi.advanceTimersByTimeAsync(0);
+      const closing = running.lifecycle.close();
+      await vi.advanceTimersByTimeAsync(CLOSE_BOUND_IN_MILLISECONDS);
+      await closing;
+      await inFlightCallOutcome;
+    });
+
+    expect(unhandledRejections).toEqual([]);
+  });
 });

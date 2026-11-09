@@ -40,7 +40,7 @@ recordsClient.on("error", () => undefined);
 overrideWorkerTiming(config.timing ?? {});
 
 const nextasking = createNextasking({
-  connection: { url: config.redisUrl },
+  connection: config.connection ?? { url: config.redisUrl },
   prefix: config.keyPrefix,
   logger: ndjsonLogger,
   tasks: workerProcessTasks(async (taskName, record) => {

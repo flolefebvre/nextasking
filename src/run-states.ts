@@ -26,6 +26,10 @@ export const RUN_STATES: readonly RunState[] = [
   "failed",
 ];
 
+export function isRunState(value: unknown): value is RunState {
+  return RUN_STATES.some((state) => state === value);
+}
+
 export type BullmqJobState = JobState | "unknown";
 
 export type BullmqJobSet = "wait" | "prioritized" | "waiting-children" | "delayed" | "active" | "completed" | "failed";

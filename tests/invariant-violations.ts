@@ -3,7 +3,7 @@ import { expect } from "vitest";
 
 import { engineKeysOf, hashTaggedPrefixOf } from "../src/engine/engine-keys.js";
 import type { EngineKeys } from "../src/engine/engine-keys.js";
-import { RUN_STATES } from "../src/run-states.js";
+import { isRunState } from "../src/run-states.js";
 import type { RunState } from "../src/run-states.js";
 
 type RunRecord = Record<string, string>;
@@ -12,6 +12,7 @@ type IndexMembership = { indexKey: string; score: string };
 
 type StoredKeysByKind = {
   recordKeysByRunId: Map<string, string>;
+  sideKeys: { runId: string; side: string }[];
   sortedIndexKeys: string[];
   slotSetKeys: string[];
   scheduleKeys: string[];
@@ -30,10 +31,6 @@ const SCORE_FIELD_BY_STATE: Readonly<Record<RunState, string>> = {
 
 const DUE_STATES: readonly RunState[] = ["delayed", "suspended", "backingOff"];
 
-function isRunState(value: string | undefined): value is RunState {
-  return RUN_STATES.some((state) => state === value);
-}
-
 async function storedKeysOf(redis: Redis, keyPrefix: string): Promise<string[]> {
   const escapedPrefix = hashTaggedPrefixOf(keyPrefix).replace(/[*?[\]\\]/g, "\\$&");
   const storedKeys: string[] = [];
@@ -47,6 +44,7 @@ function storedKeysByKindOf(storedKeys: readonly string[], keyPrefix: string): S
   const prefixLength = hashTaggedPrefixOf(keyPrefix).length + 1;
   const storedKeysByKind: StoredKeysByKind = {
     recordKeysByRunId: new Map(),
+    sideKeys: [],
     sortedIndexKeys: [],
     slotSetKeys: [],
     scheduleKeys: [],
@@ -55,6 +53,8 @@ function storedKeysByKindOf(storedKeys: readonly string[], keyPrefix: string): S
     const [kind, ...segments] = storedKey.slice(prefixLength).split(":");
     if (kind === "run" && segments.length === 1) {
       storedKeysByKind.recordKeysByRunId.set(decodeURIComponent(segments[0]!), storedKey);
+    } else if (kind === "run" && segments.length === 2) {
+      storedKeysByKind.sideKeys.push({ runId: decodeURIComponent(segments[0]!), side: segments[1]! });
     } else if (kind === "runs" || kind === "waiting") {
       storedKeysByKind.sortedIndexKeys.push(storedKey);
     } else if (kind === "pending" || kind === "due" || kind === "locks") {
@@ -91,7 +91,7 @@ function haveEqualScores(storedScore: string, expectedScore: string | undefined)
 
 export async function invariantViolationsOf(redis: Redis, keyPrefix: string): Promise<string[]> {
   const keys = engineKeysOf(keyPrefix);
-  const { recordKeysByRunId, sortedIndexKeys, slotSetKeys, scheduleKeys } = storedKeysByKindOf(
+  const { recordKeysByRunId, sideKeys, sortedIndexKeys, slotSetKeys, scheduleKeys } = storedKeysByKindOf(
     await storedKeysOf(redis, keyPrefix),
     keyPrefix,
   );
@@ -145,6 +145,12 @@ export async function invariantViolationsOf(redis: Redis, keyPrefix: string): Pr
     }
     if (!taskNames.has(record["task"] ?? "")) {
       violations.push(`run "${runId}" is of task "${String(record["task"])}", missing from ${keys.tasks}`);
+    }
+  }
+
+  for (const { runId, side } of sideKeys) {
+    if (!recordsByRunId.has(runId)) {
+      violations.push(`run "${runId}" has its ${side} key but no record`);
     }
   }
 

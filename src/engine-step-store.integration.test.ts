@@ -3,7 +3,7 @@ import { expect, vi } from "vitest";
 import { engineTest, fetchedLockedRunsOf, storedValuesByKeyOf } from "../tests/engine-test.js";
 import type { EngineTestContext } from "../tests/engine-test.js";
 import { freshLockTokensOf } from "../tests/lock-tokens.js";
-import type { ImplementedEngine, LockedRun } from "./engine/engine.js";
+import type { Engine, LockedRun } from "./engine/engine.js";
 import { createEngineStepStore, sendFenced } from "./engine-step-store.js";
 import { deriveHandlerSendId } from "./ids.js";
 import { LostRunLockError } from "./job-lock.js";
@@ -12,7 +12,7 @@ import type { HandlerSender, StepEngine } from "./step-engine.js";
 
 const PARENT_TASK = "onboard-user";
 
-function engineSenderOf(engine: ImplementedEngine): HandlerSender {
+function engineSenderOf(engine: Engine): HandlerSender {
   return {
     dispatch: async (fence, name, payload, options) => {
       const runId = options.runId!;

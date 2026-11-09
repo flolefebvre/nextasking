@@ -1,16 +1,17 @@
 import type { Redis } from "ioredis";
 
+import type { DurationInMilliseconds } from "../src/durations.js";
 import { engineKeysOf } from "../src/engine/engine-keys.js";
 import type { EngineKeys } from "../src/engine/engine-keys.js";
 import { createEngine } from "../src/engine/engine.js";
-import type { ImplementedEngine, LockedRun } from "../src/engine/engine.js";
+import type { Engine, LockedRun } from "../src/engine/engine.js";
 import { integrationTest } from "./integration-test.js";
 import { expectNoInvariantViolations } from "./invariant-violations.js";
 import { freshLockTokensOf } from "./lock-tokens.js";
 import { serverInstantInMillisecondsOf } from "./server-instant.js";
 import { withRedis } from "./with-redis.js";
 
-export type EngineTestContext = { engine: ImplementedEngine; redis: Redis; keys: EngineKeys; keyPrefix: string };
+export type EngineTestContext = { engine: Engine; redis: Redis; keys: EngineKeys; keyPrefix: string };
 
 export function engineTest(name: string, body: (context: EngineTestContext) => Promise<void>): void {
   integrationTest(name, async ({ redisUrl, keyPrefix }) => {
@@ -43,6 +44,24 @@ export async function expireLock({ redis, keys }: EngineTestContext, runId: stri
   const lockedUntil = (await serverInstantInMillisecondsOf(redis)) - 1;
   await redis.hset(keys.runRecord(runId), "lockedUntil", lockedUntil);
   await redis.zadd(keys.locks, lockedUntil, runId);
+}
+
+export async function backdateEndedRun(
+  { redis, keys }: EngineTestContext,
+  runId: string,
+  durationInMilliseconds: DurationInMilliseconds,
+): Promise<void> {
+  const [task, state, finishedAt] = await redis.hmget(keys.runRecord(runId), "task", "state", "finishedAt");
+  if (task == null || (state !== "completed" && state !== "failed") || finishedAt == null) {
+    throw new Error(`run "${runId}" has not ended`);
+  }
+  const backdatedFinishedAt = Number(finishedAt) - durationInMilliseconds;
+  await redis.hset(keys.runRecord(runId), "finishedAt", backdatedFinishedAt);
+  await redis.zadd(keys.runIndex(task, state), backdatedFinishedAt, runId);
+  const dedupExpiresAt = await redis.zscore(keys.runDedup(task), runId);
+  if (dedupExpiresAt !== null) {
+    await redis.zadd(keys.runDedup(task), Number(dedupExpiresAt) - durationInMilliseconds, runId);
+  }
 }
 
 export async function storedValuesByKeyOf(redis: Redis, keyPrefix: string): Promise<Map<string, Buffer | null>> {

@@ -112,6 +112,21 @@ const CORRUPTIONS = [
     expectedViolation: `is of task "send-email", missing from`,
   },
   {
+    name: "a payload left without its record",
+    corrupt: (redis: Redis, keys: EngineKeys) => redis.set(keys.runPayload("ghost-run"), "{}"),
+    expectedViolation: `run "ghost-run" has its payload key but no record`,
+  },
+  {
+    name: "errors left without their record",
+    corrupt: (redis: Redis, keys: EngineKeys) => redis.rpush(keys.runErrors("ghost-run"), "{}"),
+    expectedViolation: `run "ghost-run" has its errors key but no record`,
+  },
+  {
+    name: "steps left without their record",
+    corrupt: (redis: Redis, keys: EngineKeys) => redis.hset(keys.runSteps("ghost-run"), "charge", "1"),
+    expectedViolation: `run "ghost-run" has its steps key but no record`,
+  },
+  {
     name: "a schedule whose next firing disagrees with the schedules set",
     corrupt: (redis: Redis, keys: EngineKeys) => redis.zadd(keys.schedules, 1, "rebuild-index"),
     expectedViolation: `task "rebuild-index" has score 1`,

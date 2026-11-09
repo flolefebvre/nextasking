@@ -1,10 +1,4 @@
-import type {
-  DispatchOrEmitRequest,
-  HeldLock,
-  ImplementedEngine,
-  StaleReply,
-  UnknownVersionReply,
-} from "./engine/engine.js";
+import type { DispatchOrEmitRequest, HeldLock, Engine, StaleReply, UnknownVersionReply } from "./engine/engine.js";
 import type { EventId, RunId, StepId } from "./ids.js";
 import { LostRunLockError } from "./job-lock.js";
 import type { LockLoss, RefusedStepCall } from "./job-lock.js";
@@ -26,7 +20,7 @@ function lostRunLockErrorOf(
 }
 
 export function createEngineStepStore(
-  engine: Pick<ImplementedEngine, "saveStep" | "readStep">,
+  engine: Pick<Engine, "saveStep" | "readStep">,
   { runId, lockToken }: HeldLock,
 ): StepStore {
   const stepSubjectOf = (stepId: StepId) => `Step "${stepId}" of run "${runId}"`;
@@ -58,7 +52,7 @@ export function createEngineStepStore(
 }
 
 export async function sendFenced(
-  engine: Pick<ImplementedEngine, "enqueue">,
+  engine: Pick<Engine, "enqueue">,
   request: DispatchOrEmitRequest,
   { parentRunId, lockToken, stepId }: SendFence,
   sentId: RunId | EventId,

@@ -1,42 +1,51 @@
 import type { ConnectionOutageTracker } from "./connection.js";
 import type { DurationInMilliseconds } from "./durations.js";
 
-export type ReadOnlyStretch = {
+export type RefusedWriteStretch = {
   noteAnsweredReadOnly: (writeCommandNames: readonly string[], readOnlyReply: Error) => void;
+  noteAnsweredOutOfMemory: (writeCommandNames: readonly string[], outOfMemoryReply: Error) => void;
   noteAccepted: (commandNames: readonly string[]) => void;
   forget: () => void;
 };
 
-export type ReadOnlyStretchSources = {
+export type RefusedWriteStretchSources = {
   outageTracker: Pick<ConnectionOutageTracker, "reportClientError" | "reportClientReady" | "forgetClient">;
   giveUpAfterInMilliseconds: DurationInMilliseconds;
 };
 
-export function createReadOnlyStretch({
+export function createRefusedWriteStretch({
   outageTracker,
   giveUpAfterInMilliseconds,
-}: ReadOnlyStretchSources): ReadOnlyStretch {
+}: RefusedWriteStretchSources): RefusedWriteStretch {
   const stretchSubject = {};
   const learnedWriteCommandNames = new Set<string>();
-  let giveUpTimer: NodeJS.Timeout | undefined;
+  let readOnlyGiveUpTimer: NodeJS.Timeout | undefined;
+
+  const learn = (writeCommandNames: readonly string[]) => {
+    for (const commandName of writeCommandNames) {
+      learnedWriteCommandNames.add(commandName);
+    }
+  };
 
   const end = () => {
-    clearTimeout(giveUpTimer);
-    giveUpTimer = undefined;
+    clearTimeout(readOnlyGiveUpTimer);
+    readOnlyGiveUpTimer = undefined;
     learnedWriteCommandNames.clear();
   };
 
   return {
     noteAnsweredReadOnly: (writeCommandNames, readOnlyReply) => {
-      for (const commandName of writeCommandNames) {
-        learnedWriteCommandNames.add(commandName);
-      }
-      if (giveUpTimer === undefined) {
-        giveUpTimer = setTimeout(() => {
+      learn(writeCommandNames);
+      if (readOnlyGiveUpTimer === undefined) {
+        readOnlyGiveUpTimer = setTimeout(() => {
           outageTracker.reportClientError(stretchSubject, readOnlyReply);
         }, giveUpAfterInMilliseconds);
-        giveUpTimer.unref();
+        readOnlyGiveUpTimer.unref();
       }
+    },
+    noteAnsweredOutOfMemory: (writeCommandNames, outOfMemoryReply) => {
+      learn(writeCommandNames);
+      outageTracker.reportClientError(stretchSubject, outOfMemoryReply);
     },
     noteAccepted: (commandNames) => {
       if (commandNames.some((commandName) => learnedWriteCommandNames.has(commandName))) {

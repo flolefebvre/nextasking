@@ -12,7 +12,7 @@ import {
   unansweredWithinDeadlineError,
 } from "./node-redis-driver.js";
 import type { CreateRedisDriver, RedisDriver } from "./node-redis-driver.js";
-import { createReadOnlyStretch } from "./read-only-stretch.js";
+import { createRefusedWriteStretch } from "./refused-write-stretch.js";
 import type { CommandResult, RedisClient, RedisCommand } from "./redis-client.js";
 import { delayUnlessAborted, untilAborted } from "./redis-outage.js";
 import type { RedisOutage } from "./redis-outage.js";
@@ -227,7 +227,7 @@ export function createRedisConnections(
 ): RedisConnections {
   const giveUpAfterInMilliseconds = giveUpAfterInMillisecondsOf(connection);
   const outageTracker = createConnectionOutageTracker(logger);
-  const readOnlyStretch = createReadOnlyStretch({ outageTracker, giveUpAfterInMilliseconds });
+  const refusedWriteStretch = createRefusedWriteStretch({ outageTracker, giveUpAfterInMilliseconds });
   const stateByConnection = new WeakMap<RedisConnection, ConnectionState>();
   let openConnectionCount = 0;
 
@@ -410,7 +410,7 @@ export function createRedisConnections(
         readOnlyAnswers = readOnlyAnswersOf(commands, commandErrorsOfReply(reply));
         if (readOnlyAnswers.length === 0) {
           if (!isClosed(state)) {
-            readOnlyStretch.noteAccepted(commands.map(commandNameOf));
+            refusedWriteStretch.noteAccepted(commands.map(commandNameOf));
           }
           return reply;
         }
@@ -431,7 +431,7 @@ export function createRedisConnections(
       }
       const [firstReadOnlyAnswer] = readOnlyAnswers;
       if (firstReadOnlyAnswer !== undefined) {
-        readOnlyStretch.noteAnsweredReadOnly(
+        refusedWriteStretch.noteAnsweredReadOnly(
           readOnlyAnswers.map(({ commandName }) => commandName),
           firstReadOnlyAnswer.readOnlyReply,
         );
@@ -550,7 +550,7 @@ export function createRedisConnections(
       outageTracker.forgetClient(state.subject);
       openConnectionCount -= 1;
       if (openConnectionCount === 0) {
-        readOnlyStretch.forget();
+        refusedWriteStretch.forget();
       }
       if (closeBoundInMilliseconds !== undefined && state.driver.isReady) {
         await isSettledWithin(

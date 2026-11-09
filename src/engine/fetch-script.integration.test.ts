@@ -274,7 +274,7 @@ async function resumedRunFetchedTwiceOf(
 }
 
 engineTest(
-  "a run with a resume instant is fetched as a resume and loses the instant, and a resent fetch reports no resume",
+  "a run with a resume instant is fetched as a resume and loses the instant, and a resent fetch answers the same resume",
   async (context) => {
     const { redis, keys } = context;
 
@@ -282,12 +282,13 @@ engineTest(
 
     expect(lockedRun?.isResume).toBe(true);
     expect(await redis.hexists(keys.runRecord("run-1"), "resumesAt")).toBe(0);
-    expect(resentLockedRun).toEqual({ ...lockedRun, isResume: false });
+    expect(await redis.hmget(keys.runRecord("run-1"), "isLockAResume", "lockSleepsWokenAt")).toEqual(["1", null]);
+    expect(resentLockedRun).toEqual(lockedRun);
   },
 );
 
 engineTest(
-  "a run whose sleeps were woken carries sleepsWokenAt on its fresh lock only, and loses it from the record",
+  "a run whose sleeps were woken carries sleepsWokenAt on its lock, held under the lock only, and a resent fetch answers it too",
   async (context) => {
     const { redis, keys } = context;
 
@@ -298,10 +299,20 @@ engineTest(
 
     expect(lockedRun?.sleepsWokenAt).toBe(1000);
     expect(await redis.hexists(keys.runRecord("run-1"), "sleepsWokenAt")).toBe(0);
-    expect(resentLockedRun).not.toHaveProperty("sleepsWokenAt");
-    expect(resentLockedRun).toEqual({ ...lockedRun, isResume: false, sleepsWokenAt: undefined });
+    expect(await redis.hget(keys.runRecord("run-1"), "lockSleepsWokenAt")).toBe("1000");
+    expect(resentLockedRun).toEqual(lockedRun);
   },
 );
+
+engineTest("a fresh lock overwrites the pickup fields a previous lock left on the record", async (context) => {
+  const { redis, keys } = context;
+
+  const { lockedRun } = await resumedRunFetchedTwiceOf(context, { isLockAResume: 1, lockSleepsWokenAt: 1000 });
+
+  expect(lockedRun).toMatchObject({ isResume: false });
+  expect(lockedRun).not.toHaveProperty("sleepsWokenAt");
+  expect(await redis.hmget(keys.runRecord("run-1"), "isLockAResume", "lockSleepsWokenAt")).toEqual(["0", null]);
+});
 
 engineTest(
   "a fetch meeting 10 newer-version records at the head replies unknownVersion, takes no lock and leaves the indexes untouched",

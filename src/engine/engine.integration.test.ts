@@ -4,6 +4,7 @@ import { DAY_IN_MILLISECONDS, SEND_EMAIL_PRUNE_REQUEST } from "../../tests/ended
 import { backdateEndedRun, engineTest, expireLock, fetchedLockedRunsOf } from "../../tests/engine-test.js";
 import { serverInstantInMillisecondsOf } from "../../tests/server-instant.js";
 import { REPLIED_EMPTY_PROMOTE, REPLIED_ONE_RENEWAL, repliedOf } from "../../tests/tick-replies.js";
+import { RECORD_VERSION } from "./engine.js";
 
 const LOCK_DURATION_IN_MILLISECONDS = 120_000;
 
@@ -102,6 +103,77 @@ engineTest(
     });
   },
 );
+
+const HOURLY_REPORT = { task: "build-report", cron: "0 * * * *", timezone: "UTC" };
+
+engineTest(
+  "a tick reads the due schedules in the same pipelined round trip, leaving out a record of a newer version",
+  async (context) => {
+    const { engine, redis, keys } = context;
+    const instantBefore = await serverInstantInMillisecondsOf(redis);
+    await engine.syncSchedules({
+      schedulesToSync: [
+        { ...HOURLY_REPORT, nextFiringAt: instantBefore - 1000 },
+        { ...HOURLY_REPORT, task: "newer-report", nextFiringAt: instantBefore - 1000 },
+      ],
+    });
+    await redis.hset(keys.schedule("newer-report"), "version", RECORD_VERSION + 1);
+    const pipelineSpy = vi.spyOn(redis, "pipeline");
+
+    const reply = await engine.tick({
+      heldLocks: [],
+      lockDurationInMilliseconds: LOCK_DURATION_IN_MILLISECONDS,
+      scheduledTaskNames: ["build-report", "newer-report"],
+    });
+
+    expect(pipelineSpy).toHaveBeenCalledTimes(1);
+    expect(pipelineSpy.mock.results[0]?.value).toHaveLength(6);
+    expect(reply.dueSchedules).toEqual(
+      repliedOf({
+        serverInstant: expect.any(Number),
+        dueSchedules: [{ ...HOURLY_REPORT, nextFiringAt: instantBefore - 1000 }],
+      }),
+    );
+    const serverInstant = reply.dueSchedules?.kind === "replied" ? reply.dueSchedules.reply.serverInstant : 0;
+    expect(serverInstant).toBeGreaterThanOrEqual(instantBefore);
+    expect(serverInstant).toBeLessThanOrEqual(await serverInstantInMillisecondsOf(redis));
+  },
+);
+
+engineTest(
+  "a tick whose schedule read fails on the server reports it failed and still reports its other commands",
+  async (context) => {
+    const { engine, redis, keys } = context;
+    await redis.set(keys.schedule("broken-report"), "not a hash");
+
+    const reply = await engine.tick({
+      heldLocks: [],
+      lockDurationInMilliseconds: LOCK_DURATION_IN_MILLISECONDS,
+      scheduledTaskNames: ["build-report", "broken-report"],
+    });
+
+    expect(reply).toEqual({
+      promote: REPLIED_EMPTY_PROMOTE,
+      renewals: repliedOf([]),
+      prune: undefined,
+      taskNames: { kind: "replied", reply: [] },
+      dueSchedules: {
+        kind: "failed",
+        error: expect.objectContaining({ message: expect.stringContaining("WRONGTYPE") }),
+      },
+    });
+    await redis.del(keys.schedule("broken-report"));
+  },
+);
+
+engineTest("the server instant is the server's TIME", async ({ engine, redis }) => {
+  const instantBefore = await serverInstantInMillisecondsOf(redis);
+
+  const serverInstant = await engine.serverInstant();
+
+  expect(serverInstant).toBeGreaterThanOrEqual(instantBefore);
+  expect(serverInstant).toBeLessThanOrEqual(await serverInstantInMillisecondsOf(redis));
+});
 
 engineTest("a tick leaving the promote out sends three commands", async (context) => {
   const { engine, redis } = context;

@@ -56,6 +56,7 @@ engineTest(
       stalls: "0",
       dispatchedAt: recordBefore["dispatchedAt"],
       startedAt: recordBefore["startedAt"],
+      isLockAResume: "0",
       order: expect.any(String),
     });
     expect(Number(record["order"])).toBeGreaterThan(Number(await redis.hget(keys.runRecord("run-2"), "order")));

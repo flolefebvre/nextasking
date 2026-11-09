@@ -8,8 +8,11 @@ import type {
   SettleOutcome,
   SettleReply,
   StalledRun,
+  SyncSchedulesReply,
+  UnknownVersionReply,
 } from "./engine/engine.js";
 import type { ListenerLeftOut } from "./engine-failure-notice.js";
+import type { RunId } from "./ids.js";
 import type { AttemptOutcome } from "./locked-run-attempt.js";
 import type { Logger } from "./logger.js";
 
@@ -75,6 +78,42 @@ export function enqueueLinesOf(request: DispatchOrEmitRequest, reply: EnqueueRep
 
 export function workerErrorLineOf(error: Error): LifecycleLine {
   return { level: "error", message: "worker error", fields: { err: error } };
+}
+
+function shownRecordVersionOf(recordVersion: number | undefined): string {
+  return recordVersion === undefined ? "a version" : `version ${String(recordVersion)}`;
+}
+
+export function settleRefusalLineOf(
+  outcomeKind: SettleOutcome["kind"],
+  runId: RunId,
+  { recordVersion }: UnknownVersionReply,
+): LifecycleLine {
+  return workerErrorLineOf(
+    new Error(
+      `The ${outcomeKind} settle of run "${runId}" was refused: a newer release rewrote its record to ${shownRecordVersionOf(recordVersion)} this release cannot read.`,
+    ),
+  );
+}
+
+export function scheduleSyncLinesOf(reply: SyncSchedulesReply): LifecycleLine[] {
+  if (reply.kind === "unknownVersion") {
+    return [
+      workerErrorLineOf(
+        new Error(
+          `The schedule sync was refused: a newer release wrote a schedule record of ${shownRecordVersionOf(reply.recordVersion)} this release cannot read, so the stored schedules were left as they are.`,
+        ),
+      ),
+    ];
+  }
+  const changesByKind = { added: reply.added, changed: reply.changed, removed: reply.removed };
+  return Object.entries(changesByKind).flatMap(([kind, scheduleSummaries]) =>
+    scheduleSummaries.map(({ task, cron, timezone }): LifecycleLine => ({
+      level: "info",
+      message: `schedule ${kind}`,
+      fields: { task, cron, timezone },
+    })),
+  );
 }
 
 export function pickupLineOf(lockedRun: LockedRun): LifecycleLine {
@@ -177,14 +216,7 @@ export function settleLinesOf(settledAttempt: SettledAttempt): LifecycleLine[] {
     ];
   }
   if (settleReply.kind === "unknownVersion") {
-    const shownVersion = settleReply.recordVersion === undefined ? "a version" : `version ${settleReply.recordVersion}`;
-    return [
-      workerErrorLineOf(
-        new Error(
-          `The ${attemptOutcome.kind} settle of run "${settledRun.runId}" was refused: a newer release rewrote its record to ${shownVersion} this release cannot read.`,
-        ),
-      ),
-    ];
+    return [settleRefusalLineOf(attemptOutcome.kind, settledRun.runId, settleReply)];
   }
   const finishedAt = finishedAtOf(settledAttempt);
   const durationFields = {

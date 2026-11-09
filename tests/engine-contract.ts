@@ -7,11 +7,14 @@ import type {
   Engine,
   FailureNotice,
   FetchedReply,
+  FireRequest,
   LockedRun,
   RunToCreate,
+  ScheduleToSync,
   SettleOutcome,
   SettleReply,
 } from "../src/engine/engine.js";
+import { deriveFiringRunId } from "../src/ids.js";
 import type { RunId } from "../src/ids.js";
 import type { ErrorRecord } from "../src/run-queue.js";
 import type { RunState } from "../src/run-states.js";
@@ -27,7 +30,19 @@ import { REPLIED_EMPTY_PROMOTE, REPLIED_ONE_RENEWAL, repliedOf } from "./tick-re
 
 export type ContractEngine = Pick<
   Engine,
-  "enqueue" | "fetch" | "renew" | "settle" | "promote" | "saveStep" | "readStep" | "prune" | "tick"
+  | "enqueue"
+  | "fetch"
+  | "renew"
+  | "settle"
+  | "promote"
+  | "saveStep"
+  | "readStep"
+  | "prune"
+  | "tick"
+  | "fire"
+  | "syncSchedules"
+  | "serverInstant"
+  | "makeDue"
 >;
 
 export type EngineContractHarness = {
@@ -108,6 +123,34 @@ async function statesOf(harness: EngineContractHarness, runIds: readonly RunId[]
     states.push(await harness.stateOf(runId));
   }
   return states;
+}
+
+const HOUR_IN_MILLISECONDS = 60 * MINUTE_IN_MILLISECONDS;
+
+function hourlyReportOf(nextFiringAt: EpochMilliseconds, task = "build-report"): ScheduleToSync {
+  return { task, cron: "0 * * * *", timezone: "UTC", nextFiringAt };
+}
+
+function firingOf({ task, nextFiringAt }: ScheduleToSync): FireRequest {
+  return {
+    task,
+    instant: nextFiringAt,
+    instantAfter: nextFiringAt + HOUR_IN_MILLISECONDS,
+    runId: deriveFiringRunId(task, nextFiringAt),
+    retries: 2,
+  };
+}
+
+async function suspendedOnANapOf(engine: ContractEngine, lockedRun: LockedRun): Promise<EpochMilliseconds> {
+  const saveReply = await engine.saveStep({
+    runId: lockedRun.runId,
+    lockToken: lockedRun.lockToken,
+    stepId: "nap",
+    step: { kind: "sleep", durationInMilliseconds: HOUR_IN_MILLISECONDS },
+  });
+  const resumesAt = saveReply.kind === "saved" && saveReply.resumesAt !== undefined ? saveReply.resumesAt : 0;
+  await engine.settle({ ...lockedRun, outcome: { kind: "suspend", resumesAt } });
+  return resumesAt;
 }
 
 async function backdateEndedRuns(
@@ -615,6 +658,208 @@ export function defineEngineContractTests(contractTest: EngineContractTest): voi
       });
     },
   );
+
+  contractTest(
+    "a firing of the planned instant creates the run under its id with scheduledAt, and a second firing of it hears already",
+    async (harness) => {
+      const { engine } = harness;
+      const schedule = hourlyReportOf(await harness.pastInstant());
+      await engine.syncSchedules({ schedulesToSync: [schedule] });
+      const firing = firingOf(schedule);
+
+      const reply = await engine.fire(firing);
+      const secondReply = await engine.fire(firing);
+      const [firedRun] = await lockedRunsOf(engine, 2);
+
+      expect(reply).toEqual({ kind: "fired", runId: firing.runId, isRunCreated: true });
+      expect(secondReply).toEqual({ kind: "already" });
+      expect(firedRun).toMatchObject({
+        runId: firing.runId,
+        task: "build-report",
+        retries: 2,
+        payload: "",
+        scheduledAt: firing.instant,
+      });
+    },
+  );
+
+  contractTest(
+    "a firing of an instant still to come hears notDue and of a task with no schedule noSchedule, creating no run",
+    async (harness) => {
+      const { engine } = harness;
+      const schedule = hourlyReportOf((await harness.pastInstant()) + HOUR_IN_MILLISECONDS);
+      await engine.syncSchedules({ schedulesToSync: [schedule] });
+
+      const notDueReply = await engine.fire(firingOf(schedule));
+      const noScheduleReply = await engine.fire(firingOf({ ...schedule, task: "send-digest" }));
+
+      expect(notDueReply).toEqual({ kind: "notDue" });
+      expect(noScheduleReply).toEqual({ kind: "noSchedule" });
+      expect(await lockedRunsOf(engine, 1)).toEqual([]);
+    },
+  );
+
+  contractTest(
+    "a sync adds, changes and removes schedules, keeps an unchanged one's planned firing and drops a changed one's",
+    async (harness) => {
+      const { engine } = harness;
+      const plannedInstant = await harness.pastInstant();
+      const [unchanged, changed, removed, added] = ["unchanged", "changed", "removed", "added"].map((task) =>
+        hourlyReportOf(plannedInstant, task),
+      ) as [ScheduleToSync, ScheduleToSync, ScheduleToSync, ScheduleToSync];
+      await engine.syncSchedules({ schedulesToSync: [unchanged, changed, removed] });
+      const rewritten = { ...changed, cron: "30 * * * *", nextFiringAt: plannedInstant + HOUR_IN_MILLISECONDS };
+
+      const reply = await engine.syncSchedules({ schedulesToSync: [unchanged, rewritten, added] });
+      const fireReplies = [];
+      for (const schedule of [unchanged, changed, removed]) {
+        fireReplies.push((await engine.fire(firingOf(schedule))).kind);
+      }
+
+      expect(reply).toEqual({
+        kind: "synced",
+        added: [{ task: "added", cron: "0 * * * *", timezone: "UTC" }],
+        changed: [{ task: "changed", cron: "30 * * * *", timezone: "UTC" }],
+        removed: [{ task: "removed", cron: "0 * * * *", timezone: "UTC" }],
+      });
+      expect(fireReplies).toEqual(["fired", "already", "noSchedule"]);
+    },
+  );
+
+  contractTest(
+    "a tick reads the due schedules among the task names it is given, with the server's instant",
+    async (harness) => {
+      const { engine } = harness;
+      const pastInstant = await harness.pastInstant();
+      const dueReport = hourlyReportOf(pastInstant, "due-report");
+      await engine.syncSchedules({
+        schedulesToSync: [
+          dueReport,
+          hourlyReportOf(pastInstant + HOUR_IN_MILLISECONDS, "later-report"),
+          hourlyReportOf(pastInstant, "undeclared-report"),
+        ],
+      });
+
+      const reply = await engine.tick({
+        heldLocks: [],
+        lockDurationInMilliseconds: LOCK_DURATION_IN_MILLISECONDS,
+        isPromoteIncluded: false,
+        scheduledTaskNames: ["due-report", "later-report", "report-without-a-record"],
+      });
+
+      expect(reply.dueSchedules).toEqual(repliedOf({ serverInstant: expect.any(Number), dueSchedules: [dueReport] }));
+      const serverInstant = reply.dueSchedules?.kind === "replied" ? reply.dueSchedules.reply.serverInstant : 0;
+      expect(serverInstant).toBeGreaterThan(pastInstant);
+    },
+  );
+
+  contractTest(
+    "a makeDue makes a delayed and a sleeping run pending at once, and the sleep it woke reads as woken on the fetch",
+    async (harness) => {
+      const { engine } = harness;
+      await suspendedOnANapOf(engine, await onlyLockedRunOf(engine, "sleeping-run"));
+      await engine.enqueue({ runs: sendEmailRunsOf(["delayed-run"], { delayInMilliseconds: HOUR_IN_MILLISECONDS }) });
+
+      const reply = await engine.makeDue();
+      const states = await statesOf(harness, ["sleeping-run", "delayed-run"]);
+      const wokenRun = (await lockedRunsOf(engine, 2)).find(({ runId }) => runId === "sleeping-run");
+
+      expect(reply).toEqual({ kind: "madeDue", madeDueRunCount: 2 });
+      expect(states).toEqual(["pending", "pending"]);
+      expect(wokenRun).toMatchObject({ isResume: true, sleepsWokenAt: expect.any(Number) });
+      expect(await engine.readStep({ ...wokenRun!, stepId: "nap" })).toEqual({
+        kind: "read",
+        savedValue: String(wokenRun!.sleepsWokenAt),
+      });
+    },
+  );
+
+  const pickupsOfALockResent: {
+    pickup: string;
+    pickedUpRunOf: (harness: EngineContractHarness) => Promise<void>;
+    expectedPickup: Partial<LockedRun>;
+  }[] = [
+    {
+      pickup: "after a suspend, as a resume",
+      pickedUpRunOf: async (harness) => {
+        const lockedRun = await onlyLockedRunOf(harness.engine, "run-1");
+        await harness.engine.settle({
+          ...lockedRun,
+          outcome: { kind: "suspend", resumesAt: await harness.pastInstant() },
+        });
+        await harness.engine.promote();
+      },
+      expectedPickup: { isResume: true },
+    },
+    {
+      pickup: "after a makeDue woke it, with the same sleepsWokenAt",
+      pickedUpRunOf: async ({ engine }) => {
+        await suspendedOnANapOf(engine, await onlyLockedRunOf(engine, "run-1"));
+        await engine.makeDue();
+      },
+      expectedPickup: { isResume: true, sleepsWokenAt: expect.any(Number) as number },
+    },
+    {
+      pickup: "after a retry of a woken lock, as a new attempt with nothing of the previous lock",
+      pickedUpRunOf: async ({ engine }) => {
+        await suspendedOnANapOf(engine, await onlyLockedRunOf(engine, "run-1"));
+        await engine.makeDue();
+        const [wokenRun] = await lockedRunsOf(engine, 1);
+        await engine.settle({
+          ...wokenRun!,
+          outcome: { kind: "retry", error: ATTEMPT_ERROR, backoffInMilliseconds: 0 },
+        });
+        await engine.promote();
+      },
+      expectedPickup: { isResume: false, attempt: 2 },
+    },
+    {
+      pickup: "after a stall of a woken lock, with nothing of the previous lock",
+      pickedUpRunOf: async (harness) => {
+        const { engine } = harness;
+        await suspendedOnANapOf(engine, await onlyLockedRunOf(engine, "run-1"));
+        await engine.makeDue();
+        await lockedRunsOf(engine, 1);
+        await harness.expireLock("run-1");
+        await engine.promote();
+      },
+      expectedPickup: { isResume: false, attempt: 1 },
+    },
+  ];
+  for (const { pickup, pickedUpRunOf, expectedPickup } of pickupsOfALockResent) {
+    contractTest(
+      `a fetch resent with the same tokens answers a pickup ${pickup}, as its first send did`,
+      async (harness) => {
+        const { engine } = harness;
+        await pickedUpRunOf(harness);
+        const request = {
+          lockTokens: freshLockTokensOf(1),
+          concurrencyLimitsByTask: {},
+          lockDurationInMilliseconds: LOCK_DURATION_IN_MILLISECONDS,
+        };
+
+        const firstReply = await engine.fetch(request);
+        const resentReply = await engine.fetch(request);
+
+        expect(firstReply).toMatchObject({ kind: "fetched", lockedRuns: [{ runId: "run-1", ...expectedPickup }] });
+        expect(resentReply).toEqual(firstReply);
+        if (expectedPickup.sleepsWokenAt === undefined) {
+          expect(firstReply.kind === "fetched" ? firstReply.lockedRuns[0] : undefined).not.toHaveProperty(
+            "sleepsWokenAt",
+          );
+        }
+      },
+    );
+  }
+
+  contractTest("the server instant is the engine's clock, after an instant already past", async (harness) => {
+    const pastInstant = await harness.pastInstant();
+
+    const serverInstant = await harness.engine.serverInstant();
+
+    expect(serverInstant).toBeGreaterThan(pastInstant);
+    expect(serverInstant).toBeLessThan(pastInstant + MINUTE_IN_MILLISECONDS);
+  });
 
   contractTest("a tick carrying a prune prunes its task and returns the prune's reply", async (harness) => {
     const { engine } = harness;

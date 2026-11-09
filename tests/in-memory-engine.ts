@@ -14,10 +14,14 @@ import type {
   EnqueueRequest,
   Engine,
   FailureNotice,
+  DueSchedulesReply,
   FetchReply,
   FetchRequest,
+  FireReply,
+  FireRequest,
   LockedRun,
   LockRenewal,
+  MakeDueReply,
   ParkedRun,
   PromoteReply,
   PruneReply,
@@ -30,11 +34,14 @@ import type {
   RunToCreate,
   SaveStepReply,
   SaveStepRequest,
+  ScheduleSummary,
   SerializedPayload,
   SerializedStepValue,
   SettleReply,
   SettleRequest,
   StalledRun,
+  SyncSchedulesReply,
+  SyncSchedulesRequest,
   ThirdStall,
   TickCommandReply,
   TickReply,
@@ -47,7 +54,19 @@ import type { ErrorRecord, FailureReason, SourceEvent } from "../src/run-queue.j
 import type { RunState } from "../src/run-states.js";
 
 export type InMemoryEngineMethod =
-  "enqueue" | "fetch" | "renew" | "settle" | "promote" | "saveStep" | "readStep" | "prune" | "tick";
+  | "enqueue"
+  | "fetch"
+  | "renew"
+  | "settle"
+  | "promote"
+  | "saveStep"
+  | "readStep"
+  | "prune"
+  | "tick"
+  | "fire"
+  | "syncSchedules"
+  | "serverInstant"
+  | "makeDue";
 
 export type InMemoryEngineCall = { method: InMemoryEngineMethod; request: unknown };
 
@@ -76,21 +95,26 @@ export type InMemoryStoredRun = {
   scheduledAt: EpochMilliseconds | undefined;
   firstFoundUnknownAt: EpochMilliseconds | undefined;
   sleepsWokenAt: EpochMilliseconds | undefined;
+  isLockAResume: boolean | undefined;
+  lockSleepsWokenAt: EpochMilliseconds | undefined;
   errors: string[];
   steps: Map<StepId, SerializedStepValue>;
 };
 
 export type HeldCalls = { release: () => void };
 
-export type InMemoryEngine = Pick<
-  Engine,
-  "enqueue" | "fetch" | "renew" | "settle" | "promote" | "saveStep" | "readStep" | "prune" | "tick"
-> & {
+export type InMemoryStoredSchedule = ScheduleSummary & {
+  nextFiringAt: EpochMilliseconds;
+  previousFiringAt: EpochMilliseconds | undefined;
+};
+
+export type InMemoryEngine = Pick<Engine, InMemoryEngineMethod> & {
   calls: readonly InMemoryEngineCall[];
   holdCalls: (method: InMemoryEngineMethod) => HeldCalls;
   waitForWakeUp: (timeoutInMilliseconds: DurationInMilliseconds) => Promise<void>;
   isWakeUpMarkerArmed: () => boolean;
   storedRunOf: (runId: RunId) => Readonly<InMemoryStoredRun> | undefined;
+  storedScheduleOf: (task: string) => Readonly<InMemoryStoredSchedule> | undefined;
   runIdsInState: (state: RunState) => RunId[];
   expireLock: (runId: RunId) => void;
   backdateEndedRun: (runId: RunId, durationInMilliseconds: DurationInMilliseconds) => void;
@@ -146,6 +170,7 @@ export function createInMemoryEngine({ now = () => Date.now() }: InMemoryEngineO
   const dedupExpiryByRunIdByTask = new Map<string, Map<RunId, EpochMilliseconds>>();
   const dedupExpiryByEventIdByEventName = new Map<string, Map<string, EpochMilliseconds>>();
   const taskNames = new Set<string>();
+  const schedulesByTask = new Map<string, InMemoryStoredSchedule>();
   const calls: InMemoryEngineCall[] = [];
   const heldCallReleasesByMethod = new Map<InMemoryEngineMethod, Promise<void>>();
   const wakeUpWaiters: (() => void)[] = [];
@@ -278,6 +303,8 @@ export function createInMemoryEngine({ now = () => Date.now() }: InMemoryEngineO
       scheduledAt: undefined,
       firstFoundUnknownAt: undefined,
       sleepsWokenAt: undefined,
+      isLockAResume: undefined,
+      lockSleepsWokenAt: undefined,
       errors: [],
       steps: new Map(),
     };
@@ -425,7 +452,9 @@ export function createInMemoryEngine({ now = () => Date.now() }: InMemoryEngineO
           ? currentlyLockedRunOf(lockedRun.runId, lockToken)
           : undefined;
       if (lockedRun !== undefined && storedRun !== undefined) {
-        lockedRuns.push(lockedRunReplyOf(lockedRun.runId, storedRun, false, undefined));
+        lockedRuns.push(
+          lockedRunReplyOf(lockedRun.runId, storedRun, storedRun.isLockAResume === true, storedRun.lockSleepsWokenAt),
+        );
       } else {
         freshLockTokens.push(lockToken);
       }
@@ -449,6 +478,8 @@ export function createInMemoryEngine({ now = () => Date.now() }: InMemoryEngineO
         const { sleepsWokenAt } = storedRun;
         storedRun.resumesAt = undefined;
         storedRun.sleepsWokenAt = undefined;
+        storedRun.isLockAResume = isResume;
+        storedRun.lockSleepsWokenAt = sleepsWokenAt;
         storedRun.state = "executing";
         storedRun.lockToken = lockToken;
         storedRun.lockedUntil = instant + lockDurationInMilliseconds;
@@ -602,17 +633,44 @@ export function createInMemoryEngine({ now = () => Date.now() }: InMemoryEngineO
         });
       }
     }
+    const promotedRunCount = promoteDueRuns(instant, () => undefined);
+    return { kind: "promoted", promotedRunCount, stalledRuns, thirdStalls };
+  };
+
+  const promoteDueRuns = (
+    dueBefore: EpochMilliseconds,
+    beforePromotingSuspendedRun: (storedRun: InMemoryStoredRun) => void,
+  ): number => {
     const dueRunEntries = [...runsById.entries()]
       .map(([runId, storedRun]) => ({ runId, storedRun, score: dueInstantOf(storedRun) }))
-      .filter((entry): entry is typeof entry & { score: number } => entry.score !== undefined && entry.score <= instant)
+      .filter(
+        (entry): entry is typeof entry & { score: number } => entry.score !== undefined && entry.score <= dueBefore,
+      )
       .sort(byScoreThenRunId)
       .slice(0, MOST_DUE_RUNS_PROMOTED_PER_PROMOTE);
     for (const { storedRun } of dueRunEntries) {
+      if (storedRun.state === "suspended") {
+        beforePromotingSuspendedRun(storedRun);
+      }
       storedRun.startsAt = undefined;
       storedRun.nextAttemptAt = undefined;
       enterPending(storedRun, undefined);
     }
-    return { kind: "promoted", promotedRunCount: dueRunEntries.length, stalledRuns, thirdStalls };
+    return dueRunEntries.length;
+  };
+
+  const makeDue = async (): Promise<MakeDueReply> => {
+    const instant = now();
+    const madeDueRunCount = promoteDueRuns(Number.POSITIVE_INFINITY, (storedRun) => {
+      for (const [stepId, savedValue] of storedRun.steps) {
+        if (savedValue === String(storedRun.resumesAt)) {
+          storedRun.steps.set(stepId, String(instant));
+        }
+      }
+      storedRun.resumesAt = instant;
+      storedRun.sleepsWokenAt = instant;
+    });
+    return { kind: "madeDue", madeDueRunCount };
   };
 
   const saveStep = async ({ runId, lockToken, stepId, step }: SaveStepRequest): Promise<SaveStepReply> => {
@@ -689,18 +747,101 @@ export function createInMemoryEngine({ now = () => Date.now() }: InMemoryEngineO
     return { kind: "pruned", prunedRunCount: prunedRunIds.size };
   };
 
+  const fire = async ({ task, instant, instantAfter, runId, retries }: FireRequest): Promise<FireReply> => {
+    if (task === "" || runId === "") {
+      throw invalidArgumentError("a fire carries its task and run id");
+    }
+    if (instantAfter <= instant) {
+      throw invalidArgumentError("instantAfter must come after instant");
+    }
+    const storedSchedule = schedulesByTask.get(task);
+    if (storedSchedule === undefined) {
+      return { kind: "noSchedule" };
+    }
+    if (storedSchedule.nextFiringAt !== instant) {
+      return { kind: "already" };
+    }
+    const firedAt = now();
+    if (instant > firedAt) {
+      return { kind: "notDue" };
+    }
+    const { createdRunIds } = enqueueRuns([{ runId, task, payload: "", retries }], undefined, firedAt);
+    const isRunCreated = createdRunIds.length === 1;
+    if (isRunCreated) {
+      runsById.get(runId)!.scheduledAt = instant;
+    }
+    storedSchedule.nextFiringAt = instantAfter;
+    storedSchedule.previousFiringAt = instant;
+    return { kind: "fired", runId, isRunCreated };
+  };
+
+  const syncSchedules = async ({ schedulesToSync }: SyncSchedulesRequest): Promise<SyncSchedulesReply> => {
+    const listedTasks = new Set<string>();
+    for (const { task, cron, timezone } of schedulesToSync) {
+      if (task === "" || cron === "" || timezone === "") {
+        throw invalidArgumentError("a schedule carries its task, cron and timezone");
+      }
+      if (listedTasks.has(task)) {
+        throw invalidArgumentError(`task ${task} is listed twice`);
+      }
+      listedTasks.add(task);
+    }
+    const storedSchedules = [...schedulesByTask.values()]
+      .map((storedSchedule) => ({ runId: storedSchedule.task, score: storedSchedule.nextFiringAt, storedSchedule }))
+      .sort(byScoreThenRunId)
+      .map(({ storedSchedule }) => storedSchedule);
+    const added: ScheduleSummary[] = [];
+    const changed: ScheduleSummary[] = [];
+    for (const { task, cron, timezone, nextFiringAt } of schedulesToSync) {
+      const storedSchedule = schedulesByTask.get(task);
+      if (storedSchedule !== undefined && storedSchedule.cron === cron && storedSchedule.timezone === timezone) {
+        continue;
+      }
+      (storedSchedule === undefined ? added : changed).push({ task, cron, timezone });
+      schedulesByTask.set(task, {
+        task,
+        cron,
+        timezone,
+        nextFiringAt,
+        previousFiringAt: storedSchedule?.previousFiringAt,
+      });
+    }
+    const removed = storedSchedules
+      .filter(({ task }) => !listedTasks.has(task))
+      .map(({ task, cron, timezone }) => ({ task, cron, timezone }));
+    for (const { task } of removed) {
+      schedulesByTask.delete(task);
+    }
+    return { kind: "synced", added, changed, removed };
+  };
+
   const replied = <Reply>(reply: Reply): TickCommandReply<Reply> => ({ kind: "replied", reply });
+
+  const dueSchedulesOf = (scheduledTaskNames: readonly string[]): DueSchedulesReply => {
+    const serverInstant = now();
+    const dueSchedules = scheduledTaskNames.flatMap((task) => {
+      const storedSchedule = schedulesByTask.get(task);
+      if (storedSchedule === undefined || storedSchedule.nextFiringAt > serverInstant) {
+        return [];
+      }
+      const { cron, timezone, nextFiringAt } = storedSchedule;
+      return [{ task, cron, timezone, nextFiringAt }];
+    });
+    return { serverInstant, dueSchedules };
+  };
 
   const tick = async ({
     heldLocks,
     lockDurationInMilliseconds,
     prune: pruneRequest,
     isPromoteIncluded = true,
+    scheduledTaskNames = [],
   }: TickRequest): Promise<TickReply> => ({
     promote: isPromoteIncluded ? replied(await promote()) : undefined,
     renewals: replied(await renew({ heldLocks, lockDurationInMilliseconds })),
     taskNames: replied([...taskNames]),
     prune: pruneRequest === undefined ? undefined : replied(await prune(pruneRequest)),
+    dueSchedules: scheduledTaskNames.length === 0 ? undefined : replied(dueSchedulesOf(scheduledTaskNames)),
   });
 
   const recorded =
@@ -721,6 +862,10 @@ export function createInMemoryEngine({ now = () => Date.now() }: InMemoryEngineO
     readStep: recorded("readStep", readStep),
     prune: recorded("prune", prune),
     tick: recorded("tick", tick),
+    fire: recorded("fire", fire),
+    syncSchedules: recorded("syncSchedules", syncSchedules),
+    serverInstant: () => recorded("serverInstant", async () => now())(undefined),
+    makeDue: () => recorded("makeDue", makeDue)(undefined),
     calls,
     holdCalls: (method) => {
       let release = () => undefined as void;
@@ -756,6 +901,7 @@ export function createInMemoryEngine({ now = () => Date.now() }: InMemoryEngineO
       }),
     isWakeUpMarkerArmed: () => isWakeUpMarkerArmed,
     storedRunOf: (runId) => runsById.get(runId),
+    storedScheduleOf: (task) => schedulesByTask.get(task),
     runIdsInState: (state) => runEntriesInState(state, ({ order }) => order).map(({ runId }) => runId),
     expireLock: (runId) => {
       const storedRun = runsById.get(runId);

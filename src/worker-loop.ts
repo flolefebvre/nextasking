@@ -352,15 +352,15 @@ export function startWorkerLoop(config: WorkerLoopConfig): WorkerLoop {
   };
 
   const failThirdStall = async (thirdStall: ThirdStall) => {
-    const { runId, expiredLockToken, attempt } = thirdStall;
+    const { task, runId, expiredLockToken, attempt } = thirdStall;
     const { attemptOutcome, listenersLeftOut } = failingAttemptOf(
       thirdStall,
       { error: new StalledRunError(runId, timing.stallCountThatFailsARun), reason: "stalled" },
       definitions,
     );
     const settleRequest = settleRequestOf(
-      definitions.tasksByName.get(thirdStall.task),
-      { runId, lockToken: expiredLockToken, attempt },
+      definitions.tasksByName.get(task),
+      { task, runId, lockToken: expiredLockToken, attempt },
       attemptOutcome,
     );
     try {
@@ -393,7 +393,7 @@ export function startWorkerLoop(config: WorkerLoopConfig): WorkerLoop {
     );
     const prune = pruneRequestOfThisTick();
     const tickRequest: TickRequest = {
-      heldLocks: renewedAttempts.map(({ lockedRun: { runId, lockToken } }) => ({ runId, lockToken })),
+      heldLocks: renewedAttempts.map(({ lockedRun: { task, runId, lockToken } }) => ({ task, runId, lockToken })),
       lockDurationInMilliseconds,
       ...(prune === undefined ? {} : { prune }),
       isPromoteIncluded: tickSentAt >= promotePassOverEndsAt,

@@ -5,7 +5,7 @@ import { integrationTest } from "../../tests/integration-test.js";
 import { expectNoInvariantViolations } from "../../tests/invariant-violations.js";
 import { serverInstantInMillisecondsOf } from "../../tests/server-instant.js";
 import { withRedis } from "../../tests/with-redis.js";
-import { engineKeysOf, hashTaggedPrefixOf } from "./engine-keys.js";
+import { engineKeysOf, hashTaggedPrefixOf, storedRunIdOf } from "./engine-keys.js";
 import { RECORD_VERSION } from "./engine.js";
 import { ENQUEUE_KEYS_ASSIGNMENT, enqueueKeysOf } from "./enqueue-script.js";
 import { LUA_LIBRARY } from "./lua-library.js";
@@ -65,7 +65,7 @@ function probeReplyOf(
 }
 
 function runProbe(redis: Redis, keyPrefix: string, probe: string, runId = "run-1", supportedVersion = RECORD_VERSION) {
-  return probeReplyOf(redis, keyPrefix, supportedVersion, probe, runId);
+  return probeReplyOf(redis, keyPrefix, supportedVersion, probe, storedRunIdOf("send-email", runId));
 }
 
 const INSTANTS_IN_MILLISECONDS = [
@@ -133,7 +133,7 @@ for (const { name, storedVersion, reportedVersion } of UNKNOWN_VERSIONS) {
     `a record of ${name} is refused with unknownVersion before any write`,
     async ({ redisUrl, keyPrefix }) => {
       await withRedis(redisUrl, async (redis) => {
-        const recordKey = engineKeysOf(keyPrefix).runRecord("run-1");
+        const recordKey = engineKeysOf(keyPrefix).runRecord("send-email", "run-1");
         await runProbe(redis, keyPrefix, "create a delayed run");
         await (storedVersion === undefined
           ? redis.hdel(recordKey, "version")
@@ -157,7 +157,7 @@ integrationTest(
       const reply = await runProbe(redis, keyPrefix, "write after the version check", "missing-run");
 
       expect(reply).toEqual(["unknownVersion", null]);
-      expect(await redis.exists(engineKeysOf(keyPrefix).runRecord("missing-run"))).toBe(0);
+      expect(await redis.exists(engineKeysOf(keyPrefix).runRecord("send-email", "missing-run"))).toBe(0);
       await expectNoInvariantViolations(redis, keyPrefix);
     });
   },
@@ -182,7 +182,7 @@ integrationTest(
 
       expect(replyOnTheCurrentVersion).toEqual(["written"]);
       expect(replyOnAnOlderVersion).toEqual(["written"]);
-      expect(await redis.hget(keys.runRecord("older-run"), "version")).toBe(String(RECORD_VERSION));
+      expect(await redis.hget(keys.runRecord("send-email", "older-run"), "version")).toBe(String(RECORD_VERSION));
       await expectNoInvariantViolations(redis, keyPrefix);
     });
   },
@@ -210,8 +210,8 @@ integrationTest(
 
       await runProbe(redis, keyPrefix, "move the delayed run to pending");
 
-      expect(await redis.hget(keys.runRecord("run-1"), "state")).toBe("pending");
-      expect(await redis.zrange(keys.pending, 0, -1)).toEqual(["run-1"]);
+      expect(await redis.hget(keys.runRecord("send-email", "run-1"), "state")).toBe("pending");
+      expect(await redis.zrange(keys.pending, 0, -1)).toEqual([storedRunIdOf("send-email", "run-1")]);
       expect(await redis.zcard(keys.due)).toBe(0);
       expect(await redis.zcard(keys.runIndex("send-email", "delayed"))).toBe(0);
       expect(await redis.zcard(keys.wakeUpMarker)).toBe(1);

@@ -77,7 +77,10 @@ integrationTest(
           await control.waitForIdle({ timeout: "10s" });
 
           const states = await Promise.all(
-            [delayedRunId, sleepingRunId].map((runId) => redis.hget(keys.runRecord(runId), "state")),
+            [
+              { task: "send-email", runId: delayedRunId },
+              { task: "send-reminder", runId: sleepingRunId },
+            ].map(({ task, runId }) => redis.hget(keys.runRecord(task, runId), "state")),
           );
           statesSeenAtIdleByTry.push(`try ${String(tryNumber)}: ${states.join(", ")}`);
         }

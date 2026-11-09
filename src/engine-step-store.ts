@@ -19,27 +19,25 @@ function lostRunLockErrorOf(
   return new LostRunLockError(refusedSubject, { refusedCall, lockLoss });
 }
 
-export function createEngineStepStore(
-  engine: Pick<Engine, "saveStep" | "readStep">,
-  { runId, lockToken }: HeldLock,
-): StepStore {
+export function createEngineStepStore(engine: Pick<Engine, "saveStep" | "readStep">, heldLock: HeldLock): StepStore {
+  const { runId } = heldLock;
   const stepSubjectOf = (stepId: StepId) => `Step "${stepId}" of run "${runId}"`;
   return {
     readStep: async (stepId) => {
-      const reply = await engine.readStep({ runId, lockToken, stepId });
+      const reply = await engine.readStep({ ...heldLock, stepId });
       if (reply.kind !== "read") {
         throw lostRunLockErrorOf(stepSubjectOf(stepId), "read", reply);
       }
       return reply.savedValue;
     },
     saveStep: async (stepId, value) => {
-      const reply = await engine.saveStep({ runId, lockToken, stepId, step: { kind: "value", value } });
+      const reply = await engine.saveStep({ ...heldLock, stepId, step: { kind: "value", value } });
       if (reply.kind !== "saved") {
         throw lostRunLockErrorOf(stepSubjectOf(stepId), "saved", reply);
       }
     },
     saveSleep: async (stepId, sleep) => {
-      const reply = await engine.saveStep({ runId, lockToken, stepId, step: sleep });
+      const reply = await engine.saveStep({ ...heldLock, stepId, step: sleep });
       if (reply.kind !== "saved") {
         throw lostRunLockErrorOf(stepSubjectOf(stepId), "saved", reply);
       }
@@ -54,12 +52,12 @@ export function createEngineStepStore(
 export async function sendFenced(
   engine: Pick<Engine, "enqueue">,
   request: DispatchOrEmitRequest,
-  { parentRunId, lockToken, stepId }: SendFence,
+  { parentTask, parentRunId, lockToken, stepId }: SendFence,
   sentId: RunId | EventId,
 ): Promise<RunId | EventId> {
   const reply = await engine.enqueue({
     ...request,
-    parentFence: { parentRunId, lockToken, stepId, stepValue: serializeStepValue(sentId) },
+    parentFence: { parentTask, parentRunId, lockToken, stepId, stepValue: serializeStepValue(sentId) },
   });
   switch (reply.kind) {
     case "enqueued":

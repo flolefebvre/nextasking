@@ -46,10 +46,10 @@ export function runIdentityOf(storedRunId: string): RunIdentity | undefined {
 }
 
 export type EngineKeys = {
-  runRecord: (runId: RunId) => string;
-  runPayload: (runId: RunId) => string;
-  runErrors: (runId: RunId) => string;
-  runSteps: (runId: RunId) => string;
+  runRecord: (task: string, runId: RunId) => string;
+  runPayload: (task: string, runId: RunId) => string;
+  runErrors: (task: string, runId: RunId) => string;
+  runSteps: (task: string, runId: RunId) => string;
   pending: string;
   due: string;
   locks: string;
@@ -78,14 +78,14 @@ function concurrencyScopeOf(task: string, concurrencyKey: ConcurrencyKey | undef
 
 export function engineKeysOf(prefix: string): EngineKeys {
   const keyOf = (...segments: string[]) => [hashTaggedPrefixOf(prefix), ...segments].join(":");
-  const runRecord = (runId: RunId) => keyOf("run", encodeURIComponent(runId));
+  const runRecord = (task: string, runId: RunId) => keyOf("run", encodeURIComponent(storedRunIdOf(task, runId)));
   const schedules = keyOf("schedules");
   const scheduleRecordKeyStart = `${keyOf("schedule")}:`;
   return {
     runRecord,
-    runPayload: (runId) => `${runRecord(runId)}:payload`,
-    runErrors: (runId) => `${runRecord(runId)}:errors`,
-    runSteps: (runId) => `${runRecord(runId)}:steps`,
+    runPayload: (task, runId) => `${runRecord(task, runId)}:payload`,
+    runErrors: (task, runId) => `${runRecord(task, runId)}:errors`,
+    runSteps: (task, runId) => `${runRecord(task, runId)}:steps`,
     pending: keyOf("pending"),
     due: keyOf("due"),
     locks: keyOf("locks"),

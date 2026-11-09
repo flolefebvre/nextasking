@@ -96,6 +96,13 @@ function requestsOf<Request>(engine: InMemoryEngine, method: "fetch" | "settle" 
   return engine.calls.filter((call) => call.method === method).map(({ request }) => request as Request);
 }
 
+function alertOnCallNoticeRunOf(engine: InMemoryEngine, failedTask: string, failedRunId: string) {
+  return engine.storedRunOf(
+    "alert-on-call",
+    deriveListenerRunId(deriveFailureNoticeEventId(failedTask, failedRunId, 0), "alert-on-call"),
+  );
+}
+
 function linesWithMessage(lines: readonly RecordedLogLine[], message: string): RecordedLogLine[] {
   return lines.filter((line) => line.message === message);
 }
@@ -108,7 +115,7 @@ async function scenarioOfALockTakenOverWhileGated(
   await engine.enqueue({ runs: runsOf("send-email", 1) });
   const scenario = startedLoopOf([sendEmail], { engine, concurrency: 1 });
   await vi.advanceTimersByTimeAsync(0);
-  engine.expireLock("send-email-1");
+  engine.expireLock("send-email", "send-email-1");
   await engine.promote();
   handlerGate.release(1);
   await vi.advanceTimersByTimeAsync(0);
@@ -161,7 +168,7 @@ test("a run enqueued while the loop waits is fetched on the wake-up, before the 
   await vi.advanceTimersByTimeAsync(0);
 
   expect(requestsOf(engine, "tick")).toHaveLength(0);
-  expect(engine.storedRunOf("send-email-1")?.state).toBe("completed");
+  expect(engine.storedRunOf("send-email", "send-email-1")?.state).toBe("completed");
 });
 
 test("a completed, retried, failed and suspended attempt each settle with their kind, the failing one with its notice", async () => {
@@ -215,9 +222,9 @@ test("a completed, retried, failed and suspended attempt each settle with their 
   expect(failOutcome?.kind === "fail" ? failOutcome.failureNotice?.runs.map(({ runId }) => runId) : []).toEqual([
     deriveListenerRunId(deriveFailureNoticeEventId("fails", "fails-1", 0), "alert-on-call"),
   ]);
-  expect(engine.storedRunOf("fails-1")?.state).toBe("failed");
-  expect(engine.storedRunOf("retries-1")?.state).toBe("backingOff");
-  expect(engine.storedRunOf("suspends-1")?.state).toBe("suspended");
+  expect(engine.storedRunOf("fails", "fails-1")?.state).toBe("failed");
+  expect(engine.storedRunOf("retries", "retries-1")?.state).toBe("backingOff");
+  expect(engine.storedRunOf("suspends", "suspends-1")?.state).toBe("suspended");
 });
 
 test("a run of a listener of runFailed that fails carries an empty notice", async () => {
@@ -263,7 +270,7 @@ test("a listener whose key throws costs its own notice run and writes one worker
   expect(outcome?.kind === "fail" ? outcome.failureNotice?.runs.map(({ task }) => task) : []).toEqual([
     "alert-on-call",
   ]);
-  expect(engine.storedRunOf("fails-1")?.state).toBe("failed");
+  expect(engine.storedRunOf("fails", "fails-1")?.state).toBe("failed");
   expect(linesWithMessage(lines, "worker error")).toEqual([
     { level: "error", message: "worker error", fields: { err: expect.any(Error) } },
   ]);
@@ -441,7 +448,9 @@ test("a tick renews only the locks with less than a minute left", async () => {
   const ticksAroundTheMinute = requestsOf<TickRequest>(engine, "tick").slice(ticksBeforeTheMinute.length);
   expect(ticksBeforeTheMinute.flatMap(({ heldLocks }) => heldLocks)).toEqual([]);
   expect(ticksAroundTheMinute.map(({ heldLocks }) => heldLocks.map(({ runId }) => runId))).toEqual([["early-run"], []]);
-  expect(engine.storedRunOf("early-run")?.lockedUntil).toBe(Date.UTC(2030, 0, 1) + 61_000 + 2 * MINUTE_IN_MILLISECONDS);
+  expect(engine.storedRunOf("send-email", "early-run")?.lockedUntil).toBe(
+    Date.UTC(2030, 0, 1) + 61_000 + 2 * MINUTE_IN_MILLISECONDS,
+  );
 });
 
 test("a tick prunes one task per tick, round robin over the task names", async () => {
@@ -499,7 +508,7 @@ test("a tick whose prune fails still applies its renewals, writes one worker err
       fields: { err: expect.objectContaining({ message: expect.stringContaining("WRONGTYPE") }) },
     },
   ]);
-  expect(engine.storedRunOf("send-email-1")?.state).toBe("executing");
+  expect(engine.storedRunOf("send-email", "send-email-1")?.state).toBe("executing");
 });
 
 const SIGNED_UP = { eventName: "user.signed-up", eventId: "event-1" };
@@ -514,7 +523,7 @@ async function expireTheLockOfAFetchedRun(engine: InMemoryEngine, stallsBefore: 
       concurrencyLimitsByTask: {},
       lockDurationInMilliseconds: DEFAULT_WORKER_TIMING.lockDurationInMilliseconds,
     });
-    engine.expireLock("send-email-1");
+    engine.expireLock("send-email", "send-email-1");
   }
 }
 
@@ -552,15 +561,14 @@ test("two loops ticking on the same reported third stall end with one failed run
   heldSettles.release();
   await vi.advanceTimersByTimeAsync(0);
 
-  const noticeRunId = deriveListenerRunId(deriveFailureNoticeEventId("send-email", "send-email-1", 0), "alert-on-call");
   const lines = [...firstLoop.lines, ...secondLoop.lines];
   expect(requestsOf<SettleRequest>(engine, "settle").filter(({ runId }) => runId === "send-email-1")).toHaveLength(2);
-  expect(engine.storedRunOf("send-email-1")).toMatchObject({
+  expect(engine.storedRunOf("send-email", "send-email-1")).toMatchObject({
     state: "failed",
     reason: "stalled",
     errors: [expect.any(String)],
   });
-  expect(engine.storedRunOf(noticeRunId)?.state).toBe("completed");
+  expect(alertOnCallNoticeRunOf(engine, "send-email", "send-email-1")?.state).toBe("completed");
   expect(linesWithMessage(lines, "run failed")).toEqual([
     {
       level: "error",
@@ -592,12 +600,12 @@ test("a run of an unknown task is held 10 seconds against the concurrency, then 
   const sendEmail = defineTask("send-email", { schema: v.object({}), handler: async () => undefined });
   const engine = createInMemoryEngine();
   await engine.enqueue({ runs: [...runsOf("resize-image", 1), ...runsOf("send-email", 1)] });
-  const orderBefore = engine.storedRunOf("resize-image-1")?.order;
+  const orderBefore = engine.storedRunOf("resize-image", "resize-image-1")?.order;
   const { lines } = startedLoopOf([sendEmail] as AnyTaskDefinition[], { engine, concurrency: 1 });
 
   await vi.advanceTimersByTimeAsync(10_000 - 1);
   const settlesDuringTheHold = requestsOf<SettleRequest>(engine, "settle");
-  const sendEmailStateDuringTheHold = engine.storedRunOf("send-email-1")?.state;
+  const sendEmailStateDuringTheHold = engine.storedRunOf("send-email", "send-email-1")?.state;
   await vi.advanceTimersByTimeAsync(1);
 
   expect(settlesDuringTheHold).toEqual([]);
@@ -605,8 +613,12 @@ test("a run of an unknown task is held 10 seconds against the concurrency, then 
   expect(requestsOf<SettleRequest>(engine, "settle").map(({ runId, outcome }) => [runId, outcome.kind])).toEqual([
     ["resize-image-1", "handBack"],
   ]);
-  expect(engine.storedRunOf("resize-image-1")).toMatchObject({ state: "executing", order: orderBefore, attempt: 1 });
-  expect(engine.storedRunOf("send-email-1")?.state).toBe("pending");
+  expect(engine.storedRunOf("resize-image", "resize-image-1")).toMatchObject({
+    state: "executing",
+    order: orderBefore,
+    attempt: 1,
+  });
+  expect(engine.storedRunOf("send-email", "send-email-1")?.state).toBe("pending");
   expect(lines).toEqual([
     {
       level: "debug",
@@ -624,12 +636,11 @@ test("a run of an unknown task first found 30 minutes ago fails unknown task wit
 
   await vi.advanceTimersByTimeAsync(30 * MINUTE_IN_MILLISECONDS + 10_000);
 
-  const noticeRunId = deriveListenerRunId(
-    deriveFailureNoticeEventId("resize-image", "resize-image-1", 0),
-    "alert-on-call",
-  );
-  expect(engine.storedRunOf("resize-image-1")).toMatchObject({ state: "failed", reason: "unknown task" });
-  expect(engine.storedRunOf(noticeRunId)?.state).toBe("completed");
+  expect(engine.storedRunOf("resize-image", "resize-image-1")).toMatchObject({
+    state: "failed",
+    reason: "unknown task",
+  });
+  expect(alertOnCallNoticeRunOf(engine, "resize-image", "resize-image-1")?.state).toBe("completed");
   expect(linesWithMessage(lines, "run failed")).toEqual([
     {
       level: "error",
@@ -696,7 +707,7 @@ test("a fetch answered unknownVersion writes one pass-over line and no fetch hap
   await vi.advanceTimersByTimeAsync(1);
 
   expect(fetchCountDuringTheWait).toBe(1);
-  expect(engine.storedRunOf("send-email-1")?.state).toBe("completed");
+  expect(engine.storedRunOf("send-email", "send-email-1")?.state).toBe("completed");
   expect(linesWithMessage(lines, "runs passed over: newer record version")).toEqual([PASS_OVER_LINE]);
 });
 
@@ -739,7 +750,7 @@ test("a fetched reply that passed over records writes the pass-over line once pe
   await engine.enqueue({ runs: runsOf("send-email", 1) });
   await vi.advanceTimersByTimeAsync(0);
 
-  expect(engine.storedRunOf("send-email-1")?.state).toBe("completed");
+  expect(engine.storedRunOf("send-email", "send-email-1")?.state).toBe("completed");
   expect(linesWithMessage(lines, "runs passed over: newer record version")).toEqual([PASS_OVER_LINE]);
 });
 
@@ -758,7 +769,7 @@ test("a pickup after a suspend writes run resumed, and a pickup after a stall wr
   await engine.enqueue({ runs: [...runsOf("sleeps", 1), ...runsOf("stalls", 1)] });
   const { lines } = startedLoopOf(tasks, { engine });
   await vi.advanceTimersByTimeAsync(0);
-  engine.expireLock("stalls-1");
+  engine.expireLock("stalls", "stalls-1");
 
   await vi.advanceTimersByTimeAsync(MINUTE_IN_MILLISECONDS + 1_000);
 
@@ -812,7 +823,7 @@ test("the loop survives a rejected fetch and keeps fetching", async () => {
   await vi.advanceTimersByTimeAsync(1_000);
 
   expect(rejectedFetchCount).toBe(1);
-  expect(engine.storedRunOf("send-email-1")?.state).toBe("completed");
+  expect(engine.storedRunOf("send-email", "send-email-1")?.state).toBe("completed");
 });
 
 test("the loop survives a rejected wake-up wait without spinning, and a run enqueued afterwards still completes", async () => {
@@ -833,7 +844,7 @@ test("the loop survives a rejected wake-up wait without spinning, and a run enqu
     await engine.enqueue({ runs: runsOf("send-email", 1) });
     await vi.advanceTimersByTimeAsync(2_000);
 
-    expect(engine.storedRunOf("send-email-1")?.state).toBe("completed");
+    expect(engine.storedRunOf("send-email", "send-email-1")?.state).toBe("completed");
     expect(waitCount).toBeLessThan(10);
   });
 
@@ -873,7 +884,7 @@ test("a wake-up landing while a fetch is in flight is followed by another fetch,
   await vi.advanceTimersByTimeAsync(0);
 
   expect(requestsOf(engine, "tick")).toEqual([]);
-  expect(engine.storedRunOf("second-run")?.state).toBe("executing");
+  expect(engine.storedRunOf("send-email", "second-run")?.state).toBe("executing");
 });
 
 function messagesOf(lines: readonly RecordedLogLine[]): string[] {
@@ -1044,7 +1055,7 @@ test("stopFetching with a fetch in flight resolves once the fetch answers, and t
 
   expect(isStoppedBeforeTheAnswer).toBe(false);
   expect(isStopped).toBe(true);
-  expect(engine.storedRunOf("send-email-1")?.state).toBe("completed");
+  expect(engine.storedRunOf("send-email", "send-email-1")?.state).toBe("completed");
 });
 
 test("stopFetching ends a pass-over wait at once", async () => {
@@ -1090,7 +1101,7 @@ test("stopTicking with a third stall's settle in flight resolves once the settle
   const stopping = await stoppingOfTheTickAcross(loop, heldSettles);
 
   expect(stopping).toEqual({ isStoppedBeforeTheAnswer: false, isStoppedAfterTheAnswer: true });
-  expect(engine.storedRunOf("send-email-1")).toMatchObject({ state: "failed", reason: "stalled" });
+  expect(engine.storedRunOf("send-email", "send-email-1")).toMatchObject({ state: "failed", reason: "stalled" });
   expect(messagesOf(lines)).toEqual(["run failed"]);
 });
 
@@ -1164,7 +1175,7 @@ test("a fetch answered past its first send time plus the lock duration starts no
   expect(requestsOf<SettleRequest>(engine, "settle").map(({ runId, outcome }) => [runId, outcome.kind])).toEqual([
     ["send-email-1", "yield"],
   ]);
-  expect(engine.storedRunOf("send-email-1")).toMatchObject({ state: "pending", order: 1, stalls: 0 });
+  expect(engine.storedRunOf("send-email", "send-email-1")).toMatchObject({ state: "pending", order: 1, stalls: 0 });
   expect(engine.runIdsInState("pending")).toEqual(["send-email-1"]);
   heldFetches[0]?.release();
   heldTicks.release();
@@ -1175,7 +1186,7 @@ test("a late fetch's lock another worker has since taken over is left alone: the
     ...engine,
     fetch: async (request) => {
       const reply = await engine.fetch(request);
-      engine.expireLock("send-email-1");
+      engine.expireLock("send-email", "send-email-1");
       await engine.promote();
       await engine.fetch({ ...request, lockTokens: ["other-worker-token"] });
       return reply;
@@ -1189,7 +1200,10 @@ test("a late fetch's lock another worker has since taken over is left alone: the
 
   expect(messagesOf(lines)).toEqual(["connection error", "connection restored"]);
   expect(requestsOf<SettleRequest>(engine, "settle")).toHaveLength(1);
-  expect(engine.storedRunOf("send-email-1")).toMatchObject({ state: "executing", lockToken: "other-worker-token" });
+  expect(engine.storedRunOf("send-email", "send-email-1")).toMatchObject({
+    state: "executing",
+    lockToken: "other-worker-token",
+  });
   heldTicks.release();
 });
 
@@ -1223,7 +1237,7 @@ test("stopFetching during a give-back awaits a settle already sent", async () =>
 
   expect(isStoppedBeforeTheAnswer).toBe(false);
   expect(isStopped).toBe(true);
-  expect(engine.storedRunOf("send-email-1")?.state).toBe("pending");
+  expect(engine.storedRunOf("send-email", "send-email-1")?.state).toBe("pending");
   heldTicks.release();
 });
 
@@ -1249,7 +1263,7 @@ test("stopFetching during a give-back waiting for Redis ends the wait, with no r
 
   expect(isStopped).toBe(true);
   expect(requestsOf<SettleRequest>(engine, "settle")).toEqual([]);
-  expect(engine.storedRunOf("send-email-1")?.state).toBe("executing");
+  expect(engine.storedRunOf("send-email", "send-email-1")?.state).toBe("executing");
   expect(messagesOf(lines)).toEqual(["connection error", "connection restored", "connection error"]);
   heldTicks.release();
 });
@@ -1274,7 +1288,7 @@ test("an unreadable reply is logged once as worker error, and the loop goes on a
   expect(linesWithMessage(lines, "worker error")).toEqual([
     { level: "error", message: "worker error", fields: { err: unreadableReply } },
   ]);
-  expect(engine.storedRunOf("send-email-1")?.state).toBe("completed");
+  expect(engine.storedRunOf("send-email", "send-email-1")?.state).toBe("completed");
 });
 
 const HOURLY: Schedule = { cron: "0 * * * *" };
@@ -1297,9 +1311,9 @@ async function engineSyncedWith(tasks: readonly AnyTaskDefinition[]): Promise<In
 }
 
 function firedScheduledAtsOf(engine: InMemoryEngine): string[] {
-  const firedRunIds = new Set(requestsOf<FireRequest>(engine, "fire").map(({ runId }) => runId));
-  return [...firedRunIds].flatMap((runId) => {
-    const scheduledAt = engine.storedRunOf(runId)?.scheduledAt;
+  const firedTasksByRunId = new Map(requestsOf<FireRequest>(engine, "fire").map(({ task, runId }) => [runId, task]));
+  return [...firedTasksByRunId].flatMap(([runId, task]) => {
+    const scheduledAt = engine.storedRunOf(task, runId)?.scheduledAt;
     return scheduledAt === undefined ? [] : [new Date(scheduledAt).toISOString()];
   });
 }
@@ -1526,7 +1540,7 @@ test("stopTicking with a fire in flight resolves once the fire answers, and the 
   const stopping = await stoppingOfTheTickAcross(loop, heldFires);
 
   expect(stopping).toEqual({ isStoppedBeforeTheAnswer: false, isStoppedAfterTheAnswer: true });
-  expect(engine.storedRunOf(deriveFiringRunId("build-report", ONE_AM))?.scheduledAt).toBe(ONE_AM);
+  expect(engine.storedRunOf("build-report", deriveFiringRunId("build-report", ONE_AM))?.scheduledAt).toBe(ONE_AM);
 });
 
 function unreadableBuildReportOf(cron: string) {
@@ -1601,9 +1615,9 @@ test("a draining loop's attempt yields at its next step boundary, its saved step
 
   expect(settleOutcomeKindsOf(engine)).toEqual(["yield"]);
   expect(linesWithMessage(lines, "run yielded at shutdown")).toEqual([YIELDED_AT_SHUTDOWN_LINE]);
-  expect(engine.storedRunOf("send-email-1")?.state).toBe("pending");
-  expect(engine.storedRunOf("send-email-1")?.steps.has("look-up")).toBe(true);
-  expect(engine.storedRunOf("send-email-1")?.steps.has("charge")).toBe(false);
+  expect(engine.storedRunOf("send-email", "send-email-1")?.state).toBe("pending");
+  expect(engine.storedRunOf("send-email", "send-email-1")?.steps.has("look-up")).toBe(true);
+  expect(engine.storedRunOf("send-email", "send-email-1")?.steps.has("charge")).toBe(false);
 });
 
 test("the shutdown deadline aborts an attempt still in its handler, which yields without a lock-lost line, and counts it", async () => {
@@ -1624,7 +1638,7 @@ test("the shutdown deadline aborts an attempt still in its handler, which yields
   expect(abortedAttemptCount).toBe(1);
   expect(settleOutcomeKindsOf(engine)).toEqual(["yield"]);
   expect(messagesOf(lines)).toEqual(["attempt started", "run yielded at shutdown"]);
-  expect(engine.storedRunOf("send-email-1")?.state).toBe("pending");
+  expect(engine.storedRunOf("send-email", "send-email-1")?.state).toBe("pending");
 });
 
 test("an attempt whose handler ignores the shutdown deadline abort and returns keeps its completion", async () => {
@@ -1638,7 +1652,7 @@ test("an attempt whose handler ignores the shutdown deadline abort and returns k
 
   expect(settleOutcomeKindsOf(engine)).toEqual(["complete"]);
   expect(messagesOf(lines)).toEqual(["attempt started", "run completed"]);
-  expect(engine.storedRunOf("send-email-1")?.state).toBe("completed");
+  expect(engine.storedRunOf("send-email", "send-email-1")?.state).toBe("completed");
 });
 
 test("an attempt whose handler throws after the shutdown deadline abort yields instead of retrying", async () => {
@@ -1653,7 +1667,7 @@ test("an attempt whose handler throws after the shutdown deadline abort yields i
   await loop.waitForAttemptsInFlight();
 
   expect(settleOutcomeKindsOf(engine)).toEqual(["yield"]);
-  expect(engine.storedRunOf("send-email-1")?.state).toBe("pending");
+  expect(engine.storedRunOf("send-email", "send-email-1")?.state).toBe("pending");
 });
 
 test("an attempt a fetch starts after the shutdown deadline is aborted at once and yields", async () => {
@@ -1681,7 +1695,7 @@ test("an attempt a fetch starts after the shutdown deadline is aborted at once a
   expect(isHandlerAbortedAtItsStart).toBe(true);
   expect(settleOutcomeKindsOf(engine)).toEqual(["yield"]);
   expect(linesWithMessage(lines, "run yielded at shutdown")).toEqual([YIELDED_AT_SHUTDOWN_LINE]);
-  expect(engine.storedRunOf("send-email-1")?.steps.has("charge")).toBe(false);
+  expect(engine.storedRunOf("send-email", "send-email-1")?.steps.has("charge")).toBe(false);
 });
 
 test("stopSettling ends a settle waiting for Redis, with no resend and no worker error", async () => {

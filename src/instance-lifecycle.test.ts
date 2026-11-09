@@ -423,7 +423,10 @@ describe("the closed instance", () => {
     await closing;
 
     expect(isClientDisconnectedAtTheAnswer).toBe(false);
-    await expect(enqueueReply).resolves.toMatchObject({ kind: "enqueued", createdRunIds: ["send-email-1"] });
+    await expect(enqueueReply).resolves.toMatchObject({
+      kind: "enqueued",
+      createdRuns: [{ task: "send-email", runId: "send-email-1" }],
+    });
   });
 
   test.each(["rejects every command", "rejects nothing"] as const)(
@@ -464,7 +467,7 @@ describe("the close of a running worker", () => {
     expect(closed.isSettled()).toBe(true);
     expect((closed.settledAt() ?? Infinity) - closeIssuedAt).toBeLessThan(SHUTDOWN_TIMEOUT_IN_MILLISECONDS);
     expect(settleOutcomeKindsOf(engine)).toEqual(["yield"]);
-    expect(engine.storedRunOf("send-email-1")?.state).toBe("pending");
+    expect(engine.storedRunOf("send-email", "send-email-1")?.state).toBe("pending");
     expect(messagesOf(lines).slice(-2)).toEqual(["run yielded at shutdown", "worker stopped"]);
     expect(commandClient().sentCommands.at(-1)).toBe("QUIT");
     expect(commandClient().disconnectCount).toBe(1);
@@ -479,7 +482,7 @@ describe("the close of a running worker", () => {
     await vi.advanceTimersByTimeAsync(CLOSE_BOUND_IN_MILLISECONDS);
     await closing;
 
-    expect(engine.storedRunOf("send-email-1")?.state).toBe("completed");
+    expect(engine.storedRunOf("send-email", "send-email-1")?.state).toBe("completed");
     expect(messagesOf(lines)).toEqual([
       "worker started",
       "attempt started",
@@ -634,7 +637,7 @@ describe("the close of a running worker", () => {
 
     expect(appCallOutcome).toBeInstanceOf(InstanceClosedError);
     expect(engine.runIdsInState("pending")).toHaveLength(1);
-    expect(engine.storedRunOf(engine.runIdsInState("pending")[0] ?? "")?.task).toBe("send-receipt");
+    expect(engine.storedRunOf("send-receipt", engine.runIdsInState("pending")[0] ?? "")?.state).toBe("pending");
     expect(settleOutcomeKindsOf(engine)).toEqual(["complete"]);
   });
 

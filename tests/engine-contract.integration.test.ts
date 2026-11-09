@@ -8,13 +8,14 @@ defineEngineContractTests((name, body) => {
     const { engine, redis, keys } = context;
     await body({
       engine,
-      expireLock: (runId) => expireLock(context, runId),
-      backdateEndedRun: (runId, durationInMilliseconds) => backdateEndedRun(context, runId, durationInMilliseconds),
-      backdateFirstFoundUnknownAt: (runId, durationInMilliseconds) =>
-        backdateFirstFoundUnknownAt(context, runId, durationInMilliseconds),
+      expireLock: (task, runId) => expireLock(context, task, runId),
+      backdateEndedRun: (task, runId, durationInMilliseconds) =>
+        backdateEndedRun(context, task, runId, durationInMilliseconds),
+      backdateFirstFoundUnknownAt: (task, runId, durationInMilliseconds) =>
+        backdateFirstFoundUnknownAt(context, task, runId, durationInMilliseconds),
       pastInstant: async () => (await serverInstantInMillisecondsOf(redis)) - 1000,
-      stateOf: async (runId) =>
-        ((await redis.hget(keys.runRecord(runId), "state")) ?? undefined) as RunState | undefined,
+      stateOf: async (task, runId) =>
+        ((await redis.hget(keys.runRecord(task, runId), "state")) ?? undefined) as RunState | undefined,
       isWakeUpMarkerArmed: async () => (await redis.zcard(keys.wakeUpMarker)) > 0,
       disarmWakeUpMarker: async () => {
         await redis.del(keys.wakeUpMarker);

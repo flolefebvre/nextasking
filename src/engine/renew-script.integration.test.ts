@@ -4,6 +4,7 @@ import { engineTest, storedValuesByKeyOf } from "../../tests/engine-test.js";
 import type { EngineTestContext } from "../../tests/engine-test.js";
 import { freshLockTokensOf } from "../../tests/lock-tokens.js";
 import { serverInstantInMillisecondsOf } from "../../tests/server-instant.js";
+import { storedRunIdOf } from "./engine-keys.js";
 import type { HeldLock } from "./engine.js";
 
 const SHORT_LOCK_DURATION_IN_MILLISECONDS = 5_000;
@@ -27,7 +28,7 @@ async function heldLocksOf({ engine }: EngineTestContext, runCount: number): Pro
   if (reply.kind !== "fetched") {
     throw new Error(`expected a fetched reply, got ${JSON.stringify(reply)}`);
   }
-  return reply.lockedRuns.map(({ runId, lockToken }) => ({ runId, lockToken }));
+  return reply.lockedRuns.map(({ task, runId, lockToken }) => ({ task, runId, lockToken }));
 }
 
 engineTest(
@@ -44,13 +45,13 @@ engineTest(
       { kind: "renewed", lockedUntil: expect.any(Number) },
       { kind: "renewed", lockedUntil: expect.any(Number) },
     ]);
-    for (const [position, { runId, lockToken }] of heldLocks.entries()) {
+    for (const [position, { task, runId, lockToken }] of heldLocks.entries()) {
       const renewal = renewals[position];
       const lockedUntil = renewal?.kind === "renewed" ? renewal.lockedUntil : Number.NaN;
       expect(lockedUntil).toBeGreaterThanOrEqual(instantBefore + LOCK_DURATION_IN_MILLISECONDS);
       expect(lockedUntil).toBeLessThanOrEqual(instantAfter + LOCK_DURATION_IN_MILLISECONDS);
-      expect(await redis.hget(keys.runRecord(runId), "lockedUntil")).toBe(String(lockedUntil));
-      expect(Number(await redis.zscore(keys.locks, runId))).toBe(lockedUntil);
+      expect(await redis.hget(keys.runRecord(task, runId), "lockedUntil")).toBe(String(lockedUntil));
+      expect(Number(await redis.zscore(keys.locks, storedRunIdOf(task, runId)))).toBe(lockedUntil);
       expect(await redis.pttl(keys.lock(lockToken))).toBeGreaterThan(SHORT_LOCK_DURATION_IN_MILLISECONDS);
     }
   },
@@ -61,15 +62,15 @@ engineTest(
   async (context) => {
     const { engine, redis, keys } = context;
     const [currentLock, otherLock] = await heldLocksOf(context, 2);
-    const otherRecordBefore = await redis.hgetall(keys.runRecord(otherLock!.runId));
+    const otherRecordBefore = await redis.hgetall(keys.runRecord(otherLock!.task, otherLock!.runId));
 
     const renewals = await engine.renew({
-      heldLocks: [currentLock!, { runId: otherLock!.runId, lockToken: "stale-token" }],
+      heldLocks: [currentLock!, { task: otherLock!.task, runId: otherLock!.runId, lockToken: "stale-token" }],
       lockDurationInMilliseconds: LOCK_DURATION_IN_MILLISECONDS,
     });
 
     expect(renewals.map(({ kind }) => kind)).toEqual(["renewed", "stale"]);
-    expect(await redis.hgetall(keys.runRecord(otherLock!.runId))).toEqual(otherRecordBefore);
+    expect(await redis.hgetall(keys.runRecord(otherLock!.task, otherLock!.runId))).toEqual(otherRecordBefore);
     expect(await redis.exists(keys.lock("stale-token"))).toBe(0);
   },
 );
@@ -77,19 +78,19 @@ engineTest(
 const STALE_RENEWALS = [
   {
     name: "a token that is not the record's",
-    heldLockOf: ({ runId }: HeldLock) => ({ runId, lockToken: "stale-token" }),
+    heldLockOf: ({ task, runId }: HeldLock) => ({ task, runId, lockToken: "stale-token" }),
     prepare: async () => undefined,
   },
   {
     name: "a run with no record",
-    heldLockOf: ({ lockToken }: HeldLock) => ({ runId: "missing-run", lockToken }),
+    heldLockOf: ({ task, lockToken }: HeldLock) => ({ task, runId: "missing-run", lockToken }),
     prepare: async () => undefined,
   },
   {
     name: "a record of a newer version",
     heldLockOf: (heldLock: HeldLock) => heldLock,
-    prepare: async ({ redis, keys }: EngineTestContext, { runId }: HeldLock) => {
-      await redis.hset(keys.runRecord(runId), "version", 2);
+    prepare: async ({ redis, keys }: EngineTestContext, { task, runId }: HeldLock) => {
+      await redis.hset(keys.runRecord(task, runId), "version", 2);
     },
   },
 ];
@@ -124,7 +125,7 @@ engineTest(
     });
 
     expect(renewals.map(({ kind }) => kind)).toEqual(["renewed"]);
-    expect(await redis.get(keys.lock(heldLock!.lockToken))).toBe(heldLock!.runId);
+    expect(await redis.get(keys.lock(heldLock!.lockToken))).toBe(storedRunIdOf(heldLock!.task, heldLock!.runId));
   },
 );
 

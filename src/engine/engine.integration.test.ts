@@ -3,9 +3,14 @@ import { expect, vi } from "vitest";
 
 import { DAY_IN_MILLISECONDS, SEND_EMAIL_PRUNE_REQUEST } from "../../tests/ended-runs.js";
 import { backdateEndedRun, engineTest, expireLock, fetchedLockedRunsOf } from "../../tests/engine-test.js";
+import { integrationTest } from "../../tests/integration-test.js";
+import { invariantViolationsOf } from "../../tests/invariant-violations.js";
+import { freshLockTokensOf } from "../../tests/lock-tokens.js";
 import { serverInstantInMillisecondsOf } from "../../tests/server-instant.js";
+import { withRedis } from "../../tests/with-redis.js";
 import { REPLIED_EMPTY_PROMOTE, REPLIED_ONE_RENEWAL, repliedOf } from "../../tests/tick-replies.js";
-import { RECORD_VERSION, wakeUpWaitOf } from "./engine.js";
+import { engineKeysOf, storedRunIdOf } from "./engine-keys.js";
+import { createEngine, RECORD_VERSION, wakeUpWaitOf } from "./engine.js";
 
 const LOCK_DURATION_IN_MILLISECONDS = 120_000;
 
@@ -21,12 +26,12 @@ engineTest(
     });
     const lockedRuns = await fetchedLockedRunsOf(context, 2);
     const heldRun = lockedRuns.find(({ runId }) => runId === "held-run")!;
-    await expireLock(context, "stalled-run");
+    await expireLock(context, "resize-image", "stalled-run");
     const pipelineSpy = vi.spyOn(redis, "pipeline");
     const instantBefore = await serverInstantInMillisecondsOf(redis);
 
     const reply = await engine.tick({
-      heldLocks: [{ runId: heldRun.runId, lockToken: heldRun.lockToken }],
+      heldLocks: [{ task: heldRun.task, runId: heldRun.runId, lockToken: heldRun.lockToken }],
       lockDurationInMilliseconds: LOCK_DURATION_IN_MILLISECONDS,
     });
 
@@ -47,7 +52,7 @@ engineTest(
     expect(renewal?.kind === "renewed" ? renewal.lockedUntil : 0).toBeGreaterThanOrEqual(
       instantBefore + LOCK_DURATION_IN_MILLISECONDS,
     );
-    expect(await redis.hget(keys.runRecord("stalled-run"), "state")).toBe("pending");
+    expect(await redis.hget(keys.runRecord("resize-image", "stalled-run"), "state")).toBe("pending");
   },
 );
 
@@ -56,7 +61,7 @@ engineTest("a tick carrying a prune sends it in the same pipelined round trip", 
   await engine.enqueue({ runs: [{ runId: "aged-run", task: "send-email", payload: "{}", retries: 0 }] });
   const [lockedRun] = await fetchedLockedRunsOf(context, 1);
   await engine.settle({ ...lockedRun!, outcome: { kind: "complete" } });
-  await backdateEndedRun(context, "aged-run", DAY_IN_MILLISECONDS);
+  await backdateEndedRun(context, "send-email", "aged-run", DAY_IN_MILLISECONDS);
   const pipelineSpy = vi.spyOn(redis, "pipeline");
 
   const reply = await engine.tick({
@@ -68,7 +73,7 @@ engineTest("a tick carrying a prune sends it in the same pipelined round trip", 
   expect(pipelineSpy).toHaveBeenCalledTimes(1);
   expect(pipelineSpy.mock.results[0]?.value).toHaveLength(4);
   expect(reply.prune).toEqual({ kind: "replied", reply: { kind: "pruned", prunedRunCount: 1 } });
-  expect(await redis.exists(keys.runRecord("aged-run"))).toBe(0);
+  expect(await redis.exists(keys.runRecord("send-email", "aged-run"))).toBe(0);
 });
 
 engineTest("a tick with no held lock renews nothing and still promotes", async ({ engine }) => {
@@ -91,7 +96,7 @@ engineTest(
     await redis.set(keys.runDedup("broken-task"), "not a sorted set");
 
     const reply = await engine.tick({
-      heldLocks: [{ runId: heldRun!.runId, lockToken: heldRun!.lockToken }],
+      heldLocks: [{ task: heldRun!.task, runId: heldRun!.runId, lockToken: heldRun!.lockToken }],
       lockDurationInMilliseconds: LOCK_DURATION_IN_MILLISECONDS,
       prune: { ...SEND_EMAIL_PRUNE_REQUEST, task: "broken-task" },
     });
@@ -242,3 +247,42 @@ engineTest("a wake-up wait on no marker returns at its fractional timeout", asyn
     expect(Date.now() - waitStartedAt).toBeGreaterThanOrEqual(250);
   });
 });
+
+integrationTest(
+  "a fetch of a record whose task is not the task of its stored run id throws an unreadable reply",
+  async ({ redisUrl, keyPrefix }) => {
+    await withRedis(redisUrl, async (redis) => {
+      const engine = createEngine(redis, keyPrefix);
+      const keys = engineKeysOf(keyPrefix);
+      await engine.enqueue({ runs: [{ runId: "order-1", task: "send-receipt", payload: "{}", retries: 0 }] });
+      await redis.hset(keys.runRecord("send-receipt", "order-1"), "task", "update-stock");
+
+      const fetch = engine.fetch({
+        lockTokens: freshLockTokensOf(1),
+        concurrencyLimitsByTask: {},
+        lockDurationInMilliseconds: LOCK_DURATION_IN_MILLISECONDS,
+      });
+
+      await expect(fetch).rejects.toThrow("The fetch script sent a reply the engine cannot read");
+      expect(await invariantViolationsOf(redis, keyPrefix)).toContain(
+        `run "${storedRunIdOf("send-receipt", "order-1")}" has a record of task "update-stock" under an id of task "send-receipt"`,
+      );
+    });
+  },
+);
+
+integrationTest(
+  "an enqueue whose reply holds a member that is not a stored run id throws an unreadable reply",
+  async ({ redisUrl, keyPrefix }) => {
+    await withRedis(redisUrl, async (redis) => {
+      const engine = createEngine(redis, keyPrefix);
+      Reflect.set(redis, "nextaskingEnqueue", async () => ["enqueued", ["order-1"], []]);
+
+      const enqueue = engine.enqueue({
+        runs: [{ runId: "order-1", task: "send-receipt", payload: "{}", retries: 0 }],
+      });
+
+      await expect(enqueue).rejects.toThrow("The enqueue script sent a reply the engine cannot read");
+    });
+  },
+);

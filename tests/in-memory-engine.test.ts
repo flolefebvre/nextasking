@@ -8,17 +8,17 @@ defineEngineContractTests((name, body) => {
     const engine = createInMemoryEngine();
     await body({
       engine,
-      expireLock: async (runId) => {
-        engine.expireLock(runId);
+      expireLock: async (task, runId) => {
+        engine.expireLock(task, runId);
       },
-      backdateEndedRun: async (runId, durationInMilliseconds) => {
-        engine.backdateEndedRun(runId, durationInMilliseconds);
+      backdateEndedRun: async (task, runId, durationInMilliseconds) => {
+        engine.backdateEndedRun(task, runId, durationInMilliseconds);
       },
-      backdateFirstFoundUnknownAt: async (runId, durationInMilliseconds) => {
-        engine.backdateFirstFoundUnknownAt(runId, durationInMilliseconds);
+      backdateFirstFoundUnknownAt: async (task, runId, durationInMilliseconds) => {
+        engine.backdateFirstFoundUnknownAt(task, runId, durationInMilliseconds);
       },
       pastInstant: async () => Date.now() - 1000,
-      stateOf: async (runId) => engine.storedRunOf(runId)?.state,
+      stateOf: async (task, runId) => engine.storedRunOf(task, runId)?.state,
       isWakeUpMarkerArmed: async () => engine.isWakeUpMarkerArmed(),
       disarmWakeUpMarker: () => engine.waitForWakeUp(0),
     });

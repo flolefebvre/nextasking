@@ -10,6 +10,7 @@ import {
   UNKNOWN_TASK_FAILURE_DELAY_IN_MILLISECONDS,
 } from "./engine.js";
 import type { FailureNotice, LockedRun, SettleOutcome, SettleReply } from "./engine.js";
+import { storedRunIdOf } from "./engine-keys.js";
 
 const BACKOFF_IN_MILLISECONDS = 30_000;
 
@@ -71,6 +72,10 @@ async function enqueueSendEmailRuns(
   });
 }
 
+function sendEmailStoredRunIdsOf(runIds: readonly string[]): string[] {
+  return runIds.map((runId) => storedRunIdOf("send-email", runId));
+}
+
 async function lockedRunOf(context: EngineTestContext): Promise<LockedRun> {
   await enqueueSendEmailRuns(context, 1);
   const [lockedRun] = await fetchedLockedRunsOf(context, 1);
@@ -81,17 +86,19 @@ type EndedRun = { runId: string; lockToken: string; reply: SettleReply; finished
 
 async function endedRunWithASavedStepOf(context: EngineTestContext, outcome: SettleOutcome): Promise<EndedRun> {
   const { engine, redis, keys } = context;
-  const { runId, lockToken } = await lockedRunOf(context);
-  await redis.hset(keys.runSteps(runId), "step-1", '"saved"');
+  const { task, runId, lockToken } = await lockedRunOf(context);
+  await redis.hset(keys.runSteps(task, runId), "step-1", '"saved"');
   const instantBefore = await serverInstantInMillisecondsOf(redis);
-  const reply = await engine.settle({ runId, lockToken, outcome });
+  const reply = await engine.settle({ task, runId, lockToken, outcome });
   const instantAfter = await serverInstantInMillisecondsOf(redis);
   const finishedAt = reply.kind === "completed" || reply.kind === "failed" ? reply.finishedAt : Number.NaN;
   expect(finishedAt).toBeGreaterThanOrEqual(instantBefore);
   expect(finishedAt).toBeLessThanOrEqual(instantAfter);
   const finalState = reply.kind === "completed" ? "completed" : "failed";
-  expect(Number(await redis.zscore(keys.runIndex("send-email", finalState), runId))).toBe(finishedAt);
-  expect(Number(await redis.zscore(keys.runDedup("send-email"), runId))).toBe(
+  expect(Number(await redis.zscore(keys.runIndex("send-email", finalState), storedRunIdOf(task, runId)))).toBe(
+    finishedAt,
+  );
+  expect(Number(await redis.zscore(keys.runDedup("send-email"), storedRunIdOf(task, runId)))).toBe(
     finishedAt + DEDUP_WINDOW_IN_MILLISECONDS,
   );
   expect(await redis.scard(keys.slotSet("send-email", undefined))).toBe(0);
@@ -108,7 +115,7 @@ engineTest(
     expect(reply).toEqual({ kind: "completed", finishedAt: expect.any(Number) });
     expect(
       await redis.hmget(
-        keys.runRecord(runId),
+        keys.runRecord("send-email", runId),
         "state",
         "finishedAt",
         "endedLockToken",
@@ -117,8 +124,8 @@ engineTest(
         "lockedUntil",
       ),
     ).toEqual(["completed", String(finishedAt), lockToken, "complete", null, null]);
-    expect(await redis.exists(keys.runSteps(runId), keys.lock(lockToken))).toBe(0);
-    expect(await redis.zscore(keys.locks, runId)).toBeNull();
+    expect(await redis.exists(keys.runSteps("send-email", runId), keys.lock(lockToken))).toBe(0);
+    expect(await redis.zscore(keys.locks, storedRunIdOf("send-email", runId))).toBeNull();
   },
 );
 
@@ -128,14 +135,19 @@ engineTest(
     const { engine, redis, keys } = context;
     await enqueueSendEmailRuns(context, 2);
     const [lockedRun] = await fetchedLockedRunsOf(context, 1);
-    const orderBefore = await redis.hget(keys.runRecord("run-1"), "order");
+    const orderBefore = await redis.hget(keys.runRecord("send-email", "run-1"), "order");
     await redis.del(keys.wakeUpMarker);
 
-    const reply = await engine.settle({ runId: "run-1", lockToken: lockedRun!.lockToken, outcome: YIELD });
+    const reply = await engine.settle({
+      task: "send-email",
+      runId: "run-1",
+      lockToken: lockedRun!.lockToken,
+      outcome: YIELD,
+    });
 
     expect(reply).toEqual({ kind: "yielded" });
-    expect(await redis.zrange(keys.pending, 0, -1)).toEqual(["run-1", "run-2"]);
-    expect(await redis.hmget(keys.runRecord("run-1"), "state", "order", "endedAs")).toEqual([
+    expect(await redis.zrange(keys.pending, 0, -1)).toEqual(sendEmailStoredRunIdsOf(["run-1", "run-2"]));
+    expect(await redis.hmget(keys.runRecord("send-email", "run-1"), "state", "order", "endedAs")).toEqual([
       "pending",
       orderBefore,
       "yield",
@@ -154,16 +166,21 @@ engineTest(
     const [firstLock] = await fetchedLockedRunsOf(context, 1);
     const instantBefore = await serverInstantInMillisecondsOf(redis);
 
-    const firstReply = await engine.settle({ runId: "run-1", lockToken: firstLock!.lockToken, outcome: HAND_BACK });
-    const firstFoundUnknownAt = await redis.hget(keys.runRecord("run-1"), "firstFoundUnknownAt");
+    const firstReply = await engine.settle({
+      task: "send-email",
+      runId: "run-1",
+      lockToken: firstLock!.lockToken,
+      outcome: HAND_BACK,
+    });
+    const firstFoundUnknownAt = await redis.hget(keys.runRecord("send-email", "run-1"), "firstFoundUnknownAt");
     const [secondLock] = await fetchedLockedRunsOf(context, 1);
-    await engine.settle({ runId: "run-1", lockToken: secondLock!.lockToken, outcome: HAND_BACK });
+    await engine.settle({ task: "send-email", runId: "run-1", lockToken: secondLock!.lockToken, outcome: HAND_BACK });
 
     expect(firstReply).toEqual({ kind: "handedBack" });
     expect(Number(firstFoundUnknownAt)).toBeGreaterThanOrEqual(instantBefore);
-    expect(await redis.hget(keys.runRecord("run-1"), "firstFoundUnknownAt")).toBe(firstFoundUnknownAt);
-    expect(await redis.zrange(keys.pending, 0, -1)).toEqual(["run-1", "run-2"]);
-    expect(await redis.hget(keys.runRecord("run-1"), "endedAs")).toBe("handBack");
+    expect(await redis.hget(keys.runRecord("send-email", "run-1"), "firstFoundUnknownAt")).toBe(firstFoundUnknownAt);
+    expect(await redis.zrange(keys.pending, 0, -1)).toEqual(sendEmailStoredRunIdsOf(["run-1", "run-2"]));
+    expect(await redis.hget(keys.runRecord("send-email", "run-1"), "endedAs")).toBe("handBack");
   },
 );
 
@@ -171,11 +188,11 @@ engineTest(
   "a retry moves the run to backingOff at TIME plus the backoff, bumps attempt, resets stalls and appends the error",
   async (context) => {
     const { engine, redis, keys } = context;
-    const { runId, lockToken } = await lockedRunOf(context);
-    await redis.hset(keys.runRecord(runId), "stalls", 1);
+    const { task, runId, lockToken } = await lockedRunOf(context);
+    await redis.hset(keys.runRecord(task, runId), "stalls", 1);
     const instantBefore = await serverInstantInMillisecondsOf(redis);
 
-    const reply = await engine.settle({ runId, lockToken, outcome: RETRY });
+    const reply = await engine.settle({ task, runId, lockToken, outcome: RETRY });
 
     const instantAfter = await serverInstantInMillisecondsOf(redis);
     const nextAttemptAt = reply.kind === "backingOff" ? reply.nextAttemptAt : Number.NaN;
@@ -183,13 +200,23 @@ engineTest(
     expect(nextAttemptAt).toBeGreaterThanOrEqual(instantBefore + BACKOFF_IN_MILLISECONDS);
     expect(nextAttemptAt).toBeLessThanOrEqual(instantAfter + BACKOFF_IN_MILLISECONDS);
     expect(
-      await redis.hmget(keys.runRecord(runId), "state", "nextAttemptAt", "attempt", "stalls", "endedAs", "lockToken"),
+      await redis.hmget(
+        keys.runRecord(task, runId),
+        "state",
+        "nextAttemptAt",
+        "attempt",
+        "stalls",
+        "endedAs",
+        "lockToken",
+      ),
     ).toEqual(["backingOff", String(nextAttemptAt), "2", "0", "retry", null]);
-    expect(Number(await redis.zscore(keys.due, runId))).toBe(nextAttemptAt);
-    expect(Number(await redis.zscore(keys.runIndex("send-email", "backingOff"), runId))).toBe(nextAttemptAt);
-    expect((await redis.lrange(keys.runErrors(runId), 0, -1)).map((storedError) => JSON.parse(storedError))).toEqual([
-      { ...ATTEMPT_ERROR, failedAt: new Date(nextAttemptAt - BACKOFF_IN_MILLISECONDS).toISOString() },
-    ]);
+    expect(Number(await redis.zscore(keys.due, storedRunIdOf(task, runId)))).toBe(nextAttemptAt);
+    expect(Number(await redis.zscore(keys.runIndex("send-email", "backingOff"), storedRunIdOf(task, runId)))).toBe(
+      nextAttemptAt,
+    );
+    expect(
+      (await redis.lrange(keys.runErrors(task, runId), 0, -1)).map((storedError) => JSON.parse(storedError)),
+    ).toEqual([{ ...ATTEMPT_ERROR, failedAt: new Date(nextAttemptAt - BACKOFF_IN_MILLISECONDS).toISOString() }]);
     expect(await redis.exists(keys.lock(lockToken))).toBe(0);
     expect(await redis.scard(keys.slotSet("send-email", undefined))).toBe(0);
   },
@@ -197,31 +224,31 @@ engineTest(
 
 engineTest("a suspend moves the run to suspended at the instant sent and keeps attempt", async (context) => {
   const { engine, redis, keys } = context;
-  const { runId, lockToken } = await lockedRunOf(context);
+  const { task, runId, lockToken } = await lockedRunOf(context);
 
-  const reply = await engine.settle({ runId, lockToken, outcome: SUSPEND });
+  const reply = await engine.settle({ task, runId, lockToken, outcome: SUSPEND });
 
   expect(reply).toEqual({ kind: "suspended", resumesAt: RESUMES_AT });
-  expect(await redis.hmget(keys.runRecord(runId), "state", "resumesAt", "attempt", "endedAs")).toEqual([
+  expect(await redis.hmget(keys.runRecord(task, runId), "state", "resumesAt", "attempt", "endedAs")).toEqual([
     "suspended",
     String(RESUMES_AT),
     "1",
     "suspend",
   ]);
-  expect(Number(await redis.zscore(keys.due, runId))).toBe(RESUMES_AT);
-  expect(await redis.exists(keys.runErrors(runId))).toBe(0);
+  expect(Number(await redis.zscore(keys.due, storedRunIdOf(task, runId)))).toBe(RESUMES_AT);
+  expect(await redis.exists(keys.runErrors(task, runId))).toBe(0);
   expect(await redis.scard(keys.slotSet("send-email", undefined))).toBe(0);
 });
 
 engineTest("an error of 10,000 characters is stored cut at 4,000 characters with the marker", async (context) => {
   const { engine, redis, keys } = context;
-  const { runId, lockToken } = await lockedRunOf(context);
+  const { task, runId, lockToken } = await lockedRunOf(context);
   const longText = "0123456789".repeat(1000);
   const error = { ...ATTEMPT_ERROR, message: longText, stack: longText };
 
-  await engine.settle({ runId, lockToken, outcome: { ...RETRY, error } });
+  await engine.settle({ task, runId, lockToken, outcome: { ...RETRY, error } });
 
-  const [storedError] = await redis.lrange(keys.runErrors(runId), 0, -1);
+  const [storedError] = await redis.lrange(keys.runErrors(task, runId), 0, -1);
   const { message, stack } = JSON.parse(storedError!) as { message: string; stack: string };
   expect(message).toBe(`${longText.slice(0, 4000)}${CUT_ERROR_TEXT_MARKER}`);
   expect(stack).toBe(message);
@@ -229,12 +256,12 @@ engineTest("an error of 10,000 characters is stored cut at 4,000 characters with
 
 engineTest("an error whose text holds quotes and newlines is stored as the JSON of the error", async (context) => {
   const { engine, redis, keys } = context;
-  const { runId, lockToken } = await lockedRunOf(context);
+  const { task, runId, lockToken } = await lockedRunOf(context);
   const error = { ...ATTEMPT_ERROR, message: 'a "quoted"\nline with "failedAt":"x"', stack: "at \\ path" };
 
-  await engine.settle({ runId, lockToken, outcome: { ...RETRY, error } });
+  await engine.settle({ task, runId, lockToken, outcome: { ...RETRY, error } });
 
-  const [storedError] = await redis.lrange(keys.runErrors(runId), 0, -1);
+  const [storedError] = await redis.lrange(keys.runErrors(task, runId), 0, -1);
   expect(JSON.parse(storedError!)).toEqual({ ...error, failedAt: expect.stringMatching(/^\d{4}-\d\d-\d\dT/) });
 });
 
@@ -245,8 +272,8 @@ function finishedAtOf(reply: SettleReply): EpochMilliseconds {
   return reply.finishedAt;
 }
 
-async function storedErrorsOf({ redis, keys }: EngineTestContext, runId: string): Promise<unknown[]> {
-  return (await redis.lrange(keys.runErrors(runId), 0, -1)).map((storedError) => JSON.parse(storedError));
+async function storedErrorsOf({ redis, keys }: EngineTestContext, task: string, runId: string): Promise<unknown[]> {
+  return (await redis.lrange(keys.runErrors(task, runId), 0, -1)).map((storedError) => JSON.parse(storedError));
 }
 
 engineTest(
@@ -257,17 +284,13 @@ engineTest(
     const { runId, reply, finishedAt } = await endedRunWithASavedStepOf(context, { ...FAIL, failureNotice: undefined });
 
     expect(reply).toEqual({ kind: "failed", reason: "retries exhausted", finishedAt: expect.any(Number) });
-    expect(await redis.hmget(keys.runRecord(runId), "state", "finishedAt", "reason", "attempt", "endedAs")).toEqual([
-      "failed",
-      String(finishedAt),
-      "retries exhausted",
-      "1",
-      "fail",
-    ]);
-    expect(await storedErrorsOf(context, runId)).toEqual([
+    expect(
+      await redis.hmget(keys.runRecord("send-email", runId), "state", "finishedAt", "reason", "attempt", "endedAs"),
+    ).toEqual(["failed", String(finishedAt), "retries exhausted", "1", "fail"]);
+    expect(await storedErrorsOf(context, "send-email", runId)).toEqual([
       { ...ATTEMPT_ERROR, failedAt: new Date(finishedAt).toISOString() },
     ]);
-    expect(await redis.hgetall(keys.runSteps(runId))).toEqual({ "step-1": '"saved"' });
+    expect(await redis.hgetall(keys.runSteps("send-email", runId))).toEqual({ "step-1": '"saved"' });
   },
 );
 
@@ -275,23 +298,32 @@ engineTest(
   "a failure stores its notice as listener runs under the derived event id, failedAt equal to finishedAt",
   async (context) => {
     const { engine, redis, keys } = context;
-    const { runId, lockToken } = await lockedRunOf(context);
+    const { task, runId, lockToken } = await lockedRunOf(context);
 
-    const finishedAt = finishedAtOf(await engine.settle({ runId, lockToken, outcome: FAIL }));
+    const finishedAt = finishedAtOf(await engine.settle({ task, runId, lockToken, outcome: FAIL }));
 
     const expectedPayload = { ...FAILURE_NOTICE.payload, failedAt: new Date(finishedAt).toISOString() };
     for (const { runId: noticeRunId, task } of FAILURE_NOTICE.runs) {
-      expect(await redis.hmget(keys.runRecord(noticeRunId), "state", "task", "eventName", "eventId")).toEqual([
+      expect(await redis.hmget(keys.runRecord(task, noticeRunId), "state", "task", "eventName", "eventId")).toEqual([
         "pending",
         task,
         NOTICE_EVENT.eventName,
         NOTICE_EVENT.eventId,
       ]);
-      expect(JSON.parse((await redis.get(keys.runPayload(noticeRunId)))!)).toEqual(expectedPayload);
+      expect(JSON.parse((await redis.get(keys.runPayload(task, noticeRunId)))!)).toEqual(expectedPayload);
     }
-    expect(await redis.hmget(keys.runRecord("notice-run-1"), "retries", "concurrencyKey")).toEqual(["2", null]);
-    expect(await redis.hmget(keys.runRecord("notice-run-2"), "retries", "concurrencyKey")).toEqual(["0", "team-a"]);
-    expect(await redis.zrange(keys.pending, 0, -1)).toEqual(["notice-run-1", "notice-run-2"]);
+    expect(await redis.hmget(keys.runRecord("alert-ops", "notice-run-1"), "retries", "concurrencyKey")).toEqual([
+      "2",
+      null,
+    ]);
+    expect(await redis.hmget(keys.runRecord("page-on-call", "notice-run-2"), "retries", "concurrencyKey")).toEqual([
+      "0",
+      "team-a",
+    ]);
+    expect(await redis.zrange(keys.pending, 0, -1)).toEqual([
+      storedRunIdOf("alert-ops", "notice-run-1"),
+      storedRunIdOf("page-on-call", "notice-run-2"),
+    ]);
     expect(Number(await redis.zscore(keys.eventDedup(NOTICE_EVENT.eventName), NOTICE_EVENT.eventId))).toBe(
       finishedAt + DEDUP_WINDOW_IN_MILLISECONDS,
     );
@@ -302,16 +334,18 @@ engineTest(
   "a failure's notice payload carries its error cut at 4,000 characters, as the stored error",
   async (context) => {
     const { engine, redis, keys } = context;
-    const { runId, lockToken } = await lockedRunOf(context);
+    const { task, runId, lockToken } = await lockedRunOf(context);
     const longText = "0123456789".repeat(1000);
     const failureNotice: FailureNotice = {
       ...FAILURE_NOTICE,
       payload: { ...FAILURE_NOTICE.payload, error: { name: "Error", message: longText, stack: longText } },
     };
 
-    await engine.settle({ runId, lockToken, outcome: { ...FAIL, failureNotice } });
+    await engine.settle({ task, runId, lockToken, outcome: { ...FAIL, failureNotice } });
 
-    const { error } = JSON.parse((await redis.get(keys.runPayload("notice-run-1")))!) as { error: { message: string } };
+    const { error } = JSON.parse((await redis.get(keys.runPayload("alert-ops", "notice-run-1")))!) as {
+      error: { message: string };
+    };
     expect(error.message).toBe(`${longText.slice(0, 4000)}${CUT_ERROR_TEXT_MARKER}`);
   },
 );
@@ -321,9 +355,9 @@ for (const failureNotice of [undefined, { ...FAILURE_NOTICE, runs: [] }]) {
     `a failure with ${failureNotice === undefined ? "no notice" : "an empty notice list"} stores no listener run and no event dedup entry`,
     async (context) => {
       const { engine, redis, keys } = context;
-      const { runId, lockToken } = await lockedRunOf(context);
+      const { task, runId, lockToken } = await lockedRunOf(context);
 
-      await engine.settle({ runId, lockToken, outcome: { ...FAIL, failureNotice } });
+      await engine.settle({ task, runId, lockToken, outcome: { ...FAIL, failureNotice } });
 
       expect(await redis.zcard(keys.pending)).toBe(0);
       expect(await redis.exists(keys.eventDedup(NOTICE_EVENT.eventName))).toBe(0);
@@ -334,25 +368,26 @@ for (const failureNotice of [undefined, { ...FAILURE_NOTICE, runs: [] }]) {
 
 engineTest("a failure skips the notice runs that already exist, as an enqueue would", async (context) => {
   const { engine, redis, keys } = context;
-  const { runId, lockToken } = await lockedRunOf(context);
+  const { task, runId, lockToken } = await lockedRunOf(context);
   await engine.enqueue({ runs: [{ runId: "notice-run-1", task: "alert-ops", payload: '"earlier"', retries: 0 }] });
 
-  await engine.settle({ runId, lockToken, outcome: FAIL });
+  await engine.settle({ task, runId, lockToken, outcome: FAIL });
 
-  expect(await redis.get(keys.runPayload("notice-run-1"))).toBe('"earlier"');
-  expect(await redis.hget(keys.runRecord("notice-run-2"), "state")).toBe("pending");
+  expect(await redis.get(keys.runPayload("alert-ops", "notice-run-1"))).toBe('"earlier"');
+  expect(await redis.hget(keys.runRecord("page-on-call", "notice-run-2"), "state")).toBe("pending");
 });
 
 engineTest("an enqueue of a failed run's id is skipped while its dedup entry is live", async (context) => {
   const { engine, redis, keys } = context;
-  const { runId, lockToken } = await lockedRunOf(context);
-  await engine.settle({ runId, lockToken, outcome: { ...FAIL, failureNotice: undefined } });
-  await redis.del(keys.runRecord(runId), keys.runPayload(runId), keys.runErrors(runId));
-  await redis.zrem(keys.runIndex("send-email", "failed"), runId);
+  const lockedRun = await lockedRunOf(context);
+  const { task, runId } = lockedRun;
+  await engine.settle({ ...lockedRun, outcome: { ...FAIL, failureNotice: undefined } });
+  await redis.del(keys.runRecord(task, runId), keys.runPayload(task, runId), keys.runErrors(task, runId));
+  await redis.zrem(keys.runIndex("send-email", "failed"), storedRunIdOf(task, runId));
 
   const reply = await engine.enqueue({ runs: [{ runId, task: "send-email", payload: "{}", retries: 0 }] });
 
-  expect(reply).toEqual({ kind: "enqueued", createdRunIds: [], skippedRunIds: [runId] });
+  expect(reply).toEqual({ kind: "enqueued", createdRuns: [], skippedRuns: [{ task: "send-email", runId }] });
 });
 
 async function lockedRunFirstFoundUnknownOf(
@@ -362,7 +397,11 @@ async function lockedRunFirstFoundUnknownOf(
   const { redis, keys } = context;
   const lockedRun = await lockedRunOf(context);
   const now = await serverInstantInMillisecondsOf(redis);
-  await redis.hset(keys.runRecord(lockedRun.runId), "firstFoundUnknownAt", now - unknownForInMilliseconds);
+  await redis.hset(
+    keys.runRecord(lockedRun.task, lockedRun.runId),
+    "firstFoundUnknownAt",
+    now - unknownForInMilliseconds,
+  );
   return lockedRun;
 }
 
@@ -370,44 +409,45 @@ engineTest(
   "a hand-back of a run first found unknown 30 minutes ago fails it unknown task with its error and notice",
   async (context) => {
     const { engine, redis, keys } = context;
-    const { runId, lockToken } = await lockedRunFirstFoundUnknownOf(
+    const { task, runId, lockToken } = await lockedRunFirstFoundUnknownOf(
       context,
       UNKNOWN_TASK_FAILURE_DELAY_IN_MILLISECONDS,
     );
 
     const reply = await engine.settle({
+      task,
       runId,
       lockToken,
       outcome: { ...HAND_BACK, failureNotice: FAILURE_NOTICE },
     });
-    const resentReply = await engine.settle({ runId, lockToken, outcome: HAND_BACK });
+    const resentReply = await engine.settle({ task, runId, lockToken, outcome: HAND_BACK });
 
     const finishedAt = finishedAtOf(reply);
     expect(reply).toEqual({ kind: "failed", reason: "unknown task", finishedAt: expect.any(Number) });
     expect(resentReply).toEqual({ kind: "already" });
-    expect(await redis.hmget(keys.runRecord(runId), "state", "reason", "endedAs")).toEqual([
+    expect(await redis.hmget(keys.runRecord(task, runId), "state", "reason", "endedAs")).toEqual([
       "failed",
       "unknown task",
       "handBack",
     ]);
-    expect(await storedErrorsOf(context, runId)).toEqual([
+    expect(await storedErrorsOf(context, task, runId)).toEqual([
       { ...UNKNOWN_TASK_ERROR, failedAt: new Date(finishedAt).toISOString() },
     ]);
-    expect(await redis.hget(keys.runRecord("notice-run-1"), "state")).toBe("pending");
+    expect(await redis.hget(keys.runRecord("alert-ops", "notice-run-1"), "state")).toBe("pending");
   },
 );
 
 engineTest("a hand-back of a run first found unknown under 30 minutes ago returns it to pending", async (context) => {
   const { engine, redis, keys } = context;
-  const { runId, lockToken } = await lockedRunFirstFoundUnknownOf(
+  const { task, runId, lockToken } = await lockedRunFirstFoundUnknownOf(
     context,
     UNKNOWN_TASK_FAILURE_DELAY_IN_MILLISECONDS - 60_000,
   );
 
-  const reply = await engine.settle({ runId, lockToken, outcome: HAND_BACK });
+  const reply = await engine.settle({ task, runId, lockToken, outcome: HAND_BACK });
 
   expect(reply).toEqual({ kind: "handedBack" });
-  expect(await redis.hget(keys.runRecord(runId), "state")).toBe("pending");
+  expect(await redis.hget(keys.runRecord(task, runId), "state")).toBe("pending");
 });
 
 for (const outcome of [COMPLETE, YIELD, RETRY, SUSPEND, FAIL]) {
@@ -421,7 +461,9 @@ for (const outcome of [COMPLETE, YIELD, RETRY, SUSPEND, FAIL]) {
 
       await engine.settle({ ...knownTaskLock!, outcome });
 
-      expect(await redis.hexists(keys.runRecord(handedBackLock.runId), "firstFoundUnknownAt")).toBe(0);
+      expect(
+        await redis.hexists(keys.runRecord(handedBackLock.task, handedBackLock.runId), "firstFoundUnknownAt"),
+      ).toBe(0);
     },
   );
 }
@@ -431,10 +473,10 @@ for (const outcome of OUTCOMES) {
     `a ${outcome.kind} with a token that is not the record's replies stale and writes nothing`,
     async (context) => {
       const { engine, redis, keyPrefix } = context;
-      const { runId } = await lockedRunOf(context);
+      const { task, runId } = await lockedRunOf(context);
       const storedValuesBefore = await storedValuesByKeyOf(redis, keyPrefix);
 
-      const reply = await engine.settle({ runId, lockToken: "stale-token", outcome });
+      const reply = await engine.settle({ task, runId, lockToken: "stale-token", outcome });
 
       expect(reply).toEqual({ kind: "stale" });
       expect(await storedValuesByKeyOf(redis, keyPrefix)).toEqual(storedValuesBefore);
@@ -443,11 +485,11 @@ for (const outcome of OUTCOMES) {
 
   engineTest(`a resent ${outcome.kind} with the ended token replies already and writes nothing`, async (context) => {
     const { engine, redis, keyPrefix } = context;
-    const { runId, lockToken } = await lockedRunOf(context);
-    await engine.settle({ runId, lockToken, outcome });
+    const { task, runId, lockToken } = await lockedRunOf(context);
+    await engine.settle({ task, runId, lockToken, outcome });
     const storedValuesBefore = await storedValuesByKeyOf(redis, keyPrefix);
 
-    const reply = await engine.settle({ runId, lockToken, outcome });
+    const reply = await engine.settle({ task, runId, lockToken, outcome });
 
     expect(reply).toEqual({ kind: "already" });
     expect(await storedValuesByKeyOf(redis, keyPrefix)).toEqual(storedValuesBefore);
@@ -456,10 +498,10 @@ for (const outcome of OUTCOMES) {
 
 engineTest("a settle of another kind with the ended token replies stale", async (context) => {
   const { engine } = context;
-  const { runId, lockToken } = await lockedRunOf(context);
-  await engine.settle({ runId, lockToken, outcome: YIELD });
+  const { task, runId, lockToken } = await lockedRunOf(context);
+  await engine.settle({ task, runId, lockToken, outcome: YIELD });
 
-  const reply = await engine.settle({ runId, lockToken, outcome: COMPLETE });
+  const reply = await engine.settle({ task, runId, lockToken, outcome: COMPLETE });
 
   expect(reply).toEqual({ kind: "stale" });
 });
@@ -469,7 +511,7 @@ engineTest("a settle of a run with no record replies stale and writes nothing", 
   const { lockToken } = await lockedRunOf(context);
   const storedValuesBefore = await storedValuesByKeyOf(redis, keyPrefix);
 
-  const reply = await engine.settle({ runId: "missing-run", lockToken, outcome: COMPLETE });
+  const reply = await engine.settle({ task: "send-email", runId: "missing-run", lockToken, outcome: COMPLETE });
 
   expect(reply).toEqual({ kind: "stale" });
   expect(await storedValuesByKeyOf(redis, keyPrefix)).toEqual(storedValuesBefore);
@@ -477,11 +519,11 @@ engineTest("a settle of a run with no record replies stale and writes nothing", 
 
 engineTest("a settle of a record of a newer version replies unknownVersion and writes nothing", async (context) => {
   const { engine, redis, keys, keyPrefix } = context;
-  const { runId, lockToken } = await lockedRunOf(context);
-  await redis.hset(keys.runRecord(runId), "version", 2);
+  const { task, runId, lockToken } = await lockedRunOf(context);
+  await redis.hset(keys.runRecord(task, runId), "version", 2);
   const storedValuesBefore = await storedValuesByKeyOf(redis, keyPrefix);
 
-  const reply = await engine.settle({ runId, lockToken, outcome: COMPLETE });
+  const reply = await engine.settle({ task, runId, lockToken, outcome: COMPLETE });
 
   expect(reply).toEqual({ kind: "unknownVersion", recordVersion: 2 });
   expect(await storedValuesByKeyOf(redis, keyPrefix)).toEqual(storedValuesBefore);
@@ -496,9 +538,11 @@ engineTest("a completion wakes as many parked runs as there are free slots, in w
   const pendingAfterFirstCompletion = await redis.zrange(keys.pending, 0, -1);
   await engine.settle({ ...secondHolder!, outcome: COMPLETE, concurrencyLimit: 3 });
 
-  expect(pendingAfterFirstCompletion).toEqual(["run-3"]);
-  expect(await redis.zrange(keys.pending, 0, -1)).toEqual(["run-3", "run-4", "run-5"]);
-  expect(await redis.hget(keys.runRecord("run-4"), "state")).toBe("pending");
+  expect(pendingAfterFirstCompletion).toEqual([storedRunIdOf("send-email", "run-3")]);
+  expect(await redis.zrange(keys.pending, 0, -1)).toEqual(
+    ["run-3", "run-4", "run-5"].map((runId) => storedRunIdOf("send-email", runId)),
+  );
+  expect(await redis.hget(keys.runRecord("send-email", "run-4"), "state")).toBe("pending");
   expect(await redis.zcard(keys.waitingList("send-email", "account-7"))).toBe(0);
 });
 
@@ -509,7 +553,9 @@ engineTest("a settle with no limit wakes every parked run of the key", async (co
 
   await engine.settle({ ...holder!, outcome: YIELD });
 
-  expect(await redis.zrange(keys.pending, 0, -1)).toEqual(["run-1", "run-2", "run-3", "run-4"]);
+  expect(await redis.zrange(keys.pending, 0, -1)).toEqual(
+    ["run-1", "run-2", "run-3", "run-4"].map((runId) => storedRunIdOf("send-email", runId)),
+  );
   expect(await redis.zcard(keys.waitingList("send-email", "account-7"))).toBe(0);
 });
 
@@ -520,15 +566,18 @@ engineTest("a settle with no free slot left wakes no parked run", async (context
 
   await engine.settle({ ...holder!, outcome: HAND_BACK, concurrencyLimit: 1 });
 
-  expect(await redis.zrange(keys.waitingList("send-email", "account-7"), 0, -1)).toEqual(["run-3"]);
+  expect(await redis.zrange(keys.waitingList("send-email", "account-7"), 0, -1)).toEqual([
+    storedRunIdOf("send-email", "run-3"),
+  ]);
 });
 
 engineTest("a settle of an unknown kind is rejected and writes nothing", async (context) => {
   const { engine, redis, keyPrefix } = context;
-  const { runId, lockToken } = await lockedRunOf(context);
+  const { task, runId, lockToken } = await lockedRunOf(context);
   const storedValuesBefore = await storedValuesByKeyOf(redis, keyPrefix);
 
   const settle = engine.settle({
+    task,
     runId,
     lockToken,
     outcome: { kind: "explode" } as unknown as SettleOutcome,

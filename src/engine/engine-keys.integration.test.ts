@@ -2,16 +2,16 @@ import { expect } from "vitest";
 
 import { integrationTest } from "../../tests/integration-test.js";
 import { withRedis } from "../../tests/with-redis.js";
-import { engineKeysOf, hashTaggedPrefixOf } from "./engine-keys.js";
+import { engineKeysOf, hashTaggedPrefixOf, storedRunIdOf } from "./engine-keys.js";
 import { LUA_LIBRARY } from "./lua-library.js";
 
 const KEYS_BUILT_BY_THE_LUA_LIBRARY = `${LUA_LIBRARY}
-local runId, task, concurrencyKey, eventName, lockToken = ARGV[2], ARGV[3], ARGV[4], ARGV[5], ARGV[6]
+local storedRunId, task, concurrencyKey, eventName, lockToken = ARGV[2], ARGV[3], ARGV[4], ARGV[5], ARGV[6]
 return {
-  runRecordKey(runId),
-  runPayloadKey(runId),
-  runErrorsKey(runId),
-  runStepsKey(runId),
+  runRecordKey(storedRunId),
+  runPayloadKey(storedRunId),
+  runErrorsKey(storedRunId),
+  runStepsKey(storedRunId),
   lockKey(lockToken),
   waitingListKey(task, ""),
   waitingListKey(task, concurrencyKey),
@@ -50,10 +50,10 @@ for (const [caseName, sample] of Object.entries(SAMPLE_SEGMENTS_BY_CASE)) {
     async ({ redisUrl, keyPrefix }) => {
       const keys = engineKeysOf(keyPrefix);
       const expectedKeys = [
-        keys.runRecord(sample.runId),
-        keys.runPayload(sample.runId),
-        keys.runErrors(sample.runId),
-        keys.runSteps(sample.runId),
+        keys.runRecord(sample.task, sample.runId),
+        keys.runPayload(sample.task, sample.runId),
+        keys.runErrors(sample.task, sample.runId),
+        keys.runSteps(sample.task, sample.runId),
         keys.lock(sample.lockToken),
         keys.waitingList(sample.task, undefined),
         keys.waitingList(sample.task, sample.concurrencyKey),
@@ -70,7 +70,7 @@ for (const [caseName, sample] of Object.entries(SAMPLE_SEGMENTS_BY_CASE)) {
           KEYS_BUILT_BY_THE_LUA_LIBRARY,
           0,
           hashTaggedPrefixOf(keyPrefix),
-          sample.runId,
+          storedRunIdOf(sample.task, sample.runId),
           sample.task,
           sample.concurrencyKey,
           sample.eventName,

@@ -117,7 +117,7 @@ export async function executeLockedRunAttempt(lockedRunAttempt: LockedRunAttempt
       taskName: task.name,
       runId,
       lockToken,
-      store: createEngineStepStore(stepCalls, { runId, lockToken }),
+      store: createEngineStepStore(stepCalls, { task: lockedRun.task, runId, lockToken }),
       sender: sendCalls,
       abortSignal,
       isWorkerDraining,
@@ -173,12 +173,13 @@ function settleOutcomeOf(attemptOutcome: AttemptOutcome, attempt: number): Settl
 }
 
 export function settleRequestOf(
-  task: AnyTaskDefinition | undefined,
-  { runId, lockToken, attempt }: Pick<LockedRun, "runId" | "lockToken" | "attempt">,
+  taskDefinition: AnyTaskDefinition | undefined,
+  { task, runId, lockToken, attempt }: Pick<LockedRun, "task" | "runId" | "lockToken" | "attempt">,
   attemptOutcome: AttemptOutcome,
 ): SettleRequest {
-  const concurrencyLimit = task?.concurrency?.limit;
+  const concurrencyLimit = taskDefinition?.concurrency?.limit;
   return {
+    task,
     runId,
     lockToken,
     outcome: settleOutcomeOf(attemptOutcome, attempt),

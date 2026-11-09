@@ -1,11 +1,10 @@
 import type { ChainableCommander, Redis } from "ioredis";
 
-import type { RunId } from "../ids.js";
 import { defineScriptCommand } from "./script-commands.js";
 
 export type IndexScore = number;
 
-export type IndexPosition = { score: IndexScore; runId: RunId };
+export type IndexPosition = { score: IndexScore; storedRunId: string };
 
 export type IndexPageRequest = { indexKey: string; limit: number; after: IndexPosition | undefined };
 
@@ -59,7 +58,11 @@ export function defineIndexPageCommand(client: Redis): IndexPageCommand {
   const command = defineScriptCommand(client, "nextaskingIndexPage", INDEX_PAGE_SCRIPT, 1);
   return {
     appendTo: (pipeline, { indexKey, limit, after }) => {
-      command.appendTo(pipeline, [indexKey], after === undefined ? [limit] : [limit, String(after.score), after.runId]);
+      command.appendTo(
+        pipeline,
+        [indexKey],
+        after === undefined ? [limit] : [limit, String(after.score), after.storedRunId],
+      );
     },
   };
 }
@@ -73,7 +76,7 @@ export function indexPageOf(reply: unknown): IndexPosition[] {
     if (!Number.isFinite(score)) {
       break;
     }
-    indexPage.push({ runId: reply[position] as RunId, score });
+    indexPage.push({ storedRunId: reply[position] as string, score });
   }
   if (!isReadable || indexPage.length * 2 !== reply.length) {
     throw new Error(`The index page script sent a reply the reader cannot read: ${JSON.stringify(reply)}`);

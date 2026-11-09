@@ -2,11 +2,13 @@ import type { ChainableCommander, Redis } from "ioredis";
 
 import type { AnyTaskDefinition, EventDefinition } from "./definitions.js";
 import type { EpochMilliseconds } from "./durations.js";
-import { engineKeysOf } from "./engine/engine-keys.js";
+import { engineKeysOf, runIdentityOf, storedRunIdOf } from "./engine/engine-keys.js";
+import type { RunIdentity } from "./engine/engine-keys.js";
 import { RECORD_VERSION, deserializePayload, isFailureReason } from "./engine/engine.js";
 import { defineIndexPageCommand, indexPageOf } from "./engine/index-page-script.js";
 import type { IndexPosition } from "./engine/index-page-script.js";
 import { decodeEngineRunListCursor, encodeEngineRunListCursor } from "./engine-run-list-cursor.js";
+import type { ListedIndexes } from "./engine-run-list-cursor.js";
 import { UnknownEventError } from "./errors.js";
 import { deriveFiringRunId, deriveListenerRunId } from "./ids.js";
 import type { EventId, RunId } from "./ids.js";
@@ -66,7 +68,7 @@ type StoredValue = string | null;
 
 type AnyRunSummary = Omit<AnyListedRun, "lastErrorMessage">;
 
-type IndexEntry = IndexPosition & { task: string };
+type IndexEntry = { indexPosition: IndexPosition; runIdentity: RunIdentity };
 
 type PipelineResult = [error: Error | null, reply: unknown];
 
@@ -211,8 +213,8 @@ function runOf(
 }
 
 function listedRunOf(entry: IndexEntry, state: RunState, [recordReply, lastErrorReply]: readonly unknown[]) {
-  const runSummary = runSummaryOf(entry.runId, recordReply);
-  if (runSummary?.task !== entry.task || runSummary.state !== state) {
+  const runSummary = runSummaryOf(entry.runIdentity.runId, recordReply);
+  if (runSummary?.task !== entry.runIdentity.task || runSummary.state !== state) {
     return undefined;
   }
   if (lastErrorReply === null) {
@@ -222,12 +224,30 @@ function listedRunOf(entry: IndexEntry, state: RunState, [recordReply, lastError
   return lastError === undefined ? undefined : ({ ...runSummary, lastErrorMessage: lastError.message } as AnyListedRun);
 }
 
-function compareRunIdBytes(leftRunId: RunId, rightRunId: RunId): number {
-  return Buffer.compare(Buffer.from(leftRunId, "utf8"), Buffer.from(rightRunId, "utf8"));
+function compareStoredRunIdBytes(leftStoredRunId: string, rightStoredRunId: string): number {
+  return Buffer.compare(Buffer.from(leftStoredRunId, "utf8"), Buffer.from(rightStoredRunId, "utf8"));
 }
 
-function compareInIndexOrder(left: IndexPosition, right: IndexPosition): number {
-  return right.score - left.score || compareRunIdBytes(right.runId, left.runId);
+function compareInIndexOrder(left: IndexEntry, right: IndexEntry): number {
+  return (
+    right.indexPosition.score - left.indexPosition.score ||
+    compareStoredRunIdBytes(right.indexPosition.storedRunId, left.indexPosition.storedRunId)
+  );
+}
+
+function afterPositionOf(cursor: unknown, listedIndexes: ListedIndexes): IndexPosition {
+  const { score, task, runId } = decodeEngineRunListCursor(cursor, listedIndexes);
+  return { score, storedRunId: storedRunIdOf(task, runId) };
+}
+
+function indexEntryOf(indexKey: string, indexPosition: IndexPosition): IndexEntry {
+  const runIdentity = runIdentityOf(indexPosition.storedRunId);
+  if (runIdentity === undefined) {
+    throw new Error(
+      `The run index ${indexKey} holds a member that is not a stored run id: ${JSON.stringify(indexPosition.storedRunId)}`,
+    );
+  }
+  return { indexPosition, runIdentity };
 }
 
 async function repliesOf(pipeline: ChainableCommander): Promise<unknown[]> {
@@ -251,17 +271,17 @@ export function createEngineReader(config: EngineReaderConfig): EngineReader {
   const keys = engineKeysOf(config.prefix);
   const indexPageCommand = defineIndexPageCommand(client);
 
-  const appendRunRead = (pipeline: ChainableCommander, runId: RunId): void => {
-    pipeline.hmget(keys.runRecord(runId), ...RUN_RECORD_FIELDS);
-    pipeline.get(keys.runPayload(runId));
-    pipeline.lrange(keys.runErrors(runId), 0, -1);
-    pipeline.hgetall(keys.runSteps(runId));
+  const appendRunRead = (pipeline: ChainableCommander, { task, runId }: RunIdentity): void => {
+    pipeline.hmget(keys.runRecord(task, runId), ...RUN_RECORD_FIELDS);
+    pipeline.get(keys.runPayload(task, runId));
+    pipeline.lrange(keys.runErrors(task, runId), 0, -1);
+    pipeline.hgetall(keys.runSteps(task, runId));
   };
 
-  const readRuns = async (runReads: readonly { task: string; runId: RunId }[]): Promise<(AnyRun | undefined)[]> => {
+  const readRuns = async (runReads: readonly RunIdentity[]): Promise<(AnyRun | undefined)[]> => {
     const pipeline = client.pipeline();
-    for (const { runId } of runReads) {
-      appendRunRead(pipeline, runId);
+    for (const runRead of runReads) {
+      appendRunRead(pipeline, runRead);
     }
     const repliesByRun = repliesInGroupsOf(await repliesOf(pipeline), COMMANDS_PER_RUN_READ);
     return runReads.map(({ task, runId }, position) => runOf(task, runId, repliesByRun[position] ?? []));
@@ -274,13 +294,14 @@ export function createEngineReader(config: EngineReaderConfig): EngineReader {
     after: IndexPosition | undefined,
   ): Promise<{ indexEntries: IndexEntry[]; isAnyIndexPageFull: boolean }> => {
     const pipeline = client.pipeline();
-    for (const taskName of taskNames) {
-      indexPageCommand.appendTo(pipeline, { indexKey: keys.runIndex(taskName, state), limit, after });
+    const indexKeys = taskNames.map((taskName) => keys.runIndex(taskName, state));
+    for (const indexKey of indexKeys) {
+      indexPageCommand.appendTo(pipeline, { indexKey, limit, after });
     }
     const indexPages = (await repliesOf(pipeline)).map(indexPageOf);
     return {
       indexEntries: indexPages.flatMap((indexPage, position) =>
-        indexPage.map((indexPosition) => ({ ...indexPosition, task: taskNames[position] ?? "" })),
+        indexPage.map((indexPosition) => indexEntryOf(indexKeys[position] ?? "", indexPosition)),
       ),
       isAnyIndexPageFull: indexPages.some((indexPage) => indexPage.length === limit),
     };
@@ -291,9 +312,9 @@ export function createEngineReader(config: EngineReaderConfig): EngineReader {
       return [];
     }
     const pipeline = client.pipeline();
-    for (const { runId } of indexEntries) {
-      pipeline.hmget(keys.runRecord(runId), ...RUN_RECORD_FIELDS);
-      pipeline.lindex(keys.runErrors(runId), -1);
+    for (const { runIdentity } of indexEntries) {
+      pipeline.hmget(keys.runRecord(runIdentity.task, runIdentity.runId), ...RUN_RECORD_FIELDS);
+      pipeline.lindex(keys.runErrors(runIdentity.task, runIdentity.runId), -1);
     }
     const repliesByRun = repliesInGroupsOf(await repliesOf(pipeline), COMMANDS_PER_LISTED_RUN_READ);
     return indexEntries.flatMap((entry, position) => {
@@ -316,8 +337,8 @@ export function createEngineReader(config: EngineReaderConfig): EngineReader {
         rejectUnknownTask(tasksByName, task);
       }
       const limit = listLimitOf(options.limit);
-      const listedIndexes = { state, task: task ?? null };
-      const after = options.cursor === undefined ? undefined : decodeEngineRunListCursor(options.cursor, listedIndexes);
+      const listedIndexes = { state, listedTask: task ?? null };
+      const after = options.cursor === undefined ? undefined : afterPositionOf(options.cursor, listedIndexes);
       const taskNames = task === undefined ? [...tasksByName.keys()] : [task];
       const { indexEntries, isAnyIndexPageFull } = await readIndexEntries(state, taskNames, limit, after);
       const mergedEntries = indexEntries.sort(compareInIndexOrder);
@@ -328,8 +349,8 @@ export function createEngineReader(config: EngineReaderConfig): EngineReader {
       if (!isWalkUnfinished || lastTakenEntry === undefined) {
         return { runs };
       }
-      const indexPosition = { score: lastTakenEntry.score, runId: lastTakenEntry.runId };
-      return { runs, nextCursor: encodeEngineRunListCursor({ ...listedIndexes, indexPosition }) };
+      const lastListedRun = { score: lastTakenEntry.indexPosition.score, ...lastTakenEntry.runIdentity };
+      return { runs, nextCursor: encodeEngineRunListCursor({ ...listedIndexes, lastListedRun }) };
     },
 
     countRuns: async () => {

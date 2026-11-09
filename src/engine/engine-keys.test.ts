@@ -51,10 +51,10 @@ test("every key sits under the prefix's hash tag, disjoint from the keys of 0.1.
   const keys = engineKeysOf("nextasking");
 
   const everyKey = [
-    keys.runRecord("run-1"),
-    keys.runPayload("run-1"),
-    keys.runErrors("run-1"),
-    keys.runSteps("run-1"),
+    keys.runRecord("send-email", "run-1"),
+    keys.runPayload("send-email", "run-1"),
+    keys.runErrors("send-email", "run-1"),
+    keys.runSteps("send-email", "run-1"),
     keys.pending,
     keys.due,
     keys.locks,
@@ -81,7 +81,7 @@ test("isScheduleKey holds for the schedules set and every schedule record, and f
 
   const scheduleKeys = [keys.schedules, keys.schedule("build-report"), keys.schedule("a:b"), keys.schedule("a*?[b]\\")];
   const otherKeysOfThePrefix = [
-    keys.runRecord("schedule:build-report"),
+    keys.runRecord("schedule", "build-report"),
     keys.runIndex("schedule", "pending"),
     keys.runDedup("schedules"),
     keys.tasks,
@@ -98,8 +98,10 @@ test("a run id, a task, a concurrency key and an event name are encoded so no tw
   const keys = engineKeysOf("nextasking");
 
   const collidingCandidates = [
-    keys.runRecord("a:payload"),
-    keys.runPayload("a"),
+    keys.runRecord("a", "b:payload"),
+    keys.runPayload("a", "b"),
+    keys.runRecord("a", "b:c"),
+    keys.runRecord("a:b", "c"),
     keys.waitingList("a:b", undefined),
     keys.waitingList("a", "b"),
   ];

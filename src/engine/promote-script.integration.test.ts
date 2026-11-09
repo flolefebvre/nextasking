@@ -5,6 +5,7 @@ import type { EngineTestContext } from "../../tests/engine-test.js";
 import { serverInstantInMillisecondsOf } from "../../tests/server-instant.js";
 import type { RunState } from "../run-states.js";
 import type { LockedRun, PromoteReply, RunToCreate } from "./engine.js";
+import { storedRunIdOf } from "./engine-keys.js";
 import { MOST_DUE_RUNS_PROMOTED_PER_PROMOTE } from "./promote-script.js";
 
 const DELAY_IN_MILLISECONDS = 60_000;
@@ -22,17 +23,17 @@ function sendEmailRunOf(runId: string, extraFields: Partial<RunToCreate> = {}): 
 }
 
 async function makeDue({ redis, keys }: EngineTestContext, runId: string): Promise<void> {
-  const [task, state] = (await redis.hmget(keys.runRecord(runId), "task", "state")) as [string, RunState];
+  const state = (await redis.hget(keys.runRecord("send-email", runId), "state")) as RunState;
   const dueAt = (await serverInstantInMillisecondsOf(redis)) - 1000;
-  await redis.hset(keys.runRecord(runId), DUE_INSTANT_FIELD_BY_STATE[state]!, dueAt);
-  await redis.zadd(keys.due, dueAt, runId);
-  await redis.zadd(keys.runIndex(task, state), dueAt, runId);
+  await redis.hset(keys.runRecord("send-email", runId), DUE_INSTANT_FIELD_BY_STATE[state]!, dueAt);
+  await redis.zadd(keys.due, dueAt, storedRunIdOf("send-email", runId));
+  await redis.zadd(keys.runIndex("send-email", state), dueAt, storedRunIdOf("send-email", runId));
 }
 
 async function runOneWithAnExpiredLockOf(context: EngineTestContext): Promise<LockedRun> {
   await context.engine.enqueue({ runs: [sendEmailRunOf("run-1")] });
   const [lockedRun] = await fetchedLockedRunsOf(context, 1);
-  await expireLock(context, "run-1");
+  await expireLock(context, "send-email", "run-1");
   return lockedRun!;
 }
 
@@ -73,16 +74,21 @@ for (const state of ["delayed", "suspended", "backingOff"] as const) {
       const reply = await engine.promote();
 
       expect(reply).toEqual({ kind: "promoted", promotedRunCount: 1, stalledRuns: [], thirdStalls: [] });
-      expect(await redis.zrange(keys.pending, 0, -1)).toEqual(["waiting-run", "due-run"]);
-      expect(Number(await redis.hget(keys.runRecord("due-run"), "order"))).toBeGreaterThan(
-        Number(await redis.hget(keys.runRecord("waiting-run"), "order")),
+      expect(await redis.zrange(keys.pending, 0, -1)).toEqual([
+        storedRunIdOf("send-email", "waiting-run"),
+        storedRunIdOf("send-email", "due-run"),
+      ]);
+      expect(Number(await redis.hget(keys.runRecord("send-email", "due-run"), "order"))).toBeGreaterThan(
+        Number(await redis.hget(keys.runRecord("send-email", "waiting-run"), "order")),
       );
-      expect(await redis.hget(keys.runRecord("due-run"), "state")).toBe("pending");
-      expect(await redis.zscore(keys.due, "due-run")).toBeNull();
+      expect(await redis.hget(keys.runRecord("send-email", "due-run"), "state")).toBe("pending");
+      expect(await redis.zscore(keys.due, storedRunIdOf("send-email", "due-run"))).toBeNull();
       expect(await redis.zcard(keys.runIndex("send-email", state))).toBe(0);
-      expect(await redis.hexists(keys.runRecord("due-run"), "startsAt")).toBe(0);
-      expect(await redis.hexists(keys.runRecord("due-run"), "nextAttemptAt")).toBe(0);
-      expect(await redis.hexists(keys.runRecord("due-run"), "resumesAt")).toBe(state === "suspended" ? 1 : 0);
+      expect(await redis.hexists(keys.runRecord("send-email", "due-run"), "startsAt")).toBe(0);
+      expect(await redis.hexists(keys.runRecord("send-email", "due-run"), "nextAttemptAt")).toBe(0);
+      expect(await redis.hexists(keys.runRecord("send-email", "due-run"), "resumesAt")).toBe(
+        state === "suspended" ? 1 : 0,
+      );
       expect(await redis.zcard(keys.wakeUpMarker)).toBe(1);
     },
   );
@@ -107,7 +113,7 @@ engineTest("a run not yet due stays where it is", async (context) => {
 
   expect(reply).toEqual({ kind: "promoted", promotedRunCount: 0, stalledRuns: [], thirdStalls: [] });
   expect(await storedValuesByKeyOf(redis, keyPrefix)).toEqual(storedValuesBefore);
-  expect(await redis.hget(keys.runRecord("later-run"), "state")).toBe("delayed");
+  expect(await redis.hget(keys.runRecord("send-email", "later-run"), "state")).toBe("delayed");
 });
 
 engineTest(`a promote moves at most ${String(MOST_DUE_RUNS_PROMOTED_PER_PROMOTE)} due runs`, async (context) => {
@@ -135,8 +141,8 @@ engineTest(
     const { engine, redis, keys } = context;
     await engine.enqueue({ runs: [sendEmailRunOf("run-1"), sendEmailRunOf("run-2")] });
     const [lockedRun] = await fetchedLockedRunsOf(context, 1);
-    const orderBefore = await redis.hget(keys.runRecord("run-1"), "order");
-    await expireLock(context, "run-1");
+    const orderBefore = await redis.hget(keys.runRecord("send-email", "run-1"), "order");
+    await expireLock(context, "send-email", "run-1");
 
     const reply = await engine.promote();
     const lateSettleReply = await engine.settle({ ...lockedRun!, outcome: { kind: "complete" } });
@@ -148,14 +154,13 @@ engineTest(
       thirdStalls: [],
     });
     expect(lateSettleReply).toEqual({ kind: "stale" });
-    expect(await redis.zrange(keys.pending, 0, -1)).toEqual(["run-1", "run-2"]);
-    expect(await redis.hmget(keys.runRecord("run-1"), "state", "order", "stalls", "attempt", "lockToken")).toEqual([
-      "pending",
-      orderBefore,
-      "1",
-      "1",
-      null,
+    expect(await redis.zrange(keys.pending, 0, -1)).toEqual([
+      storedRunIdOf("send-email", "run-1"),
+      storedRunIdOf("send-email", "run-2"),
     ]);
+    expect(
+      await redis.hmget(keys.runRecord("send-email", "run-1"), "state", "order", "stalls", "attempt", "lockToken"),
+    ).toEqual(["pending", orderBefore, "1", "1", null]);
     expect(await redis.exists(keys.lock(lockedRun!.lockToken))).toBe(0);
     expect(await redis.zcard(keys.locks)).toBe(0);
     expect(await redis.scard(keys.slotSet("send-email", undefined))).toBe(0);
@@ -167,12 +172,12 @@ engineTest("a second expiry of the same run counts stalls 2", async (context) =>
   await runOneWithAnExpiredLockOf(context);
   await engine.promote();
   await fetchedLockedRunsOf(context, 1);
-  await expireLock(context, "run-1");
+  await expireLock(context, "send-email", "run-1");
 
   const reply = promotedReplyOf(await engine.promote());
 
   expect(reply.stalledRuns).toEqual([{ runId: "run-1", task: "send-email", attempt: 1, stalls: 2 }]);
-  expect(await redis.hget(keys.runRecord("run-1"), "stalls")).toBe("2");
+  expect(await redis.hget(keys.runRecord("send-email", "run-1"), "stalls")).toBe("2");
 });
 
 engineTest("an expired lock wakes every parked run of its key, as no limit is known", async (context) => {
@@ -181,11 +186,13 @@ engineTest("an expired lock wakes every parked run of its key, as no limit is kn
     runs: ["run-1", "run-2", "run-3"].map((runId) => sendEmailRunOf(runId, { concurrencyKey: "account-7" })),
   });
   await fetchedLockedRunsOf(context, 3, { "send-email": 1 });
-  await expireLock(context, "run-1");
+  await expireLock(context, "send-email", "run-1");
 
   await engine.promote();
 
-  expect(await redis.zrange(keys.pending, 0, -1)).toEqual(["run-1", "run-2", "run-3"]);
+  expect(await redis.zrange(keys.pending, 0, -1)).toEqual(
+    ["run-1", "run-2", "run-3"].map((runId) => storedRunIdOf("send-email", runId)),
+  );
   expect(await redis.zcard(keys.waitingList("send-email", "account-7"))).toBe(0);
 });
 
@@ -194,7 +201,7 @@ engineTest(
   async (context) => {
     const { engine, redis, keys, keyPrefix } = context;
     const lockedRun = await runOneWithAnExpiredLockOf(context);
-    await redis.hset(keys.runRecord("run-1"), "stalls", 2);
+    await redis.hset(keys.runRecord("send-email", "run-1"), "stalls", 2);
     const storedValuesBefore = await storedValuesByKeyOf(redis, keyPrefix);
 
     const reply = await engine.promote();
@@ -216,11 +223,19 @@ engineTest(
     const sourceEvent = { eventName: "user.signed-up", eventId: "event-1" };
     const scheduledAt = Date.UTC(2030, 0, 1);
     await engine.enqueue({ runs: [sendEmailRunOf("stalled-run", { sourceEvent }), sendEmailRunOf("third-stall-run")] });
-    await redis.hset(keys.runRecord("third-stall-run"), "scheduledAt", scheduledAt, "stalls", 2, "replays", 3);
-    await redis.hset(keys.runRecord("stalled-run"), "scheduledAt", scheduledAt);
+    await redis.hset(
+      keys.runRecord("send-email", "third-stall-run"),
+      "scheduledAt",
+      scheduledAt,
+      "stalls",
+      2,
+      "replays",
+      3,
+    );
+    await redis.hset(keys.runRecord("send-email", "stalled-run"), "scheduledAt", scheduledAt);
     await fetchedLockedRunsOf(context, 2);
-    await expireLock(context, "stalled-run");
-    await expireLock(context, "third-stall-run");
+    await expireLock(context, "send-email", "stalled-run");
+    await expireLock(context, "send-email", "third-stall-run");
 
     const reply = promotedReplyOf(await engine.promote());
 
@@ -235,12 +250,12 @@ engineTest(
 engineTest("an expired lock on a record of a newer version is left in place", async (context) => {
   const { engine, redis, keys } = context;
   await runOneWithAnExpiredLockOf(context);
-  await redis.hset(keys.runRecord("run-1"), "version", 2);
+  await redis.hset(keys.runRecord("send-email", "run-1"), "version", 2);
 
   const reply = await engine.promote();
 
   expect(reply).toEqual({ kind: "promoted", promotedRunCount: 0, stalledRuns: [], thirdStalls: [] });
-  expect(await redis.hget(keys.runRecord("run-1"), "state")).toBe("executing");
+  expect(await redis.hget(keys.runRecord("send-email", "run-1"), "state")).toBe("executing");
 });
 
 engineTest("a due record of a newer version is passed over and the due run behind it promoted", async (context) => {
@@ -252,13 +267,13 @@ engineTest("a due record of a newer version is passed over and the due run behin
   });
   await makeDue(context, "newer-run");
   await makeDue(context, "current-run");
-  await redis.hset(keys.runRecord("newer-run"), "version", 2);
+  await redis.hset(keys.runRecord("send-email", "newer-run"), "version", 2);
 
   const reply = await engine.promote();
 
   expect(reply).toEqual({ kind: "promoted", promotedRunCount: 1, stalledRuns: [], thirdStalls: [] });
-  expect(await redis.zrange(keys.due, 0, -1)).toEqual(["newer-run"]);
-  expect(await redis.zrange(keys.pending, 0, -1)).toEqual(["current-run"]);
+  expect(await redis.zrange(keys.due, 0, -1)).toEqual([storedRunIdOf("send-email", "newer-run")]);
+  expect(await redis.zrange(keys.pending, 0, -1)).toEqual([storedRunIdOf("send-email", "current-run")]);
 });
 
 engineTest(
@@ -271,7 +286,7 @@ engineTest(
     });
     for (const runId of runIds) {
       await makeDue(context, runId);
-      await redis.hset(keys.runRecord(runId), "version", 2);
+      await redis.hset(keys.runRecord("send-email", runId), "version", 2);
     }
     const storedValuesBefore = await storedValuesByKeyOf(redis, keyPrefix);
 

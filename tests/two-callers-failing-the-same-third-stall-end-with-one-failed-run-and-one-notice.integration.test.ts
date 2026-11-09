@@ -1,6 +1,7 @@
 import { expect } from "vitest";
 
 import type { FailureNotice, SettleOutcome } from "../src/engine/engine.js";
+import { storedRunIdOf } from "../src/engine/engine-keys.js";
 import { engineTest, expireLock, fetchedLockedRunsOf } from "./engine-test.js";
 
 const NOTICE_EVENT = { eventName: "nextasking/run.failed", eventId: "notice-event-1" };
@@ -32,8 +33,8 @@ engineTest(
     const { engine, redis, keys } = context;
     await engine.enqueue({ runs: [{ runId: "run-1", task: "send-email", payload: "{}", retries: 0 }] });
     await fetchedLockedRunsOf(context, 1);
-    await redis.hset(keys.runRecord("run-1"), "stalls", 2);
-    await expireLock(context, "run-1");
+    await redis.hset(keys.runRecord("send-email", "run-1"), "stalls", 2);
+    await expireLock(context, "send-email", "run-1");
     const [firstCallerReply, secondCallerReply] = await Promise.all([engine.promote(), engine.promote()]);
     const reportedStalls = [firstCallerReply, secondCallerReply].map((reply) =>
       reply.kind === "promoted" ? reply.thirdStalls : [],
@@ -42,8 +43,8 @@ engineTest(
     const [secondReportedStall] = reportedStalls[1]!;
 
     const settleReplies = await Promise.all(
-      [firstReportedStall!, secondReportedStall!].map(({ runId, expiredLockToken }) =>
-        engine.settle({ runId, lockToken: expiredLockToken, outcome: FAIL_STALLED }),
+      [firstReportedStall!, secondReportedStall!].map(({ task, runId, expiredLockToken }) =>
+        engine.settle({ task, runId, lockToken: expiredLockToken, outcome: FAIL_STALLED }),
       ),
     );
 
@@ -52,9 +53,9 @@ engineTest(
       { kind: "failed", reason: "stalled", finishedAt: expect.any(Number) },
     ]);
     expect(settleReplies.filter((reply) => reply.kind === "already" || reply.kind === "stale")).toHaveLength(1);
-    expect(await redis.hmget(keys.runRecord("run-1"), "state", "reason")).toEqual(["failed", "stalled"]);
-    expect(await redis.llen(keys.runErrors("run-1"))).toBe(1);
-    expect(await redis.zrange(keys.pending, 0, -1)).toEqual(["notice-run-1"]);
+    expect(await redis.hmget(keys.runRecord("send-email", "run-1"), "state", "reason")).toEqual(["failed", "stalled"]);
+    expect(await redis.llen(keys.runErrors("send-email", "run-1"))).toBe(1);
+    expect(await redis.zrange(keys.pending, 0, -1)).toEqual([storedRunIdOf("alert-ops", "notice-run-1")]);
     expect(await redis.zcard(keys.eventDedup(NOTICE_EVENT.eventName))).toBe(1);
     expect(await engine.promote()).toEqual({ kind: "promoted", promotedRunCount: 0, stalledRuns: [], thirdStalls: [] });
   },

@@ -4,6 +4,7 @@ import { engineTest, fetchedLockedRunsOf, storedValuesByKeyOf } from "../../test
 import type { EngineTestContext } from "../../tests/engine-test.js";
 import { serverInstantInMillisecondsOf } from "../../tests/server-instant.js";
 import { deriveFiringRunId } from "../ids.js";
+import { storedRunIdOf } from "./engine-keys.js";
 import { RECORD_VERSION } from "./engine.js";
 import type { FireNowRequest } from "./engine.js";
 
@@ -58,7 +59,7 @@ engineTest("a firing now of a schedule stored without retries uses the default r
 
   await engine.fireNow(firing);
 
-  expect(await redis.hget(keys.runRecord(firing.runId), "retries")).toBe("5");
+  expect(await redis.hget(keys.runRecord("build-report", firing.runId), "retries")).toBe("5");
 });
 
 engineTest("a firing now whose run id already exists creates no second run", async (context) => {
@@ -70,7 +71,7 @@ engineTest("a firing now whose run id already exists creates no second run", asy
   const reply = await engine.fireNow(firing);
 
   expect(reply).toEqual({ kind: "fired", runId: firing.runId, isRunCreated: false });
-  expect(await redis.zrange(keys.pending, 0, -1)).toEqual([firing.runId]);
+  expect(await redis.zrange(keys.pending, 0, -1)).toEqual([storedRunIdOf("build-report", firing.runId)]);
 });
 
 engineTest("a firing now of a task with no schedule record replies noSchedule and writes nothing", async (context) => {

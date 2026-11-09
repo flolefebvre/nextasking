@@ -71,7 +71,9 @@ engineTest(
 
     expect(account).toEqual({ accountId: "account-1" });
     expect(createAccount).not.toHaveBeenCalled();
-    expect(await redis.hget(keys.runSteps("parent-run"), "create-account")).toBe('[{"accountId":"account-1"}]');
+    expect(await redis.hget(keys.runSteps(PARENT_TASK, "parent-run"), "create-account")).toBe(
+      '[{"accountId":"account-1"}]',
+    );
   },
 );
 
@@ -92,11 +94,11 @@ engineTest(
     expect(resumedDispatch).toEqual(firstDispatch);
     expect(resumedEmit).toEqual(firstEmit);
     expect(await storedValuesByKeyOf(redis, context.keyPrefix)).toEqual(storedValuesBefore);
-    expect(await redis.hgetall(keys.runSteps("parent-run"))).toEqual({
+    expect(await redis.hgetall(keys.runSteps(PARENT_TASK, "parent-run"))).toEqual({
       [topLevelSendId(0)]: JSON.stringify([topLevelSendId(0)]),
       [topLevelSendId(1)]: JSON.stringify([topLevelSendId(1)]),
     });
-    expect(await redis.exists(keys.runRecord(topLevelSendId(0)))).toBe(1);
+    expect(await redis.exists(keys.runRecord("send-tips-email", topLevelSendId(0)))).toBe(1);
   },
 );
 
@@ -107,7 +109,7 @@ engineTest(
     const sendInStep = async (attempt: StepEngine) =>
       attempt.step.run("notify", async () => (await attempt.emit("user.onboarded", {})).eventId);
     const firstEventId = await sendInStep(openAttemptOf(context, lockedRun));
-    await context.redis.hdel(context.keys.runSteps("parent-run"), "notify");
+    await context.redis.hdel(context.keys.runSteps(PARENT_TASK, "parent-run"), "notify");
 
     const resumedEventId = await sendInStep(openAttemptOf(context, lockedRun));
 
@@ -132,7 +134,7 @@ engineTest("an emit whose event id is already live resolves with that id and sav
   );
 
   expect(emittedEvent).toEqual({ eventId: "onboarded-user-1" });
-  expect(await redis.hgetall(keys.runSteps("parent-run"))).toEqual({});
+  expect(await redis.hgetall(keys.runSteps(PARENT_TASK, "parent-run"))).toEqual({});
 });
 
 async function staleAttemptOf(context: EngineTestContext, markLockLost: () => void): Promise<StepEngine> {
@@ -183,7 +185,11 @@ engineTest(
 engineTest("a step write with a stale token throws LostRunLockError and writes nothing", async (context) => {
   const { engine, redis, keyPrefix } = context;
   const lockedRun = await lockedParentRunOf(context);
-  const store = createEngineStepStore(engine, { runId: lockedRun.runId, lockToken: freshLockTokensOf(1)[0]! });
+  const store = createEngineStepStore(engine, {
+    task: lockedRun.task,
+    runId: lockedRun.runId,
+    lockToken: freshLockTokensOf(1)[0]!,
+  });
   const storedValuesBefore = await storedValuesByKeyOf(redis, keyPrefix);
 
   await expect(store.saveStep("create-account", '["a-1"]')).rejects.toThrow(
@@ -197,7 +203,7 @@ engineTest(
   async (context) => {
     const { redis, keys } = context;
     const lockedRun = await lockedParentRunOf(context);
-    await redis.hset(keys.runRecord("parent-run"), "version", 2);
+    await redis.hset(keys.runRecord(PARENT_TASK, "parent-run"), "version", 2);
 
     await expect(openAttemptOf(context, lockedRun).step.run("create-account", () => "a-1")).rejects.toThrow(
       new LostRunLockError('Step "create-account" of run "parent-run"', {

@@ -1,7 +1,8 @@
+import type { RunId } from "../ids.js";
 import type { EngineKeys } from "./engine-keys.js";
 
-export function saveStepKeysOf(keys: EngineKeys, runId: string): string[] {
-  return [keys.runRecord(runId)];
+export function saveStepKeysOf(keys: EngineKeys, task: string, runId: RunId): string[] {
+  return [keys.runRecord(task, runId)];
 }
 
 export const SAVE_STEP_SCRIPT = `

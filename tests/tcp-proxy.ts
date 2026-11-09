@@ -79,7 +79,7 @@ type ArmedReplyCut = {
   markCut: () => void;
 };
 
-function connectedTargetSocketOf(targetUrl: string): Socket {
+function socketConnectingToTarget(targetUrl: string): Socket {
   const { hostname, port } = new URL(targetUrl);
   return connect(port === "" ? DEFAULT_REDIS_PORT : Number(port), hostname);
 }
@@ -120,7 +120,7 @@ export async function startTcpProxy(targetUrl: string): Promise<TcpProxy> {
 
   const server = createServer((clientSocket) => {
     acceptedConnectionCount += 1;
-    const targetSocket = connectedTargetSocketOf(currentTargetUrl);
+    const targetSocket = socketConnectingToTarget(currentTargetUrl);
     track(clientSocket);
     track(targetSocket);
     let isForwardingStopped = false;

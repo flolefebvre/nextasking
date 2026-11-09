@@ -5,16 +5,17 @@ import { createNextasking, defineTask } from "../src/index.js";
 import { closeNextaskingAndCheckItsDuration } from "./close-nextasking-and-check-its-duration.js";
 import { createHandlerGate } from "./handler-gate.js";
 import { integrationTest } from "./integration-test.js";
-import { PRIMARY_AND_REPLICA_STARTUP_BOUND_IN_MILLISECONDS, startPrimaryAndReplica } from "./primary-and-replica.js";
+import {
+  PRIMARY_AND_REPLICA_STARTUP_BOUND_IN_MILLISECONDS,
+  REPLICA_CATCH_UP_TIMEOUT_IN_MILLISECONDS,
+  startPrimaryAndReplica,
+} from "./primary-and-replica.js";
 import { createRecordingLogger, waitForLogMessage } from "./recording-logger.js";
 import { savedSteps } from "./saved-steps.js";
 import { storedRun } from "./stored-run.js";
 import { providedRedisUrl } from "./valkey-container.js";
-import { withRedis } from "./with-redis.js";
 
 type StepOutcome = { execution: number; result: string } | { execution: number; error: unknown };
-
-const REPLICA_ACKNOWLEDGEMENT_TIMEOUT_IN_MILLISECONDS = 5_000;
 
 const HANDLER_ENTRY_TIMEOUT_IN_MILLISECONDS = 10_000;
 
@@ -27,7 +28,7 @@ integrationTest.skipIf(providedRedisUrl() !== undefined)(
   {
     timeout:
       PRIMARY_AND_REPLICA_STARTUP_BOUND_IN_MILLISECONDS +
-      REPLICA_ACKNOWLEDGEMENT_TIMEOUT_IN_MILLISECONDS +
+      REPLICA_CATCH_UP_TIMEOUT_IN_MILLISECONDS +
       2 * HANDLER_ENTRY_TIMEOUT_IN_MILLISECONDS +
       STEP_OUTCOME_TIMEOUT_IN_MILLISECONDS +
       RUN_COMPLETION_TIMEOUT_IN_MILLISECONDS +
@@ -69,9 +70,7 @@ integrationTest.skipIf(providedRedisUrl() !== undefined)(
 
     try {
       const { runId } = await nextasking.dispatch("send-newsletter", { issueId: "issue-7" });
-      const replicaCountHoldingTheDispatch = await withRedis(primaryAndReplica.primaryUrl, (primary) =>
-        primary.sendCommand(["WAIT", "1", String(REPLICA_ACKNOWLEDGEMENT_TIMEOUT_IN_MILLISECONDS)]),
-      );
+      await primaryAndReplica.waitUntilReplicaHoldsEveryWriteSoFar();
       await primaryAndReplica.cutReplication();
       await nextasking.startWorker();
       await vi.waitFor(() => expect(handlerGate.inFlightCount()).toBe(1), {
@@ -109,7 +108,6 @@ integrationTest.skipIf(providedRedisUrl() !== undefined)(
         },
         savedStepsOnThePromotedReplica: {},
       });
-      expect(replicaCountHoldingTheDispatch).toBe(1);
       expect(runOnThePrimary).toMatchObject({ state: "executing" });
       expect(runOnTheReplica).toMatchObject({ state: "pending" });
       expect(runOnTheReplica).not.toHaveProperty("lockToken");

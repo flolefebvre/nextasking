@@ -2,7 +2,6 @@ import { expect } from "vitest";
 
 import { fixtureRecordsOf } from "./fixture-records.js";
 import { integrationTest } from "./integration-test.js";
-import { runQueuePosition } from "./run-queue-position.js";
 import { storedRun } from "./stored-run.js";
 import { startWorkerProcess } from "./worker-process.js";
 import { createWorkerProcessNextasking } from "./worker-process-nextasking.js";
@@ -29,7 +28,6 @@ integrationTest(
       const shutdownDurationInMilliseconds = Date.now() - signalSentAt;
       const records = await fixtureRecordsOf(redisUrl, keyPrefix, "wait-for-abort");
       const run = await storedRun(redisUrl, keyPrefix, "wait-for-abort", runId);
-      const position = await runQueuePosition(redisUrl, keyPrefix, "wait-for-abort", runId);
 
       expect(exit).toEqual({ code: 0, signal: null });
       expect(shutdownDurationInMilliseconds).toBeGreaterThanOrEqual(1000);
@@ -57,8 +55,7 @@ integrationTest(
         fields: { task: "wait-for-abort", runId, attempt: 1 },
         message: "run yielded at shutdown",
       });
-      expect(run).toMatchObject({ errors: [] });
-      expect(position).toEqual({ isWaiting: true, attemptsMade: 0, stallCount: 0 });
+      expect(run).toMatchObject({ errors: [], state: "pending", attempt: "1", stalls: "0" });
     } finally {
       await workerProcess.stop();
       await nextasking.close();

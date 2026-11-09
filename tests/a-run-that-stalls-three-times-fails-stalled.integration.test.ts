@@ -7,7 +7,7 @@ import { startStallCheckedWorkerProcesses } from "./stall-checked-worker-process
 import { storedRun } from "./stored-run.js";
 
 integrationTest(
-  "a run whose attempts stall three times with no step saved fails stalled, in a worker other than the one that counted the stalls",
+  "a run whose attempts stall three times with no step saved fails stalled, failed once by the worker that finds its third stall",
   { timeout: 60_000 },
   async ({ redisUrl, keyPrefix }) => {
     const { nextasking, stallCheckingProcess, blockingProcess, stop } = await startStallCheckedWorkerProcesses(
@@ -17,22 +17,25 @@ integrationTest(
 
     try {
       const { runId } = await nextasking.dispatch("block-event-loop", { blockInMilliseconds: 4000 });
-      await waitForLogMessage(blockingProcess.logLines, "run failed", { timeout: 40_000 });
+      await waitForLogMessage(stallCheckingProcess.logLines, "run failed", { timeout: 40_000 });
       const run = await storedRun(redisUrl, keyPrefix, "block-event-loop", runId);
       const attemptsStarted = await fixtureRecordsOf(redisUrl, keyPrefix, "block-event-loop");
+      const linesOfTheRun = [...stallCheckingProcess.logLines, ...blockingProcess.logLines].filter(
+        (line) => line.fields.runId === runId,
+      );
 
       const runFields = { task: "block-event-loop", runId, attempt: 1 };
-      expect(stallCheckingProcess.logLines.filter((line) => line.message === "attempt stalled")).toEqual([
-        { level: "warn", fields: runFields, message: "attempt stalled" },
-        { level: "warn", fields: runFields, message: "attempt stalled" },
-        { level: "warn", fields: runFields, message: "attempt stalled" },
+      expect(linesOfTheRun.filter((line) => line.message === "attempt stalled")).toEqual([
+        { level: "warn", fields: { ...runFields, stalls: 1 }, message: "attempt stalled" },
+        { level: "warn", fields: { ...runFields, stalls: 2 }, message: "attempt stalled" },
       ]);
       expect(attemptsStarted).toEqual([
         { runId, event: "started" },
         { runId, event: "started" },
         { runId, event: "started" },
       ]);
-      expect(blockingProcess.logLines.find((line) => line.message === "run failed")).toEqual({
+      expect(linesOfTheRun.filter((line) => line.message === "run failed")).toHaveLength(1);
+      expect(stallCheckingProcess.logLines.find((line) => line.message === "run failed")).toEqual({
         level: "error",
         fields: {
           ...runFields,
@@ -46,7 +49,7 @@ integrationTest(
         },
         message: "run failed",
       });
-      expect(blockingProcess.logLines.map((line) => line.message)).not.toContain("run completed");
+      expect(linesOfTheRun.map((line) => line.message)).not.toContain("run completed");
       expect(run).toMatchObject({
         reason: "stalled",
         errors: [{ attempt: 1, name: "StalledRunError", message: expect.stringContaining("stalled 3 times") }],

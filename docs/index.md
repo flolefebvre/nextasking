@@ -1,6 +1,6 @@
 # nextasking
 
-Events and background tasks for a Next.js app, on BullMQ with Redis or Valkey. Define tasks and events, list them in `createNextasking`, dispatch a task or emit an event by name from server code, and run them in a worker started from `instrumentation.ts`, in `next start`.
+Typed background tasks and events for Next.js, on Redis or Valkey. Define tasks and events in a few files, list them in one `createNextasking` call, dispatch a task or emit an event by name from server code, and run them in a worker embedded in `next start`.
 
 ## Rules that hold everywhere
 
@@ -118,8 +118,7 @@ import {
   defineListener,
   defineScheduledTask,
   defineTask,
-  fanOutFailed,
-  FanOutNotReplayableError,
+  InstanceClosedError,
   InvalidPayloadError,
   NonRetriableError,
   RedisUnavailableError,
@@ -145,8 +144,6 @@ import type {
   EventWithRuns,
   FailureNoticeError,
   FailureReason,
-  FanOutFailedPayload,
-  FanOutState,
   IanaTimeZone,
   ListedRun,
   ListedSchedule,
@@ -160,7 +157,6 @@ import type {
   PayloadSchema,
   PreviousFiring,
   Register,
-  ReplayedEvent,
   ReplayedRun,
   Run,
   RunCounts,
@@ -207,12 +203,11 @@ import type {
 | `defineListener`           | Defines a listener: a task subscribed to one event, taking that event's payload                                                      |
 | `defineScheduledTask`      | Defines a scheduled task: a name, a cron with its time zone and a handler, and no payload                                            |
 | `runFailed`                | The built-in event `nextasking/run.failed`, emitted on each final failure of a run; listen to it, never emit it                      |
-| `fanOutFailed`             | The built-in event `nextasking/fan-out.failed`, emitted on each final failure of a fan-out; listen to it, never emit it              |
 | `createNextasking`         | Builds the instance from the connection, the prefix, the logger, the events and the tasks                                            |
 | `UnknownTaskError`         | Thrown by `dispatch`, `replay`, `getRun` and `listRuns` for a task name the instance doesn't list                                    |
-| `UnknownEventError`        | Thrown by `emit`, `replayEvent` and `getEvent` for an event name the instance doesn't list                                           |
+| `UnknownEventError`        | Thrown by `emit` and `getEvent` for an event name the instance doesn't list                                                          |
 | `RunNotReplayableError`    | Thrown by `replay` for a run that is unknown, removed or not failed                                                                  |
-| `FanOutNotReplayableError` | Thrown by `replayEvent` for a fan-out that is unknown, removed or not failed                                                         |
+| `InstanceClosedError`      | Thrown by a call on the instance once it has closed, as at the worker's shutdown, a call still waiting for Redis included            |
 | `InvalidPayloadError`      | Thrown by `dispatch` and `emit` for a payload the schema refuses                                                                     |
 | `NonRetriableError`        | Thrown by a handler to fail its run at once, skipping the retries left                                                               |
 | `RedisUnavailableError`    | Thrown by every call on the instance when Redis doesn't answer within `giveUpAfter`; carries `runId` or `eventId`                    |
@@ -229,11 +224,9 @@ import type {
 | `EventId`                  | The type of an event id: a string                                                                                                    |
 | `EventName`                | The union of the registered instance's event names, the built-in events included; `never` without `Register`                         |
 | `EventOptions`             | The type of `defineEvent`'s options: `schema`                                                                                        |
-| `EventWithRuns`            | The type `getEvent` returns: `event`, `eventId`, `fanOut` and `runsByListener`                                                       |
+| `EventWithRuns`            | The type `getEvent` returns: `event`, `eventId` and `runsByListener`                                                                 |
 | `FailureReason`            | The type of a failed run's `reason`: `"retries exhausted"`, `"non-retriable"`, `"stalled"` or `"unknown task"`                       |
 | `FailureNoticeError`       | The type of a failure notice's `error`: `name`, `message` and `stack`                                                                |
-| `FanOutFailedPayload`      | The type of `fanOutFailed`'s payload: `eventName`, `eventId`, `error` and `failedAt`                                                 |
-| `FanOutState`              | The type of `getEvent`'s `fanOut`: `"pending"`, `"completed"` or `"failed"`                                                          |
 | `IanaTimeZone`             | The type of a schedule's `timezone`: an IANA time zone name, a string                                                                |
 | `ListedRun`                | The type of a run in `listRuns`' page: a `Run` without `payload`, `errors` and `steps`, with `lastErrorMessage`                      |
 | `ListedSchedule`           | The type of one entry `listSchedules` returns: `task`, `cron`, `timezone`, `nextFiringAt` and `previousFiring`                       |
@@ -247,7 +240,6 @@ import type {
 | `PayloadSchema`            | The type a `schema` option takes: a Standard Schema whose input and output are JSON                                                  |
 | `PreviousFiring`           | The type of a listed schedule's `previousFiring`: `scheduledAt` and `runId`                                                          |
 | `Register`                 | The interface you augment with your instance's type; it types names and a handler's calls                                            |
-| `ReplayedEvent`            | The type `replayEvent` returns: `eventId`                                                                                            |
 | `ReplayedRun`              | The type `replay` returns: `runId`                                                                                                   |
 | `Run`                      | The type `getRun` returns: a run of a registered task, narrowed by `task` and by `state`                                             |
 | `RunCounts`                | The type `countRuns` returns: a count per registered task and per state                                                              |
@@ -283,4 +275,4 @@ import type {
 | `NextaskingFake`           | From `./testing`: the type `fakeNextasking` returns: `dispatches`, `emits`, `replays` and `restore`                                  |
 | `RecordedDispatch`         | From `./testing`: the type of one entry of a fake's `dispatches`: `task`, `payload`, `runId` and `delay`                             |
 | `RecordedEmit`             | From `./testing`: the type of one entry of a fake's `emits`: `event`, `payload` and `eventId`                                        |
-| `RecordedReplay`           | From `./testing`: the type of one entry of a fake's `replays`: `task` and `runId`, or `event` and `eventId`                          |
+| `RecordedReplay`           | From `./testing`: the type of one entry of a fake's `replays`: `task` and `runId`                                                    |

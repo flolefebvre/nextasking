@@ -1,5 +1,5 @@
-export { fanOutFailed, runFailed } from "./built-in-events.js";
-export type { FailureNoticeError, FanOutFailedPayload, RunFailedPayload } from "./built-in-events.js";
+export { runFailed } from "./built-in-events.js";
+export type { FailureNoticeError, RunFailedPayload } from "./built-in-events.js";
 export type { ConnectionConfig } from "./connection.js";
 export { defineEvent, defineListener, defineScheduledTask, defineTask } from "./definitions.js";
 export type {
@@ -21,7 +21,7 @@ export type { EventDefinitionSummary, TaskDefinitionSummary } from "./definition
 export type { Duration } from "./durations.js";
 export type { DispatchedRun, DispatchOptions, EmitOptions, EmittedEvent, ReplayedRun } from "./enqueue-requests.js";
 export {
-  FanOutNotReplayableError,
+  InstanceClosedError,
   InvalidPayloadError,
   NonRetriableError,
   RedisUnavailableError,

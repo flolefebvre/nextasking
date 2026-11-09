@@ -21,13 +21,6 @@ export type RunFailedPayload = {
   eventId?: EventId;
 };
 
-export type FanOutFailedPayload = {
-  eventName: string;
-  eventId: EventId;
-  error: FailureNoticeError;
-  failedAt: IsoTimestamp;
-};
-
 function payloadSchemaBuiltInto<BuiltInPayload>(): StandardSchemaV1<BuiltInPayload, BuiltInPayload> {
   return {
     "~standard": {
@@ -40,11 +33,7 @@ function payloadSchemaBuiltInto<BuiltInPayload>(): StandardSchemaV1<BuiltInPaylo
 
 export const runFailed = defineEvent("nextasking/run.failed", { schema: payloadSchemaBuiltInto<RunFailedPayload>() });
 
-export const fanOutFailed = defineEvent("nextasking/fan-out.failed", {
-  schema: payloadSchemaBuiltInto<FanOutFailedPayload>(),
-});
-
-export const BUILT_IN_EVENTS = [runFailed, fanOutFailed] as const;
+export const BUILT_IN_EVENTS = [runFailed] as const;
 
 export type BuiltInEvent = (typeof BUILT_IN_EVENTS)[number];
 

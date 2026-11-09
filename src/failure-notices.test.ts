@@ -1,7 +1,7 @@
 import * as v from "valibot";
 import { expect, test } from "vitest";
 
-import { fanOutFailed, runFailed } from "./built-in-events.js";
+import { runFailed } from "./built-in-events.js";
 import { defineListener, defineTask } from "./definitions.js";
 import type { AnyTaskDefinition } from "./definitions.js";
 import { builtFailureNoticeOf } from "./failure-notices.js";
@@ -86,15 +86,13 @@ test("a replayed run that fails again gets a notice of its own event id", () => 
 });
 
 test("a failing listener of a built-in event gets an empty notice", () => {
-  for (const builtInEvent of [runFailed, fanOutFailed]) {
-    const { failureNotice: notice } = builtFailureNoticeOf(
-      { ...FAILING_RUN, task: "alert-on-call", sourceEvent: { eventName: builtInEvent.name, eventId: "notice-1" } },
-      { error: ERROR, reason: "non-retriable" },
-      workerDefinitionsOf([sendEmail, alertOnCall] as AnyTaskDefinition[]),
-    );
+  const { failureNotice: notice } = builtFailureNoticeOf(
+    { ...FAILING_RUN, task: "alert-on-call", sourceEvent: { eventName: runFailed.name, eventId: "notice-1" } },
+    { error: ERROR, reason: "non-retriable" },
+    workerDefinitionsOf([sendEmail, alertOnCall] as AnyTaskDefinition[]),
+  );
 
-    expect(notice.runs).toEqual([]);
-  }
+  expect(notice.runs).toEqual([]);
 });
 
 test("a release with no runFailed listener gets an empty notice", () => {

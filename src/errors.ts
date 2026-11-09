@@ -23,14 +23,14 @@ export class UnknownEventError extends Error {
 
 export type ReplayRefusal = "not found" | "not failed" | "written by a newer release";
 
-function shownReplayRefusalOf(replayRefusal: ReplayRefusal, replayedKind: "run" | "fan-out", idName: string): string {
+function shownReplayRefusalOf(replayRefusal: ReplayRefusal): string {
   switch (replayRefusal) {
     case "not found":
-      return `no such ${replayedKind} is kept, its ${idName} is unknown or the ${replayedKind} was removed`;
+      return "no such run is kept, its id is unknown or the run was removed";
     case "not failed":
       return "it is not failed";
     case "written by a newer release":
-      return `a newer release wrote the ${replayedKind}'s record, which this release cannot read: replay it from the newer release`;
+      return "a newer release wrote the run's record, which this release cannot read: replay it from the newer release";
   }
 }
 
@@ -38,19 +38,7 @@ export class RunNotReplayableError extends Error {
   override readonly name = "RunNotReplayableError";
 
   constructor(taskName: string, runId: string, replayRefusal: ReplayRefusal) {
-    super(
-      `Run "${runId}" of task "${taskName}" can't be replayed: ${shownReplayRefusalOf(replayRefusal, "run", "id")}.`,
-    );
-  }
-}
-
-export class FanOutNotReplayableError extends Error {
-  override readonly name = "FanOutNotReplayableError";
-
-  constructor(eventName: string, eventId: string, replayRefusal: ReplayRefusal) {
-    super(
-      `Fan-out "${eventId}" of event "${eventName}" can't be replayed: ${shownReplayRefusalOf(replayRefusal, "fan-out", "event id")}.`,
-    );
+    super(`Run "${runId}" of task "${taskName}" can't be replayed: ${shownReplayRefusalOf(replayRefusal)}.`);
   }
 }
 

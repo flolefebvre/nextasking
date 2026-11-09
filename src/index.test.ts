@@ -61,7 +61,7 @@ describe("the root export", () => {
     const exportedNames = Object.keys(root).sort();
 
     expect(exportedNames).toEqual([
-      "FanOutNotReplayableError",
+      "InstanceClosedError",
       "InvalidPayloadError",
       "NonRetriableError",
       "RedisUnavailableError",
@@ -74,7 +74,6 @@ describe("the root export", () => {
       "defineListener",
       "defineScheduledTask",
       "defineTask",
-      "fanOutFailed",
       "runFailed",
     ]);
   });
@@ -113,7 +112,7 @@ describe("the root export", () => {
 
   test("exports the registered task and event names", () => {
     expectTypeOf<TaskName>().toEqualTypeOf<RegisteredTaskName>();
-    expectTypeOf<EventName>().toEqualTypeOf<"user.signed-up" | "nextasking/run.failed" | "nextasking/fan-out.failed">();
+    expectTypeOf<EventName>().toEqualTypeOf<"user.signed-up" | "nextasking/run.failed">();
   });
 
   test("types a run by its task, then by its state", () => {
@@ -199,7 +198,6 @@ describe("the root export", () => {
     expect(nextasking.eventDefinitions).toEqual([
       { name: "user.signed-up", listenerNames: ["create-default-workspace"] },
       { name: "nextasking/run.failed", listenerNames: [] },
-      { name: "nextasking/fan-out.failed", listenerNames: [] },
     ]);
     expect(Object.isFrozen(nextasking.taskDefinitions[2]?.schedule)).toBe(true);
     expectTypeOf(runNow).parameter(0).toEqualTypeOf<TaskName>();

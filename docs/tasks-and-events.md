@@ -285,6 +285,7 @@ try {
 - `InvalidPayloadError`: the schema refused the payload. `issues` lists each issue as `{ path, message }`, with `path` dotted (`address.zipCode`) or `(root)`. Messages are redacted of payload values (`[redacted]`), so the error is safe to log. Its message names the task or the event.
 - All three are thrown before anything is stored.
 - `RedisUnavailableError`: Redis didn't answer in time. See [When Redis is down](#when-redis-is-down).
+- `InstanceClosedError`: the instance has closed, as it does when its worker shuts down; a call made then, or still waiting for Redis, throws it at once.
 
 ## When Redis is down
 

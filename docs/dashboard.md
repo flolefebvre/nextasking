@@ -178,7 +178,7 @@ export async function runNow(taskName: TaskName) {
 
 ## What reads see, and what they cost
 
-- A read sees only the runs of tasks the instance lists. Runs of a task the running release doesn't define, removed from the code or known only to a newer release, never appear in `listRuns` or `countRuns`. Point a BullMQ tool at the queue to see those.
+- A read sees only the runs of tasks the instance lists. Runs of a task the running release doesn't define, removed from the code or known only to a newer release, never appear in `listRuns` or `countRuns`.
 - Fan-outs and firings never appear as runs.
 - Retention is shared: completed runs are kept 24 hours and at most 1,000, failed runs 14 days and at most 10,000, per queue, across every task, fan-out and firing. A busy task can push another task's completed runs out within minutes.
 - No read is a snapshot. `countRuns` and `listRuns` walk the queue in batches while runs keep moving, so totals can be off by the runs that moved during the walk.

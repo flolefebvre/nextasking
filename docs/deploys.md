@@ -78,7 +78,7 @@ const unfinishedRunCount = Object.values(unfinishedCounts).reduce((total, count)
 
 - Wait for `unfinishedRunCount` to be 0 and for the deploy overlap to have ended: the old release may still dispatch until its last process stops.
 - After deploy 2, `replay`, `getRun` and `listRuns` throw `UnknownTaskError` for the name: replay its failed runs before, or accept losing them.
-- A scheduled task is removed in one deploy: the new release's boot removes its schedule, so nothing fires afterwards. A run an old worker started from a firing during the overlap, and that no old worker finished, is handed back and fails `unknown task` 30 minutes later. The new release's reads don't list that task's runs, so check `countRuns` for it before the deploy, deploy away from its firing times, and point a BullMQ tool at the queue to find a run left behind.
+- A scheduled task is removed in one deploy: the new release's boot removes its schedule, so nothing fires afterwards. A run an old worker started from a firing during the overlap, and that no old worker finished, is handed back and fails `unknown task` 30 minutes later. The new release's reads don't list that task's runs, so check `countRuns` for it before the deploy, and deploy away from its firing times.
 
 ### A listener
 

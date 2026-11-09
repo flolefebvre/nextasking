@@ -3,8 +3,8 @@ import * as v from "valibot";
 import { describe, expect, expectTypeOf, test, vi } from "vitest";
 import { z } from "zod";
 
-import { fanOutFailed, runFailed } from "./built-in-events.js";
-import type { FanOutFailedPayload, RunFailedPayload } from "./built-in-events.js";
+import { runFailed } from "./built-in-events.js";
+import type { RunFailedPayload } from "./built-in-events.js";
 import { defineEvent, defineListener, defineScheduledTask, defineTask } from "./definitions.js";
 import { InvalidPayloadError, UnknownEventError, UnknownTaskError } from "./errors.js";
 import type { Duration } from "./durations.js";
@@ -113,7 +113,7 @@ describe("createNextasking", () => {
     );
   });
 
-  test.each([runFailed, fanOutFailed])("rejects the built-in event $name listed in events", (builtInEvent) => {
+  test.each([runFailed])("rejects the built-in event $name listed in events", (builtInEvent) => {
     expect(() => createNextasking({ connection: { url: UNREACHABLE_URL }, events: [builtInEvent], tasks: [] })).toThrow(
       `Event "${builtInEvent.name}" is built in and added automatically: remove it from events, and listen to it as it is`,
     );
@@ -703,18 +703,11 @@ describe("built-in events", () => {
     },
   });
 
-  const alertOnFanOutFailed = defineListener("alert-on-fan-out-failed", {
-    on: fanOutFailed,
-    handler: async ({ payload }) => {
-      expectTypeOf(payload).toEqualTypeOf<FanOutFailedPayload>();
-    },
-  });
-
   function createAlertingNextasking() {
     return createNextasking({
       connection: { url: UNREACHABLE_URL },
       events: [invoicePaid],
-      tasks: [recordInvoicePayment, alertOnRunFailed, alertOnFanOutFailed],
+      tasks: [recordInvoicePayment, alertOnRunFailed],
     });
   }
 
@@ -724,13 +717,11 @@ describe("built-in events", () => {
     expect(nextasking.eventDefinitions).toEqual([
       { name: "invoice.paid", listenerNames: ["record-invoice-payment"] },
       { name: "nextasking/run.failed", listenerNames: ["alert-on-run-failed"] },
-      { name: "nextasking/fan-out.failed", listenerNames: ["alert-on-fan-out-failed"] },
     ]);
     expect(nextasking.isEventName("nextasking/run.failed")).toBe(false);
-    expect(nextasking.isEventName("nextasking/fan-out.failed")).toBe(false);
   });
 
-  test.each(["nextasking/run.failed", "nextasking/fan-out.failed"])(
+  test.each(["nextasking/run.failed"])(
     "can't be emitted: emit rejects %s before opening any connection",
     async (builtInEventName) => {
       const nextasking = createAlertingNextasking();

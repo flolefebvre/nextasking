@@ -8,7 +8,6 @@ import {
   defineListener,
   defineScheduledTask,
   defineTask,
-  fanOutFailed,
   InvalidPayloadError,
   RedisUnavailableError,
   runFailed,
@@ -269,4 +268,4 @@ type ShopEventName = "order.placed" | "order.cancelled";
 
 type ShopTask = typeof sendInvoice | typeof reserveStock | typeof alertOnRunFailed | typeof closeBooks;
 
-type ShopEvent = typeof orderPlaced | typeof orderCancelled | typeof runFailed | typeof fanOutFailed;
+type ShopEvent = typeof orderPlaced | typeof orderCancelled | typeof runFailed;

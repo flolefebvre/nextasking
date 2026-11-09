@@ -54,7 +54,8 @@ integrationTest(
         await waitForLogMessage(workerProcess.logLines, "run completed", { timeout: 20_000 });
 
         const [started, aborted] = recordsBeforeRedisAnswers;
-        const abortedAfterTheStartInMilliseconds = aborted!.at - started!.at;        expect(Number(runStoredDuringTheCut?.lockedUntil) - Number(runStoredDuringTheCut?.startedAt)).toBe(
+        const abortedAfterTheStartInMilliseconds = aborted!.at - started!.at;
+        expect(Number(runStoredDuringTheCut?.lockedUntil) - Number(runStoredDuringTheCut?.startedAt)).toBe(
           LOCK_DURATION_IN_MILLISECONDS,
         );
         expect(recordsBeforeRedisAnswers).toEqual([

@@ -50,12 +50,10 @@ integrationTest.skipIf(providedRedisUrl() !== undefined)(
         await nextasking.dispatch("charge-card", {}, { runId: "charge-ada" });
         await vi.waitFor(() => expect(handlerGate.inFlightCount()).toBe(1), { timeout: 10_000 });
         await admin.sendCommand(["CONFIG", "SET", "maxmemory", MAXMEMORY_BELOW_THE_USED_MEMORY]);
-        const dispatchRejection = await nextasking
-          .dispatch("charge-card", {}, { runId: "charge-grace" })
-          .then(
-            () => undefined,
-            (error: unknown) => error,
-          );
+        const dispatchRejection = await nextasking.dispatch("charge-card", {}, { runId: "charge-grace" }).then(
+          () => undefined,
+          (error: unknown) => error,
+        );
 
         handlerGate.release(1);
         await delay(OUT_OF_MEMORY_STRETCH_IN_MILLISECONDS);

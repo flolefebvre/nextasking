@@ -979,7 +979,13 @@ test("an out-of-memory reply lasting several ticks, with answered reads in betwe
   const outOfMemory = { kind: "failed", error: OUT_OF_MEMORY_REPLY } as const;
   const tickRefusedWhileOutOfMemory: WorkerLoopEngine["tick"] = async (request) =>
     isOutOfMemory
-      ? { promote: outOfMemory, renewals: outOfMemory, taskNames: { kind: "replied", reply: [] }, prune: undefined }
+      ? {
+          promote: outOfMemory,
+          renewals: outOfMemory,
+          taskNames: { kind: "replied", reply: [] },
+          prune: undefined,
+          dueSchedules: undefined,
+        }
       : engine.tick(request);
   const fetchRefusedWhileOutOfMemory: WorkerLoopEngine["fetch"] = async (request) =>
     isOutOfMemory ? Promise.reject(OUT_OF_MEMORY_REPLY) : engine.fetch(request);

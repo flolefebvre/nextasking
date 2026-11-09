@@ -14,6 +14,7 @@ import type {
   EnqueueRequest,
   Engine,
   FailureNotice,
+  DueSchedulesReply,
   FetchReply,
   FetchRequest,
   FireReply,
@@ -779,16 +780,31 @@ export function createInMemoryEngine({ now = () => Date.now() }: InMemoryEngineO
 
   const replied = <Reply>(reply: Reply): TickCommandReply<Reply> => ({ kind: "replied", reply });
 
+  const dueSchedulesOf = (scheduledTaskNames: readonly string[]): DueSchedulesReply => {
+    const serverInstant = now();
+    const dueSchedules = scheduledTaskNames.flatMap((task) => {
+      const storedSchedule = schedulesByTask.get(task);
+      if (storedSchedule === undefined || storedSchedule.nextFiringAt > serverInstant) {
+        return [];
+      }
+      const { cron, timezone, nextFiringAt } = storedSchedule;
+      return [{ task, cron, timezone, nextFiringAt }];
+    });
+    return { serverInstant, dueSchedules };
+  };
+
   const tick = async ({
     heldLocks,
     lockDurationInMilliseconds,
     prune: pruneRequest,
     isPromoteIncluded = true,
+    scheduledTaskNames = [],
   }: TickRequest): Promise<TickReply> => ({
     promote: isPromoteIncluded ? replied(await promote()) : undefined,
     renewals: replied(await renew({ heldLocks, lockDurationInMilliseconds })),
     taskNames: replied([...taskNames]),
     prune: pruneRequest === undefined ? undefined : replied(await prune(pruneRequest)),
+    dueSchedules: scheduledTaskNames.length === 0 ? undefined : replied(dueSchedulesOf(scheduledTaskNames)),
   });
 
   const recorded =

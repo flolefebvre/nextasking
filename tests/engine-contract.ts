@@ -713,6 +713,33 @@ export function defineEngineContractTests(contractTest: EngineContractTest): voi
     },
   );
 
+  contractTest(
+    "a tick reads the due schedules among the task names it is given, with the server's instant",
+    async (harness) => {
+      const { engine } = harness;
+      const pastInstant = await harness.pastInstant();
+      const dueReport = hourlyReportOf(pastInstant, "due-report");
+      await engine.syncSchedules({
+        schedulesToSync: [
+          dueReport,
+          hourlyReportOf(pastInstant + HOUR_IN_MILLISECONDS, "later-report"),
+          hourlyReportOf(pastInstant, "undeclared-report"),
+        ],
+      });
+
+      const reply = await engine.tick({
+        heldLocks: [],
+        lockDurationInMilliseconds: LOCK_DURATION_IN_MILLISECONDS,
+        isPromoteIncluded: false,
+        scheduledTaskNames: ["due-report", "later-report", "report-without-a-record"],
+      });
+
+      expect(reply.dueSchedules).toEqual(repliedOf({ serverInstant: expect.any(Number), dueSchedules: [dueReport] }));
+      const serverInstant = reply.dueSchedules?.kind === "replied" ? reply.dueSchedules.reply.serverInstant : 0;
+      expect(serverInstant).toBeGreaterThan(pastInstant);
+    },
+  );
+
   contractTest("the server instant is the engine's clock, after an instant already past", async (harness) => {
     const pastInstant = await harness.pastInstant();
 

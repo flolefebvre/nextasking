@@ -262,11 +262,16 @@ export type ReplayReply = { kind: "replayed"; task: string } | NotFoundReply | W
 
 export type MakeDueReply = { kind: "madeDue"; madeDueRunCount: number };
 
+export type DueSchedule = ScheduleSummary & { nextFiringAt: EpochMilliseconds };
+
+export type DueSchedulesReply = { serverInstant: EpochMilliseconds; dueSchedules: DueSchedule[] };
+
 export type TickRequest = {
   heldLocks: readonly HeldLock[];
   lockDurationInMilliseconds: DurationInMilliseconds;
   prune?: PruneRequest;
   isPromoteIncluded?: boolean;
+  scheduledTaskNames?: readonly string[];
 };
 
 export type TickCommandReply<Reply> = { kind: "replied"; reply: Reply } | { kind: "failed"; error: Error };
@@ -276,6 +281,7 @@ export type TickReply = {
   renewals: TickCommandReply<LockRenewal[]>;
   taskNames: TickCommandReply<string[]>;
   prune: TickCommandReply<PruneReply> | undefined;
+  dueSchedules: TickCommandReply<DueSchedulesReply> | undefined;
 };
 
 export type Engine = {
@@ -822,23 +828,72 @@ function tickCommandReplyOf<Reply>(
   }
 }
 
+const SCHEDULE_FIELDS_READ_BY_THE_TICK = ["version", "cron", "timezone", "nextFiringAt"] as const;
+
+function dueScheduleOf(task: string, storedFields: unknown, serverInstant: EpochMilliseconds): DueSchedule | undefined {
+  if (!isStoredValueList(storedFields) || storedFields.length !== SCHEDULE_FIELDS_READ_BY_THE_TICK.length) {
+    throw unreadableScheduleError(task, storedFields);
+  }
+  const [storedVersion, cron, timezone, storedNextFiringAt] = storedFields;
+  if (recordVersionOf(storedVersion) !== RECORD_VERSION) {
+    return undefined;
+  }
+  const nextFiringAt = storedIntegerOf(nullIfAbsent(storedNextFiringAt));
+  if (cron == null || timezone == null || nextFiringAt === undefined) {
+    throw unreadableScheduleError(task, storedFields);
+  }
+  return nextFiringAt <= serverInstant ? { task, cron, timezone, nextFiringAt } : undefined;
+}
+
+function unreadableScheduleError(task: string, storedFields: unknown): Error {
+  return new Error(`The schedule record of task "${task}" cannot be read: ${JSON.stringify(storedFields)}`);
+}
+
+function dueSchedulesReplyOf(
+  [timeResult, ...scheduleResults]: readonly PipelineResult[],
+  scheduledTaskNames: readonly string[],
+): TickCommandReply<DueSchedulesReply> {
+  const error = [timeResult, ...scheduleResults].find((result) => result?.[0] != null)?.[0];
+  if (error != null) {
+    return { kind: "failed", error };
+  }
+  return tickCommandReplyOf([null, timeResult?.[1]], (timeReply) => {
+    const serverInstant = serverInstantOf(timeReply);
+    const dueSchedules = scheduledTaskNames.flatMap((task, position) => {
+      const dueSchedule = dueScheduleOf(task, scheduleResults[position]?.[1], serverInstant);
+      return dueSchedule === undefined ? [] : [dueSchedule];
+    });
+    return { serverInstant, dueSchedules };
+  });
+}
+
+function scheduledTaskNamesOf(request: TickRequest): readonly string[] {
+  return request.scheduledTaskNames ?? [];
+}
+
 function tickReplyOf(results: PipelineResult[] | null, request: TickRequest): TickReply {
   if (results === null) {
     throw new Error("The tick pipeline was discarded before it ran");
   }
   const remainingResults = [...results];
-  const nextCommandReplyOf = <Reply>(readReply: (reply: unknown) => Reply): TickCommandReply<Reply> => {
-    const result = remainingResults.shift();
-    if (result === undefined) {
+  const nextResultsOf = (count: number): PipelineResult[] => {
+    if (remainingResults.length < count) {
       throw new Error(`The tick pipeline answered ${String(results.length)} commands, fewer than it sent`);
     }
-    return tickCommandReplyOf(result, readReply);
+    return remainingResults.splice(0, count);
   };
+  const nextCommandReplyOf = <Reply>(readReply: (reply: unknown) => Reply): TickCommandReply<Reply> =>
+    tickCommandReplyOf(nextResultsOf(1)[0]!, readReply);
+  const scheduledTaskNames = scheduledTaskNamesOf(request);
   return {
     promote: request.isPromoteIncluded === false ? undefined : nextCommandReplyOf(promoteReplyOf),
     renewals: nextCommandReplyOf(renewalsOf),
     taskNames: nextCommandReplyOf(taskNamesOf),
     prune: request.prune === undefined ? undefined : nextCommandReplyOf(pruneReplyOf),
+    dueSchedules:
+      scheduledTaskNames.length === 0
+        ? undefined
+        : dueSchedulesReplyOf(nextResultsOf(1 + scheduledTaskNames.length), scheduledTaskNames),
   };
 }
 
@@ -932,6 +987,13 @@ export function createEngine(client: Redis, prefix: string): Engine {
       pipeline.smembers(keys.tasks);
       if (request.prune !== undefined) {
         runPruneScript.appendTo(pipeline, pruneKeysOf(keys, request.prune.task), pruneArgumentsOf(request.prune));
+      }
+      const scheduledTaskNames = scheduledTaskNamesOf(request);
+      if (scheduledTaskNames.length > 0) {
+        pipeline.time();
+        for (const task of scheduledTaskNames) {
+          pipeline.hmget(keys.schedule(task), ...SCHEDULE_FIELDS_READ_BY_THE_TICK);
+        }
       }
       return tickReplyOf(await pipeline.exec(), request);
     },

@@ -1,10 +1,12 @@
-import { expect, vi } from "vitest";
+import { expect } from "vitest";
 
 import { DAY_IN_MILLISECONDS, endRuns, runIdsOf, SEND_EMAIL_PRUNE_REQUEST } from "../tests/ended-runs.js";
 import { backdateEndedRun, engineTest, engineTestContextOf, fetchedLockedRunsOf } from "../tests/engine-test.js";
 import type { EngineTestContext } from "../tests/engine-test.js";
 import type { EpochMilliseconds } from "./durations.js";
 import { integrationTest } from "../tests/integration-test.js";
+import { readTrafficOf } from "../tests/read-traffic.js";
+import type { ReadTraffic } from "../tests/read-traffic.js";
 import { storedKeyViolationsOf } from "../tests/stored-key-violations.js";
 import { serverInstantInMillisecondsOf } from "../tests/server-instant.js";
 import { withRedis } from "../tests/with-redis.js";
@@ -15,7 +17,6 @@ import { RECORD_VERSION } from "./engine/engine.js";
 import type { LockedRun, RunToCreate, SettleOutcome } from "./engine/engine.js";
 import { createReadApi } from "./read-api.js";
 import type { ReadApi } from "./read-api.js";
-import type { RedisClient, RedisCommand } from "./redis-client.js";
 import { UnknownEventError, UnknownTaskError } from "./errors.js";
 import { deriveFiringRunId, deriveListenerRunId } from "./ids.js";
 import type { RunId } from "./ids.js";
@@ -39,10 +40,6 @@ const READ_COMMAND_NAMES = new Set(["hmget", "get", "lrange", "lindex", "hgetall
 
 const ATTEMPT_ERROR = { attempt: 1, name: "Error", message: "boom", stack: "Error: boom", failedAt: "" };
 
-type SentCommand = { name: string; args: unknown[] };
-
-type ReadTraffic = { roundTripCount: number; sentCommands: SentCommand[] };
-
 function taskDefinitionOf(taskName: string): AnyTaskDefinition {
   return defineScheduledTask(taskName, { schedule: { cron: "0 * * * *" }, handler: async () => undefined });
 }
@@ -57,30 +54,6 @@ function readerOf({ client, keyPrefix }: EngineTestContext, supportedRecordVersi
     declaredSchedules: DECLARED_SCHEDULES,
     supportedRecordVersion,
   });
-}
-
-function sentCommandOf(command: RedisCommand): SentCommand {
-  return command.kind === "builtIn"
-    ? { name: command.name.toLowerCase(), args: [...command.commandArguments] }
-    : { name: "evalsha", args: [...command.keys, ...command.scriptArguments] };
-}
-
-async function readTrafficOf(client: RedisClient, read: () => Promise<unknown>): Promise<ReadTraffic> {
-  const send = vi.spyOn(client, "send");
-  const sendBatch = vi.spyOn(client, "sendBatch");
-  try {
-    await read();
-    return {
-      roundTripCount: send.mock.calls.length + sendBatch.mock.calls.length,
-      sentCommands: [
-        ...send.mock.calls.map(([command]) => sentCommandOf(command)),
-        ...sendBatch.mock.calls.flatMap(([commands]) => commands.map(sentCommandOf)),
-      ],
-    };
-  } finally {
-    send.mockRestore();
-    sendBatch.mockRestore();
-  }
 }
 
 function expectOnlyBoundedReads({ sentCommands }: ReadTraffic): void {

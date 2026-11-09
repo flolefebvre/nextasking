@@ -46,6 +46,7 @@ pnpm test:integration     Vitest, once, the integration project alone, against a
 pnpm test:integration:contended  The integration project twice at once, to check a timing-sensitive scenario under contention; in neither check, gate nor CI (see docs/codebase/testing.md)
 pnpm test:changed         Vitest, once, only the unit and integration tests affected since $CHECK_BASE (default origin/main)
 pnpm test:e2e             Vitest, once, the e2e project: packs the package into a fixture Next app, builds it, runs the scenarios (needs pnpm build first, Docker and the npm registry)
+pnpm test:benchmark       Vitest, once, the benchmark project on a container of its own, asserting the load envelope's floor and printing the throughput; run before a release, in neither check, gate nor CI (see docs/codebase/testing.md)
 ```
 
 ## Verification

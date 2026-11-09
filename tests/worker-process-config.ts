@@ -8,7 +8,10 @@ export type WorkerProcessConfig = {
   connection?: ConnectionConfig;
   startWorkerOptions?: StartWorkerOptions;
   isFailureNoticeRecorded?: boolean;
+  definitions?: WorkerProcessDefinitions;
 };
+
+export type WorkerProcessDefinitions = "fixture tasks" | "envelope load";
 
 export const FAILURE_NOTICE_RECORDING_LISTENER_NAME = "record-failure-notice";
 

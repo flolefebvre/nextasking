@@ -48,7 +48,7 @@ export default defineConfig([
     },
   },
   {
-    files: ["**/*.integration.test.ts", "**/*.e2e.test.ts"],
+    files: ["**/*.integration.test.ts", "**/*.e2e.test.ts", "**/*.benchmark.test.ts"],
     rules: {
       "no-restricted-imports": [
         "error",
@@ -58,7 +58,7 @@ export default defineConfig([
               name: "vitest",
               importNames: ["test", "it"],
               message:
-                "Write an integration test with integrationTest (tests/integration-test.ts) and an e2e test with e2eTest (tests/e2e/e2e-test.ts): they check the invariants after every test.",
+                "Write an integration test with integrationTest (tests/integration-test.ts), an e2e test with e2eTest (tests/e2e/e2e-test.ts) and a benchmark with benchmarkTest (tests/benchmark/benchmark-test.ts): they check the invariants after every test.",
             },
           ],
           patterns: [CLOSE_NEXTASKING_RESTRICTION],

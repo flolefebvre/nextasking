@@ -2,6 +2,7 @@ import { configDefaults, defineConfig } from "vitest/config";
 
 const INTEGRATION_TESTS = ["src/**/*.integration.test.ts", "tests/**/*.integration.test.ts"];
 const E2E_TESTS = ["tests/e2e/**/*.e2e.test.ts"];
+const BENCHMARK_TESTS = ["tests/benchmark/**/*.benchmark.test.ts"];
 
 export default defineConfig({
   test: {
@@ -14,7 +15,7 @@ export default defineConfig({
         test: {
           name: "unit",
           include: ["src/**/*.test.ts", "tests/**/*.test.ts"],
-          exclude: [...INTEGRATION_TESTS, ...E2E_TESTS],
+          exclude: [...INTEGRATION_TESTS, ...E2E_TESTS, ...BENCHMARK_TESTS],
         },
       },
       {
@@ -35,6 +36,15 @@ export default defineConfig({
           fileParallelism: false,
           testTimeout: 120_000,
           hookTimeout: 120_000,
+        },
+      },
+      {
+        extends: true,
+        test: {
+          name: "benchmark",
+          include: BENCHMARK_TESTS,
+          globalSetup: ["tests/benchmark/global-setup.ts"],
+          fileParallelism: false,
         },
       },
     ],

@@ -5,11 +5,10 @@ import type { RedisOutage } from "./redis-outage.js";
 
 const REDIS_AWAY = new Error("Redis is away");
 
-type RecordingRedisOutage = RedisOutage & { awayErrors: unknown[]; answeredCount: () => number; endOutage: () => void };
+type RecordingRedisOutage = RedisOutage & { awayErrors: unknown[]; endOutage: () => void };
 
 function recordingRedisOutage(): RecordingRedisOutage {
   const awayErrors: unknown[] = [];
-  let answeredCount = 0;
   let endOutage = () => undefined as void;
   return {
     isRedisAway: (error) => error === REDIS_AWAY,
@@ -19,11 +18,7 @@ function recordingRedisOutage(): RecordingRedisOutage {
         endOutage = resolve;
       });
     },
-    noteRedisAnswered: () => {
-      answeredCount += 1;
-    },
     awayErrors,
-    answeredCount: () => answeredCount,
     endOutage: () => {
       endOutage();
     },
@@ -116,7 +111,7 @@ describe("delayUnlessAborted", () => {
 });
 
 describe("answeredDespiteOutage", () => {
-  test("resends the same call after waiting for Redis on an away error, and notes Redis answered once it answers", async () => {
+  test("resends the same call after waiting for Redis on an away error, and returns its answer", async () => {
     const redisOutage = recordingRedisOutage();
     const call = vi.fn<() => Promise<string>>().mockRejectedValueOnce(REDIS_AWAY).mockResolvedValueOnce("answered");
 
@@ -130,7 +125,6 @@ describe("answeredDespiteOutage", () => {
     expect(await answer).toBe("answered");
     expect(callCountDuringTheOutage).toBe(1);
     expect(call).toHaveBeenCalledTimes(2);
-    expect(redisOutage.answeredCount()).toBe(1);
   });
 
   test("sends nothing and rejects with the abort reason when its call abort signal is already aborted", async () => {
@@ -144,7 +138,7 @@ describe("answeredDespiteOutage", () => {
     expect(call).not.toHaveBeenCalled();
   });
 
-  test("rethrows an error that is not Redis being away, without waiting or noting an answer", async () => {
+  test("rethrows an error that is not Redis being away, without waiting", async () => {
     const redisOutage = recordingRedisOutage();
     const unreadableReply = new Error("The fetch script sent a reply the engine cannot read");
 
@@ -152,15 +146,6 @@ describe("answeredDespiteOutage", () => {
       unreadableReply,
     );
     expect(redisOutage.awayErrors).toEqual([]);
-    expect(redisOutage.answeredCount()).toBe(0);
-  });
-
-  test("does not note Redis answered for an answer that is not complete", async () => {
-    const redisOutage = recordingRedisOutage();
-
-    await answeredDespiteOutage(redisOutage, () => Promise.resolve("refused write"), { isAnswerComplete: () => false });
-
-    expect(redisOutage.answeredCount()).toBe(0);
   });
 
   for (const signalName of ["callAbortSignal", "resendStopSignal"] as const) {

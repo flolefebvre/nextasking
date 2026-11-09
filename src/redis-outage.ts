@@ -3,13 +3,11 @@ import type { DurationInMilliseconds } from "./durations.js";
 export type RedisOutage = {
   isRedisAway: (error: unknown) => boolean;
   waitForRedis: (awayError: unknown, stopSignal?: AbortSignal) => Promise<void>;
-  noteRedisAnswered: () => void;
 };
 
-export type OutageWaitOptions<Answer> = {
+export type OutageWaitOptions = {
   callAbortSignal?: AbortSignal;
   resendStopSignal?: AbortSignal;
-  isAnswerComplete?: (answer: Answer) => boolean;
 };
 
 export function untilAborted<Value>(promise: Promise<Value>, abortSignal: AbortSignal | undefined): Promise<Value> {
@@ -58,25 +56,19 @@ export function delayUnlessAborted(
 export async function answeredDespiteOutage<Answer>(
   redisOutage: RedisOutage,
   call: () => Promise<Answer>,
-  { callAbortSignal, resendStopSignal, isAnswerComplete = () => true }: OutageWaitOptions<Answer> = {},
+  { callAbortSignal, resendStopSignal }: OutageWaitOptions = {},
 ): Promise<Answer> {
   const waitEndSignals = [callAbortSignal, resendStopSignal].filter((signal) => signal !== undefined);
   const waitEndSignal = waitEndSignals.length === 0 ? undefined : AbortSignal.any(waitEndSignals);
   for (;;) {
     callAbortSignal?.throwIfAborted();
-    let answer: Answer;
     try {
-      answer = await untilAborted(call(), callAbortSignal);
+      return await untilAborted(call(), callAbortSignal);
     } catch (error) {
       if (waitEndSignal?.aborted === true || !redisOutage.isRedisAway(error)) {
         throw error;
       }
       await untilAborted(redisOutage.waitForRedis(error, waitEndSignal), waitEndSignal);
-      continue;
     }
-    if (isAnswerComplete(answer)) {
-      redisOutage.noteRedisAnswered();
-    }
-    return answer;
   }
 }

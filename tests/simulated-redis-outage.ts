@@ -2,8 +2,11 @@ import { ErrorReply, SocketClosedUnexpectedlyError } from "@redis/client";
 
 import { createConnectionOutageTracker, createRedisOutage } from "../src/connection.js";
 import type { Logger } from "../src/logger.js";
+import { isOutOfMemoryReply } from "../src/node-redis-driver.js";
 import { untilAborted } from "../src/redis-outage.js";
 import type { RedisOutage } from "../src/redis-outage.js";
+import { createRefusedWriteStretch } from "../src/refused-write-stretch.js";
+import { failedCommandErrorsOf } from "../src/worker-loop.js";
 import type { WorkerLoopEngine } from "../src/worker-loop.js";
 
 export const UNANSWERED_COMMAND_ERROR = new SocketClosedUnexpectedlyError();
@@ -12,6 +15,7 @@ export const OUT_OF_MEMORY_REPLY = new ErrorReply("OOM command not allowed when 
 
 export type SimulatedRedisOutage = {
   redisOutage: RedisOutage;
+  engineOnWorkerCalls: (engine: WorkerLoopEngine) => WorkerLoopEngine;
   isRedisAway: () => boolean;
   unansweredCallsRejected: () => Promise<void>;
   startOutage: () => void;
@@ -19,8 +23,13 @@ export type SimulatedRedisOutage = {
   rejectUnansweredCalls: () => void;
 };
 
+function noRefusalIn(): undefined {
+  return undefined;
+}
+
 export function createSimulatedRedisOutage(logger: Logger): SimulatedRedisOutage {
   const outageTracker = createConnectionOutageTracker(logger);
+  const refusedWriteStretch = createRefusedWriteStretch({ outageTracker, giveUpAfterInMilliseconds: 1000 });
   const simulatedClient = {};
   let redisBack: Promise<void> = Promise.resolve();
   let markRedisBack: (() => void) | undefined;
@@ -28,11 +37,42 @@ export function createSimulatedRedisOutage(logger: Logger): SimulatedRedisOutage
   const unansweredCallsRejected = new Promise<void>((resolve) => {
     markUnansweredCallsRejected = resolve;
   });
+  const sentAsAWorkerCall =
+    <Request, Reply>(
+      methodName: keyof WorkerLoopEngine,
+      call: (request: Request) => Promise<Reply>,
+      outOfMemoryReplyIn: (reply: Reply) => Error | undefined = noRefusalIn,
+    ) =>
+    async (request: Request): Promise<Reply> => {
+      let reply: Reply;
+      try {
+        reply = await call(request);
+      } catch (error) {
+        if (isOutOfMemoryReply(error)) {
+          refusedWriteStretch.noteAnsweredOutOfMemory([methodName], error as Error);
+        }
+        throw error;
+      }
+      const outOfMemoryReply = outOfMemoryReplyIn(reply);
+      if (outOfMemoryReply === undefined) {
+        refusedWriteStretch.noteAccepted([methodName]);
+      } else {
+        refusedWriteStretch.noteAnsweredOutOfMemory([methodName], outOfMemoryReply);
+      }
+      return reply;
+    };
   return {
     redisOutage: createRedisOutage({
-      outageTracker,
       waitUntilReady: (stopSignal) => untilAborted(redisBack, stopSignal),
       outOfMemoryRetryDelayInMilliseconds: 1000,
+    }),
+    engineOnWorkerCalls: (engine) => ({
+      fetch: sentAsAWorkerCall("fetch", engine.fetch),
+      settle: sentAsAWorkerCall("settle", engine.settle),
+      tick: sentAsAWorkerCall("tick", engine.tick, (reply) => failedCommandErrorsOf(reply).find(isOutOfMemoryReply)),
+      saveStep: sentAsAWorkerCall("saveStep", engine.saveStep),
+      readStep: sentAsAWorkerCall("readStep", engine.readStep),
+      fire: sentAsAWorkerCall("fire", engine.fire),
     }),
     isRedisAway: () => markRedisBack !== undefined,
     unansweredCallsRejected: () => Promise.race([redisBack, unansweredCallsRejected]),

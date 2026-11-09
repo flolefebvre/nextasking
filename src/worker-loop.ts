@@ -66,7 +66,7 @@ type AttemptInFlight = {
 
 const OUTCOME_KINDS_KEPT_AT_SHUTDOWN = new Set<AttemptResult["attemptOutcome"]["kind"]>(["complete", "suspend"]);
 
-function failedCommandErrorsOf({ promote, renewals, taskNames, prune, dueSchedules }: TickReply): Error[] {
+export function failedCommandErrorsOf({ promote, renewals, taskNames, prune, dueSchedules }: TickReply): Error[] {
   return [promote, renewals, taskNames, prune, dueSchedules].flatMap((commandReply) =>
     commandReply?.kind === "failed" ? [commandReply.error] : [],
   );
@@ -407,7 +407,6 @@ export function startWorkerLoop(config: WorkerLoopConfig): WorkerLoop {
       failedCommandErrorsOf(reply).find((error) => redisOutage.isRedisAway(error));
     const reply = await answeredDespiteOutage(redisOutage, () => engine.tick(tickRequest), {
       resendStopSignal: tickStopController.signal,
-      isAnswerComplete: (answeredReply) => awayErrorOf(answeredReply) === undefined,
     });
     lastPrunedTaskName = prune?.task;
     if (reply.renewals.kind === "replied") {

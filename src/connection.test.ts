@@ -18,6 +18,7 @@ import {
   READ_ONLY_RECONNECT_PAUSE_IN_MILLISECONDS,
 } from "./connection.js";
 import type { RedisConnection, RedisConnections } from "./connection.js";
+import { createEngine } from "./engine/engine.js";
 import { createFakeRedisDrivers, fakeReplyCommandOf } from "../tests/fake-redis-drivers.js";
 import type { FakeRedisDriver } from "../tests/fake-redis-drivers.js";
 import { builtInCommandOf } from "./redis-client.js";
@@ -864,35 +865,172 @@ describe("isRedisAwayError", () => {
   });
 });
 
-describe("the worker's Redis outage", () => {
-  function outageOfRecordedLines(waitUntilReady = () => Promise.resolve()) {
-    const { logger, lines } = createRecordingLogger();
-    const redisOutage = createRedisOutage({
-      outageTracker: createConnectionOutageTracker(logger),
-      waitUntilReady,
-      outOfMemoryRetryDelayInMilliseconds: 1000,
+describe("a write answered out of memory", () => {
+  function outOfMemoryServerScenarioOf() {
+    const scenario = connectionScenarioOf((fakeRedisDriver) => {
+      fakeRedisDriver.becomeReady();
+      fakeRedisDriver.onForceReconnect = () => {
+        setTimeout(() => {
+          fakeRedisDriver.becomeReady();
+        }, 5);
+      };
+      fakeRedisDriver.infoReply = () => Promise.resolve("# Memory\r\nused_memory:1048576\r\n");
     });
-    return { redisOutage, lines };
+    let isOutOfMemory = true;
+    const outOfMemoryReplies: ErrorReply[] = [];
+    const write = fakeReplyCommandOf("SET", async () => {
+      if (isOutOfMemory) {
+        const outOfMemoryReply = new ErrorReply(OUT_OF_MEMORY_MESSAGE);
+        outOfMemoryReplies.push(outOfMemoryReply);
+        throw outOfMemoryReply;
+      }
+      return "OK";
+    });
+    const giveMemoryBack = () => {
+      isOutOfMemory = false;
+    };
+    return { ...scenario, write, outOfMemoryReplies, giveMemoryBack };
   }
 
-  test("an out-of-memory reply lasting several waits opens one connection error, closed by the first answer", async () => {
-    const { redisOutage, lines } = outageOfRecordedLines();
-    const outOfMemoryReply = new ErrorReply(OUT_OF_MEMORY_MESSAGE);
+  test("an out-of-memory reply lasting several refusals of a worker write opens one connection error, closed once the refused write is accepted", async () => {
+    const { connection, lines, write, outOfMemoryReplies, giveMemoryBack } = outOfMemoryServerScenarioOf();
 
-    for (let waitCount = 0; waitCount < 3; waitCount += 1) {
-      const wait = redisOutage.waitForRedis(outOfMemoryReply);
-      await vi.advanceTimersByTimeAsync(1000);
-      await wait;
+    for (let refusalCount = 0; refusalCount < 3; refusalCount += 1) {
+      await connection.workerCalls.send(write).catch(() => undefined);
     }
-    redisOutage.noteRedisAnswered();
-    redisOutage.noteRedisAnswered();
+    giveMemoryBack();
+    await connection.workerCalls.send(write);
+    await connection.workerCalls.send(write);
 
     expect(lines.map(({ message }) => message)).toEqual(["connection error", "connection restored"]);
-    expect(lines[0]?.fields).toEqual({ err: outOfMemoryReply });
+    expect(lines[0]?.fields).toEqual({ err: outOfMemoryReplies[0] });
   });
 
+  test("a worker write answered out of memory rejects with the reply at once, after writing connection error, without a resend", async () => {
+    const { connection, driver, lines, write, outOfMemoryReplies } = outOfMemoryServerScenarioOf();
+
+    const outcome = await connection.workerCalls.send(write).catch((error: unknown) => error);
+
+    expect(outcome).toBe(outOfMemoryReplies[0]);
+    expect(outOfMemoryReplies).toHaveLength(1);
+    expect(driver.forceReconnectCount).toBe(0);
+    expect(lines).toEqual([{ level: "error", fields: { err: outOfMemoryReplies[0] }, message: "connection error" }]);
+  });
+
+  test("a read accepted between the refusals of a worker write does not close the pair", async () => {
+    const { connection, lines, write, outOfMemoryReplies, giveMemoryBack } = outOfMemoryServerScenarioOf();
+    await connection.workerCalls.send(write).catch(() => undefined);
+
+    await connection.workerCalls.send(builtInCommandOf("INFO"));
+    await connection.workerCalls.send(write).catch(() => undefined);
+    await connection.workerCalls.sendBatch([builtInCommandOf("INFO")]);
+    const messagesBeforeTheWriteIsAccepted = lines.map(({ message }) => message);
+    giveMemoryBack();
+    await connection.workerCalls.send(write);
+
+    expect(messagesBeforeTheWriteIsAccepted).toEqual(["connection error"]);
+    expect(lines).toEqual(onePairNaming(outOfMemoryReplies[0]));
+  });
+
+  test("a worker batch with a command answered out of memory returns its results, teaches that command, and closes the pair only from a batch with no refusal", async () => {
+    const { connection, lines, write, outOfMemoryReplies, giveMemoryBack } = outOfMemoryServerScenarioOf();
+
+    const refusedResults = await connection.workerCalls.sendBatch([write, builtInCommandOf("INFO")]);
+    await connection.workerCalls.sendBatch([builtInCommandOf("INFO")]);
+    await connection.workerCalls.sendBatch([write, answered("accepted alongside a refusal")]);
+    const messagesBeforeABatchWithNoRefusal = lines.map(({ message }) => message);
+    giveMemoryBack();
+    await connection.workerCalls.sendBatch([write, builtInCommandOf("INFO")]);
+
+    expect(refusedResults).toEqual([
+      { kind: "failed", error: outOfMemoryReplies[0] },
+      { kind: "replied", reply: "# Memory\r\nused_memory:1048576\r\n" },
+    ]);
+    expect(messagesBeforeABatchWithNoRefusal).toEqual(["connection error"]);
+    expect(lines).toEqual(onePairNaming(outOfMemoryReplies[0]));
+  });
+
+  test("a tick whose renew script is answered out of memory teaches its name, and a later tick, which sends the renew script even with no lock held, closes the pair once the server accepts it", async () => {
+    const { connection, driver, lines } = outOfMemoryServerScenarioOf();
+    const renewOutOfMemoryReply = new ErrorReply(
+      `ERR Error running script (call to f_71e6319f97b0fe8bdfa1c5df3ce4489946dda479): @user_script:1: ${OUT_OF_MEMORY_MESSAGE}`,
+    );
+    let isOutOfMemory = true;
+    const sentScriptNames: string[] = [];
+    driver.scriptReply = async (scriptName) => {
+      sentScriptNames.push(scriptName);
+      if (isOutOfMemory && scriptName === "nextaskingRenew") {
+        throw renewOutOfMemoryReply;
+      }
+      return [];
+    };
+    const engine = createEngine(connection.workerCalls, "prefix:");
+    const heldLock = { task: "send-email", runId: "welcome-ada", lockToken: "lock-token-ada" };
+    const refusedTick = await engine.tick({
+      heldLocks: [heldLock],
+      lockDurationInMilliseconds: 60_000,
+      isPromoteIncluded: false,
+    });
+    const messagesWhileOutOfMemory = lines.map(({ message }) => message);
+
+    isOutOfMemory = false;
+    await engine.tick({ heldLocks: [], lockDurationInMilliseconds: 60_000, isPromoteIncluded: false });
+
+    expect(refusedTick.renewals).toEqual({ kind: "failed", error: renewOutOfMemoryReply });
+    expect(sentScriptNames).toEqual(["nextaskingRenew", "nextaskingRenew"]);
+    expect(messagesWhileOutOfMemory).toEqual(["connection error"]);
+    expect(lines).toEqual(onePairNaming(renewOutOfMemoryReply));
+  });
+
+  test("worker writes refused out of memory while the server also answers READONLY past giveUpAfter write one pair, restored by a write accepted", async () => {
+    const { connection, lines, write, outOfMemoryReplies, giveMemoryBack } = outOfMemoryServerScenarioOf();
+    let isReadOnly = true;
+    const readOnlyWrite = fakeReplyCommandOf("SET", async () => {
+      if (isReadOnly) {
+        throw new ErrorReply("READONLY You can't write against a read only replica.");
+      }
+      return "OK";
+    });
+    const readOnlyOutcome = connection.workerCalls.send(readOnlyWrite);
+    await connection.workerCalls.send(write).catch(() => undefined);
+    await vi.advanceTimersByTimeAsync(2 * GIVE_UP_AFTER_IN_MILLISECONDS);
+
+    isReadOnly = false;
+    giveMemoryBack();
+    await vi.advanceTimersByTimeAsync(GIVE_UP_AFTER_IN_MILLISECONDS);
+    await readOnlyOutcome;
+
+    expect(lines).toEqual(onePairNaming(outOfMemoryReplies[0]));
+  });
+
+  test("instance writes answered out of memory, as on an instance with no worker, never open the pair", async () => {
+    const { connection, lines, write } = outOfMemoryServerScenarioOf();
+
+    const outcome = await connection.instanceCalls.send(write).catch((error: unknown) => error);
+    await connection.instanceCalls.sendBatch([write]);
+
+    expect(outcome).toBeInstanceOf(ErrorReply);
+    expect(lines).toEqual([]);
+  });
+
+  test("the pair of a worker write refused out of memory ends silently when the instance closes its connections, so the next refusal opens a pair of its own", async () => {
+    const { connections, connection, lines, write } = outOfMemoryServerScenarioOf();
+    await connection.workerCalls.send(write).catch(() => undefined);
+
+    await connections.closeConnection(connection);
+    const nextConnection = connections.createCommandConnection();
+    await nextConnection.workerCalls.send(write).catch(() => undefined);
+
+    await expectMessagesOnceEveryTimerHasRun(lines, ["connection error", "connection error"]);
+  });
+});
+
+describe("the worker's Redis outage", () => {
   test("an out-of-memory wait lasts the retry delay, or ends on its stop signal", async () => {
-    const { redisOutage } = outageOfRecordedLines();
+    const redisOutage = createRedisOutage({
+      waitUntilReady: () => Promise.resolve(),
+      outOfMemoryRetryDelayInMilliseconds: 1000,
+    });
     const stopController = new AbortController();
     let isWaitOver = false;
     void redisOutage.waitForRedis(new ErrorReply(OUT_OF_MEMORY_MESSAGE)).then(() => {
@@ -911,13 +1049,19 @@ describe("the worker's Redis outage", () => {
   });
 
   test("an unanswered command waits for the connection to be ready and writes no line itself", async () => {
-    const waitUntilReady = vi.fn(() => Promise.resolve());
-    const { redisOutage, lines } = outageOfRecordedLines(waitUntilReady);
+    const { connections, connection, driver, lines } = connectionScenarioOf();
+    const redisOutage = connections.workerRedisOutageOf(connection, 1000);
+    let isWaitOver = false;
+    const wait = redisOutage.waitForRedis(new SocketClosedUnexpectedlyError()).then(() => {
+      isWaitOver = true;
+    });
 
-    await redisOutage.waitForRedis(new SocketClosedUnexpectedlyError());
-    redisOutage.noteRedisAnswered();
+    await vi.advanceTimersByTimeAsync(0);
+    const isWaitOverBeforeTheReady = isWaitOver;
+    driver.becomeReady();
+    await wait;
 
-    expect(waitUntilReady).toHaveBeenCalledTimes(1);
+    expect(isWaitOverBeforeTheReady).toBe(false);
     expect(lines).toEqual([]);
   });
 });

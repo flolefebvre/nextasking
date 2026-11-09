@@ -41,8 +41,10 @@ import {
   isDevelopment,
   isSignalHandlingLeftToTheApp,
 } from "./shutdown-signals.js";
-import { startRunWorker, workerOptionsFrom } from "./worker-runtime.js";
-import type { RunningWorker, StartWorkerOptions } from "./worker-runtime.js";
+import { workerOptionsFrom } from "./worker-options.js";
+import type { StartWorkerOptions } from "./worker-options.js";
+import { startRunWorker } from "./worker-runtime.js";
+import type { RunningWorker } from "./worker-runtime.js";
 
 // eslint-disable-next-line @typescript-eslint/no-empty-object-type
 export interface Register {}

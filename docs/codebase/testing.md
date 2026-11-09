@@ -15,6 +15,8 @@
 - The test opens its own client on `redisUrl`, with an `error` listener attached before it connects, and closes it in a `finally`, so a failed assertion leaves no open handle.
 - Cut the connection with `startTcpProxy(redisUrl)` from `tests/tcp-proxy.ts`: point the instance at its `url`; `cut()` resets the live sockets and refuses new connections as a down server does, `restore()` accepts them again, `cutFor(milliseconds)` does both around a wait, and `stop()` goes in the `finally`. An integration or e2e test that needs a server with an evicting `maxmemory-policy` starts its own container with `startEvictingServer` from `tests/evicting-server.ts` (`isConfigDisabled` renames `CONFIG` away, as a managed service blocks it), which hands back its direct `url`, a `proxy` in front of it, and `stop()`; it is skipped with `skipIf(providedRedisUrl() !== undefined)`, so `NEXTASKING_TEST_REDIS_URL` still means no Docker.
 
+- Build the `INFO` and `CONFIG GET` replies a boot reads, and a source answering them that records what it was sent, with `tests/info-replies.ts`.
+
 ## Engine scripts
 
 - The engine lives in `src/engine/`: each Lua script is a TypeScript module exporting its source as a string (`enqueue-script.ts`), never a `.lua` file, because Next bundles the library and a file read at runtime would not ship. The engine prepends the shared library (`lua-library.ts`) and loads the result with `defineScriptCommand` (`script-commands.ts`).

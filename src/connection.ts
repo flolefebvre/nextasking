@@ -400,18 +400,21 @@ export function createRedisConnections(
     state: ConnectionState,
     commands: readonly RedisCommand[],
     send: Send<Reply>,
-    commandErrorsOf: (reply: Reply) => readonly (Error | undefined)[],
+    commandErrorsOfReply: (reply: Reply) => readonly (Error | undefined)[],
   ): Promise<Reply> => {
     for (;;) {
       throwIfClosed(state);
       let readOnlyAnswers: ReadOnlyAnswer[];
       try {
         const reply = await answeredWithinTheAnswerBound(state, () => send());
-        readOnlyAnswers = readOnlyAnswersOf(commands, commandErrorsOf(reply));
+        readOnlyAnswers = readOnlyAnswersOf(commands, commandErrorsOfReply(reply));
         if (readOnlyAnswers.length === 0) {
-          readOnlyStretch.noteAccepted(commands.map(commandNameOf));
+          if (!isClosed(state)) {
+            readOnlyStretch.noteAccepted(commands.map(commandNameOf));
+          }
           return reply;
         }
+        throwIfClosed(state);
       } catch (error) {
         if (isUnblockedReply(error) && !isClosed(state)) {
           reconnectByForceUnlessUnderWay(state);

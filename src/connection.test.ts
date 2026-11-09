@@ -38,6 +38,15 @@ function onePairNaming(err: Error | undefined): RecordedLogLine[] {
   ];
 }
 
+async function expectMessagesOnceEveryTimerHasRun(
+  lines: readonly RecordedLogLine[],
+  expectedMessages: readonly string[],
+): Promise<void> {
+  await vi.advanceTimersByTimeAsync(20 * GIVE_UP_AFTER_IN_MILLISECONDS);
+  expect(lines.map(({ message }) => message)).toEqual(expectedMessages);
+  expect(vi.getTimerCount()).toBe(0);
+}
+
 function networkError(code: string): Error {
   return Object.assign(new Error(`connect ${code} 127.0.0.1:6379`), { code });
 }
@@ -477,6 +486,38 @@ describe("a write answered READONLY, as during a failover", () => {
   });
 
   test.each([
+    { isStretchLoggedBeforeTheClose: false, expectedMessages: [] },
+    { isStretchLoggedBeforeTheClose: true, expectedMessages: ["connection error"] },
+  ])(
+    "a worker batch answered READONLY while the last connection closes gracefully notes nothing, the stretch logged before the close or not: $expectedMessages, and no timer",
+    async ({ isStretchLoggedBeforeTheClose, expectedMessages }) => {
+      const { connections, connection, driver, lines, write } = demotedPrimaryScenarioOf(
+        10 * GIVE_UP_AFTER_IN_MILLISECONDS,
+      );
+      const blockingConnection = connections.createBlockingConnection(0);
+      const blockingOutcome = blockingConnection.workerCalls.send(write()).catch((error: unknown) => error);
+      await vi.advanceTimersByTimeAsync(isStretchLoggedBeforeTheClose ? GIVE_UP_AFTER_IN_MILLISECONDS : 0);
+      let answerReadOnly: (readOnlyReply: Error) => void = () => undefined;
+      const heldReadOnlyReply = new Promise<never>((_, reject) => {
+        answerReadOnly = reject;
+      });
+      const batchOutcome = connection.workerCalls
+        .sendBatch([fakeReplyCommandOf("tick", () => heldReadOnlyReply)])
+        .catch((error: unknown) => error);
+      await vi.advanceTimersByTimeAsync(0);
+      await connections.closeConnection(blockingConnection);
+      driver.closeReply = "never answered";
+
+      const closing = connections.closeConnection(connection, 100);
+      answerReadOnly(new ErrorReply("READONLY You can't write against a read only replica."));
+      await vi.advanceTimersByTimeAsync(100);
+      await Promise.all([closing, batchOutcome, blockingOutcome]);
+
+      await expectMessagesOnceEveryTimerHasRun(lines, expectedMessages);
+    },
+  );
+
+  test.each([
     { closedAfterInMilliseconds: GIVE_UP_AFTER_IN_MILLISECONDS / 2, expectedMessages: [] },
     { closedAfterInMilliseconds: GIVE_UP_AFTER_IN_MILLISECONDS, expectedMessages: ["connection error"] },
   ])(
@@ -493,10 +534,8 @@ describe("a write answered READONLY, as during a failover", () => {
       await connections.closeConnection(blockingConnection);
       await connections.closeConnection(connection);
       await outcomes;
-      await vi.advanceTimersByTimeAsync(20 * GIVE_UP_AFTER_IN_MILLISECONDS);
 
-      expect(lines.map(({ message }) => message)).toEqual(expectedMessages);
-      expect(vi.getTimerCount()).toBe(0);
+      await expectMessagesOnceEveryTimerHasRun(lines, expectedMessages);
     },
   );
 

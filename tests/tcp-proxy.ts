@@ -12,6 +12,7 @@ export type TcpProxy = {
   stopAnswering: () => void;
   answerAgain: () => void;
   acceptedConnectionCount: () => number;
+  silencedConnectionCount: () => number;
   recordRequestChunks: () => () => string[];
   stop: () => Promise<void>;
 };
@@ -82,6 +83,7 @@ export async function startTcpProxy(targetUrl: string): Promise<TcpProxy> {
   const liveSockets = new Set<Socket>();
   const liveForwardingSwitches = new Set<ForwardingSwitch>();
   const switchesAcceptedWhileNotAnswering = new Set<ForwardingSwitch>();
+  const silencedSwitches = new Set<ForwardingSwitch>();
   let isAnswering = true;
   let acceptedConnectionCount = 0;
   let recordedRequestChunks: string[] | undefined;
@@ -116,48 +118,11 @@ export async function startTcpProxy(targetUrl: string): Promise<TcpProxy> {
     track(clientSocket);
     track(targetSocket);
     let isForwardingStopped = false;
-    const forwardingSwitch: ForwardingSwitch = {
-      stopForwarding: () => {
-        if (isForwardingStopped) {
-          return;
-        }
-        isForwardingStopped = true;
-        targetSocket.unpipe(clientSocket);
-        targetSocket.pause();
-        clientSocket.pause();
-      },
-      forwardAgain: () => {
-        if (!isForwardingStopped) {
-          return;
-        }
-        isForwardingStopped = false;
-        targetSocket.pipe(clientSocket);
-        clientSocket.resume();
-      },
-    };
-    if (!isAnswering) {
-      switchesAcceptedWhileNotAnswering.add(forwardingSwitch);
-    }
-    liveForwardingSwitches.add(forwardingSwitch);
-    clientSocket.on("error", () => reset(targetSocket));
-    targetSocket.on("error", () => reset(clientSocket));
-    clientSocket.on("close", () => {
-      switchesAcceptedWhileNotAnswering.delete(forwardingSwitch);
-      liveForwardingSwitches.delete(forwardingSwitch);
-      reset(targetSocket);
-    });
-    targetSocket.on("close", () => reset(clientSocket));
-    targetSocket.pipe(clientSocket);
-    if (!isAnswering) {
-      forwardingSwitch.stopForwarding();
-    }
     let unforwardedRequestBytes = Buffer.alloc(0);
     let isForwardingRequests = true;
-    clientSocket.on("data", (requestChunk: Buffer) => {
-      recordedRequestChunks?.push(requestChunk.toString());
-      unforwardedRequestBytes = Buffer.concat([unforwardedRequestBytes, requestChunk]);
+    const forwardCompleteRequests = () => {
       let commandByteLength = byteLengthOfFirstCompleteCommand(unforwardedRequestBytes);
-      while (isForwardingRequests && commandByteLength !== undefined) {
+      while (!isForwardingStopped && isForwardingRequests && commandByteLength !== undefined) {
         const command = unforwardedRequestBytes.subarray(0, commandByteLength);
         unforwardedRequestBytes = unforwardedRequestBytes.subarray(commandByteLength);
         targetSocket.write(command);
@@ -170,6 +135,46 @@ export async function startTcpProxy(targetUrl: string): Promise<TcpProxy> {
         }
         commandByteLength = byteLengthOfFirstCompleteCommand(unforwardedRequestBytes);
       }
+    };
+    const forwardingSwitch: ForwardingSwitch = {
+      stopForwarding: () => {
+        if (isForwardingStopped) {
+          return;
+        }
+        isForwardingStopped = true;
+        targetSocket.unpipe(clientSocket);
+        targetSocket.pause();
+      },
+      forwardAgain: () => {
+        if (!isForwardingStopped) {
+          return;
+        }
+        isForwardingStopped = false;
+        targetSocket.pipe(clientSocket);
+        forwardCompleteRequests();
+      },
+    };
+    if (!isAnswering) {
+      switchesAcceptedWhileNotAnswering.add(forwardingSwitch);
+    }
+    liveForwardingSwitches.add(forwardingSwitch);
+    clientSocket.on("error", () => reset(targetSocket));
+    targetSocket.on("error", () => reset(clientSocket));
+    clientSocket.on("close", () => {
+      switchesAcceptedWhileNotAnswering.delete(forwardingSwitch);
+      silencedSwitches.delete(forwardingSwitch);
+      liveForwardingSwitches.delete(forwardingSwitch);
+      reset(targetSocket);
+    });
+    targetSocket.on("close", () => reset(clientSocket));
+    targetSocket.pipe(clientSocket);
+    if (!isAnswering) {
+      forwardingSwitch.stopForwarding();
+    }
+    clientSocket.on("data", (requestChunk: Buffer) => {
+      recordedRequestChunks?.push(requestChunk.toString());
+      unforwardedRequestBytes = Buffer.concat([unforwardedRequestBytes, requestChunk]);
+      forwardCompleteRequests();
     });
   });
   await listen(server, 0);
@@ -209,6 +214,7 @@ export async function startTcpProxy(targetUrl: string): Promise<TcpProxy> {
       isAnswering = false;
       for (const forwardingSwitch of liveForwardingSwitches) {
         forwardingSwitch.stopForwarding();
+        silencedSwitches.add(forwardingSwitch);
       }
     },
     answerAgain: () => {
@@ -219,6 +225,7 @@ export async function startTcpProxy(targetUrl: string): Promise<TcpProxy> {
       switchesAcceptedWhileNotAnswering.clear();
     },
     acceptedConnectionCount: () => acceptedConnectionCount,
+    silencedConnectionCount: () => silencedSwitches.size,
     recordRequestChunks: () => {
       const requestChunks: string[] = [];
       recordedRequestChunks = requestChunks;

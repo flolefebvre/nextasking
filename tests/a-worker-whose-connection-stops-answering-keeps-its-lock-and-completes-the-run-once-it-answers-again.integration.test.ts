@@ -1,5 +1,3 @@
-import { setTimeout as sleep } from "node:timers/promises";
-
 import { expect, vi } from "vitest";
 
 import { fixtureRecordsOf } from "./fixture-records.js";
@@ -10,8 +8,6 @@ import { startWorkerProcess } from "./worker-process.js";
 import { createWorkerProcessNextasking } from "./worker-process-nextasking.js";
 
 const LOCK_DURATION_IN_MILLISECONDS = 6_000;
-
-const SILENCE_LONGER_THAN_GIVE_UP_AFTER_IN_MILLISECONDS = 2_500;
 
 integrationTest(
   "a worker whose connection stops answering without closing, for longer than giveUpAfter, renews its lock once it answers again and completes the run in its first attempt",
@@ -41,7 +37,7 @@ integrationTest(
         );
 
         proxy.stopAnswering();
-        await sleep(SILENCE_LONGER_THAN_GIVE_UP_AFTER_IN_MILLISECONDS);
+        await vi.waitFor(() => expect(proxy.silencedConnectionCount()).toBe(0), { timeout: 10_000 });
         proxy.answerAgain();
         await waitForLogMessage(workerProcess.logLines, "run completed");
 

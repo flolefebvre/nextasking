@@ -1,15 +1,34 @@
+import { engineKeysOf } from "../src/engine/engine-keys.js";
+import { deserializePayload } from "../src/engine/engine.js";
 import type { RunId } from "../src/ids.js";
-import { runJobKey } from "./run-job-key.js";
 import { withRedis } from "./with-redis.js";
+
+export type StoredRun = {
+  record: Record<string, string>;
+  payload: unknown;
+  errors: unknown[];
+};
 
 export async function storedRun(
   redisUrl: string,
   keyPrefix: string,
-  taskName: string,
+  task: string,
   runId: RunId,
-): Promise<Record<string, unknown> | undefined> {
+): Promise<StoredRun | undefined> {
+  const keys = engineKeysOf(keyPrefix);
   return withRedis(redisUrl, async (redis) => {
-    const storedData = await redis.hget(runJobKey(keyPrefix, taskName, runId), "data");
-    return storedData === null ? undefined : (JSON.parse(storedData) as Record<string, unknown>);
+    const [record, serializedPayload, serializedErrors] = await Promise.all([
+      redis.hgetall(keys.runRecord(task, runId)),
+      redis.get(keys.runPayload(task, runId)),
+      redis.lrange(keys.runErrors(task, runId), 0, -1),
+    ]);
+    if (Object.keys(record).length === 0) {
+      return undefined;
+    }
+    return {
+      record,
+      payload: serializedPayload === null ? undefined : deserializePayload(serializedPayload),
+      errors: serializedErrors.map((serializedError) => JSON.parse(serializedError) as unknown),
+    };
   });
 }

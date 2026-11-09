@@ -2,11 +2,14 @@ import * as v from "valibot";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 import { runFailed } from "./built-in-events.js";
-import { defineListener, defineScheduledTask, defineTask } from "./definitions.js";
+import { defineEvent, defineListener, defineScheduledTask, defineTask } from "./definitions.js";
 import type { AnyTaskDefinition, TaskHandler } from "./definitions.js";
-import type { FetchRequest, FireRequest, RunToCreate, SettleRequest, TickRequest } from "./engine/engine.js";
+import type { Engine, FetchRequest, FireRequest, RunToCreate, SettleRequest, TickRequest } from "./engine/engine.js";
+import { createEnqueueRequests } from "./enqueue-requests.js";
+import type { DispatchByName, EmitByName } from "./enqueue-requests.js";
 import { syncDeclaredSchedules } from "./engine-schedules.js";
-import { deriveFailureNoticeEventId, deriveFiringRunId, deriveListenerRunId } from "./ids.js";
+import { deriveFailureNoticeEventId, deriveFiringRunId, deriveHandlerSendId, deriveListenerRunId } from "./ids.js";
+import { handlerSenderOn } from "./send-target.js";
 import type { EpochMilliseconds } from "./durations.js";
 import type { Schedule } from "./schedules.js";
 import type { HandlerSender } from "./step-engine.js";
@@ -57,6 +60,7 @@ function startedLoopOf(
     timing = DEFAULT_WORKER_TIMING,
     recordingLogger = createRecordingLogger(),
     simulatedRedisOutage = createSimulatedRedisOutage(recordingLogger.logger),
+    sender = NO_SENDER,
   }: {
     concurrency?: number;
     engine?: InMemoryEngine;
@@ -65,6 +69,7 @@ function startedLoopOf(
     timing?: WorkerTiming;
     recordingLogger?: ReturnType<typeof createRecordingLogger>;
     simulatedRedisOutage?: SimulatedRedisOutage;
+    sender?: HandlerSender;
   } = {},
 ): LoopScenario {
   const { logger, lines } = recordingLogger;
@@ -74,7 +79,7 @@ function startedLoopOf(
     timing,
     logger,
     concurrency,
-    sender: NO_SENDER,
+    sender,
     waitForWakeUp,
     redisOutage: simulatedRedisOutage.redisOutage,
   });
@@ -1029,6 +1034,59 @@ test("an out-of-memory reply lasting several ticks, with answered reads in betwe
 
   expect(messagesOf(lines)).toEqual(["connection error", "connection restored"]);
   expect(lines[0]?.fields).toEqual({ err: OUT_OF_MEMORY_REPLY });
+});
+
+test("a handler's emit and dispatch on the instance's sender wait out an outage and succeed, and the attempt completes with no attempt failed line", async () => {
+  const userSignedUp = defineEvent("user.signed-up", { schema: v.object({ userId: v.string() }) });
+  const tasks = [
+    defineTask("onboard-user", {
+      schema: v.object({}),
+      handler: async ({ emit, dispatch }) => {
+        await (emit as EmitByName)("user.signed-up", { userId: "ada" });
+        await (dispatch as DispatchByName)("send-welcome-email", { email: "ada@example.com" });
+      },
+    }),
+    defineTask("send-welcome-email", { schema: v.object({ email: v.string() }), handler: async () => undefined }),
+    defineListener("create-workspace", { on: userSignedUp, handler: async () => undefined }),
+  ] as AnyTaskDefinition[];
+  const { tasksByName, listenerNamesByEventName } = workerDefinitionsOf(tasks);
+  const requests = createEnqueueRequests({
+    tasksByName,
+    eventsByName: new Map([[userSignedUp.name, userSignedUp]]),
+    listenerNamesByEventName,
+  });
+  const engine = createInMemoryEngine();
+  const recordingLogger = createRecordingLogger();
+  const simulatedRedisOutage = createSimulatedRedisOutage(recordingLogger.logger);
+  const enqueueAwayDuringOutage: Pick<Engine, "enqueue"> = {
+    enqueue: (request) =>
+      simulatedRedisOutage.isRedisAway() ? Promise.reject(UNANSWERED_COMMAND_ERROR) : engine.enqueue(request),
+  };
+  await engine.enqueue({ runs: runsOf("onboard-user", 1) });
+  simulatedRedisOutage.startOutage();
+  const { lines } = startedLoopOf(tasks, {
+    engine,
+    concurrency: 1,
+    recordingLogger,
+    simulatedRedisOutage,
+    sender: handlerSenderOn(enqueueAwayDuringOutage, requests, recordingLogger.logger),
+  });
+  await vi.advanceTimersByTimeAsync(10_000);
+  const parentStateDuringTheOutage = engine.storedRunOf("onboard-user", "onboard-user-1")?.state;
+
+  simulatedRedisOutage.endOutage();
+  await vi.advanceTimersByTimeAsync(1_000);
+
+  const emittedEventId = deriveHandlerSendId("onboard-user", "onboard-user-1", undefined, 0);
+  const dispatchedRunId = deriveHandlerSendId("onboard-user", "onboard-user-1", undefined, 1);
+  expect(parentStateDuringTheOutage).toBe("executing");
+  expect(engine.storedRunOf("onboard-user", "onboard-user-1")?.state).toBe("completed");
+  expect(engine.storedRunOf("create-workspace", deriveListenerRunId(emittedEventId, "create-workspace"))).toBeDefined();
+  expect(engine.storedRunOf("send-welcome-email", dispatchedRunId)).toBeDefined();
+  expect(messagesOf(lines)).not.toContain("attempt failed");
+  expect(linesWithMessage(lines, "run dispatched")).toEqual([
+    { level: "debug", fields: { task: "send-welcome-email", runId: dispatchedRunId }, message: "run dispatched" },
+  ]);
 });
 
 type StoppedLoopParts = { stoppedParts: () => string[] };

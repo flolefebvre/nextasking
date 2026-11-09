@@ -131,7 +131,7 @@ integrationTest(
     await withNextReleaseAndOlderReleaseWorker(redisUrl, keyPrefix, async ({ nextasking, olderReleaseWorker }) => {
       const { runId } = await nextasking.dispatch("archive-account", { accountId: "account-7" });
       await waitForLogMessage(olderReleaseWorker.logLines, "run failed", { timeout: 15_000 });
-      const run = (await storedRun(redisUrl, keyPrefix, "archive-account", runId)) as {
+      const run = (await storedRun(redisUrl, keyPrefix, "archive-account", runId)) as unknown as {
         firstFoundUnknownAt: string;
         errors: { failedAt: string }[];
       };

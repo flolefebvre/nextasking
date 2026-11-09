@@ -1,24 +1,21 @@
 import * as v from "valibot";
-import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { describe, expect, test } from "vitest";
 
 import { createInMemoryEngine } from "../tests/in-memory-engine.js";
 import type { InMemoryEngine } from "../tests/in-memory-engine.js";
 import { freshLockTokensOf } from "../tests/lock-tokens.js";
 import { createRecordingLogger } from "../tests/recording-logger.js";
-import { createSimulatedRedisOutage, UNANSWERED_COMMAND_ERROR } from "../tests/simulated-redis-outage.js";
 import { workerDefinitionsOf } from "../tests/worker-definitions.js";
 import { defineEvent, defineListener, defineTask } from "./definitions.js";
 import type { AnyTaskDefinition, EventDefinition } from "./definitions.js";
-import type { Engine, LockedRun, ReplayReply } from "./engine/engine.js";
+import type { LockedRun, ReplayReply } from "./engine/engine.js";
 import { createEnqueueRequests } from "./enqueue-requests.js";
-import type { DispatchByName, EmitByName, EnqueueRequests } from "./enqueue-requests.js";
+import type { EnqueueRequests } from "./enqueue-requests.js";
 import { RunNotReplayableError } from "./errors.js";
 import { deriveHandlerSendId, deriveListenerRunId } from "./ids.js";
 import { appSendersOn, handlerSenderOn } from "./send-target.js";
 import type { SendTarget } from "./send-target.js";
 import type { SendFence } from "./step-engine.js";
-import { startWorkerLoop } from "./worker-loop.js";
-import type { WorkerLoop } from "./worker-loop.js";
 import { DEFAULT_WORKER_TIMING } from "./worker-timing.js";
 
 const userSignedUp = defineEvent("user.signed-up", { schema: v.object({ userId: v.string() }) });
@@ -126,72 +123,6 @@ describe("the handler's sender", () => {
     expect(
       engine.storedRunOf("create-workspace", deriveListenerRunId("signed-up-ada", "create-workspace")),
     ).toBeDefined();
-  });
-});
-
-describe("a handler's send during an outage", () => {
-  const startedLoops: WorkerLoop[] = [];
-
-  beforeEach(() => {
-    vi.useFakeTimers({ now: Date.UTC(2030, 0, 1) });
-  });
-
-  afterEach(async () => {
-    for (const loop of startedLoops.splice(0)) {
-      await loop.stopFetching();
-      await loop.stopTicking();
-    }
-    vi.useRealTimers();
-  });
-
-  test("waits for Redis, then succeeds, and the attempt completes with no attempt failed line", async () => {
-    const onboardUser = defineTask("onboard-user", {
-      schema: v.object({}),
-      handler: async ({ emit, dispatch }) => {
-        await (emit as EmitByName)("user.signed-up", { userId: "ada" });
-        await (dispatch as DispatchByName)("send-welcome-email", { email: "ada@example.com" });
-      },
-    });
-    const tasks = [onboardUser, sendWelcomeEmail, createWorkspace] as AnyTaskDefinition[];
-    const engine = createInMemoryEngine();
-    const { logger, lines } = createRecordingLogger();
-    const simulatedRedisOutage = createSimulatedRedisOutage(logger);
-    const awayEngine: Pick<Engine, "enqueue"> = {
-      enqueue: (request) =>
-        simulatedRedisOutage.isRedisAway() ? Promise.reject(UNANSWERED_COMMAND_ERROR) : engine.enqueue(request),
-    };
-    await engine.enqueue({ runs: [{ runId: "onboard-ada", task: "onboard-user", payload: "{}", retries: 3 }] });
-    simulatedRedisOutage.startOutage();
-    startedLoops.push(
-      startWorkerLoop({
-        engine,
-        definitions: workerDefinitionsOf(tasks),
-        timing: DEFAULT_WORKER_TIMING,
-        logger,
-        concurrency: 1,
-        sender: handlerSenderOn(awayEngine, requestsOf(tasks, [userSignedUp]), logger),
-        waitForWakeUp: engine.waitForWakeUp,
-        redisOutage: simulatedRedisOutage.redisOutage,
-      }),
-    );
-    await vi.advanceTimersByTimeAsync(10_000);
-    const parentStateDuringTheOutage = engine.storedRunOf("onboard-user", "onboard-ada")?.state;
-
-    simulatedRedisOutage.endOutage();
-    await vi.advanceTimersByTimeAsync(1_000);
-
-    const emittedEventId = deriveHandlerSendId("onboard-user", "onboard-ada", undefined, 0);
-    const dispatchedRunId = deriveHandlerSendId("onboard-user", "onboard-ada", undefined, 1);
-    expect(parentStateDuringTheOutage).toBe("executing");
-    expect(engine.storedRunOf("onboard-user", "onboard-ada")?.state).toBe("completed");
-    expect(
-      engine.storedRunOf("create-workspace", deriveListenerRunId(emittedEventId, "create-workspace")),
-    ).toBeDefined();
-    expect(engine.storedRunOf("send-welcome-email", dispatchedRunId)).toBeDefined();
-    expect(lines.map(({ message }) => message)).not.toContain("attempt failed");
-    expect(lines.filter(({ message }) => message === "run dispatched")).toEqual([
-      { level: "debug", fields: { task: "send-welcome-email", runId: dispatchedRunId }, message: "run dispatched" },
-    ]);
   });
 });
 

@@ -20,6 +20,7 @@ import {
 import type { RedisConnection, RedisConnections } from "./connection.js";
 import { createFakeRedisDrivers, fakeReplyCommandOf } from "../tests/fake-redis-drivers.js";
 import type { FakeRedisDriver } from "../tests/fake-redis-drivers.js";
+import { builtInCommandOf } from "./redis-client.js";
 import { createRecordingLogger } from "../tests/recording-logger.js";
 import type { RecordedLogLine } from "../tests/recording-logger.js";
 
@@ -364,26 +365,102 @@ describe("a write answered READONLY, as during a failover", () => {
     setTimeout(() => {
       isReadOnly = false;
     }, readOnlyStretchInMilliseconds);
+    const readOnlyReplies: ErrorReply[] = [];
     const write = () =>
       fakeReplyCommandOf("SET", async () => {
         if (isReadOnly) {
-          throw new ErrorReply("READONLY You can't write against a read only replica.");
+          const readOnlyReply = new ErrorReply("READONLY You can't write against a read only replica.");
+          readOnlyReplies.push(readOnlyReply);
+          throw readOnlyReply;
         }
         return "OK";
       });
-    return { ...scenario, write };
+    return { ...scenario, write, readOnlyReplies };
   }
 
-  test("a worker write is answered once the server accepts writes again, the caller seeing no error, through a bounded number of reconnects", async () => {
-    const { connection, driver, lines, write } = demotedPrimaryScenarioOf(READ_ONLY_STRETCH_IN_MILLISECONDS);
+  test("worker writes on both connections answered READONLY past giveUpAfter, a drop overlapping, write one connection error with the first reply and one connection restored once a write is accepted", async () => {
+    const { connections, connection, driver, lines, write, readOnlyReplies } = demotedPrimaryScenarioOf(
+      READ_ONLY_STRETCH_IN_MILLISECONDS,
+    );
+    const blockingConnection = connections.createBlockingConnection(0);
+    const commandOutcome = connection.workerCalls.send(write()).catch((error: unknown) => error);
+    const blockingReply = blockingConnection.workerCalls.send(write());
+    await vi.advanceTimersByTimeAsync(GIVE_UP_AFTER_IN_MILLISECONDS);
+    const messagesAtGiveUpAfter = lines.map(({ message }) => message);
+
+    driver.loseConnection(networkError("ECONNRESET"));
+    await vi.advanceTimersByTimeAsync(GIVE_UP_AFTER_IN_MILLISECONDS / 4);
+    driver.becomeReady();
+    const messagesOnceTheDropIsOver = lines.map(({ message }) => message);
+    await vi.advanceTimersByTimeAsync(READ_ONLY_STRETCH_IN_MILLISECONDS);
+    await commandOutcome;
+
+    expect(await blockingReply).toBe("OK");
+    expect(messagesAtGiveUpAfter).toEqual(["connection error"]);
+    expect(messagesOnceTheDropIsOver).toEqual(["connection error"]);
+    expect(lines).toEqual([
+      { level: "error", fields: { err: readOnlyReplies[0] }, message: "connection error" },
+      { level: "info", fields: {}, message: "connection restored" },
+    ]);
+  });
+
+  test("a read accepted during a worker's stretch past giveUpAfter does not end it", async () => {
+    const { connection, driver, lines, write } = demotedPrimaryScenarioOf(10 * GIVE_UP_AFTER_IN_MILLISECONDS);
+    driver.infoReply = () => Promise.resolve("# Replication\r\nrole:slave\r\n");
+    void connection.workerCalls.send(write()).catch(() => undefined);
+    await vi.advanceTimersByTimeAsync(GIVE_UP_AFTER_IN_MILLISECONDS);
+
+    await connection.workerCalls.send(builtInCommandOf("INFO"));
+
+    expect(lines.map(({ message }) => message)).toEqual(["connection error"]);
+  });
+
+  test("instance writes alone, as on an instance with no worker, never open the pair", async () => {
+    const { connection, lines, write } = demotedPrimaryScenarioOf(10 * GIVE_UP_AFTER_IN_MILLISECONDS);
+
+    const outcome = connection.instanceCalls.send(write()).catch((error: unknown) => error);
+    await vi.advanceTimersByTimeAsync(5 * GIVE_UP_AFTER_IN_MILLISECONDS);
+    await outcome;
+
+    expect(lines).toEqual([]);
+  });
+
+  test.each([
+    { closedAfterInMilliseconds: GIVE_UP_AFTER_IN_MILLISECONDS / 2, expectedMessages: [] },
+    { closedAfterInMilliseconds: GIVE_UP_AFTER_IN_MILLISECONDS, expectedMessages: ["connection error"] },
+  ])(
+    "closing the instance's connections $closedAfterInMilliseconds ms into a worker's stretch writes $expectedMessages and leaves no timer",
+    async ({ closedAfterInMilliseconds, expectedMessages }) => {
+      const { connections, connection, lines, write } = demotedPrimaryScenarioOf(10 * GIVE_UP_AFTER_IN_MILLISECONDS);
+      const blockingConnection = connections.createBlockingConnection(0);
+      const outcomes = Promise.all([
+        connection.workerCalls.send(write()).catch((error: unknown) => error),
+        blockingConnection.workerCalls.send(write()).catch((error: unknown) => error),
+      ]);
+      await vi.advanceTimersByTimeAsync(closedAfterInMilliseconds);
+
+      await connections.closeConnection(blockingConnection);
+      await connections.closeConnection(connection);
+      await outcomes;
+      await vi.advanceTimersByTimeAsync(20 * GIVE_UP_AFTER_IN_MILLISECONDS);
+
+      expect(lines.map(({ message }) => message)).toEqual(expectedMessages);
+      expect(vi.getTimerCount()).toBe(0);
+    },
+  );
+
+  test("a worker write is answered once the server accepts writes again within giveUpAfter, the caller seeing no error and nothing logged, through a bounded number of reconnects", async () => {
+    const shortStretchInMilliseconds = GIVE_UP_AFTER_IN_MILLISECONDS / 2;
+    const { connection, driver, lines, write } = demotedPrimaryScenarioOf(shortStretchInMilliseconds);
 
     const reply = connection.workerCalls.send(write());
-    await vi.advanceTimersByTimeAsync(READ_ONLY_STRETCH_IN_MILLISECONDS + READ_ONLY_RECONNECT_PAUSE_IN_MILLISECONDS);
+    await vi.advanceTimersByTimeAsync(shortStretchInMilliseconds + READ_ONLY_RECONNECT_PAUSE_IN_MILLISECONDS);
+    await vi.advanceTimersByTimeAsync(10 * GIVE_UP_AFTER_IN_MILLISECONDS);
 
     expect(await reply).toBe("OK");
     expect(driver.forceReconnectCount).toBeGreaterThan(0);
     expect(driver.forceReconnectCount).toBeLessThanOrEqual(
-      READ_ONLY_STRETCH_IN_MILLISECONDS / READ_ONLY_RECONNECT_PAUSE_IN_MILLISECONDS + 1,
+      shortStretchInMilliseconds / READ_ONLY_RECONNECT_PAUSE_IN_MILLISECONDS + 1,
     );
     expect(lines).toEqual([]);
   });

@@ -11,6 +11,7 @@ import {
   unansweredWithinDeadlineError,
 } from "./node-redis-driver.js";
 import type { CreateRedisDriver, RedisDriver } from "./node-redis-driver.js";
+import { createReadOnlyStretch } from "./read-only-stretch.js";
 import type { CommandResult, RedisClient, RedisCommand } from "./redis-client.js";
 import { delayUnlessAborted, untilAborted } from "./redis-outage.js";
 import type { RedisOutage } from "./redis-outage.js";
@@ -192,6 +193,32 @@ function noRetryError(): undefined {
   return undefined;
 }
 
+function noErrors(): readonly Error[] {
+  return [];
+}
+
+function commandErrorsOf(results: readonly CommandResult[]): readonly (Error | undefined)[] {
+  return results.map((result) => (result.kind === "failed" ? result.error : undefined));
+}
+
+function commandNameOf(command: RedisCommand): string {
+  return command.kind === "script" ? command.script.name : command.name;
+}
+
+type ReadOnlyAnswer = { commandName: string; readOnlyReply: Error };
+
+function readOnlyAnswersOf(
+  commands: readonly RedisCommand[],
+  commandErrors: readonly (Error | undefined)[],
+): ReadOnlyAnswer[] {
+  return commands.flatMap((command, position) => {
+    const commandError = commandErrors[position];
+    return commandError !== undefined && isReadOnlyReply(commandError)
+      ? [{ commandName: commandNameOf(command), readOnlyReply: commandError }]
+      : [];
+  });
+}
+
 export function createRedisConnections(
   connection: ConnectionConfig,
   logger: Logger,
@@ -199,7 +226,9 @@ export function createRedisConnections(
 ): RedisConnections {
   const giveUpAfterInMilliseconds = giveUpAfterInMillisecondsOf(connection);
   const outageTracker = createConnectionOutageTracker(logger);
+  const readOnlyStretch = createReadOnlyStretch({ outageTracker, giveUpAfterInMilliseconds });
   const stateByConnection = new WeakMap<RedisConnection, ConnectionState>();
+  let openConnectionCount = 0;
 
   const stateOf = (redisConnection: RedisConnection): ConnectionState => {
     const state = stateByConnection.get(redisConnection);
@@ -360,22 +389,35 @@ export function createRedisConnections(
 
   const sentWithoutDeadline = async <Reply>(
     state: ConnectionState,
+    commands: readonly RedisCommand[],
     send: Send<Reply>,
-    readOnlyReplyOf: (reply: Reply) => Error | undefined,
+    commandErrorsOf: (reply: Reply) => readonly (Error | undefined)[],
   ): Promise<Reply> => {
     for (;;) {
       throwIfClosed(state);
-      let readOnlyReply: Error | undefined;
+      let readOnlyAnswers: ReadOnlyAnswer[];
       try {
         const reply = await answeredWithinTheAnswerBound(state, () => send());
-        readOnlyReply = readOnlyReplyOf(reply);
-        if (readOnlyReply === undefined) {
+        readOnlyAnswers = readOnlyAnswersOf(commands, commandErrorsOf(reply));
+        if (readOnlyAnswers.length === 0) {
+          readOnlyStretch.noteAccepted(commands.map(commandNameOf));
           return reply;
         }
       } catch (error) {
         if (!isReadOnlyReply(error) || isClosed(state)) {
           throw error;
         }
+        readOnlyAnswers = readOnlyAnswersOf(
+          commands,
+          commands.map(() => error as Error),
+        );
+      }
+      const [firstReadOnlyAnswer] = readOnlyAnswers;
+      if (firstReadOnlyAnswer !== undefined) {
+        readOnlyStretch.noteAnsweredReadOnly(
+          readOnlyAnswers.map(({ commandName }) => commandName),
+          firstReadOnlyAnswer.readOnlyReply,
+        );
       }
       await untilAborted(reconnectedAfterReadOnly(state), state.closedController.signal);
     }
@@ -393,9 +435,9 @@ export function createRedisConnections(
   });
 
   const workerCallsOf = (state: ConnectionState): RedisClient => ({
-    send: (command: RedisCommand) => sentWithoutDeadline(state, () => state.driver.send(command), noRetryError),
+    send: (command: RedisCommand) => sentWithoutDeadline(state, [command], () => state.driver.send(command), noErrors),
     sendBatch: (commands: readonly RedisCommand[]) =>
-      sentWithoutDeadline(state, () => state.driver.sendBatch(commands), failedResultErrorOf(isReadOnlyReply)),
+      sentWithoutDeadline(state, commands, () => state.driver.sendBatch(commands), commandErrorsOf),
   });
 
   const openConnection = (longestBlockInMilliseconds: DurationInMilliseconds): RedisConnection => {
@@ -462,6 +504,7 @@ export function createRedisConnections(
     };
     opened.state = state;
     stateByConnection.set(redisConnection, state);
+    openConnectionCount += 1;
     driver.connect();
     return redisConnection;
   };
@@ -488,6 +531,10 @@ export function createRedisConnections(
       state.readyWait?.markClosed();
       state.readyWait = undefined;
       outageTracker.forgetClient(state.subject);
+      openConnectionCount -= 1;
+      if (openConnectionCount === 0) {
+        readOnlyStretch.forget();
+      }
       if (closeBoundInMilliseconds !== undefined && state.driver.isReady) {
         await isSettledWithin(
           state.driver.close().catch(() => undefined),

@@ -5,8 +5,8 @@ import type { ConnectionConfig } from "./connection.js";
 import type { AnyTaskDefinition, EventDefinition, PayloadInput, PayloadSchema } from "./definitions.js";
 import { parseDuration } from "./durations.js";
 import { createEngine, wakeUpWaitOf } from "./engine/engine.js";
-import { createEngineReader } from "./engine-reader.js";
-import type { EngineReader } from "./engine-reader.js";
+import { createReadApi } from "./read-api.js";
+import type { ReadApi } from "./read-api.js";
 import { RESERVED_NAME_PREFIX, createEnqueueRequests } from "./enqueue-requests.js";
 import type { DispatchedRun, DispatchOptions, EmitOptions, EmittedEvent, ReplayedRun } from "./enqueue-requests.js";
 import type { RedisCallIds } from "./errors.js";
@@ -27,10 +27,11 @@ import type {
 import { eventDefinitionSummariesOf, taskDefinitionSummariesOf } from "./definition-summaries.js";
 import type { EventDefinitionSummary, TaskDefinitionSummary } from "./definition-summaries.js";
 import type { RunState } from "./run-states.js";
-import { rejectInvalidSchedule, timezoneOf } from "./schedules.js";
+import { rejectInvalidSchedule } from "./schedules.js";
 import { appSendersOn, engineSendTargetOf, handlerSenderOn } from "./send-target.js";
 import type { AppSenders, SendTarget } from "./send-target.js";
 import type { StartWorkerOptions } from "./worker-options.js";
+import { declaredSchedulesOf } from "./worker-schedules.js";
 
 // eslint-disable-next-line @typescript-eslint/no-empty-object-type
 export interface Register {}
@@ -179,11 +180,7 @@ export function createNextasking<
       listenerNamesByEventName.get(task.on.name)?.push(task.name);
     }
   }
-  const declaredSchedules = config.tasks.flatMap((task) =>
-    task.schedule === undefined
-      ? []
-      : [{ taskName: task.name, cron: task.schedule.cron, timezone: timezoneOf(task.schedule) }],
-  );
+  const declaredSchedules = declaredSchedulesOf({ tasksByName, listenerNamesByEventName });
   const requests = createEnqueueRequests({ tasksByName, eventsByName, listenerNamesByEventName });
   const lifecycle = createInstanceLifecycle({
     connections,
@@ -211,15 +208,15 @@ export function createNextasking<
     logger,
   });
 
-  let readApi: EngineReader | undefined;
+  let readApi: ReadApi | undefined;
   const readOnRedis = <Result>(
     callName: string,
     callIds: RedisCallIds,
-    read: (reader: EngineReader) => Promise<Result>,
+    read: (reader: ReadApi) => Promise<Result>,
   ): Promise<Result> =>
     recordingSendTarget === undefined
       ? callOnRedisWhileOpen(callIds, ({ commandClient }) => {
-          readApi ??= createEngineReader({
+          readApi ??= createReadApi({
             client: commandClient,
             prefix,
             tasksByName,
@@ -240,7 +237,7 @@ export function createNextasking<
       eventsByName.has(name) && !isBuiltInEventName(name),
     getRun: ((taskName: string, runId: RunId) =>
       readOnRedis("getRun", { runId }, (reader) => reader.getRun(taskName, runId))) as Instance["getRun"],
-    listRuns: ((options: Parameters<EngineReader["listRuns"]>[0]) =>
+    listRuns: ((options: Parameters<ReadApi["listRuns"]>[0]) =>
       readOnRedis("listRuns", {}, (reader) => reader.listRuns(options))) as Instance["listRuns"],
     countRuns: (() => readOnRedis("countRuns", {}, (reader) => reader.countRuns())) as Instance["countRuns"],
     getEvent: ((eventName: string, eventId: EventId) =>

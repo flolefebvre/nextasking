@@ -3,7 +3,6 @@ import { describe, expect, test } from "vitest";
 import {
   checkServerInfoReading,
   maxmemoryPolicyRejectionOf,
-  readMaxmemoryPolicy,
   readServerInfo,
   serverFloorRejectionOf,
   serverVersionReadingOf,
@@ -31,8 +30,12 @@ describe("maxmemoryPolicyRejectionOf", () => {
   });
 });
 
-describe("readMaxmemoryPolicy", () => {
-  test("reads the policy from INFO memory, without CONFIG", async () => {
+async function readMaxmemoryPolicy(source: Parameters<typeof readServerInfo>[0]): Promise<MaxmemoryPolicyReading> {
+  return (await readServerInfo(source)).maxmemoryPolicyReading;
+}
+
+describe("the maxmemory-policy reading of readServerInfo", () => {
+  test("reads the policy from INFO, without CONFIG", async () => {
     const source = maxmemoryPolicySourceAnswering({
       info: async () => infoMemoryReplyWith("allkeys-lru"),
       config: async () => {
@@ -43,10 +46,10 @@ describe("readMaxmemoryPolicy", () => {
     const reading = await readMaxmemoryPolicy(source);
 
     expect(reading).toEqual({ kind: "read", policy: "allkeys-lru" });
-    expect(source.calledCommands).toEqual(["INFO memory"]);
+    expect(source.calledCommands).toEqual(["INFO"]);
   });
 
-  test("falls back to CONFIG GET when INFO memory has no maxmemory_policy line", async () => {
+  test("falls back to CONFIG GET when INFO has no maxmemory_policy line", async () => {
     const source = maxmemoryPolicySourceAnswering({
       info: async () => INFO_MEMORY_REPLY_WITHOUT_POLICY,
       config: async () => ["maxmemory-policy", "noeviction"],
@@ -55,7 +58,7 @@ describe("readMaxmemoryPolicy", () => {
     const reading = await readMaxmemoryPolicy(source);
 
     expect(reading).toEqual({ kind: "read", policy: "noeviction" });
-    expect(source.calledCommands).toEqual(["INFO memory", "CONFIG GET maxmemory-policy"]);
+    expect(source.calledCommands).toEqual(["INFO", "CONFIG GET maxmemory-policy"]);
   });
 
   test("falls back to CONFIG GET when INFO fails with a reply error", async () => {
@@ -85,7 +88,7 @@ describe("readMaxmemoryPolicy", () => {
 
     expect(reading).toEqual({ kind: "unreadable", error: expect.any(AggregateError) });
     const { error } = reading as { error: AggregateError };
-    expect(error.message).toBe("maxmemory-policy is readable from neither INFO memory nor CONFIG GET");
+    expect(error.message).toBe("maxmemory-policy is readable from neither INFO nor CONFIG GET");
     expect(error.errors).toEqual([infoFailure, configFailure]);
     expect(infoFailure).not.toHaveProperty("cause");
     expect(configFailure).not.toHaveProperty("cause");
@@ -100,7 +103,7 @@ describe("readMaxmemoryPolicy", () => {
     const reading = await readMaxmemoryPolicy(source);
 
     expect((reading as { error: AggregateError }).error.errors.map((error: Error) => error.message)).toEqual([
-      "INFO memory has no maxmemory_policy line",
+      "INFO has no maxmemory_policy line",
       "CONFIG GET maxmemory-policy returned []",
     ]);
   });

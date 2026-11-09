@@ -4,6 +4,8 @@ export type DurationInMilliseconds = number;
 
 export type EpochMilliseconds = number;
 
+export type IsoTimestamp = string;
+
 type DurationUnit = "s" | "m" | "h" | "d";
 
 const MILLISECONDS_BY_UNIT: Record<DurationUnit, DurationInMilliseconds> = {

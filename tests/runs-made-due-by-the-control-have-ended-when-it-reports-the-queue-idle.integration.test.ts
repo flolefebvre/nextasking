@@ -11,7 +11,6 @@ import { createNextaskingControl } from "../src/testing.js";
 import type { AnyTaskDefinition } from "../src/definitions.js";
 import { engineKeysOf } from "../src/engine/engine-keys.js";
 import { createEngine } from "../src/engine/engine.js";
-import { createEngineControl } from "../src/engine-control.js";
 import type { HandlerSender } from "../src/step-engine.js";
 import { startWorkerLoop } from "../src/worker-loop.js";
 import { DEFAULT_WORKER_TIMING } from "../src/worker-timing.js";
@@ -64,7 +63,7 @@ integrationTest(
         waitForWakeUp: (timeoutInMilliseconds) => sleep(Math.min(timeoutInMilliseconds, 10)),
         redisOutage: createSimulatedRedisOutage(logger).redisOutage,
       });
-      await using control = createEngineControl({ connection: { url: redisUrl }, prefix: keyPrefix });
+      await using control = createNextaskingControl({ connection: { url: redisUrl }, prefix: keyPrefix });
       const statesSeenAtIdleByTry: string[] = [];
       try {
         for (let tryNumber = 1; tryNumber <= TRY_COUNT; tryNumber += 1) {

@@ -6,7 +6,7 @@ import { freshLockTokensOf } from "../tests/lock-tokens.js";
 import type { Engine, LockedRun } from "./engine/engine.js";
 import { createEngineStepStore, sendFenced } from "./engine-step-store.js";
 import { deriveHandlerSendId } from "./ids.js";
-import { LostRunLockError } from "./job-lock.js";
+import { LostRunLockError } from "./errors.js";
 import { openStepEngine } from "./step-engine.js";
 import type { HandlerSender, StepEngine } from "./step-engine.js";
 

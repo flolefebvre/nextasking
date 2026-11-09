@@ -6,7 +6,7 @@ import { deriveHandlerSendId } from "./ids.js";
 import type { JsonValue } from "./json.js";
 import type { DispatchByName, DispatchOptions, EmitByName, EmitOptions } from "./enqueue-requests.js";
 import { createInMemoryStepStore } from "./in-memory-step-store.js";
-import { LostRunLockError } from "./job-lock.js";
+import { LostRunLockError } from "./errors.js";
 import { openStepEngine, sendThenSave } from "./step-engine.js";
 import type {
   FutureResumeTimeHandling,

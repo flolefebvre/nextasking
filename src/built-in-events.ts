@@ -1,6 +1,7 @@
 import { defineEvent } from "./definitions.js";
 import type { EventId, RunId } from "./ids.js";
-import type { FailureReason, IsoTimestamp } from "./run-queue.js";
+import type { IsoTimestamp } from "./durations.js";
+import type { FailureReason } from "./run-states.js";
 import type { StandardSchemaV1 } from "./standard-schema.js";
 
 export type FailureNoticeError = {

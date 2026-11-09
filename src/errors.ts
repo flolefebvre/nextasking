@@ -165,3 +165,28 @@ function issuePath(schemaIssue: StandardSchemaV1Issue): string {
 function quotedList(names: readonly string[]): string {
   return names.length === 0 ? "none" : names.map((name) => `"${name}"`).join(", ");
 }
+export type RefusedStepCall = "saved" | "read" | "sent";
+
+export type LockLoss = { kind: "lockTakenOver" } | { kind: "recordRewritten"; recordVersion: number | undefined };
+
+export class LostRunLockError extends Error {
+  override readonly name = "LostRunLockError";
+
+  constructor(
+    refusedSubject: string,
+    {
+      refusedCall = "saved",
+      lockLoss = { kind: "lockTakenOver" },
+    }: { refusedCall?: RefusedStepCall; lockLoss?: LockLoss } = {},
+  ) {
+    super(`${refusedSubject} was not ${refusedCall}: ${reasonOfLockLoss(lockLoss)}`);
+  }
+}
+
+function reasonOfLockLoss(lockLoss: LockLoss): string {
+  if (lockLoss.kind === "lockTakenOver") {
+    return "this attempt no longer holds its lock, so another attempt owns it now.";
+  }
+  const shownVersion = lockLoss.recordVersion === undefined ? "a version" : `version ${lockLoss.recordVersion}`;
+  return `a newer release rewrote the run's record to ${shownVersion} this release cannot read, so this attempt no longer holds its lock.`;
+}

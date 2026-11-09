@@ -7,8 +7,8 @@ import type {
   UnknownVersionReply,
 } from "./engine/engine.js";
 import type { EventId, RunId, StepId } from "./ids.js";
-import { LostRunLockError } from "./job-lock.js";
-import type { LockLoss, RefusedStepCall } from "./job-lock.js";
+import { LostRunLockError } from "./errors.js";
+import type { LockLoss, RefusedStepCall } from "./errors.js";
 import { sentIdOf, serializeStepValue } from "./step-engine.js";
 import type { SendFence, StepStore } from "./step-engine.js";
 

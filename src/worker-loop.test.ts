@@ -7,7 +7,7 @@ import type { AnyTaskDefinition, TaskHandler } from "./definitions.js";
 import type { Engine, FetchRequest, FireRequest, RunToCreate, SettleRequest, TickRequest } from "./engine/engine.js";
 import { createEnqueueRequests } from "./enqueue-requests.js";
 import type { DispatchByName, EmitByName } from "./enqueue-requests.js";
-import { syncDeclaredSchedules } from "./engine-schedules.js";
+import { syncDeclaredSchedules } from "./worker-schedules.js";
 import { deriveFailureNoticeEventId, deriveFiringRunId, deriveHandlerSendId, deriveListenerRunId } from "./ids.js";
 import { handlerSenderOn } from "./send-target.js";
 import type { EpochMilliseconds } from "./durations.js";

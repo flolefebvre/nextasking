@@ -14,7 +14,6 @@
     "cron",
     "scheduled-tasks",
     "events",
-    "bullmq",
     "redis",
     "valkey",
     "typescript"
@@ -89,7 +88,6 @@
     "zod": "^4.6.7"
   },
   "dependencies": {
-    "bullmq": "6.5.3",
     "cron-parser": "5.10.2",
     "ioredis": "~5.11.1"
   },

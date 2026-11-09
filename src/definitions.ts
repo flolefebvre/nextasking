@@ -100,6 +100,11 @@ export type AnyScheduledTaskDefinition = Readonly<
 
 export type AnyTaskDefinition = AnyUnscheduledTaskDefinition | AnyScheduledTaskDefinition;
 
+export type WorkerDefinitions = {
+  tasksByName: ReadonlyMap<string, AnyTaskDefinition>;
+  listenerNamesByEventName: ReadonlyMap<string, readonly string[]>;
+};
+
 const DEFAULT_RETRIES = 5;
 
 const DEFAULT_BACKOFF: Duration = "30s";

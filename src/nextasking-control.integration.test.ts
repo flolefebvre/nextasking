@@ -10,7 +10,7 @@ import { withRedis } from "../tests/with-redis.js";
 import { engineKeysOf, hashTaggedPrefixOf } from "./engine/engine-keys.js";
 import { createEngine, RECORD_VERSION } from "./engine/engine.js";
 import type { RunToCreate } from "./engine/engine.js";
-import { createEngineControl } from "./engine-control.js";
+import { createNextaskingControl } from "./nextasking-control.js";
 import { deriveFiringRunId } from "./ids.js";
 import type { NextaskingControl } from "./nextasking-control.js";
 
@@ -21,7 +21,7 @@ const ONE_HOUR_IN_MILLISECONDS = 3_600_000;
 function controlTest(name: string, body: (context: ControlTestContext) => Promise<void>): void {
   integrationTest(name, async ({ redisUrl, keyPrefix }) => {
     await withRedis(redisUrl, async (redis) => {
-      await using control = createEngineControl({ connection: { url: redisUrl }, prefix: keyPrefix });
+      await using control = createNextaskingControl({ connection: { url: redisUrl }, prefix: keyPrefix });
       await body({ engine: createEngine(redis, keyPrefix), redis, keys: engineKeysOf(keyPrefix), keyPrefix, control });
       await expectNoInvariantViolations(redis, keyPrefix);
     });

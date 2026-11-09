@@ -26,9 +26,9 @@ const WORKER_COUNT = 3;
 const KILL_COUNT = 2;
 
 const FAST_TIMING = {
-  lockDurationInMilliseconds: 1000,
-  stallIntervalInMilliseconds: 1000,
-  concurrencySlotSafetyDelayInMilliseconds: 3000,
+  lockDurationInMilliseconds: 2000,
+  lockTimeLeftThatTriggersRenewalInMilliseconds: 1500,
+  tickIntervalInMilliseconds: 500,
 };
 
 integrationTest(

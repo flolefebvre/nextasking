@@ -12,7 +12,7 @@ import type {
   SyncSchedulesReply,
   UnknownVersionReply,
 } from "./engine/engine.js";
-import type { ListenerLeftOut } from "./engine-failure-notice.js";
+import type { ListenerLeftOut } from "./failure-notices.js";
 import type { RunId } from "./ids.js";
 import type { AttemptOutcome } from "./locked-run-attempt.js";
 import type { Logger } from "./logger.js";

@@ -18,7 +18,7 @@ import type {
 import { MOST_DUE_RUNS_PROMOTED_PER_PROMOTE } from "../src/engine/promote-script.js";
 import { deriveFiringRunId } from "../src/ids.js";
 import type { RunId } from "../src/ids.js";
-import type { ErrorRecord } from "../src/run-queue.js";
+import type { ErrorRecord } from "../src/engine/engine.js";
 import type { RunState } from "../src/run-states.js";
 import {
   DAY_IN_MILLISECONDS,

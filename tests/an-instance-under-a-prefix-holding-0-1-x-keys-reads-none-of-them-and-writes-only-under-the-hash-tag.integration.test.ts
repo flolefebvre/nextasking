@@ -41,19 +41,24 @@ integrationTest(
       ],
     });
     const monitoredCommands: MonitoredCommand[] = [];
-    const monitorClient = new Redis(redisUrl, { lazyConnect: true });
+    const monitorClient = new Redis(redisUrl, { lazyConnect: true, monitor: true });
     monitorClient.on("error", () => undefined);
 
     try {
       await withRedis(redisUrl, async (redis) => {
         const seededValuesByKey = await seedReleaseZeroOneKeys(redis, runsKeyStart);
-        await monitorClient.connect();
-        const monitor = await monitorClient.monitor();
-        monitor.on("monitor", (_time: string, args: string[], source: string) => {
+        monitorClient.on("monitor", (_time: string, args: string[], source: string) => {
           if (args.some((argument) => argument.includes(keyPrefix))) {
             monitoredCommands.push({ args, source });
           }
         });
+        const monitoring = new Promise<void>((resolve) => {
+          monitorClient.once("monitoring", () => {
+            resolve();
+          });
+        });
+        await monitorClient.connect();
+        await monitoring;
 
         await nextasking.startWorker();
         const { runId } = await nextasking.dispatch("send-welcome-email", { email: "ada@example.com" });
@@ -65,7 +70,7 @@ integrationTest(
         await vi.waitFor(() => expect(monitoredCommands.some(({ source }) => source.includes("lua"))).toBe(true), {
           timeout: 5_000,
         });
-        monitor.disconnect();
+        monitorClient.disconnect();
         const keysUnderThePrefix = (await redis.keys(`*${keyPrefix.replace(/[*?[\]\\]/g, "\\$&")}*`)).sort();
         const seededValuesAfter = new Map(
           [...seededValuesByKey.keys()].map((key) => [key, null as Buffer | null] as const),

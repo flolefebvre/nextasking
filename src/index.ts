@@ -33,7 +33,6 @@ export {
 export type { PayloadIssue } from "./errors.js";
 export type { EventId, RunId } from "./ids.js";
 export type { Logger } from "./logger.js";
-export type { FanOutState } from "./queue-reader.js";
 export type { PreviousFiring, RunError } from "./read-api.js";
 export { createNextasking } from "./registry.js";
 export type {
@@ -50,7 +49,7 @@ export type {
   RunPage,
   TaskName,
 } from "./registry.js";
-export type { FailureReason } from "./run-queue.js";
+export type { FailureReason } from "./run-states.js";
 export type { RunState } from "./run-states.js";
 export type { CronExpression, IanaTimeZone, Schedule } from "./schedules.js";
 export type { StandardSchemaV1 } from "./standard-schema.js";

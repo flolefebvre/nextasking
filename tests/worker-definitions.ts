@@ -1,7 +1,7 @@
 import { runFailed } from "../src/built-in-events.js";
 import { defineListener } from "../src/definitions.js";
 import type { AnyTaskDefinition } from "../src/definitions.js";
-import type { WorkerDefinitions } from "../src/engine-failure-notice.js";
+import type { WorkerDefinitions } from "../src/definitions.js";
 
 export const brokenKeyRunFailedListener = defineListener("broken-key-listener", {
   on: runFailed,

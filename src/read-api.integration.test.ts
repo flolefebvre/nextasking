@@ -13,25 +13,25 @@ import type { AnyTaskDefinition } from "./definitions.js";
 import { engineKeysOf, runIdentityOf, storedRunIdOf } from "./engine/engine-keys.js";
 import { createEngine, RECORD_VERSION } from "./engine/engine.js";
 import type { LockedRun, RunToCreate, SettleOutcome } from "./engine/engine.js";
-import { createEngineReader } from "./engine-reader.js";
-import type { EngineReader } from "./engine-reader.js";
+import { createReadApi } from "./read-api.js";
+import type { ReadApi } from "./read-api.js";
 import { UnknownEventError, UnknownTaskError } from "./errors.js";
 import { deriveFiringRunId, deriveListenerRunId } from "./ids.js";
 import type { RunId } from "./ids.js";
-import { cursorOfFields } from "./read-api.js";
+import { cursorOfFields } from "./run-list-cursor.js";
 import type { AnyListedRun, ListRunsOptionsOf } from "./read-api.js";
 import { RUN_STATES } from "./run-states.js";
 import type { RunState } from "./run-states.js";
-import type { DeclaredSchedule } from "./schedules.js";
+import type { ScheduleSummary } from "./engine/engine.js";
 import { DEFAULT_WORKER_TIMING } from "./worker-timing.js";
 
 const TASK_NAMES = ["send-email", "build-report", "resize-image"] as const;
 
 const LISTENER_NAMES = ["record-payment", "email-receipt"] as const;
 
-const DECLARED_SCHEDULES: readonly DeclaredSchedule[] = [
-  { taskName: "build-report", cron: "0 * * * *", timezone: "UTC" },
-  { taskName: "send-email", cron: "*/5 * * * *", timezone: "Europe/Paris" },
+const DECLARED_SCHEDULES: readonly ScheduleSummary[] = [
+  { task: "build-report", cron: "0 * * * *", timezone: "UTC" },
+  { task: "send-email", cron: "*/5 * * * *", timezone: "Europe/Paris" },
 ];
 
 const READ_COMMAND_NAMES = new Set(["hmget", "get", "lrange", "lindex", "hgetall", "zcard", "eval", "evalsha"]);
@@ -46,9 +46,9 @@ function taskDefinitionOf(taskName: string): AnyTaskDefinition {
   return defineScheduledTask(taskName, { schedule: { cron: "0 * * * *" }, handler: async () => undefined });
 }
 
-function readerOf({ redis, keyPrefix }: EngineTestContext): EngineReader {
+function readerOf({ redis, keyPrefix }: EngineTestContext): ReadApi {
   const taskNames = [...TASK_NAMES, ...LISTENER_NAMES];
-  return createEngineReader({
+  return createReadApi({
     client: redis,
     prefix: keyPrefix,
     tasksByName: new Map(taskNames.map((taskName) => [taskName, taskDefinitionOf(taskName)])),
@@ -413,7 +413,7 @@ type ListedIndexesOptions = Omit<ListRunsOptionsOf<string>, "limit" | "cursor">;
 const MOST_PAGES_WALKED = 1000;
 
 async function walkedPagesOf(
-  reader: EngineReader,
+  reader: ReadApi,
   options: ListedIndexesOptions,
   limits: readonly number[],
   firstCursor?: string,

@@ -4,7 +4,7 @@ import { errorFromThrownValue } from "./attempt-errors.js";
 import { retriesOf } from "./definitions.js";
 import type { EpochMilliseconds } from "./durations.js";
 import type { DueSchedule, DueSchedulesReply, Engine, FireRequest, ScheduleSummary } from "./engine/engine.js";
-import type { WorkerDefinitions } from "./engine-failure-notice.js";
+import type { WorkerDefinitions } from "./definitions.js";
 import { deriveFiringRunId } from "./ids.js";
 import { scheduleSyncLinesOf, workerErrorLineOf, writeLifecycleLines } from "./lifecycle-logs.js";
 import type { Logger } from "./logger.js";

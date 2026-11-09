@@ -53,7 +53,8 @@ import type {
 import { MOST_LOCK_TOKENS_PER_FETCH, MOST_RUNS_PARKED_PER_FETCH } from "../src/engine/fetch-script.js";
 import { MOST_DUE_RUNS_PROMOTED_PER_PROMOTE } from "../src/engine/promote-script.js";
 import type { RunId, StepId } from "../src/ids.js";
-import type { ErrorRecord, FailureReason, SourceEvent } from "../src/run-queue.js";
+import type { ErrorRecord, SourceEvent } from "../src/engine/engine.js";
+import type { FailureReason } from "../src/run-states.js";
 import type { RunState } from "../src/run-states.js";
 
 export type InMemoryEngineMethod =

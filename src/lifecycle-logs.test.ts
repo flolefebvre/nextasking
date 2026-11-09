@@ -10,7 +10,7 @@ import {
   workerErrorLineOf,
   writeLifecycleLines,
 } from "./lifecycle-logs.js";
-import type { ListenerLeftOut } from "./engine-failure-notice.js";
+import type { ListenerLeftOut } from "./failure-notices.js";
 import type { AttemptOutcome } from "./locked-run-attempt.js";
 import { createRecordingLogger } from "../tests/recording-logger.js";
 

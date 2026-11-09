@@ -2,9 +2,12 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
+import { disallowedImportsOf, requiredPeerNamesOf } from "./declaration-imports.js";
+import type { PeerManifest } from "./declaration-imports.js";
+
 type ExportTarget = string | null | ExportTarget[] | { [condition: string]: ExportTarget };
 
-type Manifest = {
+type Manifest = PeerManifest & {
   name?: string;
   exports?: Record<string, ExportTarget>;
   bin?: string | Record<string, string>;
@@ -103,8 +106,24 @@ if (missingPaths.length > 0) {
   fail(`Missing from the tarball: ${missingPaths.join(", ")}`);
 }
 
+const requiredPeerNames = requiredPeerNamesOf(manifest);
+const declarationPaths = packedPaths.filter((path) => path.endsWith(".d.ts"));
+const disallowedDeclarationImports = declarationPaths.flatMap((path) =>
+  disallowedImportsOf(readFileSync(new URL(`../${path}`, import.meta.url), "utf-8"), requiredPeerNames).map(
+    (disallowedImport) => `${path} imports ${disallowedImport}`,
+  ),
+);
+if (disallowedDeclarationImports.length > 0) {
+  fail(
+    "A public declaration imports a package that is neither a required peer " +
+      `(${requiredPeerNames.join(", ")}) nor a Node built-in: ${disallowedDeclarationImports.join(", ")}`,
+  );
+}
+
 console.log(
   `Tarball OK: ${String(packedPaths.length)} files, the exports ${EXPECTED_SUBPATHS.join(", ")} ` +
     `and ${String(manualPagePaths.length)} manual pages ship, the manifest declares ${binListOf(EXPECTED_BIN_NAMES)}, ` +
-    "nothing outside dist, the manual, README.md, LICENSE and package.json does, and no script runs on install.",
+    "nothing outside dist, the manual, README.md, LICENSE and package.json does, and no script runs on install; " +
+    `the ${String(declarationPaths.length)} declarations import nothing but the required peers ` +
+    `(${requiredPeerNames.join(", ")}) and Node's built-ins and types.`,
 );

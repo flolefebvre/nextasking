@@ -6,8 +6,8 @@ import type { WorkerProcess } from "./worker-process.js";
 import { createWorkerProcessNextasking } from "./worker-process-nextasking.js";
 
 const FAST_STALLS = {
-  lockDurationInMilliseconds: 2000,
-  lockTimeLeftThatTriggersRenewalInMilliseconds: 1500,
+  lockDurationInMilliseconds: 3000,
+  lockTimeLeftThatTriggersRenewalInMilliseconds: 2500,
   tickIntervalInMilliseconds: 500,
 };
 

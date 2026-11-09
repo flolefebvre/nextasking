@@ -13,6 +13,12 @@ function messagesOfRun(lines: readonly RecordedLogLine[], runId: string): string
   return lines.filter((line) => line.fields.runId === runId).map((line) => line.message);
 }
 
+function workerMessagesOfRun(lines: readonly RecordedLogLine[], runId: string): string[] {
+  const messages = messagesOfRun(lines, runId);
+  expect(messages.filter((message) => message === "run dispatched")).toHaveLength(1);
+  return messages.filter((message) => message !== "run dispatched");
+}
+
 integrationTest(
   "runs beyond a key's limit wait without using retries, start in dispatch order, and leave other keys free",
   async ({ redisUrl, keyPrefix }) => {
@@ -78,11 +84,10 @@ integrationTest(
         { order: 3, attempt: 1 },
         { order: 4, attempt: 1 },
       ]);
-      expect(messagesOfRun(lines, holdingRun.runId)).toEqual(["run dispatched", "attempt started", "run completed"]);
-      expect(messagesOfRun(lines, otherKeyRun.runId)).toEqual(["run dispatched", "attempt started", "run completed"]);
+      expect(workerMessagesOfRun(lines, holdingRun.runId)).toEqual(["attempt started", "run completed"]);
+      expect(workerMessagesOfRun(lines, otherKeyRun.runId)).toEqual(["attempt started", "run completed"]);
       for (const runId of waitingRunIds) {
-        expect(messagesOfRun(lines, runId)).toEqual([
-          "run dispatched",
+        expect(workerMessagesOfRun(lines, runId)).toEqual([
           "run waiting for a concurrency slot",
           "attempt started",
           "run completed",

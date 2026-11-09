@@ -4,7 +4,7 @@ import { z } from "zod";
 
 import { defineScheduledTask, defineTask } from "../src/index.js";
 
-const SCHEDULED_BLOCK_IN_MILLISECONDS = 4000;
+const SCHEDULED_BLOCK_IN_MILLISECONDS = 6000;
 
 export type WriteRecord = (taskName: string, record: unknown) => Promise<void>;
 

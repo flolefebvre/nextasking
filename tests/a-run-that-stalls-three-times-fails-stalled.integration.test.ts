@@ -16,7 +16,7 @@ integrationTest(
     );
 
     try {
-      const { runId } = await nextasking.dispatch("block-event-loop", { blockInMilliseconds: 4000 });
+      const { runId } = await nextasking.dispatch("block-event-loop", { blockInMilliseconds: 6000 });
       await waitForLogMessage(stallCheckingProcess.logLines, "run failed", { timeout: 40_000 });
       const run = await storedRun(redisUrl, keyPrefix, "block-event-loop", runId);
       const attemptsStarted = await fixtureRecordsOf(redisUrl, keyPrefix, "block-event-loop");

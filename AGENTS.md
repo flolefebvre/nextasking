@@ -34,7 +34,7 @@ pnpm check                Format check, lint, duplication, typecheck, manual lin
 pnpm gate                 Format check, lint, duplication, typecheck, manual links, then test, build, then pack check and dist typecheck, then test:e2e — the full check, the same as CI
 pnpm build                Build the package into dist/
 pnpm manual-links:check   Check that every relative link of README.md and the top-level docs/ pages reaches a shipped file, and its anchor a heading of that page
-pnpm pack:check           Check the tarball after build: exports targets and manual pages ship, nothing else does, no bin, no install script
+pnpm pack:check           Check the tarball after build: exports targets and manual pages ship, nothing else does, no bin, no install script, the declarations import only required peers and Node built-ins
 pnpm typecheck:dist       Typecheck tests/dist-consumer against the built dist, both entries together and each entry alone, on the TypeScript floor and the newest
 pnpm format               Prettier, rewriting files in place
 pnpm format:check         Prettier in check mode (fails on unformatted files)

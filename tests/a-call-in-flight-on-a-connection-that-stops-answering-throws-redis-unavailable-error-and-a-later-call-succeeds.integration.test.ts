@@ -4,6 +4,7 @@ import { RedisUnavailableError } from "../src/index.js";
 import { closeWhenTestFinishes } from "./close-when-test-finishes.js";
 import { createGiveUpAfterOneSecondNextasking } from "./give-up-after-one-second-nextasking.js";
 import { integrationTest } from "./integration-test.js";
+import { measuredRejectionOf } from "./measured-duration.js";
 import { createRecordingLogger } from "./recording-logger.js";
 import { startTcpProxy } from "./tcp-proxy.js";
 
@@ -21,14 +22,13 @@ integrationTest(
     await nextasking.dispatch("send-welcome-email", { email: "ada@example.com" }, { runId: "welcome-ada" });
     proxy.stopAnswering();
 
-    const startedAt = performance.now();
-    const rejection = await nextasking
-      .dispatch("send-welcome-email", { email: "grace@example.com" }, { runId: "welcome-grace" })
-      .then(
-        () => new Error("the call resolved"),
-        (error: unknown) => error,
-      );
-    const elapsed = performance.now() - startedAt;
+    const {
+      result: rejection,
+      elapsedInMilliseconds,
+      elapsedNetOfStallInMilliseconds,
+    } = await measuredRejectionOf(() =>
+      nextasking.dispatch("send-welcome-email", { email: "grace@example.com" }, { runId: "welcome-grace" }),
+    );
     proxy.answerAgain();
     const laterRun = await vi.waitFor(() => nextasking.getRun("send-welcome-email", "welcome-ada"), {
       timeout: 10_000,
@@ -40,8 +40,8 @@ integrationTest(
       runId: "welcome-grace",
       cause: expect.any(Error),
     });
-    expect(elapsed).toBeGreaterThanOrEqual(GIVE_UP_AFTER_IN_MILLISECONDS - TIMER_SLACK_IN_MILLISECONDS);
-    expect(elapsed).toBeLessThan(GIVE_UP_AFTER_IN_MILLISECONDS + 500);
+    expect(elapsedInMilliseconds).toBeGreaterThanOrEqual(GIVE_UP_AFTER_IN_MILLISECONDS - TIMER_SLACK_IN_MILLISECONDS);
+    expect(elapsedNetOfStallInMilliseconds).toBeLessThan(GIVE_UP_AFTER_IN_MILLISECONDS + 500);
     expect(laterRun).toMatchObject({ runId: "welcome-ada" });
     expect(lines.filter(({ level }) => level !== "debug").map(({ message }) => message)).toEqual([
       "connection error",

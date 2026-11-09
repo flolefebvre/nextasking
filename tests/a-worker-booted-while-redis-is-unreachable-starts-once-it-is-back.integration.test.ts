@@ -6,6 +6,7 @@ import { expect, vi } from "vitest";
 import { closeWhenTestFinishes } from "./close-when-test-finishes.js";
 import { giveUpAfterOneSecondNextaskingBehindACutProxyOf } from "./give-up-after-one-second-nextasking.js";
 import { integrationTest } from "./integration-test.js";
+import { measuredDurationOf } from "./measured-duration.js";
 import { waitForLogMessage } from "./recording-logger.js";
 import { startTcpProxy } from "./tcp-proxy.js";
 import { startWorkerProcess } from "./worker-process.js";
@@ -42,10 +43,11 @@ integrationTest(
     const { proxy, nextasking, lines } = await giveUpAfterOneSecondNextaskingBehindACutProxyOf(redisUrl, keyPrefix);
     const onWorkerNotStarted = vi.fn();
 
-    const startedAt = performance.now();
-    await nextasking.startWorker({ onWorkerNotStarted });
+    const { elapsedNetOfStallInMilliseconds } = await measuredDurationOf(() =>
+      nextasking.startWorker({ onWorkerNotStarted }),
+    );
 
-    expect(performance.now() - startedAt).toBeLessThan(SLOWEST_RESOLVING_START_IN_MILLISECONDS);
+    expect(elapsedNetOfStallInMilliseconds).toBeLessThan(SLOWEST_RESOLVING_START_IN_MILLISECONDS);
     expect(lines.map((line) => line.message)).toContain("connection error");
     expect(lines.map((line) => line.message)).not.toContain("worker started");
 

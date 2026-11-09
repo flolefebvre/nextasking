@@ -3,6 +3,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { expect, vi } from "vitest";
 
 import { integrationTest } from "../tests/integration-test.js";
+import { measuredRejectionOf } from "../tests/measured-duration.js";
 import { createRecordingLogger } from "../tests/recording-logger.js";
 import { startTcpProxy } from "../tests/tcp-proxy.js";
 import type { TcpProxy } from "../tests/tcp-proxy.js";
@@ -30,12 +31,6 @@ async function withProxiedConnections(
   }
 }
 
-async function elapsedAndOutcomeOf(call: Promise<unknown>): Promise<{ elapsed: number; outcome: unknown }> {
-  const startedAt = performance.now();
-  const outcome = await call.catch((error: unknown) => error);
-  return { elapsed: performance.now() - startedAt, outcome };
-}
-
 async function readyAgain(connections: RedisConnections, connection: RedisConnection): Promise<void> {
   await vi.waitFor(() => connections.waitUntilReady(connection), { timeout: 10_000 });
 }
@@ -50,16 +45,22 @@ integrationTest(
         await connections.waitUntilReady(connection);
         proxy.stopAnswering();
 
-        const { elapsed, outcome } = await elapsedAndOutcomeOf(
+        const {
+          result: rejection,
+          elapsedInMilliseconds,
+          elapsedNetOfStallInMilliseconds,
+        } = await measuredRejectionOf(() =>
           connection.workerCalls.send(builtInCommandOf("GET", `${keyPrefix}in-flight`)),
         );
         proxy.answerAgain();
         await readyAgain(connections, connection);
         const reply = await connection.workerCalls.send(builtInCommandOf("ECHO", "answered again"));
 
-        expect(isRedisAwayError(outcome)).toBe(true);
-        expect(elapsed).toBeGreaterThanOrEqual(GIVE_UP_AFTER_IN_MILLISECONDS - TIMER_SLACK_IN_MILLISECONDS);
-        expect(elapsed).toBeLessThan(2 * GIVE_UP_AFTER_IN_MILLISECONDS);
+        expect(isRedisAwayError(rejection)).toBe(true);
+        expect(elapsedInMilliseconds).toBeGreaterThanOrEqual(
+          GIVE_UP_AFTER_IN_MILLISECONDS - TIMER_SLACK_IN_MILLISECONDS,
+        );
+        expect(elapsedNetOfStallInMilliseconds).toBeLessThan(2 * GIVE_UP_AFTER_IN_MILLISECONDS);
         expect(reply).toBe("answered again");
       } finally {
         await connections.closeConnection(connection);
@@ -80,18 +81,22 @@ integrationTest(
         await connections.waitUntilReady(connection);
         proxy.stopAnswering();
 
-        const { elapsed, outcome } = await elapsedAndOutcomeOf(
+        const {
+          result: rejection,
+          elapsedInMilliseconds,
+          elapsedNetOfStallInMilliseconds,
+        } = await measuredRejectionOf(() =>
           connection.workerCalls.send(builtInCommandOf("BZPOPMIN", markerKey, blockInMilliseconds / 1000)),
         );
         proxy.answerAgain();
         await readyAgain(connections, connection);
         const nextPop = await connection.workerCalls.send(builtInCommandOf("BZPOPMIN", markerKey, 0.1));
 
-        expect(isRedisAwayError(outcome)).toBe(true);
-        expect(elapsed).toBeGreaterThanOrEqual(
+        expect(isRedisAwayError(rejection)).toBe(true);
+        expect(elapsedInMilliseconds).toBeGreaterThanOrEqual(
           blockInMilliseconds + GIVE_UP_AFTER_IN_MILLISECONDS - TIMER_SLACK_IN_MILLISECONDS,
         );
-        expect(elapsed).toBeLessThan(blockInMilliseconds + 2 * GIVE_UP_AFTER_IN_MILLISECONDS);
+        expect(elapsedNetOfStallInMilliseconds).toBeLessThan(blockInMilliseconds + 2 * GIVE_UP_AFTER_IN_MILLISECONDS);
         expect(nextPop).toBeNull();
       } finally {
         await connections.closeConnection(connection);

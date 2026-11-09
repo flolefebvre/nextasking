@@ -77,6 +77,5 @@ integrationTest(
       "unknown task",
     ]);
     expectOneConnectionErrorAndOneConnectionRestored(lines);
-    expect(lines.filter((line) => line.message === "worker error")).toEqual([]);
   },
 );

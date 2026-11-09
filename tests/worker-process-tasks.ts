@@ -147,8 +147,24 @@ export function workerProcessTasks(writeRecord: WriteRecord) {
     },
   });
 
+  const emitProcessWarning = defineTask("emit-process-warning", {
+    schema: z.object({ warning: z.string() }),
+    handler: async ({ payload }) => {
+      process.emitWarning(payload.warning);
+    },
+  });
+
+  const rejectWithNoHandler = defineTask("reject-with-no-handler", {
+    schema: z.object({ reason: z.string() }),
+    handler: async ({ payload }) => {
+      void Promise.reject(new Error(payload.reason));
+    },
+  });
+
   return [
     limitedExecutionTask(writeRecord, "one-per-key", { limit: 1, isKeyed: true }),
+    emitProcessWarning,
+    rejectWithNoHandler,
     limitedExecutionTask(writeRecord, "two-per-key", { limit: 2, isKeyed: true }),
     limitedExecutionTask(writeRecord, "three-in-all", { limit: 3, isKeyed: false }),
     holdConcurrencySlot,

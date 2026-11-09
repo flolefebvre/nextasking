@@ -2,12 +2,14 @@ import { expect, vi } from "vitest";
 
 import { createNextasking, defineScheduledTask } from "../src/index.js";
 import type { ScheduledTaskContext } from "../src/index.js";
-import { closeNextasking } from "../src/registry.js";
+import { closeNextaskingAndCheckItsDuration } from "./close-nextasking-and-check-its-duration.js";
 import { integrationTest } from "./integration-test.js";
+import { createRecordingLogger } from "./recording-logger.js";
 
 integrationTest(
   "a scheduled task dispatched with no payload runs now, with scheduledAt undefined and no payload in its context",
   async ({ redisUrl, keyPrefix }) => {
+    const { logger } = createRecordingLogger();
     const recordedContexts: ScheduledTaskContext[] = [];
     const purgeExpiredSessions = defineScheduledTask("purge-expired-sessions", {
       schedule: { cron: "0 0 1 1 *" },
@@ -18,6 +20,7 @@ integrationTest(
     const nextasking = createNextasking({
       connection: { url: redisUrl },
       prefix: keyPrefix,
+      logger,
       tasks: [purgeExpiredSessions],
     });
 
@@ -37,7 +40,7 @@ integrationTest(
       expect(recordedContexts[0]).toHaveProperty("scheduledAt");
       expect(recordedContexts[0]).not.toHaveProperty("payload");
     } finally {
-      await closeNextasking(nextasking);
+      await closeNextaskingAndCheckItsDuration(nextasking);
     }
   },
 );

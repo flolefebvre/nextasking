@@ -1,6 +1,7 @@
 import { expect, vi } from "vitest";
 
 import { e2eTest } from "./e2e-test.js";
+import { isThePinnedNextInstalledIn } from "./fixture-app.js";
 import { startNext } from "./next-process.js";
 import { postWelcomeEmail } from "./welcome-email-route.js";
 
@@ -9,7 +10,10 @@ const STARTUP_ERROR =
 
 e2eTest(
   "a config error fails loudly at boot: next start logs it and answers 500 to every request",
-  async ({ fixtureAppDir, fixtureAppEnv }) => {
+  async ({ fixtureAppDir, fixtureAppEnv, expectInvariantViolation }) => {
+    if (await isThePinnedNextInstalledIn(fixtureAppDir)) {
+      expectInvariantViolation("unhandled rejection", STARTUP_ERROR);
+    }
     const nextProcess = await startNext(fixtureAppDir, {
       command: "start",
       env: { ...fixtureAppEnv, NEXTASKING_E2E_CONFIG_ERROR: "unlisted-event" },

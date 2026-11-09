@@ -73,7 +73,6 @@ async function withFailureReplyCut(
   await afterOutage({ directNextasking, lines, runId, runFailedNotices });
 
   expectOneConnectionErrorAndOneConnectionRestored(lines);
-  expect(lines.filter((line) => line.message === "worker error")).toEqual([]);
 }
 
 integrationTest(

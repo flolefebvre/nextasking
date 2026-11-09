@@ -5,6 +5,8 @@ import type { EpochMilliseconds } from "../src/durations.js";
 import { integrationTest } from "./integration-test.js";
 import { concurrencyViolationsIn, limitedExecutionsOf } from "./limited-executions.js";
 import { seededRandomnessOfThisRun } from "./seeded-random.js";
+import { storedKeyViolationsOf } from "./stored-key-violations.js";
+import { withRedis } from "./with-redis.js";
 import { startWorkerProcess } from "./worker-process.js";
 import type { WorkerProcess } from "./worker-process.js";
 import { createWorkerProcessNextasking } from "./worker-process-nextasking.js";
@@ -25,6 +27,8 @@ const WORKER_COUNT = 3;
 
 const KILL_COUNT = 2;
 
+const SAMPLE_INTERVAL_IN_MILLISECONDS = 100;
+
 const FAST_TIMING = {
   lockDurationInMilliseconds: 2000,
   lockTimeLeftThatTriggersRenewalInMilliseconds: 1500,
@@ -41,6 +45,16 @@ integrationTest(
       startWorkerProcess({ redisUrl, keyPrefix, timing: FAST_TIMING, startWorkerOptions: { concurrency: 5 } });
     const workerProcesses: WorkerProcess[] = [];
     const killTimeByPid = new Map<number, EpochMilliseconds>();
+    const sampledViolations: string[] = [];
+    let sampleCount = 0;
+    let isSampling = true;
+    const sampling = withRedis(redisUrl, async (redis) => {
+      while (isSampling) {
+        sampledViolations.push(...(await storedKeyViolationsOf(redis, keyPrefix)));
+        sampleCount += 1;
+        await sleep(SAMPLE_INTERVAL_IN_MILLISECONDS);
+      }
+    });
 
     try {
       for (let workerIndex = 0; workerIndex < WORKER_COUNT; workerIndex += 1) {
@@ -83,7 +97,11 @@ integrationTest(
         { timeout: 40_000, interval: 500 },
       );
       const executions = await limitedExecutionsOf(redisUrl, keyPrefix, TASK_NAMES, killTimeByPid);
+      isSampling = false;
+      await sampling;
 
+      expect(sampleCount, seedMessage).toBeGreaterThan(0);
+      expect(sampledViolations, seedMessage).toEqual([]);
       expect(concurrencyViolationsIn(executions, LIMIT_BY_TASK_NAME), seedMessage).toEqual([]);
       expect(
         executions.filter((execution) => execution.endedAt === undefined && execution.killedAt === undefined),
@@ -94,6 +112,8 @@ integrationTest(
         seedMessage,
       ).toEqual([]);
     } finally {
+      isSampling = false;
+      await sampling;
       await Promise.all(workerProcesses.map((workerProcess) => workerProcess.stop()));
       await nextasking.close();
     }

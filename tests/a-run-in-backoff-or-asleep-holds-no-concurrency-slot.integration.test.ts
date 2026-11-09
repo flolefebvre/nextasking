@@ -2,7 +2,7 @@ import { expect, vi } from "vitest";
 import { z } from "zod";
 
 import { createNextasking, defineTask } from "../src/index.js";
-import { closeNextasking } from "../src/registry.js";
+import { closeNextaskingAndCheckItsDuration } from "./close-nextasking-and-check-its-duration.js";
 import { integrationTest } from "./integration-test.js";
 import { createRecordingLogger, waitForLogMessage } from "./recording-logger.js";
 
@@ -54,7 +54,7 @@ integrationTest(
       expect(handlerEvents.lastIndexOf("other attempt 1")).toBeLessThan(handlerEvents.indexOf("sleep resumed"));
       expect(lines.map((line) => line.message)).not.toContain("run waiting for a concurrency slot");
     } finally {
-      await closeNextasking(nextasking);
+      await closeNextaskingAndCheckItsDuration(nextasking);
     }
   },
 );

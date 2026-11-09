@@ -3,8 +3,9 @@ import { z } from "zod";
 
 import { createNextasking, defineTask } from "../src/index.js";
 import type { TaskContext } from "../src/index.js";
-import { closeNextasking } from "../src/registry.js";
+import { closeNextaskingAndCheckItsDuration } from "./close-nextasking-and-check-its-duration.js";
 import { integrationTest } from "./integration-test.js";
+import { createRecordingLogger } from "./recording-logger.js";
 
 const RANDOM_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
@@ -21,6 +22,7 @@ integrationTest(
     const nextasking = createNextasking({
       connection: { url: redisUrl },
       prefix: keyPrefix,
+      logger: createRecordingLogger().logger,
       tasks: [sendWelcomeEmail],
     });
 
@@ -48,7 +50,7 @@ integrationTest(
         { timeout: 10_000 },
       );
     } finally {
-      await closeNextasking(nextasking);
+      await closeNextaskingAndCheckItsDuration(nextasking);
     }
   },
 );

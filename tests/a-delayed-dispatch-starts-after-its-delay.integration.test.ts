@@ -2,8 +2,9 @@ import { expect, vi } from "vitest";
 import { z } from "zod";
 
 import { createNextasking, defineTask } from "../src/index.js";
-import { closeNextasking } from "../src/registry.js";
+import { closeNextaskingAndCheckItsDuration } from "./close-nextasking-and-check-its-duration.js";
 import { integrationTest } from "./integration-test.js";
+import { createRecordingLogger } from "./recording-logger.js";
 
 const DELAY_IN_MILLISECONDS = 2000;
 
@@ -18,7 +19,12 @@ integrationTest(
         handlerStartedAt = Date.now();
       },
     });
-    const nextasking = createNextasking({ connection: { url: redisUrl }, prefix: keyPrefix, tasks: [sendReminder] });
+    const nextasking = createNextasking({
+      connection: { url: redisUrl },
+      prefix: keyPrefix,
+      logger: createRecordingLogger().logger,
+      tasks: [sendReminder],
+    });
 
     try {
       await nextasking.startWorker();
@@ -29,7 +35,7 @@ integrationTest(
       const startedAt = await vi.waitUntil(() => handlerStartedAt, { timeout: 10_000 });
       expect(startedAt - dispatchedAt).toBeGreaterThanOrEqual(DELAY_IN_MILLISECONDS);
     } finally {
-      await closeNextasking(nextasking);
+      await closeNextaskingAndCheckItsDuration(nextasking);
     }
   },
 );

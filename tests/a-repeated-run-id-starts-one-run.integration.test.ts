@@ -2,7 +2,7 @@ import { expect, vi } from "vitest";
 import { z } from "zod";
 
 import { createNextasking, defineTask } from "../src/index.js";
-import { closeNextasking } from "../src/registry.js";
+import { closeNextaskingAndCheckItsDuration } from "./close-nextasking-and-check-its-duration.js";
 import { integrationTest } from "./integration-test.js";
 import { createRecordingLogger } from "./recording-logger.js";
 import { storedRunIdentities } from "./stored-run-identities.js";
@@ -58,7 +58,7 @@ integrationTest(
       ]);
       expect(recordedEmails).toEqual(["first@example.com"]);
     } finally {
-      await closeNextasking(nextasking);
+      await closeNextaskingAndCheckItsDuration(nextasking);
     }
   },
 );

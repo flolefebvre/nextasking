@@ -9,7 +9,7 @@ import {
 } from "../../tests/ended-runs.js";
 import { backdateEndedRun, engineTest, fetchedLockedRunsOf } from "../../tests/engine-test.js";
 import type { EngineTestContext } from "../../tests/engine-test.js";
-import { invariantViolationsOf } from "../../tests/invariant-violations.js";
+import { storedKeyViolationsOf } from "../../tests/stored-key-violations.js";
 import { seededRandomnessOfThisRun } from "../../tests/seeded-random.js";
 import type { SeededRandomness } from "../../tests/seeded-random.js";
 import { serverInstantInMillisecondsOf } from "../../tests/server-instant.js";
@@ -253,7 +253,7 @@ engineTest(
       ]);
       prunedRunCounts.push(pruneReply.prunedRunCount);
       if (round % LOAD_ROUNDS_BETWEEN_SAMPLES === 0) {
-        expect(await invariantViolationsOf(redis, keyPrefix), `after round ${String(round)}, ${seedMessage}`).toEqual(
+        expect(await storedKeyViolationsOf(redis, keyPrefix), `after round ${String(round)}, ${seedMessage}`).toEqual(
           [],
         );
       }

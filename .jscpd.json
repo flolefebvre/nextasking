@@ -4,5 +4,6 @@
   "minTokens": 50,
   "exitCode": 1,
   "reporters": ["consoleFull"],
-  "ignore": ["**/node_modules/**", "**/.next/**"]
+  "ignore": ["**/node_modules/**", "**/.next/**"],
+  "ignorePattern": ["\\bimport [^;()]* from \"[^\"]*\";"]
 }

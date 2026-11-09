@@ -1,5 +1,5 @@
 import { createNextasking } from "../src/index.js";
-import { closeNextasking } from "../src/registry.js";
+import { closeNextaskingAndCheckItsDuration } from "./close-nextasking-and-check-its-duration.js";
 import { workerProcessTasks } from "./worker-process-tasks.js";
 
 function createDispatchingNextasking(redisUrl: string, keyPrefix: string) {
@@ -16,6 +16,6 @@ export function createWorkerProcessNextasking(redisUrl: string, keyPrefix: strin
   const nextasking = createDispatchingNextasking(redisUrl, keyPrefix);
   return {
     dispatch: nextasking.dispatch,
-    close: () => closeNextasking(nextasking),
+    close: () => closeNextaskingAndCheckItsDuration(nextasking),
   };
 }

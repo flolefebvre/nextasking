@@ -4,7 +4,7 @@ import { z } from "zod";
 
 import { createNextasking, defineTask } from "../src/index.js";
 import type { StartWorkerOptions } from "../src/index.js";
-import { closeNextasking } from "../src/registry.js";
+import { closeNextaskingAndCheckItsDuration } from "./close-nextasking-and-check-its-duration.js";
 import { integrationTest } from "./integration-test.js";
 import { createRecordingLogger } from "./recording-logger.js";
 
@@ -38,7 +38,7 @@ async function runABacklogOfResizes({
       .poll(() => lines.filter((line) => line.message === "run completed").length, { timeout: 10_000 })
       .toBe(BACKLOG_SIZE);
   } finally {
-    await closeNextasking(nextasking);
+    await closeNextaskingAndCheckItsDuration(nextasking);
   }
 }
 

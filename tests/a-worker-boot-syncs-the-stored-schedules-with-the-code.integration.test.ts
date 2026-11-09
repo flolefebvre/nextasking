@@ -3,9 +3,9 @@ import { z } from "zod";
 
 import { createNextasking, defineScheduledTask, defineTask } from "../src/index.js";
 import type { Schedule } from "../src/index.js";
-import { closeNextasking } from "../src/registry.js";
 import { engineKeysOf } from "../src/engine/engine-keys.js";
 import { RECORD_VERSION } from "../src/engine/engine.js";
+import { closeNextaskingAndCheckItsDuration } from "./close-nextasking-and-check-its-duration.js";
 import { integrationTest } from "./integration-test.js";
 import { createRecordingLogger } from "./recording-logger.js";
 import type { RecordedLogLine } from "./recording-logger.js";
@@ -58,7 +58,7 @@ integrationTest(
 
     try {
       await firstReleaseNextasking.startWorker();
-      await closeNextasking(firstReleaseNextasking);
+      await closeNextaskingAndCheckItsDuration(firstReleaseNextasking);
       await withRedis(redisUrl, async (redis) => {
         await redis.hset(keys.schedule("purge-expired-sessions"), "nextFiringAt", LEFT_UNTOUCHED_INSTANT, "retries", 2);
         await redis.zadd(keys.schedules, LEFT_UNTOUCHED_INSTANT, "purge-expired-sessions");
@@ -155,8 +155,8 @@ integrationTest(
         expect.objectContaining({ task: "send-weekly-report", cron: "0 9 * * 1", timezone: "Europe/Paris" }),
       ]);
     } finally {
-      await closeNextasking(firstReleaseNextasking);
-      await closeNextasking(secondReleaseNextasking);
+      await closeNextaskingAndCheckItsDuration(firstReleaseNextasking);
+      await closeNextaskingAndCheckItsDuration(secondReleaseNextasking);
     }
   },
 );

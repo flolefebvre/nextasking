@@ -6,13 +6,14 @@ import { createNextasking, defineTask } from "../src/index.js";
 import { closeWhenTestFinishes } from "./close-when-test-finishes.js";
 import { integrationTest } from "./integration-test.js";
 import { createRecordingLogger, waitForLogMessage } from "./recording-logger.js";
+import { runLeftExecutingSentenceOf } from "./stored-key-violations.js";
 import { startTcpProxy } from "./tcp-proxy.js";
 import { withRedis } from "./with-redis.js";
 
 integrationTest(
   "a run whose lock is taken over during an outage, after its attempt failed and before its failure is stored, logs its outcome discarded and no attempt failed",
   { timeout: 20_000 },
-  async ({ redisUrl, keyPrefix }) => {
+  async ({ redisUrl, keyPrefix, expectInvariantViolation }) => {
     const proxy = await startTcpProxy(redisUrl);
     let isConnectionCut = false;
     const { logger, lines } = createRecordingLogger();
@@ -41,6 +42,7 @@ integrationTest(
 
     await workerNextasking.startWorker();
     const { runId } = await directNextasking.dispatch("charge-invoice", { invoiceId: "invoice-7" });
+    expectInvariantViolation("run left executing", runLeftExecutingSentenceOf("charge-invoice", runId));
     await vi.waitUntil(() => isConnectionCut, { timeout: 10_000 });
     await withRedis(redisUrl, (redis) =>
       redis.hset(engineKeysOf(keyPrefix).runRecord("charge-invoice", runId), "lockToken", "token-of-another-attempt"),
@@ -55,6 +57,6 @@ integrationTest(
         message: "attempt outcome discarded: lock lost",
       },
     ]);
-    expect(lines.filter((line) => line.message === "attempt failed" || line.message === "worker error")).toEqual([]);
+    expect(lines.filter((line) => line.message === "attempt failed")).toEqual([]);
   },
 );

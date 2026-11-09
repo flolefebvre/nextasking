@@ -1,5 +1,6 @@
 import { GenericContainer, Wait } from "testcontainers";
 
+import { invariantsOfCurrentTestOrThrow } from "./invariant-violations.js";
 import { startTcpProxy } from "./tcp-proxy.js";
 import type { TcpProxy } from "./tcp-proxy.js";
 import { testImage } from "./valkey-container.js";
@@ -18,6 +19,7 @@ export type EvictingServer = {
 export async function startEvictingServer({
   isConfigDisabled = false,
 }: { isConfigDisabled?: boolean } = {}): Promise<EvictingServer> {
+  const invariants = invariantsOfCurrentTestOrThrow("startEvictingServer");
   const container = await new GenericContainer(testImage())
     .withCommand(["--maxmemory-policy", "allkeys-lru", ...(isConfigDisabled ? ["--rename-command", "CONFIG", ""] : [])])
     .withExposedPorts(REDIS_CONTAINER_PORT)
@@ -29,6 +31,7 @@ export async function startEvictingServer({
     url,
     proxy,
     stop: async () => {
+      await invariants.checkStoredKeysOn(url);
       await proxy.stop();
       await container.stop();
     },

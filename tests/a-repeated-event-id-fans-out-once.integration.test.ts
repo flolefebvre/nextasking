@@ -3,7 +3,7 @@ import { z } from "zod";
 
 import { createNextasking, defineEvent, defineListener } from "../src/index.js";
 import { deriveListenerRunId } from "../src/ids.js";
-import { closeNextasking } from "../src/registry.js";
+import { closeNextaskingAndCheckItsDuration } from "./close-nextasking-and-check-its-duration.js";
 import { integrationTest } from "./integration-test.js";
 import { createRecordingLogger } from "./recording-logger.js";
 import { storedRunIdentities } from "./stored-run-identities.js";
@@ -51,6 +51,6 @@ integrationTest("a repeated eventId returns the first id and fans out once", asy
     ]);
     expect(recordedInvoiceIds).toEqual(["inv-1"]);
   } finally {
-    await closeNextasking(nextasking);
+    await closeNextaskingAndCheckItsDuration(nextasking);
   }
 });

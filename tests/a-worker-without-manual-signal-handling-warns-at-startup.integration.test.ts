@@ -2,7 +2,7 @@ import { expect, vi } from "vitest";
 import { z } from "zod";
 
 import { createNextasking, defineTask } from "../src/index.js";
-import { closeNextasking } from "../src/registry.js";
+import { closeNextaskingAndCheckItsDuration } from "./close-nextasking-and-check-its-duration.js";
 import { integrationTest } from "./integration-test.js";
 import { createRecordingLogger } from "./recording-logger.js";
 
@@ -28,7 +28,7 @@ async function startupLinesOfAWorker(redisUrl: string, keyPrefix: string) {
       ),
     };
   } finally {
-    await closeNextasking(nextasking);
+    await closeNextaskingAndCheckItsDuration(nextasking);
   }
 }
 

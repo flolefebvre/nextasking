@@ -4,7 +4,7 @@ import { expect, vi } from "vitest";
 import { DAY_IN_MILLISECONDS, SEND_EMAIL_PRUNE_REQUEST } from "../../tests/ended-runs.js";
 import { backdateEndedRun, engineTest, expireLock, fetchedLockedRunsOf } from "../../tests/engine-test.js";
 import { integrationTest } from "../../tests/integration-test.js";
-import { invariantViolationsOf } from "../../tests/invariant-violations.js";
+import { storedKeyViolationsOf } from "../../tests/stored-key-violations.js";
 import { freshLockTokensOf } from "../../tests/lock-tokens.js";
 import { serverInstantInMillisecondsOf } from "../../tests/server-instant.js";
 import { withRedis } from "../../tests/with-redis.js";
@@ -250,10 +250,19 @@ engineTest("a wake-up wait on no marker returns at its fractional timeout", asyn
 
 integrationTest(
   "a fetch of a record whose task is not the task of its stored run id throws an unreadable reply",
-  async ({ redisUrl, keyPrefix }) => {
+  async ({ redisUrl, keyPrefix, expectInvariantViolation }) => {
     await withRedis(redisUrl, async (redis) => {
       const engine = createEngine(redis, keyPrefix);
       const keys = engineKeysOf(keyPrefix);
+      const storedRunId = storedRunIdOf("send-receipt", "order-1");
+      const corruptions = [
+        `run "${storedRunId}" has a record of task "update-stock" under an id of task "send-receipt"`,
+        `run "${storedRunId}" sits in ${keys.runIndex("send-receipt", "pending")} though its record is executing`,
+        `run "${storedRunId}" is of task "update-stock", missing from ${keys.tasks}`,
+      ];
+      for (const corruption of corruptions) {
+        expectInvariantViolation("stored keys", corruption);
+      }
       await engine.enqueue({ runs: [{ runId: "order-1", task: "send-receipt", payload: "{}", retries: 0 }] });
       await redis.hset(keys.runRecord("send-receipt", "order-1"), "task", "update-stock");
 
@@ -264,9 +273,7 @@ integrationTest(
       });
 
       await expect(fetch).rejects.toThrow("The fetch script sent a reply the engine cannot read");
-      expect(await invariantViolationsOf(redis, keyPrefix)).toContain(
-        `run "${storedRunIdOf("send-receipt", "order-1")}" has a record of task "update-stock" under an id of task "send-receipt"`,
-      );
+      expect([...(await storedKeyViolationsOf(redis, keyPrefix))].sort()).toEqual([...corruptions].sort());
     });
   },
 );

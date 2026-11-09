@@ -1,213 +1,189 @@
-import type { Redis } from "ioredis";
-import { expect } from "vitest";
+import { setImmediate as macrotaskYield } from "node:timers/promises";
+import { inspect } from "node:util";
+import type { TestContext } from "vitest";
 
-import { engineKeysOf, hashTaggedPrefixOf, runIdentityOf } from "../src/engine/engine-keys.js";
-import type { EngineKeys } from "../src/engine/engine-keys.js";
-import { isRunState } from "../src/run-states.js";
-import type { RunState } from "../src/run-states.js";
+import { runsLeftExecutingIn, storedKeysSnapshotOf, storedKeyViolationsIn } from "./stored-key-violations.js";
+import { withRedis } from "./with-redis.js";
+import type { LockToken } from "../src/engine/engine-keys.js";
 
-type RunRecord = Record<string, string>;
+export type Invariant =
+  "stored keys" | "worker error" | "process warning" | "unhandled rejection" | "slow close" | "run left executing";
 
-type IndexMembership = { indexKey: string; score: string };
+export type InvariantViolation = { invariant: Invariant; message: string; detail?: string };
 
-type StoredKeysByKind = {
-  recordKeysByStoredRunId: Map<string, string>;
-  sideKeys: { storedRunId: string; side: string }[];
-  sortedIndexKeys: string[];
-  slotSetKeys: string[];
-  scheduleKeys: string[];
+export type ExpectInvariantViolation = (invariant: Invariant, message: string) => void;
+
+type TestInvariants = {
+  report: (violation: InvariantViolation) => void;
+  reportLockTokensMadeByTheTest: (lockTokens: readonly LockToken[]) => void;
+  stopRecordingProcessEvents: () => void;
+  waitBeforeJudging: (settled: Promise<unknown>) => void;
+  checkStoredKeysOn: (redisUrl: string) => Promise<void>;
 };
 
-const SCORE_FIELD_BY_STATE: Readonly<Record<RunState, string>> = {
-  delayed: "startsAt",
-  pending: "order",
-  waitingForConcurrencySlot: "order",
-  executing: "startedAt",
-  suspended: "resumesAt",
-  backingOff: "nextAttemptAt",
-  completed: "finishedAt",
-  failed: "finishedAt",
-};
+export const CLOSE_BOUND_PAST_THE_SHUTDOWN_TIMEOUT_IN_MILLISECONDS = 2000;
 
-const DUE_STATES: readonly RunState[] = ["delayed", "suspended", "backingOff"];
+let invariantsOfCurrentTest: TestInvariants | undefined;
 
-async function storedKeysOf(redis: Redis, keyPrefix: string): Promise<string[]> {
-  const escapedPrefix = hashTaggedPrefixOf(keyPrefix).replace(/[*?[\]\\]/g, "\\$&");
-  const storedKeys: string[] = [];
-  for await (const scannedKeys of redis.scanStream({ match: `${escapedPrefix}:*`, count: 1000 })) {
-    storedKeys.push(...(scannedKeys as string[]));
-  }
-  return storedKeys;
+export function invariantsOfCurrentTestIfAny(): TestInvariants | undefined {
+  return invariantsOfCurrentTest;
 }
 
-function storedKeysByKindOf(storedKeys: readonly string[], keyPrefix: string): StoredKeysByKind {
-  const prefixLength = hashTaggedPrefixOf(keyPrefix).length + 1;
-  const storedKeysByKind: StoredKeysByKind = {
-    recordKeysByStoredRunId: new Map(),
-    sideKeys: [],
-    sortedIndexKeys: [],
-    slotSetKeys: [],
-    scheduleKeys: [],
-  };
-  for (const storedKey of storedKeys) {
-    const [kind, ...segments] = storedKey.slice(prefixLength).split(":");
-    if (kind === "run" && segments.length === 1) {
-      storedKeysByKind.recordKeysByStoredRunId.set(decodeURIComponent(segments[0]!), storedKey);
-    } else if (kind === "run" && segments.length === 2) {
-      storedKeysByKind.sideKeys.push({ storedRunId: decodeURIComponent(segments[0]!), side: segments[1]! });
-    } else if (kind === "runs" || kind === "waiting") {
-      storedKeysByKind.sortedIndexKeys.push(storedKey);
-    } else if (kind === "pending" || kind === "due" || kind === "locks") {
-      storedKeysByKind.sortedIndexKeys.push(storedKey);
-    } else if (kind === "slots") {
-      storedKeysByKind.slotSetKeys.push(storedKey);
-    } else if (kind === "schedule") {
-      storedKeysByKind.scheduleKeys.push(storedKey);
-    }
-  }
-  return storedKeysByKind;
-}
-
-function expectedIndexScoresOf(keys: EngineKeys, record: RunRecord): Map<string, string | undefined> {
-  const state = record["state"] as RunState;
-  const task = record["task"] ?? "";
-  const stateScore = record[SCORE_FIELD_BY_STATE[state]];
-  const expectedIndexScores = new Map([[keys.runIndex(task, state), stateScore]]);
-  if (state === "pending") {
-    expectedIndexScores.set(keys.pending, stateScore);
-  } else if (state === "waitingForConcurrencySlot") {
-    expectedIndexScores.set(keys.waitingList(task, record["concurrencyKey"]), stateScore);
-  } else if (state === "executing") {
-    expectedIndexScores.set(keys.locks, record["lockedUntil"]);
-  } else if (DUE_STATES.includes(state)) {
-    expectedIndexScores.set(keys.due, stateScore);
-  }
-  return expectedIndexScores;
-}
-
-function haveEqualScores(storedScore: string, expectedScore: string | undefined): boolean {
-  return expectedScore !== undefined && Number(storedScore) === Number(expectedScore);
-}
-
-export async function invariantViolationsOf(redis: Redis, keyPrefix: string): Promise<string[]> {
-  const keys = engineKeysOf(keyPrefix);
-  const { recordKeysByStoredRunId, sideKeys, sortedIndexKeys, slotSetKeys, scheduleKeys } = storedKeysByKindOf(
-    await storedKeysOf(redis, keyPrefix),
-    keyPrefix,
-  );
-  const recordsByStoredRunId = new Map<string, RunRecord>();
-  for (const [storedRunId, recordKey] of recordKeysByStoredRunId) {
-    recordsByStoredRunId.set(storedRunId, await redis.hgetall(recordKey));
-  }
-  const membershipsByStoredRunId = new Map<string, IndexMembership[]>();
-  for (const indexKey of sortedIndexKeys) {
-    const membersWithScores = await redis.zrange(indexKey, 0, -1, "WITHSCORES");
-    for (let position = 0; position < membersWithScores.length; position += 2) {
-      const storedRunId = membersWithScores[position]!;
-      const memberships = membershipsByStoredRunId.get(storedRunId) ?? [];
-      memberships.push({ indexKey, score: membersWithScores[position + 1]! });
-      membershipsByStoredRunId.set(storedRunId, memberships);
-    }
-  }
-  const taskNames = new Set(await redis.smembers(keys.tasks));
-  const violations: string[] = [];
-
-  for (const [storedRunId, memberships] of membershipsByStoredRunId) {
-    const record = recordsByStoredRunId.get(storedRunId);
-    if (record === undefined || !isRunState(record["state"])) {
-      violations.push(
-        ...memberships.map(
-          ({ indexKey }) => `run "${storedRunId}" sits in ${indexKey} but has no record with a known state`,
-        ),
-      );
-      continue;
-    }
-    const expectedIndexScores = expectedIndexScoresOf(keys, record);
-    for (const { indexKey, score } of memberships) {
-      if (!expectedIndexScores.has(indexKey)) {
-        violations.push(`run "${storedRunId}" sits in ${indexKey} though its record is ${record["state"]}`);
-      } else if (!haveEqualScores(score, expectedIndexScores.get(indexKey))) {
-        violations.push(
-          `run "${storedRunId}" has score ${score} in ${indexKey} but ${String(expectedIndexScores.get(indexKey))} in its record`,
-        );
-      }
-    }
-  }
-
-  for (const [storedRunId, record] of recordsByStoredRunId) {
-    const runIdentity = runIdentityOf(storedRunId);
-    if (runIdentity === undefined) {
-      violations.push(`run "${storedRunId}" has a record under an id that is not a stored run id`);
-    } else if (runIdentity.task !== record["task"]) {
-      violations.push(
-        `run "${storedRunId}" has a record of task "${String(record["task"])}" under an id of task "${runIdentity.task}"`,
-      );
-    }
-    if (!isRunState(record["state"])) {
-      violations.push(`run "${storedRunId}" has a record with no known state: ${String(record["state"])}`);
-      continue;
-    }
-    const indexKeysHoldingTheRun = new Set(
-      (membershipsByStoredRunId.get(storedRunId) ?? []).map(({ indexKey }) => indexKey),
+export function invariantsOfCurrentTestOrThrow(sourceName: string): TestInvariants {
+  if (invariantsOfCurrentTest === undefined) {
+    throw new Error(
+      `${sourceName} reports to the invariants of the current test: start it inside an integrationTest or an e2eTest body`,
     );
-    for (const expectedIndexKey of expectedIndexScoresOf(keys, record).keys()) {
-      if (!indexKeysHoldingTheRun.has(expectedIndexKey)) {
-        violations.push(`run "${storedRunId}" is ${record["state"]} but missing from ${expectedIndexKey}`);
-      }
-    }
-    if (!taskNames.has(record["task"] ?? "")) {
-      violations.push(`run "${storedRunId}" is of task "${String(record["task"])}", missing from ${keys.tasks}`);
-    }
   }
-
-  for (const { storedRunId, side } of sideKeys) {
-    if (!recordsByStoredRunId.has(storedRunId)) {
-      violations.push(`run "${storedRunId}" has its ${side} key but no record`);
-    }
-  }
-
-  for (const [storedRunId, record] of recordsByStoredRunId) {
-    const slotSetKey = keys.slotSet(record["task"] ?? "", record["concurrencyKey"]);
-    if (record["state"] === "executing" && (await redis.sismember(slotSetKey, storedRunId)) === 0) {
-      violations.push(`run "${storedRunId}" is executing but holds no slot in ${slotSetKey}`);
-    }
-  }
-
-  for (const slotSetKey of slotSetKeys) {
-    for (const storedRunId of await redis.smembers(slotSetKey)) {
-      const record = recordsByStoredRunId.get(storedRunId);
-      const isHolderOfThisSlotSet =
-        record?.["state"] === "executing" &&
-        keys.slotSet(record["task"] ?? "", record["concurrencyKey"]) === slotSetKey;
-      if (!isHolderOfThisSlotSet) {
-        violations.push(`run "${storedRunId}" holds a slot in ${slotSetKey} but is not an executing run of that key`);
-      }
-    }
-  }
-
-  const scheduledTasksWithScores = await redis.zrange(keys.schedules, 0, -1, "WITHSCORES");
-  const scheduleKeysListedInSchedules = new Set<string>();
-  for (let position = 0; position < scheduledTasksWithScores.length; position += 2) {
-    const task = scheduledTasksWithScores[position]!;
-    const score = scheduledTasksWithScores[position + 1]!;
-    scheduleKeysListedInSchedules.add(keys.schedule(task));
-    const nextFiringAt = await redis.hget(keys.schedule(task), "nextFiringAt");
-    if (!haveEqualScores(score, nextFiringAt ?? undefined)) {
-      violations.push(
-        `task "${task}" has score ${score} in ${keys.schedules} but next firing ${String(nextFiringAt)} in ${keys.schedule(task)}`,
-      );
-    }
-  }
-  for (const scheduleKey of scheduleKeys) {
-    if (!scheduleKeysListedInSchedules.has(scheduleKey)) {
-      violations.push(`${scheduleKey} is missing from ${keys.schedules}`);
-    }
-  }
-
-  return violations;
+  return invariantsOfCurrentTest;
 }
 
-export async function expectNoInvariantViolations(redis: Redis, keyPrefix: string): Promise<void> {
-  const violations = await invariantViolationsOf(redis, keyPrefix);
-  expect(violations, `invariant violations:\n${violations.join("\n")}`).toEqual([]);
+function messageOfReason(reason: unknown): string {
+  return reason instanceof Error ? reason.message : String(reason);
+}
+
+function detailOfReason(reason: unknown): string {
+  return reason instanceof Error ? (reason.stack ?? reason.message) : inspect(reason);
+}
+
+function isSameViolation(left: InvariantViolation, right: InvariantViolation): boolean {
+  return left.invariant === right.invariant && left.message === right.message;
+}
+
+function shownViolation({ invariant, message }: InvariantViolation): string {
+  return `  ${invariant}: ${message}`;
+}
+
+function shownDetailOf({ invariant, message, detail }: InvariantViolation): string {
+  return `${invariant}: ${message}\n${String(detail).replace(/^/gm, "  ")}`;
+}
+
+function invariantViolationsErrorOf(
+  undeclaredViolations: readonly InvariantViolation[],
+  unseenExpectations: readonly InvariantViolation[],
+): Error {
+  const sections: string[] = [];
+  if (undeclaredViolations.length > 0) {
+    sections.push(
+      `The test ended with invariant violations it did not declare:\n${undeclaredViolations.map(shownViolation).join("\n")}`,
+    );
+  }
+  if (unseenExpectations.length > 0) {
+    sections.push(
+      `The test declared invariant violations that never happened:\n${unseenExpectations.map(shownViolation).join("\n")}`,
+    );
+  }
+  const details = undeclaredViolations.filter((violation) => violation.detail !== undefined).map(shownDetailOf);
+  return new Error(
+    sections.join("\n"),
+    details.length === 0 ? undefined : { cause: new Error(`Details of the violations:\n${details.join("\n")}`) },
+  );
+}
+
+async function storedKeyInvariantViolationsOn(
+  redisUrl: string,
+  keyPrefix: string,
+  lockTokensMadeByTheTest: ReadonlySet<LockToken>,
+): Promise<InvariantViolation[]> {
+  const snapshot = await withRedis(redisUrl, (redis) => storedKeysSnapshotOf(redis, keyPrefix));
+  const runsLeftExecuting = runsLeftExecutingIn(snapshot, keyPrefix, lockTokensMadeByTheTest);
+  return [
+    ...storedKeyViolationsIn(snapshot, keyPrefix).map((message) => ({ invariant: "stored keys" as const, message })),
+    ...runsLeftExecuting.map((message) => ({ invariant: "run left executing" as const, message })),
+  ];
+}
+
+export function checkInvariantsOfThisTest({
+  redisUrl,
+  keyPrefix,
+  onTestFinished,
+}: {
+  redisUrl: string;
+  keyPrefix: string;
+  onTestFinished: TestContext["onTestFinished"];
+}): ExpectInvariantViolation {
+  const observedViolations: InvariantViolation[] = [];
+  const expectedViolations: InvariantViolation[] = [];
+  const settledSources: Promise<unknown>[] = [];
+  const storedKeyChecks: Promise<void>[] = [];
+  const recordUnhandledRejection = (reason: unknown) => {
+    observedViolations.push({
+      invariant: "unhandled rejection",
+      message: messageOfReason(reason),
+      detail: detailOfReason(reason),
+    });
+  };
+  const recordProcessWarning = (warning: Error) => {
+    observedViolations.push({
+      invariant: "process warning",
+      message: `${warning.name}: ${warning.message}`,
+      detail: warning.stack,
+    });
+  };
+  const lockTokensMadeByTheTest = new Set<LockToken>();
+  const stopRecordingProcessEvents = () => {
+    process.off("unhandledRejection", recordUnhandledRejection);
+    process.off("warning", recordProcessWarning);
+  };
+  const invariants: TestInvariants = {
+    report: (violation) => {
+      observedViolations.push(violation);
+    },
+    reportLockTokensMadeByTheTest: (lockTokens) => {
+      for (const lockToken of lockTokens) lockTokensMadeByTheTest.add(lockToken);
+    },
+    stopRecordingProcessEvents,
+    waitBeforeJudging: (settled) => {
+      settledSources.push(settled.catch(() => undefined));
+    },
+    checkStoredKeysOn: (otherRedisUrl) => {
+      const storedKeyCheck = storedKeyInvariantViolationsOn(otherRedisUrl, keyPrefix, lockTokensMadeByTheTest).then(
+        (violations) => {
+          observedViolations.push(...violations);
+        },
+        (error: unknown) => {
+          observedViolations.push({
+            invariant: "stored keys",
+            message: `the stored keys on ${otherRedisUrl} could not be read`,
+            detail: detailOfReason(error),
+          });
+        },
+      );
+      storedKeyChecks.push(storedKeyCheck);
+      return storedKeyCheck;
+    },
+  };
+  invariantsOfCurrentTest?.stopRecordingProcessEvents();
+  process.on("unhandledRejection", recordUnhandledRejection);
+  process.on("warning", recordProcessWarning);
+  invariantsOfCurrentTest = invariants;
+
+  onTestFinished(async () => {
+    try {
+      await Promise.all(settledSources);
+      await Promise.all(storedKeyChecks);
+      await macrotaskYield();
+    } finally {
+      stopRecordingProcessEvents();
+      invariantsOfCurrentTest = undefined;
+    }
+    const recordedViolations = [...observedViolations];
+    const violationsSeen = [
+      ...recordedViolations,
+      ...(await storedKeyInvariantViolationsOn(redisUrl, keyPrefix, lockTokensMadeByTheTest)),
+    ];
+    const undeclaredViolations = violationsSeen.filter(
+      (violation) => !expectedViolations.some((expected) => isSameViolation(expected, violation)),
+    );
+    const unseenExpectations = expectedViolations.filter(
+      (expected) => !violationsSeen.some((violation) => isSameViolation(expected, violation)),
+    );
+    if (undeclaredViolations.length > 0 || unseenExpectations.length > 0) {
+      throw invariantViolationsErrorOf(undeclaredViolations, unseenExpectations);
+    }
+  });
+
+  return (invariant, message) => {
+    expectedViolations.push({ invariant, message });
+  };
 }

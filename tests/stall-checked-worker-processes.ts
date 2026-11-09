@@ -27,7 +27,7 @@ export async function startStallCheckedWorkerProcesses(
     redisUrl,
     keyPrefix,
     timing: FAST_STALLS,
-    startWorkerOptions: { concurrency: 1 },
+    startWorkerOptions: { concurrency: 1, shutdownTimeout: "1s" },
   });
   const blockingProcess = await (async () => {
     await nextasking.dispatch("wait-for-abort", {});
@@ -45,7 +45,9 @@ export async function startStallCheckedWorkerProcesses(
     stallCheckingProcess,
     blockingProcess,
     stop: async () => {
-      await Promise.all([stallCheckingProcess.stop(), blockingProcess.stop()]);
+      await blockingProcess.stop();
+      stallCheckingProcess.kill("SIGTERM");
+      await stallCheckingProcess.exited;
       await nextasking.close();
     },
   };

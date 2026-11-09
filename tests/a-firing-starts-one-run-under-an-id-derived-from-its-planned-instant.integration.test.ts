@@ -3,8 +3,9 @@ import { expect, vi } from "vitest";
 import { createEngine } from "../src/engine/engine.js";
 import { createNextasking, defineScheduledTask } from "../src/index.js";
 import { deriveFiringRunId } from "../src/ids.js";
-import { closeNextasking } from "../src/registry.js";
+import { closeNextaskingAndCheckItsDuration } from "./close-nextasking-and-check-its-duration.js";
 import { integrationTest } from "./integration-test.js";
+import { createRecordingLogger } from "./recording-logger.js";
 import { storedRunIdentities } from "./stored-run-identities.js";
 import { storedRun } from "./stored-run.js";
 import { moveNextFiringTo } from "./stored-schedules.js";
@@ -25,6 +26,7 @@ integrationTest(
     const nextasking = createNextasking({
       connection: { url: redisUrl },
       prefix: keyPrefix,
+      logger: createRecordingLogger().logger,
       tasks: [purgeExpiredSessions],
     });
     const plannedInstant = Date.parse("2025-12-31T23:00:00.000Z");
@@ -59,7 +61,7 @@ integrationTest(
         { task: "purge-expired-sessions", runId: firingRunId },
       ]);
     } finally {
-      await closeNextasking(nextasking);
+      await closeNextaskingAndCheckItsDuration(nextasking);
     }
   },
 );

@@ -4,8 +4,9 @@ import { z } from "zod";
 import { createNextasking, defineEvent, defineListener, defineTask } from "../src/index.js";
 import type { RunState } from "../src/index.js";
 import { deriveListenerRunId } from "../src/ids.js";
-import { closeNextasking } from "../src/registry.js";
+import { closeNextaskingAndCheckItsDuration } from "./close-nextasking-and-check-its-duration.js";
 import { integrationTest } from "./integration-test.js";
+import { createRecordingLogger } from "./recording-logger.js";
 import { withReaderAndWorker } from "./with-reader-and-worker.js";
 
 const userSignedUp = defineEvent("user.signed-up", { schema: z.object({ userId: z.string() }) });
@@ -14,6 +15,7 @@ function createDispatchOnlyNextasking(redisUrl: string, keyPrefix: string) {
   return createNextasking({
     connection: { url: redisUrl },
     prefix: keyPrefix,
+    logger: createRecordingLogger().logger,
     events: [userSignedUp],
     tasks: [
       defineTask("send-reminder", { schema: z.object({ email: z.string() }), handler: async () => undefined }),
@@ -98,7 +100,7 @@ integrationTest(
         ],
       });
     } finally {
-      await closeNextasking(nextasking);
+      await closeNextaskingAndCheckItsDuration(nextasking);
     }
   },
 );
@@ -122,7 +124,7 @@ integrationTest(
         "Invalid listRuns cursor",
       );
     } finally {
-      await closeNextasking(nextasking);
+      await closeNextaskingAndCheckItsDuration(nextasking);
     }
   },
 );

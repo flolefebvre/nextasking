@@ -2,7 +2,7 @@ import { expect, vi } from "vitest";
 import { z } from "zod";
 
 import { createNextasking, defineTask } from "../src/index.js";
-import { closeNextasking } from "../src/registry.js";
+import { closeNextaskingAndCheckItsDuration } from "./close-nextasking-and-check-its-duration.js";
 import { integrationTest } from "./integration-test.js";
 
 const CONSOLE_METHODS = ["log", "debug", "info", "warn", "error", "trace"] as const;
@@ -23,13 +23,13 @@ integrationTest("a run without a logger writes nothing to the console", async ({
     await nextasking.startWorker();
     await nextasking.dispatch("purge-sessions", {});
     await vi.waitUntil(() => isRunCompleted, { timeout: 10_000 });
-    await closeNextasking(nextasking);
+    await closeNextaskingAndCheckItsDuration(nextasking);
 
     for (const consoleSpy of consoleSpies) {
       expect(consoleSpy).not.toHaveBeenCalled();
     }
   } finally {
-    await closeNextasking(nextasking);
+    await closeNextaskingAndCheckItsDuration(nextasking);
     for (const consoleSpy of consoleSpies) {
       consoleSpy.mockRestore();
     }

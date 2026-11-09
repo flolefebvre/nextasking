@@ -3,7 +3,7 @@ import { z } from "zod";
 
 import { createNextasking, defineEvent, defineListener, defineTask } from "../src/index.js";
 import type { EventId, Logger, RunId, TaskHandler } from "../src/index.js";
-import { closeNextasking } from "../src/registry.js";
+import { closeNextaskingAndCheckItsDuration } from "./close-nextasking-and-check-its-duration.js";
 import { integrationTest } from "./integration-test.js";
 import { createRecordingLogger } from "./recording-logger.js";
 import type { RecordedLogLine } from "./recording-logger.js";
@@ -88,7 +88,7 @@ integrationTest(
       expect(lines.filter((line) => line.message === "attempt started")).toHaveLength(3);
       expectOneEmitAcrossTwoStretches(emittedEventIdsByAttempt, workspaceRunIds, lines);
     } finally {
-      await closeNextasking(nextasking);
+      await closeNextaskingAndCheckItsDuration(nextasking);
     }
   },
 );
@@ -121,7 +121,7 @@ integrationTest(
       expect(lines.map((line) => line.message)).toContain("run resumed");
       expectOneEmitAcrossTwoStretches(emittedEventIdsByStretch, workspaceRunIds, lines);
     } finally {
-      await closeNextasking(nextasking);
+      await closeNextaskingAndCheckItsDuration(nextasking);
     }
   },
 );
@@ -170,7 +170,7 @@ integrationTest(
       expect(welcomeEmailRunIds).toEqual(["welcome-ada@example.com"]);
       expect(lines.map((line) => line.message)).not.toContain("duplicate dispatch dropped");
     } finally {
-      await closeNextasking(nextasking);
+      await closeNextaskingAndCheckItsDuration(nextasking);
     }
   },
 );

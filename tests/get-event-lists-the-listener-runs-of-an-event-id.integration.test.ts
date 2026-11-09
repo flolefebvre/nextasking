@@ -2,8 +2,9 @@ import { expect, vi } from "vitest";
 import { z } from "zod";
 
 import { NonRetriableError, createNextasking, defineEvent, defineListener } from "../src/index.js";
-import { closeNextasking } from "../src/registry.js";
+import { closeNextaskingAndCheckItsDuration } from "./close-nextasking-and-check-its-duration.js";
 import { integrationTest } from "./integration-test.js";
+import { createRecordingLogger } from "./recording-logger.js";
 
 integrationTest(
   "getEvent lists the run of each listener of an event id, pending from the emit on, and none for an id never emitted",
@@ -13,6 +14,7 @@ integrationTest(
     const nextasking = createNextasking({
       connection: { url: redisUrl },
       prefix: keyPrefix,
+      logger: createRecordingLogger().logger,
       events: [invoicePaid],
       tasks: [
         defineListener("record-invoice-payment", { on: invoicePaid, handler: async () => undefined }),
@@ -62,7 +64,7 @@ integrationTest(
         'Unknown event "invoice.voided"',
       );
     } finally {
-      await closeNextasking(nextasking);
+      await closeNextaskingAndCheckItsDuration(nextasking);
     }
   },
 );

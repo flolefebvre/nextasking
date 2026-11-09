@@ -4,6 +4,7 @@ import { createNextasking } from "../src/index.js";
 import type { Logger } from "../src/index.js";
 import { overrideWorkerTiming } from "../src/worker-timing.js";
 import { fixtureRecordsKey } from "./fixture-records.js";
+import { UNHANDLED_REJECTION_MARKER } from "./process-output-violations.js";
 import type { LogLevel } from "./recording-logger.js";
 import { WORKER_PROCESS_CONFIG_VARIABLE, WORKER_PROCESS_READY } from "./worker-process-config.js";
 import type { WorkerProcessConfig } from "./worker-process-config.js";
@@ -27,6 +28,11 @@ const ndjsonLogger: Logger = {
   warn: lineWriterAt("warn"),
   error: lineWriterAt("error"),
 };
+
+process.on("unhandledRejection", (reason) => {
+  const shownReason = reason instanceof Error ? (reason.stack ?? reason.message) : String(reason);
+  process.stderr.write(`${UNHANDLED_REJECTION_MARKER}${shownReason}\n`);
+});
 
 const recordsClient = new Redis(config.redisUrl);
 recordsClient.on("error", () => undefined);

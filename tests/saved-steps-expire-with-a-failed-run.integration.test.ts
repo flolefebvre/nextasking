@@ -4,7 +4,7 @@ import { z } from "zod";
 import { engineKeysOf } from "../src/engine/engine-keys.js";
 import { createEngine } from "../src/engine/engine.js";
 import { createNextasking, defineTask, NonRetriableError } from "../src/index.js";
-import { closeNextasking } from "../src/registry.js";
+import { closeNextaskingAndCheckItsDuration } from "./close-nextasking-and-check-its-duration.js";
 import { backdateEndedRun } from "./engine-test.js";
 import { integrationTest } from "./integration-test.js";
 import { createRecordingLogger, waitForLogMessage } from "./recording-logger.js";
@@ -56,7 +56,7 @@ integrationTest(
       expect(stepsOfTheFailedRun.serializedResultsByStepId).toEqual({ "parse-file": '[{"contactCount":2}]' });
       expect((await savedSteps(redisUrl, keyPrefix, "import-contacts", runId)).serializedResultsByStepId).toEqual({});
     } finally {
-      await closeNextasking(nextasking);
+      await closeNextaskingAndCheckItsDuration(nextasking);
     }
   },
 );

@@ -1,10 +1,13 @@
-import { onTestFinished } from "vitest";
+import { expect, onTestFinished } from "vitest";
 
 import { engineKeysOf, storedRunIdOf } from "../src/engine/engine-keys.js";
 import { integrationTest } from "./integration-test.js";
+import { invariantsOfCurrentTestOrThrow, STORED_KEYS_READ_BOUND_IN_MILLISECONDS } from "./invariant-violations.js";
 import { freshLockTokensOf } from "./lock-tokens.js";
+import { measuredDurationOf } from "./measured-duration.js";
 import { createRecordingLogger } from "./recording-logger.js";
 import { serverInstantInMillisecondsOf } from "./server-instant.js";
+import { startTcpProxy } from "./tcp-proxy.js";
 import { testFailingWith } from "./test-failing-with.js";
 import { withRedis } from "./with-redis.js";
 
@@ -215,5 +218,51 @@ testFailingWith(
   () => [`${NEVER_HAPPENED}\n  worker error: failed on purpose`],
   async ({ expectInvariantViolation }) => {
     expectInvariantViolation("worker error", "failed on purpose");
+  },
+);
+
+function unreadStoredKeysSentenceOf(redisUrl: string): string {
+  return `the stored keys on ${redisUrl} could not be read`;
+}
+
+integrationTest(
+  "a check of the stored keys on a server that resets every connection ends at once and records a violation naming the server",
+  { timeout: STORED_KEYS_READ_BOUND_IN_MILLISECONDS + 5_000 },
+  async ({ redisUrl, expectInvariantViolation }) => {
+    const proxy = await startTcpProxy(redisUrl);
+    try {
+      await proxy.cut();
+      expectInvariantViolation("stored keys", unreadStoredKeysSentenceOf(proxy.url));
+
+      const { elapsedNetOfStallInMilliseconds } = await measuredDurationOf(() =>
+        invariantsOfCurrentTestOrThrow("the test").checkStoredKeysOn(proxy.url),
+      );
+
+      expect(elapsedNetOfStallInMilliseconds).toBeLessThan(STORED_KEYS_READ_BOUND_IN_MILLISECONDS);
+    } finally {
+      await proxy.stop();
+    }
+  },
+);
+
+integrationTest(
+  "a check of the stored keys on a server that accepts the connection and never answers ends at its bound and records a violation naming the server",
+  { timeout: STORED_KEYS_READ_BOUND_IN_MILLISECONDS + 5_000 },
+  async ({ redisUrl, expectInvariantViolation }) => {
+    const proxy = await startTcpProxy(redisUrl);
+    try {
+      proxy.stopAnswering();
+      expectInvariantViolation("stored keys", unreadStoredKeysSentenceOf(proxy.url));
+
+      const { elapsedInMilliseconds, elapsedNetOfStallInMilliseconds } = await measuredDurationOf(() =>
+        invariantsOfCurrentTestOrThrow("the test").checkStoredKeysOn(proxy.url),
+      );
+
+      expect(elapsedInMilliseconds).toBeGreaterThanOrEqual(STORED_KEYS_READ_BOUND_IN_MILLISECONDS - 50);
+      expect(elapsedNetOfStallInMilliseconds).toBeLessThan(STORED_KEYS_READ_BOUND_IN_MILLISECONDS + 1_000);
+    } finally {
+      proxy.answerAgain();
+      await proxy.stop();
+    }
   },
 );

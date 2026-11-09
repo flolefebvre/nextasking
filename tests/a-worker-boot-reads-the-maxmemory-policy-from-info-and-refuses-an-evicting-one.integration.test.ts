@@ -4,6 +4,7 @@ import { closeNextaskingAndCheckItsDuration } from "./close-nextasking-and-check
 import { EVICTING_POLICY_REJECTION, startEvictingServer } from "./evicting-server.js";
 import { createGiveUpAfterOneSecondNextasking } from "./give-up-after-one-second-nextasking.js";
 import { integrationTest } from "./integration-test.js";
+import { STORED_KEYS_READ_BOUND_IN_MILLISECONDS } from "./invariant-violations.js";
 import { SERVER_CONTAINER_START_BOUND_IN_MILLISECONDS } from "./own-server.js";
 import { createRecordingLogger } from "./recording-logger.js";
 import { providedRedisUrl } from "./valkey-container.js";
@@ -91,5 +92,5 @@ integrationTest.skipIf(providedRedisUrl() !== undefined)(
       await evictingServer.stop();
     }
   },
-  SERVER_CONTAINER_START_BOUND_IN_MILLISECONDS + 15_000 + 5_000,
+  SERVER_CONTAINER_START_BOUND_IN_MILLISECONDS + 15_000 + STORED_KEYS_READ_BOUND_IN_MILLISECONDS + 5_000,
 );

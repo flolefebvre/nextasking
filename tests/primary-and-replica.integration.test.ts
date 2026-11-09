@@ -1,6 +1,7 @@
 import { expect } from "vitest";
 
 import { integrationTest } from "./integration-test.js";
+import { STORED_KEYS_READ_BOUND_IN_MILLISECONDS } from "./invariant-violations.js";
 import {
   PRIMARY_AND_REPLICA_STARTUP_BOUND_IN_MILLISECONDS,
   REPLICA_CATCH_UP_TIMEOUT_IN_MILLISECONDS,
@@ -20,6 +21,7 @@ integrationTest.skipIf(providedRedisUrl() !== undefined)(
   {
     timeout:
       PRIMARY_AND_REPLICA_STARTUP_BOUND_IN_MILLISECONDS +
+      STORED_KEYS_READ_BOUND_IN_MILLISECONDS +
       WAIT_TIMEOUT_IN_MILLISECONDS +
       REPLICA_CATCH_UP_TIMEOUT_IN_MILLISECONDS +
       WINDOW_FOR_A_LOST_WRITE_TO_BE_ACKNOWLEDGED_IN_MILLISECONDS +

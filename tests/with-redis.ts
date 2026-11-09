@@ -9,6 +9,10 @@ function testClientOf(redisUrl: string) {
 
 export type TestClient = ReturnType<typeof testClientOf>;
 
+export function testClientNeverReconnectingOf(redisUrl: string): TestClient {
+  return createClient({ url: redisUrl, RESP: 2, socket: { reconnectStrategy: false } }).on("error", () => undefined);
+}
+
 export function connectedTestClientOf(redisUrl: string): Promise<TestClient> {
   return testClientOf(redisUrl).connect();
 }

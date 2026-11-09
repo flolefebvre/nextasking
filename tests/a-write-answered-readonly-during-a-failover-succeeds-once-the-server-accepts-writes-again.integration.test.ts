@@ -5,6 +5,7 @@ import { expect } from "vitest";
 import { closeNextaskingAndCheckItsDuration } from "./close-nextasking-and-check-its-duration.js";
 import { createGiveUpAfterOneSecondNextasking } from "./give-up-after-one-second-nextasking.js";
 import { integrationTest } from "./integration-test.js";
+import { STORED_KEYS_READ_BOUND_IN_MILLISECONDS } from "./invariant-violations.js";
 import { SERVER_CONTAINER_START_BOUND_IN_MILLISECONDS, startOwnServer } from "./own-server.js";
 import { providedRedisUrl } from "./valkey-container.js";
 import { createRecordingLogger } from "./recording-logger.js";
@@ -16,7 +17,13 @@ const UNREACHABLE_PRIMARY_PORT = "1";
 
 integrationTest.skipIf(providedRedisUrl() !== undefined)(
   "a write answered READONLY while the server is a replica succeeds once it is a primary again, the caller seeing no error",
-  { timeout: SERVER_CONTAINER_START_BOUND_IN_MILLISECONDS + READ_ONLY_STRETCH_IN_MILLISECONDS + 5_000 },
+  {
+    timeout:
+      SERVER_CONTAINER_START_BOUND_IN_MILLISECONDS +
+      READ_ONLY_STRETCH_IN_MILLISECONDS +
+      STORED_KEYS_READ_BOUND_IN_MILLISECONDS +
+      5_000,
+  },
   async ({ keyPrefix }) => {
     const ownServer = await startOwnServer();
     const { logger, lines } = createRecordingLogger();

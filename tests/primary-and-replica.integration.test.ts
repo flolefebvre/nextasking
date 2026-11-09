@@ -1,7 +1,7 @@
 import { expect } from "vitest";
 
 import { integrationTest } from "./integration-test.js";
-import { startPrimaryAndReplica } from "./primary-and-replica.js";
+import { PRIMARY_AND_REPLICA_STARTUP_BOUND_IN_MILLISECONDS, startPrimaryAndReplica } from "./primary-and-replica.js";
 import { providedRedisUrl } from "./valkey-container.js";
 import { withRedis } from "./with-redis.js";
 
@@ -11,7 +11,13 @@ const WINDOW_FOR_A_LOST_WRITE_TO_BE_ACKNOWLEDGED_IN_MILLISECONDS = 300;
 
 integrationTest.skipIf(providedRedisUrl() !== undefined)(
   "a promotion keeps the writes the replica acknowledged before the cut, loses the ones the primary took after it, and the proxy reaches the promoted replica",
-  { timeout: 60_000 },
+  {
+    timeout:
+      PRIMARY_AND_REPLICA_STARTUP_BOUND_IN_MILLISECONDS +
+      REPLICA_ACKNOWLEDGEMENT_TIMEOUT_IN_MILLISECONDS +
+      WINDOW_FOR_A_LOST_WRITE_TO_BE_ACKNOWLEDGED_IN_MILLISECONDS +
+      5_000,
+  },
   async ({ keyPrefix }) => {
     const primaryAndReplica = await startPrimaryAndReplica();
     try {

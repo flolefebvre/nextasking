@@ -5,7 +5,7 @@ import { createNextasking, defineTask } from "../src/index.js";
 import { closeNextaskingAndCheckItsDuration } from "./close-nextasking-and-check-its-duration.js";
 import { createHandlerGate } from "./handler-gate.js";
 import { integrationTest } from "./integration-test.js";
-import { startPrimaryAndReplica } from "./primary-and-replica.js";
+import { PRIMARY_AND_REPLICA_STARTUP_BOUND_IN_MILLISECONDS, startPrimaryAndReplica } from "./primary-and-replica.js";
 import { createRecordingLogger, waitForLogMessage } from "./recording-logger.js";
 import { savedSteps } from "./saved-steps.js";
 import { storedRun } from "./stored-run.js";
@@ -24,7 +24,15 @@ const RUN_COMPLETION_TIMEOUT_IN_MILLISECONDS = 10_000;
 
 integrationTest.skipIf(providedRedisUrl() !== undefined)(
   "a step saved by an attempt whose lock a lossy promotion lost is refused by the lock token, and the run fetched again on the promoted replica completes once",
-  { timeout: 75_000 },
+  {
+    timeout:
+      PRIMARY_AND_REPLICA_STARTUP_BOUND_IN_MILLISECONDS +
+      REPLICA_ACKNOWLEDGEMENT_TIMEOUT_IN_MILLISECONDS +
+      2 * HANDLER_ENTRY_TIMEOUT_IN_MILLISECONDS +
+      STEP_OUTCOME_TIMEOUT_IN_MILLISECONDS +
+      RUN_COMPLETION_TIMEOUT_IN_MILLISECONDS +
+      5_000,
+  },
   async ({ keyPrefix }) => {
     const primaryAndReplica = await startPrimaryAndReplica();
     const { logger, lines } = createRecordingLogger();

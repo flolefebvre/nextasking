@@ -8,6 +8,8 @@ import { testImage } from "./valkey-container.js";
 
 export const REDIS_CONTAINER_PORT = 6379;
 
+export const SERVER_CONTAINER_STARTUP_TIMEOUT_IN_MILLISECONDS = 60_000;
+
 export type OwnServer = {
   url: string;
   proxy: TcpProxy;
@@ -34,7 +36,8 @@ export async function startServerContainer({
   const containerToStart = new GenericContainer(testImage())
     .withCommand([...serverArguments])
     .withExposedPorts(REDIS_CONTAINER_PORT)
-    .withWaitStrategy(Wait.forLogMessage(/Ready to accept connections/));
+    .withWaitStrategy(Wait.forLogMessage(/Ready to accept connections/))
+    .withStartupTimeout(SERVER_CONTAINER_STARTUP_TIMEOUT_IN_MILLISECONDS);
   const container = await (
     networkPlace === undefined
       ? containerToStart

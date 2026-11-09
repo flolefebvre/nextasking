@@ -2,7 +2,11 @@ import { Network } from "testcontainers";
 import { vi } from "vitest";
 
 import { invariantsOfCurrentTestOrThrow } from "./invariant-violations.js";
-import { REDIS_CONTAINER_PORT, startServerContainer } from "./own-server.js";
+import {
+  REDIS_CONTAINER_PORT,
+  SERVER_CONTAINER_STARTUP_TIMEOUT_IN_MILLISECONDS,
+  startServerContainer,
+} from "./own-server.js";
 import { startTcpProxy } from "./tcp-proxy.js";
 import type { TcpProxy } from "./tcp-proxy.js";
 import { withRedis } from "./with-redis.js";
@@ -25,6 +29,9 @@ const UNREACHABLE_PRIMARY_HOST = "127.0.0.1";
 const UNREACHABLE_PRIMARY_PORT = "1";
 
 const REPLICATION_LINK_UP_TIMEOUT_IN_MILLISECONDS = 10_000;
+
+export const PRIMARY_AND_REPLICA_STARTUP_BOUND_IN_MILLISECONDS =
+  2 * SERVER_CONTAINER_STARTUP_TIMEOUT_IN_MILLISECONDS + REPLICATION_LINK_UP_TIMEOUT_IN_MILLISECONDS;
 
 async function waitForReplicationLinkUp(replicaUrl: string): Promise<void> {
   await withRedis(replicaUrl, async (replica) => {

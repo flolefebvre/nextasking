@@ -15,6 +15,7 @@ import { createInMemoryEngine } from "../tests/in-memory-engine.js";
 import type { InMemoryEngine } from "../tests/in-memory-engine.js";
 import { freshLockTokensOf } from "../tests/lock-tokens.js";
 import { createRecordingLogger } from "../tests/recording-logger.js";
+import { createSimulatedRedisOutage } from "../tests/simulated-redis-outage.js";
 import { brokenKeyRunFailedListener, workerDefinitionsOf } from "../tests/worker-definitions.js";
 
 const NO_SENDER: HandlerSender = {
@@ -54,6 +55,7 @@ async function attemptResultOf(
     definitions: workerDefinitionsOf([task, alertOnCall] as AnyTaskDefinition[]),
     sender: NO_SENDER,
     logger,
+    redisOutage: createSimulatedRedisOutage(logger).redisOutage,
     abortSignal: abortController.signal,
     abortAttempt: () => {
       abortController.abort();

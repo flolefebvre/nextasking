@@ -200,15 +200,35 @@ engineTest(
     const reply = await engine.promote();
     const nextReply = await engine.promote();
 
-    const expectedReply = {
-      kind: "promoted",
-      promotedRunCount: 0,
-      stalledRuns: [],
-      thirdStalls: [{ runId: "run-1", task: "send-email", attempt: 1, expiredLockToken: lockedRun.lockToken }],
-    };
+    const { runId, task, attempt, lockToken: expiredLockToken, replays, dispatchedAt, startedAt } = lockedRun;
+    const thirdStall = { runId, task, attempt, expiredLockToken, replays, dispatchedAt, startedAt };
+    const expectedReply = { kind: "promoted", promotedRunCount: 0, stalledRuns: [], thirdStalls: [thirdStall] };
     expect(reply).toEqual(expectedReply);
     expect(nextReply).toEqual(expectedReply);
     expect(await storedValuesByKeyOf(redis, keyPrefix)).toEqual(storedValuesBefore);
+  },
+);
+
+engineTest(
+  "a stalled run and a third stall carry the scheduled instant and source event of their run",
+  async (context) => {
+    const { engine, redis, keys } = context;
+    const sourceEvent = { eventName: "user.signed-up", eventId: "event-1" };
+    const scheduledAt = Date.UTC(2030, 0, 1);
+    await engine.enqueue({ runs: [sendEmailRunOf("stalled-run", { sourceEvent }), sendEmailRunOf("third-stall-run")] });
+    await redis.hset(keys.runRecord("third-stall-run"), "scheduledAt", scheduledAt, "stalls", 2, "replays", 3);
+    await redis.hset(keys.runRecord("stalled-run"), "scheduledAt", scheduledAt);
+    await fetchedLockedRunsOf(context, 2);
+    await expireLock(context, "stalled-run");
+    await expireLock(context, "third-stall-run");
+
+    const reply = promotedReplyOf(await engine.promote());
+
+    expect(reply.stalledRuns).toEqual([
+      { runId: "stalled-run", task: "send-email", attempt: 1, stalls: 1, scheduledAt, sourceEvent },
+    ]);
+    expect(reply.thirdStalls).toEqual([expect.objectContaining({ runId: "third-stall-run", replays: 3, scheduledAt })]);
+    expect(reply.thirdStalls[0]).not.toHaveProperty("sourceEvent");
   },
 );
 

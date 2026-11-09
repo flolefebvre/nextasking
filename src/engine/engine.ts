@@ -129,13 +129,7 @@ export type LockedRun = {
   sleepsWokenAt?: EpochMilliseconds;
 };
 
-export type ParkedRun = {
-  runId: RunId;
-  task: string;
-  attempt: number;
-  scheduledAt?: EpochMilliseconds;
-  sourceEvent?: SourceEvent;
-};
+export type ParkedRun = { runId: RunId; task: string; attempt: number } & RunOrigin;
 
 export type FetchedReply = {
   kind: "fetched";
@@ -186,9 +180,19 @@ export type SettledReply =
 
 export type SettleReply = SettledReply | StaleReply | AlreadyReply | UnknownVersionReply;
 
-export type StalledRun = { runId: RunId; task: string; attempt: number; stalls: number };
+export type RunOrigin = { scheduledAt?: EpochMilliseconds; sourceEvent?: SourceEvent };
 
-export type ThirdStall = { runId: RunId; task: string; attempt: number; expiredLockToken: LockToken };
+export type StalledRun = { runId: RunId; task: string; attempt: number; stalls: number } & RunOrigin;
+
+export type ThirdStall = {
+  runId: RunId;
+  task: string;
+  attempt: number;
+  expiredLockToken: LockToken;
+  replays: number;
+  dispatchedAt: EpochMilliseconds;
+  startedAt: EpochMilliseconds;
+} & RunOrigin;
 
 export type PromotedReply = {
   kind: "promoted";
@@ -262,13 +266,16 @@ export type TickRequest = {
   heldLocks: readonly HeldLock[];
   lockDurationInMilliseconds: DurationInMilliseconds;
   prune?: PruneRequest;
+  isPromoteIncluded?: boolean;
 };
 
+export type TickCommandReply<Reply> = { kind: "replied"; reply: Reply } | { kind: "failed"; error: Error };
+
 export type TickReply = {
-  promote: PromoteReply;
-  renewals: LockRenewal[];
-  prune: PruneReply | undefined;
-  taskNames: string[];
+  promote: TickCommandReply<PromoteReply> | undefined;
+  renewals: TickCommandReply<LockRenewal[]>;
+  taskNames: TickCommandReply<string[]>;
+  prune: TickCommandReply<PruneReply> | undefined;
 };
 
 export type Engine = {
@@ -353,23 +360,25 @@ function lockedRunOf(reply: unknown): LockedRun | undefined {
   };
 }
 
+function runOriginOf(storedOrigin: readonly (string | null | undefined)[]): RunOrigin {
+  const [storedScheduledAt, eventName, eventId] = storedOrigin.map(nullIfAbsent);
+  const scheduledAt = storedIntegerOf(nullIfAbsent(storedScheduledAt));
+  return {
+    ...(scheduledAt === undefined ? {} : { scheduledAt }),
+    ...(eventName == null || eventId == null ? {} : { sourceEvent: { eventName, eventId } }),
+  };
+}
+
 function parkedRunOf(reply: unknown): ParkedRun | undefined {
   if (!isStoredValueList(reply) || reply.length !== 6) {
     return undefined;
   }
-  const [runId, task, storedAttempt, storedScheduledAt, eventName, eventId] = reply.map(nullIfAbsent);
+  const [runId, task, storedAttempt, ...storedOrigin] = reply.map(nullIfAbsent);
   const attempt = storedIntegerOf(nullIfAbsent(storedAttempt));
   if (runId == null || task == null || attempt === undefined) {
     return undefined;
   }
-  const scheduledAt = storedIntegerOf(nullIfAbsent(storedScheduledAt));
-  return {
-    runId,
-    task,
-    attempt,
-    ...(scheduledAt === undefined ? {} : { scheduledAt }),
-    ...(eventName == null || eventId == null ? {} : { sourceEvent: { eventName, eventId } }),
-  };
+  return { runId, task, attempt, ...runOriginOf(storedOrigin) };
 }
 
 function definedElementsOf<Element>(elements: readonly (Element | undefined)[]): Element[] | undefined {
@@ -476,25 +485,26 @@ function settleReplyOf(reply: unknown): SettleReply {
 }
 
 function stalledRunOf(reply: unknown): StalledRun | undefined {
-  if (!isStringList(reply) || reply.length !== 4) {
+  if (!isStoredValueList(reply) || reply.length !== 7) {
     return undefined;
   }
-  const [runId, task, storedAttempt, storedStalls] = reply;
+  const [runId, task, storedAttempt, storedStalls, ...storedOrigin] = reply.map(nullIfAbsent);
   const integersByField = storedIntegersByFieldOf({ attempt: storedAttempt, stalls: storedStalls });
-  return runId === undefined || task === undefined || integersByField === undefined
+  return runId == null || task == null || integersByField === undefined
     ? undefined
-    : { runId, task, ...integersByField };
+    : { runId, task, ...integersByField, ...runOriginOf(storedOrigin) };
 }
 
 function thirdStallOf(reply: unknown): ThirdStall | undefined {
-  if (!isStringList(reply) || reply.length !== 4) {
+  if (!isStoredValueList(reply) || reply.length !== 10) {
     return undefined;
   }
-  const [runId, task, storedAttempt, expiredLockToken] = reply;
-  const attempt = storedIntegerOf(nullIfAbsent(storedAttempt));
-  return runId === undefined || task === undefined || attempt === undefined || expiredLockToken === undefined
+  const [runId, task, attempt, expiredLockToken, replays, dispatchedAt, startedAt, ...storedOrigin] =
+    reply.map(nullIfAbsent);
+  const integersByField = storedIntegersByFieldOf({ attempt, replays, dispatchedAt, startedAt });
+  return runId == null || task == null || expiredLockToken == null || integersByField === undefined
     ? undefined
-    : { runId, task, attempt, expiredLockToken };
+    : { runId, task, expiredLockToken, ...integersByField, ...runOriginOf(storedOrigin) };
 }
 
 function promoteReplyOf(reply: unknown): PromoteReply {
@@ -780,21 +790,45 @@ function renewArgumentsOf({ heldLocks, lockDurationInMilliseconds }: RenewReques
 
 function taskNamesOf(reply: unknown): string[] {
   if (!isStringList(reply)) {
-    throw unreadableReplyError("tick", reply);
+    throw new Error(`The SMEMBERS of the task names sent a reply the engine cannot read: ${JSON.stringify(reply)}`);
   }
   return reply;
 }
 
-function pipelineRepliesOf(results: [error: Error | null, reply: unknown][] | null): unknown[] {
+type PipelineResult = [error: Error | null, reply: unknown];
+
+function tickCommandReplyOf<Reply>(
+  [error, reply]: PipelineResult,
+  readReply: (reply: unknown) => Reply,
+): TickCommandReply<Reply> {
+  if (error !== null) {
+    return { kind: "failed", error };
+  }
+  try {
+    return { kind: "replied", reply: readReply(reply) };
+  } catch (readError) {
+    return { kind: "failed", error: readError as Error };
+  }
+}
+
+function tickReplyOf(results: PipelineResult[] | null, request: TickRequest): TickReply {
   if (results === null) {
     throw new Error("The tick pipeline was discarded before it ran");
   }
-  return results.map(([error, reply]) => {
-    if (error !== null) {
-      throw error;
+  const remainingResults = [...results];
+  const nextCommandReplyOf = <Reply>(readReply: (reply: unknown) => Reply): TickCommandReply<Reply> => {
+    const result = remainingResults.shift();
+    if (result === undefined) {
+      throw new Error(`The tick pipeline answered ${String(results.length)} commands, fewer than it sent`);
     }
-    return reply;
-  });
+    return tickCommandReplyOf(result, readReply);
+  };
+  return {
+    promote: request.isPromoteIncluded === false ? undefined : nextCommandReplyOf(promoteReplyOf),
+    renewals: nextCommandReplyOf(renewalsOf),
+    taskNames: nextCommandReplyOf(taskNamesOf),
+    prune: request.prune === undefined ? undefined : nextCommandReplyOf(pruneReplyOf),
+  };
 }
 
 export function createEngine(client: Redis, prefix: string): Engine {
@@ -879,19 +913,15 @@ export function createEngine(client: Redis, prefix: string): Engine {
     promote: async () => promoteReplyOf(await runPromoteScript(PROMOTE_ARGUMENTS)),
     tick: async (request) => {
       const pipeline = client.pipeline();
-      runPromoteScript.appendTo(pipeline, PROMOTE_ARGUMENTS);
+      if (request.isPromoteIncluded !== false) {
+        runPromoteScript.appendTo(pipeline, PROMOTE_ARGUMENTS);
+      }
       runRenewScript.appendTo(pipeline, renewArgumentsOf(request));
       pipeline.smembers(keys.tasks);
       if (request.prune !== undefined) {
         runPruneScript.appendTo(pipeline, pruneKeysOf(keys, request.prune.task), pruneArgumentsOf(request.prune));
       }
-      const [promoteReply, renewReply, taskNamesReply, pruneReply] = pipelineRepliesOf(await pipeline.exec());
-      return {
-        promote: promoteReplyOf(promoteReply),
-        renewals: renewalsOf(renewReply),
-        prune: request.prune === undefined ? undefined : pruneReplyOf(pruneReply),
-        taskNames: taskNamesOf(taskNamesReply),
-      };
+      return tickReplyOf(await pipeline.exec(), request);
     },
     settle: async ({ runId, lockToken, outcome, concurrencyLimit }) =>
       settleReplyOf(

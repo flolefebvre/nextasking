@@ -26,16 +26,21 @@ local stalledRuns, thirdStalls = {}, {}
 
 for _, runId in ipairs(redis.call("ZRANGE", engineKeys.locks, "-inf", now, "BYSCORE")) do
   if not unknownVersionRefusalOf(runId) then
-    local record = redis.call("HMGET", runRecordKey(runId), "task", "concurrencyKey", "lockToken", "stalls", "attempt", "order")
+    local record = redis.call("HMGET", runRecordKey(runId), "task", "concurrencyKey", "lockToken", "stalls", "attempt", "order",
+      "replays", "dispatchedAt", "startedAt", "scheduledAt", "eventName", "eventId")
     local task, concurrencyKey, expiredLockToken = record[1], record[2] or "", record[3]
     local stalls, attempt, order = tonumber(record[4]) or 0, record[5], record[6]
+    local replays, dispatchedAt, startedAt = record[7], record[8], record[9]
+    local scheduledAt, eventName, eventId = record[10], record[11], record[12]
     if stalls >= 2 then
-      table.insert(thirdStalls, { runId, task, attempt, expiredLockToken })
+      table.insert(thirdStalls, {
+        runId, task, attempt, expiredLockToken, replays, dispatchedAt, startedAt, scheduledAt, eventName, eventId
+      })
     else
       endLock(runId, task, concurrencyKey, expiredLockToken, "stalled", nil)
       redis.call("HSET", runRecordKey(runId), "stalls", stalls + 1)
       enterPending(runId, task, order)
-      table.insert(stalledRuns, { runId, task, attempt, tostring(stalls + 1) })
+      table.insert(stalledRuns, { runId, task, attempt, tostring(stalls + 1), scheduledAt, eventName, eventId })
     end
   end
 end

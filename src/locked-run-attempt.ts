@@ -1,11 +1,12 @@
 import type { AttemptAbortCause } from "./attempt-abort.js";
-import { errorFromThrownValue, errorRecordFor, failureReasonFor } from "./attempt-errors.js";
+import { errorFromThrownValue, errorRecordFor, failureReasonFor, UnknownTaskRunError } from "./attempt-errors.js";
 import { settleWithinTimeout } from "./attempt-timeout.js";
 import { backoffInMillisecondsFor } from "./backoff.js";
 import { backoffOf } from "./definitions.js";
 import type { AnyTaskDefinition } from "./definitions.js";
-import { parseDuration } from "./durations.js";
+import { parseDuration, shownDurationOf } from "./durations.js";
 import type { DurationInMilliseconds, EpochMilliseconds } from "./durations.js";
+import { UNKNOWN_TASK_FAILURE_DELAY_IN_MILLISECONDS } from "./engine/engine.js";
 import type { Engine, FailureNotice, LockedRun, SettleOutcome, SettleRequest } from "./engine/engine.js";
 import { engineFailureNoticeOf } from "./engine-failure-notice.js";
 import type { FailingRun, ListenerLeftOut, RunFailure, WorkerDefinitions } from "./engine-failure-notice.js";
@@ -13,6 +14,8 @@ import { createEngineStepStore } from "./engine-step-store.js";
 import { runFieldsOf } from "./lifecycle-logs.js";
 import { loggerWithFields } from "./logger.js";
 import type { Logger } from "./logger.js";
+import { answeredDespiteOutage } from "./redis-outage.js";
+import type { RedisOutage } from "./redis-outage.js";
 import type { FailureReason } from "./run-queue.js";
 import { executeTaskHandler, openStepEngine } from "./step-engine.js";
 import type { HandlerOutcome, HandlerSender } from "./step-engine.js";
@@ -34,10 +37,25 @@ export type LockedRunAttempt = {
   definitions: WorkerDefinitions;
   sender: HandlerSender;
   logger: Logger;
+  redisOutage: RedisOutage;
   abortSignal: AbortSignal;
   abortAttempt: (abortCause: AttemptAbortCause) => void;
   isWorkerDraining: () => boolean;
 };
+
+function callsWaitingOutOutagesOf({ engine, sender, redisOutage, abortSignal }: LockedRunAttempt) {
+  const untilAnswered = <Answer>(call: () => Promise<Answer>) =>
+    answeredDespiteOutage(redisOutage, call, { callAbortSignal: abortSignal });
+  const stepCalls: Pick<Engine, "saveStep" | "readStep"> = {
+    saveStep: (request) => untilAnswered(() => engine.saveStep(request)),
+    readStep: (request) => untilAnswered(() => engine.readStep(request)),
+  };
+  const sendCalls: HandlerSender = {
+    dispatch: (...sendArguments) => untilAnswered(() => sender.dispatch(...sendArguments)),
+    emit: (...sendArguments) => untilAnswered(() => sender.emit(...sendArguments)),
+  };
+  return { stepCalls, sendCalls };
+}
 
 const ATTEMPT_OUTCOME_BY_HANDLER_OUTCOME_KIND: {
   [Kind in HandlerOutcome["kind"]]: (handlerOutcome: Extract<HandlerOutcome, { kind: Kind }>) => AttemptOutcome;
@@ -60,6 +78,20 @@ export function failingAttemptOf(
   return { attemptOutcome: { kind: "fail", ...failure, failureNotice }, listenersLeftOut };
 }
 
+export function handBackAttemptOf(lockedRun: LockedRun, definitions: WorkerDefinitions): AttemptResult {
+  const error = new UnknownTaskRunError(
+    lockedRun.task,
+    lockedRun.runId,
+    shownDurationOf(UNKNOWN_TASK_FAILURE_DELAY_IN_MILLISECONDS),
+  );
+  const { failureNotice, listenersLeftOut } = engineFailureNoticeOf(
+    lockedRun,
+    { error, reason: "unknown task" },
+    definitions,
+  );
+  return { attemptOutcome: { kind: "handBack", error, failureNotice }, listenersLeftOut };
+}
+
 function failedAttemptOf(
   { task, lockedRun, definitions }: LockedRunAttempt,
   thrownValue: unknown,
@@ -80,7 +112,8 @@ function failedAttemptOf(
 }
 
 export async function executeLockedRunAttempt(lockedRunAttempt: LockedRunAttempt): Promise<AttemptResult> {
-  const { engine, task, lockedRun, sender, logger, abortSignal, abortAttempt, isWorkerDraining } = lockedRunAttempt;
+  const { task, lockedRun, logger, abortSignal, abortAttempt, isWorkerDraining } = lockedRunAttempt;
+  const { stepCalls, sendCalls } = callsWaitingOutOutagesOf(lockedRunAttempt);
   const { runId, lockToken, attempt, sleepsWokenAt, scheduledAt } = lockedRun;
   let handlerOutcome: HandlerOutcome;
   try {
@@ -88,8 +121,8 @@ export async function executeLockedRunAttempt(lockedRunAttempt: LockedRunAttempt
       taskName: task.name,
       runId,
       lockToken,
-      store: createEngineStepStore(engine, { runId, lockToken }),
-      sender,
+      store: createEngineStepStore(stepCalls, { runId, lockToken }),
+      sender: sendCalls,
       abortSignal,
       isWorkerDraining,
       futureResumeTime: "suspend the run",
@@ -145,7 +178,7 @@ function settleOutcomeOf(attemptOutcome: AttemptOutcome, attempt: number): Settl
 
 export function settleRequestOf(
   task: AnyTaskDefinition | undefined,
-  { runId, lockToken, attempt }: LockedRun,
+  { runId, lockToken, attempt }: Pick<LockedRun, "runId" | "lockToken" | "attempt">,
   attemptOutcome: AttemptOutcome,
 ): SettleRequest {
   const concurrencyLimit = task?.concurrency?.limit;

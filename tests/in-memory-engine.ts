@@ -26,6 +26,7 @@ import type {
   ReadStepRequest,
   RenewRequest,
   RetentionLimit,
+  RunOrigin,
   RunToCreate,
   SaveStepReply,
   SaveStepRequest,
@@ -35,6 +36,7 @@ import type {
   SettleRequest,
   StalledRun,
   ThirdStall,
+  TickCommandReply,
   TickReply,
   TickRequest,
 } from "../src/engine/engine.js";
@@ -92,6 +94,7 @@ export type InMemoryEngine = Pick<
   runIdsInState: (state: RunState) => RunId[];
   expireLock: (runId: RunId) => void;
   backdateEndedRun: (runId: RunId, durationInMilliseconds: DurationInMilliseconds) => void;
+  backdateFirstFoundUnknownAt: (runId: RunId, durationInMilliseconds: DurationInMilliseconds) => void;
 };
 
 export type InMemoryEngineOptions = { now?: () => EpochMilliseconds };
@@ -340,18 +343,21 @@ export function createInMemoryEngine({ now = () => Date.now() }: InMemoryEngineO
     dispatchedAt: storedRun.dispatchedAt,
     startedAt: storedRun.startedAt ?? 0,
     lockedUntil: storedRun.lockedUntil ?? 0,
-    ...(storedRun.scheduledAt === undefined ? {} : { scheduledAt: storedRun.scheduledAt }),
-    ...(storedRun.sourceEvent === undefined ? {} : { sourceEvent: storedRun.sourceEvent }),
+    ...runOriginOf(storedRun),
     ...(storedRun.concurrencyKey === undefined ? {} : { concurrencyKey: storedRun.concurrencyKey }),
     ...(sleepsWokenAt === undefined ? {} : { sleepsWokenAt }),
+  });
+
+  const runOriginOf = (storedRun: InMemoryStoredRun): RunOrigin => ({
+    ...(storedRun.scheduledAt === undefined ? {} : { scheduledAt: storedRun.scheduledAt }),
+    ...(storedRun.sourceEvent === undefined ? {} : { sourceEvent: storedRun.sourceEvent }),
   });
 
   const parkedRunReplyOf = (runId: RunId, storedRun: InMemoryStoredRun): ParkedRun => ({
     runId,
     task: storedRun.task,
     attempt: storedRun.attempt,
-    ...(storedRun.scheduledAt === undefined ? {} : { scheduledAt: storedRun.scheduledAt }),
-    ...(storedRun.sourceEvent === undefined ? {} : { sourceEvent: storedRun.sourceEvent }),
+    ...runOriginOf(storedRun),
   });
 
   const enqueue = async ({ runs, eventDedup, parentFence }: EnqueueRequest): Promise<EnqueueReply> => {
@@ -578,12 +584,22 @@ export function createInMemoryEngine({ now = () => Date.now() }: InMemoryEngineO
           task: storedRun.task,
           attempt: storedRun.attempt,
           expiredLockToken: storedRun.lockToken ?? "",
+          replays: storedRun.replays,
+          dispatchedAt: storedRun.dispatchedAt,
+          startedAt: storedRun.startedAt ?? 0,
+          ...runOriginOf(storedRun),
         });
       } else {
         endLock(runId, storedRun, "stalled", undefined);
         storedRun.stalls += 1;
         enterPending(storedRun, storedRun.order);
-        stalledRuns.push({ runId, task: storedRun.task, attempt: storedRun.attempt, stalls: storedRun.stalls });
+        stalledRuns.push({
+          runId,
+          task: storedRun.task,
+          attempt: storedRun.attempt,
+          stalls: storedRun.stalls,
+          ...runOriginOf(storedRun),
+        });
       }
     }
     const dueRunEntries = [...runsById.entries()]
@@ -673,15 +689,18 @@ export function createInMemoryEngine({ now = () => Date.now() }: InMemoryEngineO
     return { kind: "pruned", prunedRunCount: prunedRunIds.size };
   };
 
+  const replied = <Reply>(reply: Reply): TickCommandReply<Reply> => ({ kind: "replied", reply });
+
   const tick = async ({
     heldLocks,
     lockDurationInMilliseconds,
     prune: pruneRequest,
+    isPromoteIncluded = true,
   }: TickRequest): Promise<TickReply> => ({
-    promote: await promote(),
-    renewals: await renew({ heldLocks, lockDurationInMilliseconds }),
-    prune: pruneRequest === undefined ? undefined : await prune(pruneRequest),
-    taskNames: [...taskNames],
+    promote: isPromoteIncluded ? replied(await promote()) : undefined,
+    renewals: replied(await renew({ heldLocks, lockDurationInMilliseconds })),
+    taskNames: replied([...taskNames]),
+    prune: pruneRequest === undefined ? undefined : replied(await prune(pruneRequest)),
   });
 
   const recorded =
@@ -744,6 +763,13 @@ export function createInMemoryEngine({ now = () => Date.now() }: InMemoryEngineO
         throw new Error(`run "${runId}" holds no lock to expire`);
       }
       storedRun.lockedUntil = now() - 1;
+    },
+    backdateFirstFoundUnknownAt: (runId, durationInMilliseconds) => {
+      const storedRun = runsById.get(runId);
+      if (storedRun?.firstFoundUnknownAt === undefined) {
+        throw new Error(`run "${runId}" was never found unknown`);
+      }
+      storedRun.firstFoundUnknownAt -= durationInMilliseconds;
     },
     backdateEndedRun: (runId, durationInMilliseconds) => {
       const storedRun = runsById.get(runId);

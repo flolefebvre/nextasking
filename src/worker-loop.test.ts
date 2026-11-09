@@ -5,7 +5,15 @@ import { runFailed } from "./built-in-events.js";
 import { defineEvent, defineListener, defineScheduledTask, defineTask } from "./definitions.js";
 import type { AnyTaskDefinition, TaskHandler } from "./definitions.js";
 import { MOST_RUNS_PRUNED_PER_PRUNE } from "./engine/engine.js";
-import type { Engine, FetchRequest, FireRequest, RunToCreate, SettleRequest, TickRequest } from "./engine/engine.js";
+import type {
+  Engine,
+  FetchRequest,
+  FireRequest,
+  RunToCreate,
+  SettleRequest,
+  TickReply,
+  TickRequest,
+} from "./engine/engine.js";
 import { createEnqueueRequests } from "./enqueue-requests.js";
 import type { DispatchByName, EmitByName } from "./enqueue-requests.js";
 import { syncDeclaredSchedules } from "./worker-schedules.js";
@@ -14,7 +22,7 @@ import { handlerSenderOn } from "./send-target.js";
 import type { EpochMilliseconds } from "./durations.js";
 import type { Schedule } from "./schedules.js";
 import type { HandlerSender } from "./step-engine.js";
-import { startWorkerLoop } from "./worker-loop.js";
+import { MOST_FULL_PRUNES_IN_A_ROW, startWorkerLoop } from "./worker-loop.js";
 import type { WaitForWakeUp, WorkerLoop, WorkerLoopEngine } from "./worker-loop.js";
 import { DEFAULT_WORKER_TIMING } from "./worker-timing.js";
 import type { WorkerTiming } from "./worker-timing.js";
@@ -33,6 +41,7 @@ import {
 } from "../tests/simulated-redis-outage.js";
 import type { AwayEngineCalls, SimulatedRedisOutage } from "../tests/simulated-redis-outage.js";
 import type { RecordedLogLine } from "../tests/recording-logger.js";
+import { repliedOf } from "../tests/tick-replies.js";
 import { unhandledRejectionsDuring } from "../tests/unhandled-rejections.js";
 import { brokenKeyRunFailedListener, workerDefinitionsOf } from "../tests/worker-definitions.js";
 
@@ -564,6 +573,84 @@ test("a task over its cap by three batches is pruned on four ticks in a row, the
     "task-03",
   ]);
   expect(engine.runIdsInState("completed").filter((runId) => runId.startsWith("task-01-"))).toHaveLength(10);
+});
+
+const FULL_PRUNE_REPLY = repliedOf({ kind: "pruned", prunedRunCount: MOST_RUNS_PRUNED_PER_PRUNE } as const);
+
+const EMPTY_PRUNE_REPLY = repliedOf({ kind: "pruned", prunedRunCount: 0 } as const);
+
+async function loopEngineAnsweringPrunesWith(
+  engine: InMemoryEngine,
+  pruneReplyOf: (task: string) => TickReply["prune"],
+): Promise<WorkerLoopEngine> {
+  for (const taskName of ["resize-image", "send-email", "sync-crm"]) {
+    await endRuns(engine, taskName, runIdsOf(`${taskName}-run`, 1), "complete");
+  }
+  return {
+    ...engine,
+    tick: async (request) => {
+      const reply = await engine.tick(request);
+      return request.prune === undefined ? reply : { ...reply, prune: pruneReplyOf(request.prune.task) };
+    },
+  };
+}
+
+function repeated<Item>(item: Item, count: number): Item[] {
+  return Array.from({ length: count }, () => item);
+}
+
+test(`a task whose every prune is full gives the turn to the next task of the round after ${String(MOST_FULL_PRUNES_IN_A_ROW)} prunes in a row, takes it back for ${String(MOST_FULL_PRUNES_IN_A_ROW)} more, and the round goes on from there once it stops being full`, async () => {
+  const engine = createInMemoryEngine();
+  let isResizeImageFull = true;
+  const loopEngine = await loopEngineAnsweringPrunesWith(engine, (task) =>
+    task === "resize-image" && isResizeImageFull ? FULL_PRUNE_REPLY : EMPTY_PRUNE_REPLY,
+  );
+  startedLoopOf([], { engine, loopEngine });
+
+  await vi.advanceTimersByTimeAsync((3 * (MOST_FULL_PRUNES_IN_A_ROW + 1) + 1) * 1_000);
+  isResizeImageFull = false;
+  await vi.advanceTimersByTimeAsync(3_000);
+
+  const holdOfResizeImage = repeated("resize-image", MOST_FULL_PRUNES_IN_A_ROW);
+  expect(prunedTaskNamesOf(engine)).toEqual([
+    undefined,
+    ...holdOfResizeImage,
+    "send-email",
+    ...holdOfResizeImage,
+    "sync-crm",
+    ...holdOfResizeImage,
+    "send-email",
+    "resize-image",
+    "sync-crm",
+    "resize-image",
+  ]);
+});
+
+test(`a task whose prune fails while it holds the turn gives it away, and its next hold lasts ${String(MOST_FULL_PRUNES_IN_A_ROW)} full prunes again`, async () => {
+  const engine = createInMemoryEngine();
+  let resizeImagePruneCount = 0;
+  const loopEngine = await loopEngineAnsweringPrunesWith(engine, (task) => {
+    if (task !== "resize-image") {
+      return EMPTY_PRUNE_REPLY;
+    }
+    resizeImagePruneCount += 1;
+    return resizeImagePruneCount === 3
+      ? { kind: "failed", error: new Error("WRONGTYPE Operation against a key") }
+      : FULL_PRUNE_REPLY;
+  });
+  const { lines } = startedLoopOf([], { engine, loopEngine });
+
+  await vi.advanceTimersByTimeAsync((MOST_FULL_PRUNES_IN_A_ROW + 7) * 1_000);
+
+  expect(prunedTaskNamesOf(engine)).toEqual([
+    undefined,
+    ...repeated("resize-image", 3),
+    "send-email",
+    "sync-crm",
+    ...repeated("resize-image", MOST_FULL_PRUNES_IN_A_ROW),
+    "send-email",
+  ]);
+  expect(linesWithMessage(lines, "worker error")).toHaveLength(1);
 });
 
 test("a tick whose prune fails still applies its renewals, writes one worker error, and the next tick prunes the next task", async () => {

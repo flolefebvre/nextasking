@@ -1,17 +1,16 @@
 import { setTimeout as sleep } from "node:timers/promises";
 
 import { expect } from "vitest";
-import { z } from "zod";
 
-import { createNextasking, defineTask } from "../src/index.js";
 import { closeNextaskingAndCheckItsDuration } from "./close-nextasking-and-check-its-duration.js";
+import { createGiveUpAfterOneSecondNextasking } from "./give-up-after-one-second-nextasking.js";
 import { integrationTest } from "./integration-test.js";
 import { startOwnServer } from "./own-server.js";
 import { providedRedisUrl } from "./valkey-container.js";
 import { createRecordingLogger } from "./recording-logger.js";
 import { withRedis } from "./with-redis.js";
 
-const READ_ONLY_STRETCH_IN_MILLISECONDS = 800;
+const READ_ONLY_STRETCH_IN_MILLISECONDS = 500;
 
 const UNREACHABLE_PRIMARY_PORT = "1";
 
@@ -21,14 +20,7 @@ integrationTest.skipIf(providedRedisUrl() !== undefined)(
   async ({ keyPrefix }) => {
     const ownServer = await startOwnServer();
     const { logger, lines } = createRecordingLogger();
-    const nextasking = createNextasking({
-      connection: { url: ownServer.url, giveUpAfter: "3s" },
-      prefix: keyPrefix,
-      logger,
-      tasks: [
-        defineTask("send-welcome-email", { schema: z.object({ email: z.string() }), handler: async () => undefined }),
-      ],
-    });
+    const nextasking = createGiveUpAfterOneSecondNextasking(ownServer.url, keyPrefix, { logger });
     try {
       await withRedis(ownServer.url, async (admin) => {
         await nextasking.dispatch("send-welcome-email", { email: "ada@example.com" }, { runId: "welcome-ada" });

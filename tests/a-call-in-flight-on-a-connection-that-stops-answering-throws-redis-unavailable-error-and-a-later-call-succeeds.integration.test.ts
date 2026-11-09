@@ -1,8 +1,8 @@
 import { expect, vi } from "vitest";
-import { z } from "zod";
 
-import { RedisUnavailableError, createNextasking, defineTask } from "../src/index.js";
+import { RedisUnavailableError } from "../src/index.js";
 import { closeWhenTestFinishes } from "./close-when-test-finishes.js";
+import { createGiveUpAfterOneSecondNextasking } from "./give-up-after-one-second-nextasking.js";
 import { integrationTest } from "./integration-test.js";
 import { createRecordingLogger } from "./recording-logger.js";
 import { startTcpProxy } from "./tcp-proxy.js";
@@ -16,14 +16,7 @@ integrationTest(
   async ({ redisUrl, keyPrefix }) => {
     const proxy = await startTcpProxy(redisUrl);
     const { logger, lines } = createRecordingLogger();
-    const nextasking = createNextasking({
-      connection: { url: proxy.url, giveUpAfter: "1s" },
-      prefix: keyPrefix,
-      logger,
-      tasks: [
-        defineTask("send-welcome-email", { schema: z.object({ email: z.string() }), handler: async () => undefined }),
-      ],
-    });
+    const nextasking = createGiveUpAfterOneSecondNextasking(proxy.url, keyPrefix, { logger });
     closeWhenTestFinishes({ proxy, nextaskings: [nextasking], lines });
     await nextasking.dispatch("send-welcome-email", { email: "ada@example.com" }, { runId: "welcome-ada" });
     proxy.stopAnswering();

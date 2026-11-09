@@ -1,4 +1,4 @@
-import { ReplyError } from "ioredis";
+import { ErrorReply } from "@redis/client";
 
 import type { RedisClient } from "../src/redis-client.js";
 
@@ -25,9 +25,9 @@ export function infoReplyWith({ valkeyVersion, redisVersion, maxmemoryPolicy }: 
 
 export const INFO_MEMORY_REPLY_WITHOUT_POLICY = ["# Memory", "used_memory:1048576", "maxmemory:0"].join("\r\n");
 
-export const CONFIG_DISABLED = () => new ReplyError("ERR unknown command 'CONFIG', with args beginning with: 'GET'");
+export const CONFIG_DISABLED = () => new ErrorReply("ERR unknown command 'CONFIG', with args beginning with: 'GET'");
 
-export const INFO_DENIED = () => new ReplyError("NOPERM User default has no permissions to run the 'info' command");
+export const INFO_DENIED = () => new ErrorReply("NOPERM User default has no permissions to run the 'info' command");
 
 export function maxmemoryPolicySourceAnswering({
   info,

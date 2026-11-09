@@ -1,4 +1,4 @@
-import { ReplyError } from "ioredis";
+import { ErrorReply, SocketClosedUnexpectedlyError } from "@redis/client";
 
 import { createConnectionOutageTracker, createRedisOutage } from "../src/connection.js";
 import type { Logger } from "../src/logger.js";
@@ -6,9 +6,9 @@ import { untilAborted } from "../src/redis-outage.js";
 import type { RedisOutage } from "../src/redis-outage.js";
 import type { WorkerLoopEngine } from "../src/worker-loop.js";
 
-export const UNANSWERED_COMMAND_ERROR = new Error("Connection is closed.");
+export const UNANSWERED_COMMAND_ERROR = new SocketClosedUnexpectedlyError();
 
-export const OUT_OF_MEMORY_REPLY = new ReplyError("OOM command not allowed when used memory > 'maxmemory'.");
+export const OUT_OF_MEMORY_REPLY = new ErrorReply("OOM command not allowed when used memory > 'maxmemory'.");
 
 export type SimulatedRedisOutage = {
   redisOutage: RedisOutage;

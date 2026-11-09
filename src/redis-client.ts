@@ -19,6 +19,13 @@ export type RedisClient = {
   sendBatch: (commands: readonly RedisCommand[]) => Promise<CommandResult[]>;
 };
 
+export function commandResultOf(reply: Promise<unknown>): Promise<CommandResult> {
+  return reply.then(
+    (repliedValue): CommandResult => ({ kind: "replied", reply: repliedValue }),
+    (error: unknown): CommandResult => ({ kind: "failed", error: error as Error }),
+  );
+}
+
 export function builtInCommandOf(name: string, ...commandArguments: CommandArgument[]): RedisCommand {
   return { kind: "builtIn", name, commandArguments };
 }

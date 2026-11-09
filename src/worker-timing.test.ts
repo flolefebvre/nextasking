@@ -7,7 +7,7 @@ test("holds a 2-minute lock, 3 stalls to fail a run, a 1-second abort grace, a 1
     lockDurationInMilliseconds: 120_000,
     stallCountThatFailsARun: 3,
     abortedAttemptsGraceInMilliseconds: 1000,
-    commandClientQuitBoundInMilliseconds: 1000,
+    commandConnectionCloseBoundInMilliseconds: 1000,
     unknownNameHandBackDelayInMilliseconds: 10_000,
     tickIntervalInMilliseconds: 1000,
     lockTimeLeftThatTriggersRenewalInMilliseconds: 60_000,

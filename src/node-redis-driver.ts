@@ -10,6 +10,7 @@ import {
   TimeoutError,
 } from "@redis/client";
 
+import { commandResultOf } from "./redis-client.js";
 import type { CommandResult, RedisCommand, RedisScript } from "./redis-client.js";
 
 export type RedisDriverEvents = {
@@ -21,6 +22,7 @@ export type RedisDriverEvents = {
 export type RedisDriver = {
   readonly isReady: boolean;
   connect: () => void;
+  forceReconnect: () => void;
   destroy: () => void;
   close: () => Promise<void>;
   send: (command: RedisCommand, abortSignal?: AbortSignal) => Promise<unknown>;
@@ -55,7 +57,7 @@ const READ_ONLY_REPLY_PREFIX = "READONLY";
 
 const OUT_OF_MEMORY_REPLY_PATTERN = /(?:^|[\s:-])OOM command not allowed\b/;
 
-export function isDriverUnansweredError(error: unknown): boolean {
+export function isUnansweredCommandError(error: unknown): boolean {
   if (!(error instanceof Error)) {
     return false;
   }
@@ -64,6 +66,10 @@ export function isDriverUnansweredError(error: unknown): boolean {
     UNANSWERED_ERROR_CLASSES.some((errorClass) => error instanceof errorClass) ||
     (typeof code === "string" && NETWORK_ERROR_CODES.has(code))
   );
+}
+
+export function isErrorReply(error: unknown): error is Error {
+  return error instanceof ErrorReply;
 }
 
 export function isOutOfMemoryReply(error: unknown): boolean {
@@ -126,26 +132,29 @@ export const createNodeRedisDriver: CreateRedisDriver = (url, { onConnect, onRea
     }
   };
 
+  let isDestroyed = false;
+  const connect = () => {
+    if (!isDestroyed) {
+      client.connect().catch(() => undefined);
+    }
+  };
+
   return {
     get isReady() {
       return client.isReady;
     },
-    connect: () => {
-      client.connect().catch(() => undefined);
+    connect,
+    forceReconnect: () => {
+      client.destroy();
+      setImmediate(connect);
     },
     destroy: () => {
+      isDestroyed = true;
       client.destroy();
     },
     close: () => client.close(),
     send,
     sendBatch: (commands, abortSignal) =>
-      Promise.all(
-        commands.map((command) =>
-          send(command, abortSignal).then(
-            (reply): CommandResult => ({ kind: "replied", reply }),
-            (error: unknown): CommandResult => ({ kind: "failed", error: error as Error }),
-          ),
-        ),
-      ),
+      Promise.all(commands.map((command) => commandResultOf(send(command, abortSignal)))),
   };
 };

@@ -1,4 +1,5 @@
 import type { Logger } from "./logger.js";
+import { isErrorReply } from "./node-redis-driver.js";
 import { builtInCommandOf } from "./redis-client.js";
 import type { RedisClient } from "./redis-client.js";
 
@@ -33,7 +34,7 @@ async function queryPolicy<Reply>({
   try {
     reply = await send();
   } catch (error) {
-    if ((error as Error).name === "ReplyError") {
+    if (isErrorReply(error)) {
       return { kind: "failed", error };
     }
     throw error;

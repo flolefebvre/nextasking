@@ -7,6 +7,7 @@ import type { ConcurrencyKey } from "../definitions.js";
 import type { DurationInMilliseconds, EpochMilliseconds } from "../durations.js";
 import type { RunId, StepId } from "../ids.js";
 import type { ErrorRecord, FailureReason, SourceEvent } from "../run-queue.js";
+import { RUN_STATES } from "../run-states.js";
 import type { RunState } from "../run-states.js";
 import { ENQUEUE_SCRIPT, enqueueKeysOf } from "./enqueue-script.js";
 import { engineKeysOf, hashTaggedPrefixOf } from "./engine-keys.js";
@@ -29,6 +30,7 @@ import {
 } from "./promote-script.js";
 import { READ_STEP_SCRIPT, readStepKeysOf } from "./read-step-script.js";
 import { RENEW_SCRIPT, renewKeysOf } from "./renew-script.js";
+import { REPLAY_SCRIPT, replayKeysOf } from "./replay-script.js";
 import { SAVE_STEP_SCRIPT, saveStepKeysOf } from "./save-step-script.js";
 import { defineScriptCommand } from "./script-commands.js";
 import type { ScriptArgument } from "./script-commands.js";
@@ -282,7 +284,17 @@ export type Engine = {
 
 export type ImplementedEngine = Pick<
   Engine,
-  "enqueue" | "fetch" | "renew" | "settle" | "promote" | "saveStep" | "readStep" | "fire" | "syncSchedules" | "makeDue"
+  | "enqueue"
+  | "fetch"
+  | "renew"
+  | "settle"
+  | "promote"
+  | "saveStep"
+  | "readStep"
+  | "fire"
+  | "syncSchedules"
+  | "replay"
+  | "makeDue"
 > & {
   tick: (request: TickRequest & { prune?: undefined }) => Promise<TickReply>;
 };
@@ -619,6 +631,27 @@ function syncSchedulesReplyOf(reply: unknown): SyncSchedulesReply {
   throw unreadableReplyError("syncSchedules", reply);
 }
 
+function isRunState(value: unknown): value is RunState {
+  return RUN_STATES.some((state) => state === value);
+}
+
+function replayReplyOf(reply: unknown): ReplayReply {
+  const unknownVersionReply = unknownVersionReplyOf(reply);
+  if (unknownVersionReply !== undefined) {
+    return unknownVersionReply;
+  }
+  if (Array.isArray(reply) && reply.length === 1 && reply[0] === "notFound") {
+    return { kind: "notFound" };
+  }
+  if (Array.isArray(reply) && reply.length === 2 && reply[0] === "wrongState" && isRunState(reply[1])) {
+    return { kind: "wrongState", state: reply[1] };
+  }
+  if (Array.isArray(reply) && reply.length === 2 && reply[0] === "replayed" && typeof reply[1] === "string") {
+    return { kind: "replayed", task: reply[1] };
+  }
+  throw unreadableReplyError("replay", reply);
+}
+
 function makeDueReplyOf(reply: unknown): MakeDueReply {
   if (Array.isArray(reply) && reply.length === 2 && reply[0] === "madeDue" && Number.isSafeInteger(reply[1])) {
     return { kind: "madeDue", madeDueRunCount: Number(reply[1]) };
@@ -790,7 +823,9 @@ export function createEngine(client: Redis, prefix: string): ImplementedEngine {
     syncSchedulesKeysOf(keys),
   );
   const runFireScript = scriptRunnerOf("nextaskingFire", FIRE_SCRIPT, fireKeysOf(keys));
+  const runReplayScript = scriptRunnerOf("nextaskingReplay", REPLAY_SCRIPT, replayKeysOf(keys));
   return {
+    replay: async ({ runId }) => replayReplyOf(await runReplayScript([runId])),
     fire: async ({ task, instant, instantAfter, runId, retries }) =>
       fireReplyOf(await runFireScript([task, instant, instantAfter, runId, retries])),
     syncSchedules: async ({ schedulesToSync }) =>

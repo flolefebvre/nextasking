@@ -1,0 +1,177 @@
+import { expect, vi } from "vitest";
+
+import { engineTest, fetchedLockedRunsOf } from "../../tests/engine-test.js";
+import type { EngineTestContext } from "../../tests/engine-test.js";
+import { serverInstantInMillisecondsOf } from "../../tests/server-instant.js";
+import type { EpochMilliseconds } from "../durations.js";
+import type { RunId } from "../ids.js";
+import type { LockedRun } from "./engine.js";
+import { defineIndexPageCommand, indexPageOf } from "./index-page-script.js";
+import type { IndexPosition } from "./index-page-script.js";
+
+const EARLIER_RUN_IDS_IN_INDEX_ORDER: readonly RunId[] = [
+  "\u{1F600}-astral",
+  "～-fullwidth",
+  "épée",
+  "run-1",
+  "run",
+  "apple",
+  "Banana",
+  "Apple",
+];
+
+const LATER_RUN_IDS_IN_INDEX_ORDER: readonly RunId[] = ["later-b", "later-a"];
+
+type StartedGroup = { startedAt: EpochMilliseconds; lockedRuns: LockedRun[] };
+
+type TwoStartedGroups = { earlier: StartedGroup; later: StartedGroup; indexKey: string };
+
+async function runsStartedTogether(context: EngineTestContext, runIds: readonly RunId[]): Promise<StartedGroup> {
+  await context.engine.enqueue({
+    runs: runIds.map((runId) => ({ runId, task: "send-email", payload: "", retries: 0 })),
+  });
+  const lockedRuns = await fetchedLockedRunsOf(context, runIds.length);
+  const startedAt = lockedRuns[0]!.startedAt;
+  expect(lockedRuns.map((lockedRun) => lockedRun.startedAt)).toEqual(runIds.map(() => startedAt));
+  return { startedAt, lockedRuns };
+}
+
+async function twoGroupsOfExecutingRunsOf(context: EngineTestContext): Promise<TwoStartedGroups> {
+  const earlier = await runsStartedTogether(context, [...EARLIER_RUN_IDS_IN_INDEX_ORDER].reverse());
+  await vi.waitUntil(async () => (await serverInstantInMillisecondsOf(context.redis)) > earlier.startedAt, {
+    timeout: 1000,
+    interval: 1,
+  });
+  const later = await runsStartedTogether(context, LATER_RUN_IDS_IN_INDEX_ORDER);
+  return { earlier, later, indexKey: context.keys.runIndex("send-email", "executing") };
+}
+
+async function indexPageAfter(
+  { redis }: EngineTestContext,
+  indexKey: string,
+  limit: number,
+  after: IndexPosition | undefined,
+): Promise<IndexPosition[]> {
+  const indexPageCommand = defineIndexPageCommand(redis);
+  const pipeline = redis.pipeline();
+  indexPageCommand.appendTo(pipeline, { indexKey, limit, after });
+  const [[error, reply]] = (await pipeline.exec()) as [[Error | null, unknown]];
+  if (error !== null) {
+    throw error;
+  }
+  return indexPageOf(reply);
+}
+
+async function runIdsAfter(
+  context: EngineTestContext,
+  indexKey: string,
+  limit: number,
+  after: IndexPosition | undefined,
+): Promise<RunId[]> {
+  return (await indexPageAfter(context, indexKey, limit, after)).map(({ runId }) => runId);
+}
+
+async function walkedRunIdsOf(context: EngineTestContext, indexKey: string, limit: number): Promise<RunId[]> {
+  const walkedRunIds: RunId[] = [];
+  let after: IndexPosition | undefined;
+  for (;;) {
+    const indexPage = await indexPageAfter(context, indexKey, limit, after);
+    walkedRunIds.push(...indexPage.map(({ runId }) => runId));
+    if (indexPage.length < limit) {
+      return walkedRunIds;
+    }
+    after = indexPage.at(-1);
+  }
+}
+
+engineTest("an index page lists the index most recent score first, then run ids in byte order", async (context) => {
+  const { earlier, later, indexKey } = await twoGroupsOfExecutingRunsOf(context);
+
+  const indexPage = await indexPageAfter(context, indexKey, 20, undefined);
+
+  expect(indexPage).toEqual([
+    ...LATER_RUN_IDS_IN_INDEX_ORDER.map((runId) => ({ runId, score: later.startedAt })),
+    ...EARLIER_RUN_IDS_IN_INDEX_ORDER.map((runId) => ({ runId, score: earlier.startedAt })),
+  ]);
+});
+
+for (const limit of [1, 2, 3]) {
+  engineTest(
+    `a walk in pages of ${String(limit)} lists every run of the index once, in the index's order`,
+    async (context) => {
+      const { indexKey } = await twoGroupsOfExecutingRunsOf(context);
+
+      const walkedRunIds = await walkedRunIdsOf(context, indexKey, limit);
+
+      expect(walkedRunIds).toEqual([...LATER_RUN_IDS_IN_INDEX_ORDER, ...EARLIER_RUN_IDS_IN_INDEX_ORDER]);
+      expect(walkedRunIds).toEqual(await context.redis.zrange(indexKey, 0, -1, "REV"));
+    },
+  );
+}
+
+engineTest("a page after the first run of a score starts at the second run of that score", async (context) => {
+  const { earlier, indexKey } = await twoGroupsOfExecutingRunsOf(context);
+
+  const runIds = await runIdsAfter(context, indexKey, 2, {
+    score: earlier.startedAt,
+    runId: EARLIER_RUN_IDS_IN_INDEX_ORDER[0]!,
+  });
+
+  expect(runIds).toEqual(EARLIER_RUN_IDS_IN_INDEX_ORDER.slice(1, 3));
+});
+
+engineTest("a page after the last run of a score starts at the next lower score", async (context) => {
+  const { later, indexKey } = await twoGroupsOfExecutingRunsOf(context);
+
+  const runIds = await runIdsAfter(context, indexKey, 2, {
+    score: later.startedAt,
+    runId: LATER_RUN_IDS_IN_INDEX_ORDER.at(-1)!,
+  });
+
+  expect(runIds).toEqual(EARLIER_RUN_IDS_IN_INDEX_ORDER.slice(0, 2));
+});
+
+engineTest("a page after the last run of the index is empty", async (context) => {
+  const { earlier, indexKey } = await twoGroupsOfExecutingRunsOf(context);
+
+  const runIds = await runIdsAfter(context, indexKey, 2, {
+    score: earlier.startedAt,
+    runId: EARLIER_RUN_IDS_IN_INDEX_ORDER.at(-1)!,
+  });
+
+  expect(runIds).toEqual([]);
+});
+
+engineTest("a page after a score no run has starts at the next lower score", async (context) => {
+  const { earlier, later, indexKey } = await twoGroupsOfExecutingRunsOf(context);
+
+  const runIdsBetweenTheScores = await runIdsAfter(context, indexKey, 1, {
+    score: earlier.startedAt + 0.5,
+    runId: "z",
+  });
+  const runIdsAboveEveryScore = await runIdsAfter(context, indexKey, 1, { score: later.startedAt + 1, runId: "a" });
+
+  expect(runIdsBetweenTheScores).toEqual(EARLIER_RUN_IDS_IN_INDEX_ORDER.slice(0, 1));
+  expect(runIdsAboveEveryScore).toEqual(LATER_RUN_IDS_IN_INDEX_ORDER.slice(0, 1));
+});
+
+engineTest("a page after a run that left the index starts at the run that followed it", async (context) => {
+  const { engine } = context;
+  const { earlier, indexKey } = await twoGroupsOfExecutingRunsOf(context);
+  const leavingRun = earlier.lockedRuns.find((lockedRun) => lockedRun.runId === "run")!;
+  await engine.settle({ ...leavingRun, outcome: { kind: "complete" } });
+
+  const runIds = await runIdsAfter(context, indexKey, 2, { score: earlier.startedAt, runId: "run" });
+
+  expect(runIds).toEqual(["apple", "Banana"]);
+});
+
+engineTest("a page after a run id that is a prefix of the next one starts after the longer id", async (context) => {
+  const { earlier, indexKey } = await twoGroupsOfExecutingRunsOf(context);
+
+  const runIdsAfterTheLongerId = await runIdsAfter(context, indexKey, 1, { score: earlier.startedAt, runId: "run-1" });
+  const runIdsAfterThePrefix = await runIdsAfter(context, indexKey, 1, { score: earlier.startedAt, runId: "run" });
+
+  expect(runIdsAfterTheLongerId).toEqual(["run"]);
+  expect(runIdsAfterThePrefix).toEqual(["apple"]);
+});

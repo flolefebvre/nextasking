@@ -87,6 +87,32 @@ export type AnyListedRun = ListedRunOfTask<AnyTaskDefinition>;
 
 export const DEFAULT_LIST_LIMIT = 50;
 
+export const INVALID_CURSOR_MESSAGE = "Invalid listRuns cursor: pass back a nextCursor that listRuns returned";
+
+export function otherStateCursorMessageOf(cursorState: RunState, calledState: RunState): string {
+  return `Invalid listRuns cursor: it pages through state "${cursorState}", not "${calledState}"`;
+}
+
+export function cursorOfFields(fields: readonly unknown[]): RunListCursor {
+  return Buffer.from(JSON.stringify(fields), "utf8").toString("base64url");
+}
+
+export function cursorFieldsOf(cursor: unknown, formatVersion: number, fieldCount: number): unknown[] | undefined {
+  if (typeof cursor !== "string" || cursor === "") {
+    return undefined;
+  }
+  let decoded: unknown;
+  try {
+    decoded = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8"));
+  } catch {
+    return undefined;
+  }
+  if (!Array.isArray(decoded) || decoded.length !== fieldCount || decoded[0] !== formatVersion) {
+    return undefined;
+  }
+  return decoded as unknown[];
+}
+
 export function rejectInvalidState(state: unknown): asserts state is RunState {
   if (!RUN_STATES.includes(state as RunState)) {
     const shownState = typeof state === "string" ? JSON.stringify(state) : String(state);

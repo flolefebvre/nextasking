@@ -1,5 +1,5 @@
 import { parseDuration } from "./durations.js";
-import type { Duration, DurationInMilliseconds } from "./durations.js";
+import type { Duration, DurationInMilliseconds, EpochMilliseconds } from "./durations.js";
 import { RedisUnavailableError } from "./errors.js";
 import type { RedisCallIds } from "./errors.js";
 import type { Logger } from "./logger.js";
@@ -122,7 +122,7 @@ export type RedisConnection = {
 export type RedisConnections = {
   readonly giveUpAfterInMilliseconds: DurationInMilliseconds;
   createCommandConnection: () => RedisConnection;
-  createBlockingConnection: () => RedisConnection;
+  createBlockingConnection: (longestBlockInMilliseconds: DurationInMilliseconds) => RedisConnection;
   waitUntilReady: (connection: RedisConnection, stopSignal?: AbortSignal) => Promise<void>;
   closeConnection: (connection: RedisConnection, closeBoundInMilliseconds?: DurationInMilliseconds) => Promise<void>;
   workerRedisOutageOf: (
@@ -137,9 +137,16 @@ type ReadyWait = { promise: Promise<void>; markReady: () => void; markClosed: ()
 
 type ConnectionState = {
   readonly driver: RedisDriver;
+  readonly subject: object;
+  readonly answerBoundInMilliseconds: DurationInMilliseconds;
   readonly closedController: AbortController;
   errorWhileDown: unknown;
   readyWait: ReadyWait | undefined;
+  lastReadyAt: EpochMilliseconds;
+  isReconnectingByForce: boolean;
+  handshakeTimer: NodeJS.Timeout | undefined;
+  readonly callsInFlight: { sentAt: EpochMilliseconds }[];
+  watchdogTimer: NodeJS.Timeout | undefined;
 };
 
 type Send<Reply> = (abortSignal?: AbortSignal) => Promise<Reply>;
@@ -176,8 +183,10 @@ export function createRedisConnections(
     return state;
   };
 
+  const isClosed = (state: ConnectionState) => state.closedController.signal.aborted;
+
   const readyWaitOf = (state: ConnectionState): Promise<void> => {
-    if (state.closedController.signal.aborted) {
+    if (isClosed(state)) {
       return Promise.reject(new ConnectionClosedError());
     }
     if (state.driver.isReady) {
@@ -199,9 +208,60 @@ export function createRedisConnections(
   };
 
   const throwIfClosed = (state: ConnectionState) => {
-    if (state.closedController.signal.aborted) {
+    if (isClosed(state)) {
       throw new ConnectionClosedError();
     }
+  };
+
+  const reconnectByForce = (state: ConnectionState, cause: Error) => {
+    if (isClosed(state) || state.isReconnectingByForce) {
+      return;
+    }
+    state.isReconnectingByForce = true;
+    clearTimeout(state.handshakeTimer);
+    state.errorWhileDown = cause;
+    outageTracker.reportClientError(state.subject, cause);
+    state.driver.forceReconnect();
+  };
+
+  const overdueAtOf = (state: ConnectionState): EpochMilliseconds =>
+    Math.max(Math.min(...state.callsInFlight.map(({ sentAt }) => sentAt)), state.lastReadyAt) +
+    state.answerBoundInMilliseconds;
+
+  const watchTheCallsInFlight = (state: ConnectionState) => {
+    clearTimeout(state.watchdogTimer);
+    state.watchdogTimer = undefined;
+    if (isClosed(state) || !state.driver.isReady || state.callsInFlight.length === 0) {
+      return;
+    }
+    const overdueAt = overdueAtOf(state);
+    state.watchdogTimer = unrefTimer(
+      setTimeout(
+        () => {
+          state.watchdogTimer = undefined;
+          if (state.driver.isReady && state.callsInFlight.length > 0 && Date.now() >= overdueAtOf(state)) {
+            reconnectByForce(state, unansweredWithinDeadlineError());
+          }
+          watchTheCallsInFlight(state);
+        },
+        Math.max(overdueAt - Date.now(), 0),
+      ),
+    );
+  };
+
+  const answeredWithinTheAnswerBound = <Reply>(state: ConnectionState, send: () => Promise<Reply>): Promise<Reply> => {
+    const callInFlight = { sentAt: Date.now() };
+    state.callsInFlight.push(callInFlight);
+    if (state.watchdogTimer === undefined) {
+      watchTheCallsInFlight(state);
+    }
+    return send().finally(() => {
+      state.callsInFlight.splice(state.callsInFlight.indexOf(callInFlight), 1);
+      if (state.callsInFlight.length === 0) {
+        clearTimeout(state.watchdogTimer);
+        state.watchdogTimer = undefined;
+      }
+    });
   };
 
   const unansweredErrorAtTheDeadline = (state: ConnectionState): Error =>
@@ -226,7 +286,10 @@ export function createRedisConnections(
         throwIfClosed(state);
         let retryError: Error | undefined;
         try {
-          const reply = await untilAborted(send(deadlineSignal), deadlineSignal);
+          const reply = await untilAborted(
+            answeredWithinTheAnswerBound(state, () => send(deadlineSignal)),
+            deadlineSignal,
+          );
           retryError = retryErrorOf(reply);
           if (retryError === undefined) {
             return reply;
@@ -237,7 +300,7 @@ export function createRedisConnections(
           }
           retryError = error as Error;
         }
-        if (state.closedController.signal.aborted) {
+        if (isClosed(state)) {
           throw retryError;
         }
         await untilAborted(readyWaitOf(state), deadlineSignal);
@@ -249,7 +312,7 @@ export function createRedisConnections(
 
   const sentWithoutDeadline = async <Reply>(state: ConnectionState, send: Send<Reply>): Promise<Reply> => {
     throwIfClosed(state);
-    return send();
+    return answeredWithinTheAnswerBound(state, () => send());
   };
 
   const instanceCallsOf = (state: ConnectionState): RedisClient => ({
@@ -265,42 +328,66 @@ export function createRedisConnections(
       sentWithoutDeadline(state, () => state.driver.sendBatch(commands)),
   });
 
-  const openConnection = (): RedisConnection => {
-    const opened: { connection?: RedisConnection; state?: ConnectionState } = {};
-    const openState = () =>
-      opened.state === undefined || opened.state.closedController.signal.aborted ? undefined : opened.state;
+  const openConnection = (longestBlockInMilliseconds: DurationInMilliseconds): RedisConnection => {
+    const opened: { state?: ConnectionState } = {};
+    const openState = () => (opened.state === undefined || isClosed(opened.state) ? undefined : opened.state);
     const driver = createDriver(connection.url, {
-      onConnect: () => undefined,
-      onReady: () => {
+      onConnect: () => {
         const state = openState();
-        if (state === undefined || opened.connection === undefined) {
+        if (state === undefined) {
           return;
         }
+        state.isReconnectingByForce = false;
+        clearTimeout(state.handshakeTimer);
+        state.handshakeTimer = unrefTimer(
+          setTimeout(() => {
+            if (!state.driver.isReady) {
+              reconnectByForce(state, unansweredWithinDeadlineError());
+            }
+          }, giveUpAfterInMilliseconds),
+        );
+      },
+      onReady: () => {
+        const state = openState();
+        if (state === undefined) {
+          return;
+        }
+        clearTimeout(state.handshakeTimer);
+        state.isReconnectingByForce = false;
+        state.lastReadyAt = Date.now();
         state.errorWhileDown = undefined;
         state.readyWait?.markReady();
         state.readyWait = undefined;
-        outageTracker.reportClientReady(opened.connection);
+        watchTheCallsInFlight(state);
+        outageTracker.reportClientReady(state.subject);
       },
       onError: (error) => {
         const state = openState();
-        if (state === undefined || opened.connection === undefined) {
+        if (state === undefined) {
           return;
         }
         state.errorWhileDown = error;
-        outageTracker.reportClientError(opened.connection, error);
+        outageTracker.reportClientError(state.subject, error);
       },
     });
+    const subject = {};
     const state: ConnectionState = {
       driver,
+      subject,
+      answerBoundInMilliseconds: longestBlockInMilliseconds + giveUpAfterInMilliseconds,
       closedController: new AbortController(),
       errorWhileDown: undefined,
       readyWait: undefined,
+      lastReadyAt: Date.now(),
+      isReconnectingByForce: false,
+      handshakeTimer: undefined,
+      callsInFlight: [],
+      watchdogTimer: undefined,
     };
     const redisConnection: RedisConnection = {
       instanceCalls: instanceCallsOf(state),
       workerCalls: workerCallsOf(state),
     };
-    opened.connection = redisConnection;
     opened.state = state;
     stateByConnection.set(redisConnection, state);
     driver.connect();
@@ -309,7 +396,7 @@ export function createRedisConnections(
 
   return {
     giveUpAfterInMilliseconds,
-    createCommandConnection: openConnection,
+    createCommandConnection: () => openConnection(0),
     createBlockingConnection: openConnection,
     waitUntilReady: (redisConnection, stopSignal) => untilAborted(readyWaitOf(stateOf(redisConnection)), stopSignal),
     workerRedisOutageOf: (redisConnection, outOfMemoryRetryDelayInMilliseconds) =>
@@ -320,13 +407,15 @@ export function createRedisConnections(
       }),
     closeConnection: async (redisConnection, closeBoundInMilliseconds) => {
       const state = stateOf(redisConnection);
-      if (state.closedController.signal.aborted) {
+      if (isClosed(state)) {
         return;
       }
       state.closedController.abort(new ConnectionClosedError());
+      clearTimeout(state.handshakeTimer);
+      clearTimeout(state.watchdogTimer);
       state.readyWait?.markClosed();
       state.readyWait = undefined;
-      outageTracker.forgetClient(redisConnection);
+      outageTracker.forgetClient(state.subject);
       if (closeBoundInMilliseconds !== undefined && state.driver.isReady) {
         await isSettledWithin(
           state.driver.close().catch(() => undefined),

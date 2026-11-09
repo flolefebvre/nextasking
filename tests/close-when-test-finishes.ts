@@ -38,6 +38,7 @@ export function closeWhenTestFinishes({
   lines?: readonly RecordedLogLine[];
 }): void {
   onTestFinished(async () => {
+    proxy.answerAgain();
     await proxy.restore();
     try {
       if (lines !== undefined) {

@@ -1,10 +1,11 @@
-import type { StartWorkerOptions } from "../src/index.js";
+import type { ConnectionConfig, StartWorkerOptions } from "../src/index.js";
 import type { WorkerTiming } from "../src/worker-timing.js";
 
 export type WorkerProcessConfig = {
   redisUrl: string;
   keyPrefix: string;
   timing?: Partial<WorkerTiming>;
+  connection?: ConnectionConfig;
   startWorkerOptions?: StartWorkerOptions;
 };
 

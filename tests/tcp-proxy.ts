@@ -9,8 +9,13 @@ export type TcpProxy = {
   restore: () => Promise<void>;
   cutFor: (outageDurationInMilliseconds: number) => Promise<void>;
   cutBeforeReplyTo: (isRequestToCut: (request: string) => boolean) => Promise<void>;
+  stopAnswering: () => void;
+  answerAgain: () => void;
+  acceptedConnectionCount: () => number;
   stop: () => Promise<void>;
 };
+
+type ForwardingSwitch = { stopForwarding: () => void; forwardAgain: () => void };
 
 const DEFAULT_REDIS_PORT = 6379;
 
@@ -74,6 +79,10 @@ export async function startTcpProxy(targetUrl: string): Promise<TcpProxy> {
   const target = new URL(targetUrl);
   const targetPort = target.port === "" ? DEFAULT_REDIS_PORT : Number(target.port);
   const liveSockets = new Set<Socket>();
+  const liveForwardingSwitches = new Set<ForwardingSwitch>();
+  const switchesAcceptedWhileNotAnswering = new Set<ForwardingSwitch>();
+  let isAnswering = true;
+  let acceptedConnectionCount = 0;
   let armedReplyCut: ArmedReplyCut | undefined;
 
   const track = (socket: Socket) => {
@@ -100,14 +109,46 @@ export async function startTcpProxy(targetUrl: string): Promise<TcpProxy> {
   };
 
   const server = createServer((clientSocket) => {
+    acceptedConnectionCount += 1;
     const targetSocket = connect(targetPort, target.hostname);
     track(clientSocket);
     track(targetSocket);
+    let isForwardingStopped = false;
+    const forwardingSwitch: ForwardingSwitch = {
+      stopForwarding: () => {
+        if (isForwardingStopped) {
+          return;
+        }
+        isForwardingStopped = true;
+        targetSocket.unpipe(clientSocket);
+        targetSocket.pause();
+        clientSocket.pause();
+      },
+      forwardAgain: () => {
+        if (!isForwardingStopped) {
+          return;
+        }
+        isForwardingStopped = false;
+        targetSocket.pipe(clientSocket);
+        clientSocket.resume();
+      },
+    };
+    if (!isAnswering) {
+      switchesAcceptedWhileNotAnswering.add(forwardingSwitch);
+    }
+    liveForwardingSwitches.add(forwardingSwitch);
     clientSocket.on("error", () => reset(targetSocket));
     targetSocket.on("error", () => reset(clientSocket));
-    clientSocket.on("close", () => reset(targetSocket));
+    clientSocket.on("close", () => {
+      switchesAcceptedWhileNotAnswering.delete(forwardingSwitch);
+      liveForwardingSwitches.delete(forwardingSwitch);
+      reset(targetSocket);
+    });
     targetSocket.on("close", () => reset(clientSocket));
     targetSocket.pipe(clientSocket);
+    if (!isAnswering) {
+      forwardingSwitch.stopForwarding();
+    }
     let unforwardedRequestBytes = Buffer.alloc(0);
     let isForwardingRequests = true;
     clientSocket.on("data", (requestChunk: Buffer) => {
@@ -161,6 +202,20 @@ export async function startTcpProxy(targetUrl: string): Promise<TcpProxy> {
       new Promise<void>((markCut) => {
         armedReplyCut = { isRequestToCut, markCut };
       }),
+    stopAnswering: () => {
+      isAnswering = false;
+      for (const forwardingSwitch of liveForwardingSwitches) {
+        forwardingSwitch.stopForwarding();
+      }
+    },
+    answerAgain: () => {
+      isAnswering = true;
+      for (const forwardingSwitch of switchesAcceptedWhileNotAnswering) {
+        forwardingSwitch.forwardAgain();
+      }
+      switchesAcceptedWhileNotAnswering.clear();
+    },
+    acceptedConnectionCount: () => acceptedConnectionCount,
     stop: async () => {
       isStopped = true;
       await cut();

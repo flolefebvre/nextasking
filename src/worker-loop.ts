@@ -32,6 +32,10 @@ export type WorkerLoopEngine = Pick<Engine, "fetch" | "settle" | "tick" | "saveS
 
 export type WaitForWakeUp = (timeoutInMilliseconds: DurationInMilliseconds) => Promise<void>;
 
+export function wakeUpBlockInMillisecondsOf(timing: WorkerTiming): DurationInMilliseconds {
+  return timing.tickIntervalInMilliseconds;
+}
+
 export type WorkerLoopConfig = {
   engine: WorkerLoopEngine;
   definitions: WorkerDefinitions;
@@ -151,7 +155,7 @@ export function startWorkerLoop(config: WorkerLoopConfig): WorkerLoop {
       return;
     }
     pendingWakeUp = (async () => {
-      await config.waitForWakeUp(timing.tickIntervalInMilliseconds);
+      await config.waitForWakeUp(wakeUpBlockInMillisecondsOf(timing));
     })().then(
       () => {
         pendingWakeUp = undefined;

@@ -19,7 +19,7 @@ import {
   isSignalHandlingLeftToTheApp,
 } from "./shutdown-signals.js";
 import type { HandlerSender } from "./step-engine.js";
-import { startWorkerLoop } from "./worker-loop.js";
+import { startWorkerLoop, wakeUpBlockInMillisecondsOf } from "./worker-loop.js";
 import type { WaitForWakeUp, WorkerLoop } from "./worker-loop.js";
 import { callOnWorkerNotStarted, workerOptionsFrom } from "./worker-options.js";
 import type { StartWorkerOptions, WorkerOptions } from "./worker-options.js";
@@ -121,7 +121,7 @@ export function createInstanceLifecycle(config: InstanceLifecycleConfig): Instan
   };
 
   const startTheWorker = ({ opened: { workerEngine: engine }, timing, workerOptions, redisOutage }: WorkerBoot) => {
-    const blockingConnection = connections.createBlockingConnection();
+    const blockingConnection = connections.createBlockingConnection(wakeUpBlockInMillisecondsOf(timing));
     const loop = startWorkerLoop({
       engine,
       definitions,

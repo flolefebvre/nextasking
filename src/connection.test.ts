@@ -68,6 +68,16 @@ function settledAtOf(
   );
 }
 
+async function forceReconnectCountsAround(
+  driver: FakeRedisDriver | undefined,
+  instantInMilliseconds: number,
+): Promise<[before: number | undefined, at: number | undefined]> {
+  await vi.advanceTimersByTimeAsync(instantInMilliseconds - 1);
+  const forceReconnectCountBefore = driver?.forceReconnectCount;
+  await vi.advanceTimersByTimeAsync(1);
+  return [forceReconnectCountBefore, driver?.forceReconnectCount];
+}
+
 beforeEach(() => {
   vi.useFakeTimers({ now: Date.UTC(2030, 0, 1) });
 });
@@ -203,6 +213,126 @@ describe("the worker calls", () => {
     driver.loseConnection(connectionReset);
 
     expect(await outcome).toBe(connectionReset);
+  });
+});
+
+describe("a connection that stops answering without closing", () => {
+  test("an instance call in flight rejects at giveUpAfter, and the connection is reconnected by force at that instant", async () => {
+    const { connection, driver, lines } = connectionScenarioOf((fakeRedisDriver) => {
+      fakeRedisDriver.becomeReady();
+    });
+    driver.isAnswering = false;
+    const startedAt = Date.now();
+
+    const outcome = settledAtOf(connection.instanceCalls.send(answered("lost")), startedAt);
+    const forceReconnectCounts = await forceReconnectCountsAround(driver, GIVE_UP_AFTER_IN_MILLISECONDS);
+
+    expect(forceReconnectCounts).toEqual([0, 1]);
+    expect(await outcome).toEqual({
+      outcome: expect.any(TimeoutError),
+      afterMilliseconds: GIVE_UP_AFTER_IN_MILLISECONDS,
+    });
+    expect(lines.map(({ message }) => message)).toEqual(["connection error"]);
+  });
+
+  test("a worker call in flight is rejected by the forced reconnect at giveUpAfter, as an away error", async () => {
+    const { connection, driver } = connectionScenarioOf((fakeRedisDriver) => {
+      fakeRedisDriver.becomeReady();
+    });
+    driver.isAnswering = false;
+
+    const outcome = connection.workerCalls.send(answered("lost")).catch((error: unknown) => error);
+    await vi.advanceTimersByTimeAsync(GIVE_UP_AFTER_IN_MILLISECONDS);
+
+    expect(driver.forceReconnectCount).toBe(1);
+    expect(isRedisAwayError(await outcome)).toBe(true);
+  });
+
+  test("a call written at the ready after a wait gets its full giveUpAfter from that ready", async () => {
+    const { connection, driver } = connectionScenarioOf();
+    driver.isAnswering = false;
+    const outcome = connection.workerCalls.send(answered("late")).catch((error: unknown) => error);
+    await vi.advanceTimersByTimeAsync(5 * GIVE_UP_AFTER_IN_MILLISECONDS);
+
+    driver.becomeReady();
+    const forceReconnectCounts = await forceReconnectCountsAround(driver, GIVE_UP_AFTER_IN_MILLISECONDS);
+
+    expect(forceReconnectCounts).toEqual([0, 1]);
+    expect(isRedisAwayError(await outcome)).toBe(true);
+  });
+
+  test("a blocking connection waits for its longest block plus giveUpAfter before it reconnects by force", async () => {
+    const { logger } = createRecordingLogger();
+    const fakeRedisDrivers = createFakeRedisDrivers();
+    fakeRedisDrivers.onCreate((fakeRedisDriver) => {
+      fakeRedisDriver.becomeReady();
+      fakeRedisDriver.isAnswering = false;
+    });
+    const connections = createRedisConnections(
+      { url: "redis://127.0.0.1:1", giveUpAfter: "1s" },
+      logger,
+      fakeRedisDrivers.createDriver,
+    );
+    const connection = connections.createBlockingConnection(3000);
+    const [driver] = fakeRedisDrivers.createdDrivers();
+
+    const outcome = connection.workerCalls.send(answered(null)).catch((error: unknown) => error);
+    const forceReconnectCounts = await forceReconnectCountsAround(driver, 3000 + GIVE_UP_AFTER_IN_MILLISECONDS);
+
+    expect(forceReconnectCounts).toEqual([0, 1]);
+    expect(isRedisAwayError(await outcome)).toBe(true);
+  });
+
+  test("a handshake left unanswered for giveUpAfter is reconnected by force, again for each new one", async () => {
+    const { driver } = connectionScenarioOf();
+
+    driver.startHandshake();
+    await vi.advanceTimersByTimeAsync(GIVE_UP_AFTER_IN_MILLISECONDS);
+    driver.startHandshake();
+    await vi.advanceTimersByTimeAsync(GIVE_UP_AFTER_IN_MILLISECONDS - 1);
+    const forceReconnectCountBeforeTheSecond = driver.forceReconnectCount;
+    driver.becomeReady();
+    await vi.advanceTimersByTimeAsync(10 * GIVE_UP_AFTER_IN_MILLISECONDS);
+
+    expect(forceReconnectCountBeforeTheSecond).toBe(1);
+    expect(driver.forceReconnectCount).toBe(1);
+  });
+
+  test("an answered connection idle for longer than giveUpAfter is never reconnected and logs nothing", async () => {
+    const { connection, driver, lines } = connectionScenarioOf((fakeRedisDriver) => {
+      fakeRedisDriver.becomeReady();
+    });
+
+    await connection.instanceCalls.send(answered("first"));
+    await vi.advanceTimersByTimeAsync(10 * GIVE_UP_AFTER_IN_MILLISECONDS);
+    const reply = await connection.instanceCalls.send(answered("next"));
+
+    expect(reply).toBe("next");
+    expect(driver.forceReconnectCount).toBe(0);
+    expect(lines).toEqual([]);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  test("none of its timers keeps the process alive, and none is left once the connection is closed", async () => {
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const { connections, connection, driver } = connectionScenarioOf((fakeRedisDriver) => {
+      fakeRedisDriver.becomeReady();
+    });
+    driver.isAnswering = false;
+    const outcomes = Promise.all([
+      connection.instanceCalls.send(answered("lost")).catch((error: unknown) => error),
+      connection.workerCalls.send(answered("lost")).catch((error: unknown) => error),
+    ]);
+    driver.startHandshake();
+    await vi.advanceTimersByTimeAsync(GIVE_UP_AFTER_IN_MILLISECONDS / 2);
+    const timers = setTimeoutSpy.mock.results.map(({ value }) => value as NodeJS.Timeout);
+
+    await connections.closeConnection(connection);
+    await outcomes;
+
+    expect(timers.length).toBeGreaterThanOrEqual(3);
+    expect(timers.map((timer) => timer.hasRef())).toEqual(timers.map(() => false));
+    expect(vi.getTimerCount()).toBe(0);
   });
 });
 

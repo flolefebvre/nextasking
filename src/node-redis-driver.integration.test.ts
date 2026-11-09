@@ -1,8 +1,10 @@
-import { expect } from "vitest";
+import { expect, vi } from "vitest";
 
 import { integrationTest } from "../tests/integration-test.js";
 import { startTcpProxy } from "../tests/tcp-proxy.js";
 import { withRedisClient } from "../tests/with-redis.js";
+import { createNodeRedisDriver } from "./node-redis-driver.js";
+import type { RedisDriver } from "./node-redis-driver.js";
 import { builtInCommandOf, scriptCommandOf } from "./redis-client.js";
 import type { RedisClient, RedisScript } from "./redis-client.js";
 
@@ -217,5 +219,45 @@ integrationTest(
       expect(hit).toEqual([markerKey, "wake-up", "0"]);
       expect(timedOut).toBeNull();
     });
+  },
+);
+
+const SOCKET_CLOSED_BOUND_IN_MILLISECONDS = 2_000;
+
+const NO_DRIVER_EVENTS = { onConnect: () => undefined, onReady: () => undefined, onError: () => undefined };
+
+integrationTest.for([
+  {
+    ending: "destroyed",
+    endWhileConnecting: (driver: RedisDriver) => {
+      driver.destroy();
+    },
+  },
+  {
+    ending: "reconnected by force, then destroyed",
+    endWhileConnecting: (driver: RedisDriver) => {
+      driver.forceReconnect();
+      driver.destroy();
+    },
+  },
+])(
+  "a driver $ending while its socket is still connecting leaves no socket open",
+  { timeout: 2 * SOCKET_CLOSED_BOUND_IN_MILLISECONDS + 5_000 },
+  async ({ endWhileConnecting }, { redisUrl }) => {
+    const proxy = await startTcpProxy(redisUrl);
+    try {
+      const driver = createNodeRedisDriver(proxy.url, NO_DRIVER_EVENTS);
+
+      driver.connect();
+      endWhileConnecting(driver);
+      await vi.waitUntil(() => proxy.acceptedConnectionCount() > 0, { timeout: SOCKET_CLOSED_BOUND_IN_MILLISECONDS });
+      await vi
+        .waitUntil(() => proxy.liveConnectionCount() === 0, { timeout: SOCKET_CLOSED_BOUND_IN_MILLISECONDS })
+        .catch(() => undefined);
+
+      expect(proxy.liveConnectionCount()).toBe(0);
+    } finally {
+      await proxy.stop();
+    }
   },
 );

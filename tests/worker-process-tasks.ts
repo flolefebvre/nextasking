@@ -129,6 +129,28 @@ export function workerProcessTasks(writeRecord: WriteRecord) {
     },
   });
 
+  const completeAtOnce = defineTask("complete-at-once", {
+    schema: z.object({}),
+    handler: async () => undefined,
+  });
+
+  const runIdsAbortedOnce = new Set<string>();
+  const waitForAbortOnce = defineTask("wait-for-abort-once", {
+    schema: z.object({}),
+    handler: async ({ runId, abortSignal }) => {
+      await writeRecord("wait-for-abort-once", { event: "started", at: Date.now() });
+      if (!runIdsAbortedOnce.has(runId)) {
+        await waitForAbort(abortSignal);
+        runIdsAbortedOnce.add(runId);
+        await writeRecord("wait-for-abort-once", {
+          event: "aborted",
+          abortReason: messageOf(abortSignal.reason),
+          at: Date.now(),
+        });
+      }
+    },
+  });
+
   const blockEventLoopOnSchedule = defineScheduledTask("block-event-loop-on-schedule", {
     schedule: { cron: "0 0 1 1 *" },
     handler: async ({ runId, scheduledAt }) => {
@@ -172,6 +194,8 @@ export function workerProcessTasks(writeRecord: WriteRecord) {
     recordAbortAfterBlocking,
     waitThenRecord,
     waitForAbortTask,
+    waitForAbortOnce,
+    completeAtOnce,
     blockEventLoopOnSchedule,
   ] as const;
 }

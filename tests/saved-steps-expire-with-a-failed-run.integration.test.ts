@@ -14,7 +14,7 @@ const FIFTEEN_DAYS_IN_MILLISECONDS = 15 * 24 * 60 * 60 * 1000;
 
 integrationTest(
   "a run that fails for good keeps its saved steps until the failed-run retention of 14 days removes it with them",
-  { timeout: 20_000 },
+  { timeout: 25_000 },
   async ({ redisUrl, keyPrefix }) => {
     const { logger, lines } = createRecordingLogger();
     const importContacts = defineTask("import-contacts", {

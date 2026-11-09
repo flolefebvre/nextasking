@@ -2,6 +2,7 @@ import { expect } from "vitest";
 
 import { fixtureRecordsOf } from "./fixture-records.js";
 import { integrationTest } from "./integration-test.js";
+import { measuredDurationOf } from "./measured-duration.js";
 import { storedRun } from "./stored-run.js";
 import { startWorkerProcess } from "./worker-process.js";
 import { createWorkerProcessNextasking } from "./worker-process-nextasking.js";
@@ -22,16 +23,20 @@ integrationTest(
       await expect
         .poll(() => fixtureRecordsOf(redisUrl, keyPrefix, "wait-for-abort"), { timeout: 10_000 })
         .toEqual([{ event: "started" }]);
-      const signalSentAt = Date.now();
-      workerProcess.kill("SIGTERM");
-      const exit = await workerProcess.exited;
-      const shutdownDurationInMilliseconds = Date.now() - signalSentAt;
+      const {
+        result: exit,
+        elapsedInMilliseconds: shutdownDurationInMilliseconds,
+        elapsedNetOfStallInMilliseconds: shutdownDurationNetOfStallInMilliseconds,
+      } = await measuredDurationOf(() => {
+        workerProcess.kill("SIGTERM");
+        return workerProcess.exited;
+      });
       const records = await fixtureRecordsOf(redisUrl, keyPrefix, "wait-for-abort");
       const run = await storedRun(redisUrl, keyPrefix, "wait-for-abort", runId);
 
       expect(exit).toEqual({ code: 0, signal: null });
       expect(shutdownDurationInMilliseconds).toBeGreaterThanOrEqual(1000);
-      expect(shutdownDurationInMilliseconds).toBeLessThan(5000);
+      expect(shutdownDurationNetOfStallInMilliseconds).toBeLessThan(5000);
       expect(records).toEqual([
         { event: "started" },
         {

@@ -68,6 +68,7 @@
     "test": "vitest run --project unit --project integration",
     "test:unit": "vitest run --project unit",
     "test:integration": "vitest run --project integration",
+    "test:integration:contended": "tsx scripts/gate.ts test:integration+test:integration",
     "test:changed": "vitest run --project unit --project integration --changed ${CHECK_BASE:-origin/main}",
     "test:e2e": "vitest run --project e2e",
     "test:watch": "vitest"

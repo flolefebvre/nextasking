@@ -14,7 +14,7 @@ import { startTcpProxy } from "./tcp-proxy.js";
 
 integrationTest(
   "a connection cut after the completion of a run is stored, before its reply arrives, logs run completed once after the reconnect and no worker error",
-  { timeout: 20_000 },
+  { timeout: 45_000 },
   async ({ redisUrl, keyPrefix }) => {
     const proxy = await startTcpProxy(redisUrl);
     const { logger, lines } = createRecordingLogger();

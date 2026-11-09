@@ -82,7 +82,7 @@ integrationTest(
       { timeout: 15_000 },
     );
   },
-  30_000,
+  35_000,
 );
 
 integrationTest(

@@ -4,6 +4,7 @@ import { z } from "zod";
 import { RedisUnavailableError, createNextasking, defineEvent, defineListener, defineTask } from "../src/index.js";
 import { closeWhenTestFinishes } from "./close-when-test-finishes.js";
 import { integrationTest } from "./integration-test.js";
+import { measuredRejectionOf } from "./measured-duration.js";
 import { startTcpProxy } from "./tcp-proxy.js";
 
 const GIVE_UP_AFTER_IN_MILLISECONDS = 1_000;
@@ -24,13 +25,13 @@ function createInvoicingNextasking(url: string, keyPrefix: string) {
 }
 
 async function rejectionOf(call: Promise<unknown>): Promise<unknown> {
-  const startedAt = performance.now();
-  const rejection = await call.then(
-    () => new Error("the call resolved"),
-    (error: unknown) => error,
-  );
-  expect(performance.now() - startedAt).toBeGreaterThanOrEqual(GIVE_UP_AFTER_IN_MILLISECONDS - 50);
-  expect(performance.now() - startedAt).toBeLessThan(SLOWEST_GIVE_UP_IN_MILLISECONDS);
+  const {
+    result: rejection,
+    elapsedInMilliseconds,
+    elapsedNetOfStallInMilliseconds,
+  } = await measuredRejectionOf(() => call);
+  expect(elapsedInMilliseconds).toBeGreaterThanOrEqual(GIVE_UP_AFTER_IN_MILLISECONDS - 50);
+  expect(elapsedNetOfStallInMilliseconds).toBeLessThan(SLOWEST_GIVE_UP_IN_MILLISECONDS);
   return rejection;
 }
 

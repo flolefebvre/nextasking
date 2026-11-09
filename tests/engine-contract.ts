@@ -136,11 +136,7 @@ async function statesOf(
   task: string,
   runIds: readonly RunId[],
 ): Promise<(RunState | undefined)[]> {
-  const states: (RunState | undefined)[] = [];
-  for (const runId of runIds) {
-    states.push(await harness.stateOf(task, runId));
-  }
-  return states;
+  return Promise.all(runIds.map((runId) => harness.stateOf(task, runId)));
 }
 
 const HOUR_IN_MILLISECONDS = 60 * MINUTE_IN_MILLISECONDS;
@@ -178,9 +174,7 @@ async function backdateEndedRuns(
   runIds: readonly RunId[],
   durationInMilliseconds: DurationInMilliseconds,
 ): Promise<void> {
-  for (const runId of runIds) {
-    await harness.backdateEndedRun(task, runId, durationInMilliseconds);
-  }
+  await Promise.all(runIds.map((runId) => harness.backdateEndedRun(task, runId, durationInMilliseconds)));
 }
 
 export function defineEngineContractTests(contractTest: EngineContractTest): void {

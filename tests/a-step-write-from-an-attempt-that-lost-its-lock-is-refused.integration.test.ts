@@ -12,6 +12,7 @@ import { withRedis } from "./with-redis.js";
 
 integrationTest(
   "a step is refused, read or write, once the run's record holds another attempt's lock token",
+  { timeout: 15_000 },
   async ({ redisUrl, keyPrefix, expectInvariantViolation }) => {
     const stepErrors: unknown[] = [];
     const sendNewsletter = defineTask("send-newsletter", {

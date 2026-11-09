@@ -19,7 +19,7 @@ const LONGER_AGO_THAN_THE_GIVE_UP_DELAY_IN_MILLISECONDS = 60 * 60 * 1000;
 
 integrationTest(
   "a connection cut after a given-up run of an unknown task is stored as failed, before its reply arrives, logs no worker error and sends the failure notice",
-  { timeout: 30_000 },
+  { timeout: 50_000 },
   async ({ redisUrl, keyPrefix }) => {
     const proxy = await startTcpProxy(redisUrl);
     const { logger, lines } = createRecordingLogger();

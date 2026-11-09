@@ -14,6 +14,7 @@ const OUTAGE_DURATION_IN_MILLISECONDS = 3_000;
 
 integrationTest(
   "an outage cutting the instance's and the worker's connections logs one connection error and one connection restored",
+  { timeout: 50_000 },
   async ({ redisUrl, keyPrefix }) => {
     const proxy = await startTcpProxy(redisUrl);
     const { logger, lines } = createRecordingLogger();

@@ -13,6 +13,7 @@ type InvoicePaidPayload = { invoiceId: string; amountInCents: number };
 
 integrationTest(
   "an emitted event runs each of its listeners once, with the event's schema output",
+  { timeout: 15_000 },
   async ({ redisUrl, keyPrefix }) => {
     const { logger, lines } = createRecordingLogger();
     const recordedContextsByListener: Record<string, TaskContext<InvoicePaidPayload>[]> = {

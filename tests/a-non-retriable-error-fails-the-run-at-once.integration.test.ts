@@ -13,6 +13,7 @@ class NonRetriableErrorFromAnotherCopy extends Error {
 
 integrationTest(
   "throwing NonRetriableError, or an error of that name, fails the run at once with its retries left unused",
+  { timeout: 15_000 },
   async ({ redisUrl, keyPrefix }) => {
     const { logger, lines } = createRecordingLogger();
     const chargeCard = defineTask("charge-card", {

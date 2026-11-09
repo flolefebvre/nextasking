@@ -68,7 +68,7 @@ const runStep = (name: string, isBuffered: boolean) =>
 const width = Math.max(...steps.map((name) => name.length));
 
 const runStagesUntilFailure = async () => {
-  const resultsByStep = new Map<string, StepResult>();
+  const stepResults: StepResult[] = [];
   for (const stage of stages) {
     const isBuffered = stage.length > 1;
     if (isBuffered) {
@@ -86,16 +86,16 @@ const runStagesUntilFailure = async () => {
         return result;
       }),
     );
-    for (const result of stageResults) resultsByStep.set(result.name, result);
+    stepResults.push(...stageResults);
     if (stageResults.some((result) => !result.ok)) break;
   }
-  return resultsByStep;
+  return stepResults;
 };
 
-const printSummary = (resultsByStep: Map<string, StepResult>) => {
+const printSummary = (stepResults: StepResult[]) => {
   console.log("");
-  for (const name of steps) {
-    const result = resultsByStep.get(name);
+  for (const [position, name] of steps.entries()) {
+    const result = stepResults[position];
     if (!result) {
       console.log(dim(`  ${name.padEnd(width)}  –  skipped`));
       continue;
@@ -105,7 +105,7 @@ const printSummary = (resultsByStep: Map<string, StepResult>) => {
   }
   console.log("");
 
-  const failedSteps = steps.filter((name) => resultsByStep.get(name)?.ok === false);
+  const failedSteps = stepResults.filter((result) => !result.ok).map(({ name }) => name);
   if (failedSteps.length > 0) {
     fail(`--${invokingScript} FAILED at ${failedSteps.join(", ")}--`);
   }

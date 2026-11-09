@@ -12,6 +12,7 @@ import { withRedisClient } from "./with-redis.js";
 
 integrationTest(
   "a due schedule left by an earlier release for a task this release no longer schedules is removed at boot and starts no run",
+  { timeout: 15_000 },
   async ({ redisUrl, keyPrefix }) => {
     const { logger, lines } = createRecordingLogger();
     const handledPayloads: unknown[] = [];

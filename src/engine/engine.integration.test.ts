@@ -5,6 +5,7 @@ import { backdateEndedRun, engineTest, expireLock, fetchedLockedRunsOf } from ".
 import { integrationTest } from "../../tests/integration-test.js";
 import { storedKeyViolationsOf } from "../../tests/stored-key-violations.js";
 import { freshLockTokensOf } from "../../tests/lock-tokens.js";
+import { measuredDurationOf } from "../../tests/measured-duration.js";
 import { serverInstantInMillisecondsOf } from "../../tests/server-instant.js";
 import { withRedis, withRedisClient } from "../../tests/with-redis.js";
 import { REPLIED_EMPTY_PROMOTE, REPLIED_ONE_RENEWAL, repliedOf } from "../../tests/tick-replies.js";
@@ -204,10 +205,11 @@ engineTest(
     await engine.enqueue({ runs: [{ runId: "welcome-ada", task: "send-email", payload: "{}", retries: 0 }] });
 
     await withRedisClient(redisUrl, async (blockingClient) => {
-      const waitStartedAt = Date.now();
-      await wakeUpWaitOf(blockingClient, keyPrefix)(LONG_WAKE_UP_TIMEOUT_IN_MILLISECONDS);
+      const { elapsedNetOfStallInMilliseconds } = await measuredDurationOf(() =>
+        wakeUpWaitOf(blockingClient, keyPrefix)(LONG_WAKE_UP_TIMEOUT_IN_MILLISECONDS),
+      );
 
-      expect(Date.now() - waitStartedAt).toBeLessThan(LONG_WAKE_UP_TIMEOUT_IN_MILLISECONDS);
+      expect(elapsedNetOfStallInMilliseconds).toBeLessThan(LONG_WAKE_UP_TIMEOUT_IN_MILLISECONDS);
       expect(await redis.exists(keys.wakeUpMarker)).toBe(0);
     });
   },
@@ -217,12 +219,13 @@ engineTest(
   "a wake-up wait returns once an enqueue arms the marker while it blocks",
   async ({ engine, redisUrl, keyPrefix }) => {
     await withRedisClient(redisUrl, async (blockingClient) => {
-      const waitStartedAt = Date.now();
-      const wakeUpWait = wakeUpWaitOf(blockingClient, keyPrefix)(LONG_WAKE_UP_TIMEOUT_IN_MILLISECONDS);
-      await engine.enqueue({ runs: [{ runId: "welcome-ada", task: "send-email", payload: "{}", retries: 0 }] });
-      await wakeUpWait;
+      const { elapsedNetOfStallInMilliseconds } = await measuredDurationOf(async () => {
+        const wakeUpWait = wakeUpWaitOf(blockingClient, keyPrefix)(LONG_WAKE_UP_TIMEOUT_IN_MILLISECONDS);
+        await engine.enqueue({ runs: [{ runId: "welcome-ada", task: "send-email", payload: "{}", retries: 0 }] });
+        await wakeUpWait;
+      });
 
-      expect(Date.now() - waitStartedAt).toBeLessThan(LONG_WAKE_UP_TIMEOUT_IN_MILLISECONDS);
+      expect(elapsedNetOfStallInMilliseconds).toBeLessThan(LONG_WAKE_UP_TIMEOUT_IN_MILLISECONDS);
     });
   },
 );

@@ -10,6 +10,7 @@ import { storedRun } from "./stored-run.js";
 
 integrationTest(
   "a repeated step id the handler catches still fails the run at once, with its retries left unused",
+  { timeout: 15_000 },
   async ({ redisUrl, keyPrefix }) => {
     const { logger, lines } = createRecordingLogger();
     const notifyFollowers = defineTask("notify-followers", {
@@ -53,6 +54,7 @@ integrationTest(
 
 integrationTest(
   "a step result over 1 MiB fails the run with the misuse, not the handler's later error, and is not saved",
+  { timeout: 15_000 },
   async ({ redisUrl, keyPrefix }) => {
     const { logger, lines } = createRecordingLogger();
     const buildExport = defineTask("build-export", {

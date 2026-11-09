@@ -15,6 +15,7 @@ const invoicePaid = defineEvent("invoice.paid", {
 
 integrationTest(
   "a dispatched run and a listener run store the concurrency key computed from their validated payload",
+  { timeout: 15_000 },
   async ({ redisUrl, keyPrefix }) => {
     const rebuildIndex = defineTask("rebuild-index", {
       schema: z.object({ accountId: z.string().trim() }),

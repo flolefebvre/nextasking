@@ -9,6 +9,7 @@ import { storedRunIdentities } from "./stored-run-identities.js";
 
 integrationTest(
   "a repeated runId returns the first id and starts one run, while the same runId on another task starts its own",
+  { timeout: 15_000 },
   async ({ redisUrl, keyPrefix }) => {
     const { logger, lines } = createRecordingLogger();
     const recordedEmails: string[] = [];

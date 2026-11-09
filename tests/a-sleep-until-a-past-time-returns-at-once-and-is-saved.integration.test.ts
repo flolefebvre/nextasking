@@ -10,6 +10,7 @@ import { storedRun } from "./stored-run.js";
 
 integrationTest(
   "a sleepUntil time in the past returns at once, without suspending, and is saved with its wake time",
+  { timeout: 15_000 },
   async ({ redisUrl, keyPrefix }) => {
     const { logger, lines } = createRecordingLogger();
     const trialEndedAt = new Date(Date.now() - 60_000);

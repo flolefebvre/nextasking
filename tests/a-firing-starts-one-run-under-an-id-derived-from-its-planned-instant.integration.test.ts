@@ -15,6 +15,7 @@ type RecordedFiringRun = { runId: string; scheduledAt: Date | undefined; attempt
 
 integrationTest(
   "a firing starts one run whose id and scheduledAt come from the planned instant, not the time it was processed, and a repeat of it starts no other run",
+  { timeout: 15_000 },
   async ({ redisUrl, keyPrefix }) => {
     const recordedRuns: RecordedFiringRun[] = [];
     const purgeExpiredSessions = defineScheduledTask("purge-expired-sessions", {

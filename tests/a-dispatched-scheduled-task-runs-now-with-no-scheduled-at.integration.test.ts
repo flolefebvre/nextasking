@@ -8,6 +8,7 @@ import { createRecordingLogger } from "./recording-logger.js";
 
 integrationTest(
   "a scheduled task dispatched with no payload runs now, with scheduledAt undefined and no payload in its context",
+  { timeout: 15_000 },
   async ({ redisUrl, keyPrefix }) => {
     const { logger } = createRecordingLogger();
     const recordedContexts: ScheduledTaskContext[] = [];

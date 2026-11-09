@@ -45,6 +45,8 @@ const ARRIVAL_COUNT = 1950;
 
 const READ_CYCLE_PAUSE_IN_MILLISECONDS = 250;
 
+const LEAST_ROUND_TRIPS_PER_READ = 1;
+
 const MOST_ROUND_TRIPS_PER_READ = 2;
 
 const LEAST_READ_CYCLE_COUNT = 100;
@@ -120,7 +122,8 @@ benchmarkTest(
       expect(readerDrivers).toHaveLength(1);
       const [readerDriver] = readerDrivers;
       let latestRun: RunIdentity = { task: "task-01", runId: runIdsOf("completed-task-01", 1)[0]! };
-      let latestEventId: EventId = "no-event-emitted-yet";
+      const { eventId: eventIdEmittedBeforeTheLoad } = await app.emit(LOAD_EVENT_NAME, {});
+      let latestEventId: EventId = eventIdEmittedBeforeTheLoad;
       const dispatchedRuns: RunIdentity[] = [];
       const emittedEventIds: EventId[] = [];
       const measuredReads: MeasuredRead[] = [];
@@ -179,10 +182,11 @@ benchmarkTest(
       isLoadOver = true;
       await readCycles;
       const arrivalCount = dispatchedRuns.length + emittedEventIds.length;
+      const runCountToHandle = arrivalCount + 1;
       const isEveryRunCompleted = await vi
         .waitUntil(
           async () =>
-            (await handledRunRecords()).length >= arrivalCount && unfinishedRunCountIn(await app.countRuns()) === 0,
+            (await handledRunRecords()).length >= runCountToHandle && unfinishedRunCountIn(await app.countRuns()) === 0,
           { timeout: DRAIN_TIMEOUT_IN_MILLISECONDS, interval: DRAIN_POLL_INTERVAL_IN_MILLISECONDS },
         )
         .then(
@@ -191,19 +195,22 @@ benchmarkTest(
         );
       const drainedAfterInMilliseconds = performance.now() - loadEndedAt;
       const handledRunKeys = (await handledRunRecords()).map(handledRunKeyOf);
-      const mostRoundTrips = Math.max(...measuredReads.map(({ roundTripCount }) => roundTripCount));
+      const roundTripCounts = measuredReads.map(({ roundTripCount }) => roundTripCount);
       console.log(
         [
           throughputLineOf(
             `${String(WORKER_PROCESS_COUNT)} workers under 10 runs/s with bursts of 100/s over 50 tasks, 100,000 runs kept`,
             { runCount: arrivalCount, elapsedInMilliseconds: loadEndedAt - loadStartedAt },
           ),
-          `benchmark: reads under that load: ${String(measuredReads.length)} reads in ${String(readCycleCount)} cycles, at most ${String(mostRoundTrips)} round trips each; the queue drained ${(drainedAfterInMilliseconds / 1000).toFixed(2)} s after the last arrival`,
+          `benchmark: reads under that load: ${String(measuredReads.length)} reads in ${String(readCycleCount)} cycles, ${String(Math.min(...roundTripCounts))} to ${String(Math.max(...roundTripCounts))} round trips each; the queue drained ${(drainedAfterInMilliseconds / 1000).toFixed(2)} s after the last arrival`,
         ].join("\n"),
       );
 
       expect(
-        measuredReads.filter(({ roundTripCount }) => roundTripCount > MOST_ROUND_TRIPS_PER_READ),
+        measuredReads.filter(
+          ({ roundTripCount }) =>
+            roundTripCount < LEAST_ROUND_TRIPS_PER_READ || roundTripCount > MOST_ROUND_TRIPS_PER_READ,
+        ),
         seedMessage,
       ).toEqual([]);
       expect(
@@ -235,7 +242,7 @@ benchmarkTest(
         seedMessage,
       ).toEqual({
         isEveryRunCompleted: true,
-        handledRunCount: arrivalCount,
+        handledRunCount: runCountToHandle,
         runsHandledMoreThanOnce: [],
         dispatchedRunsNeverHandled: [],
       });

@@ -1,9 +1,12 @@
 import { expect, vi } from "vitest";
 import { z } from "zod";
 
+import { createEngine } from "../src/engine/engine.js";
 import { createNextasking, defineTask } from "../src/index.js";
 import { closeNextaskingAndCheckItsDuration } from "./close-nextasking-and-check-its-duration.js";
 import { integrationTest } from "./integration-test.js";
+import { freshLockTokensOf } from "./lock-tokens.js";
+import { withRedis } from "./with-redis.js";
 import { startTcpProxy } from "./tcp-proxy.js";
 import { isFetchRequest } from "./engine-requests.js";
 import { storedRun } from "./stored-run.js";
@@ -17,9 +20,19 @@ const ACCOUNT_IDS = ["account-1", "account-2", "account-3"];
 
 const WAIT_WELL_UNDER_THE_LOCK_DURATION_IN_MILLISECONDS = 10_000;
 
+async function lockTokensOf(
+  redisUrl: string,
+  keyPrefix: string,
+  runIds: readonly string[],
+): Promise<(string | undefined)[]> {
+  return Promise.all(
+    runIds.map(async (runId) => (await storedRun(redisUrl, keyPrefix, "close-account", runId))?.lockToken),
+  );
+}
+
 integrationTest(
   "a connection cut after a fetch locks runs, before its reply arrives, starts each of them once, right after the reconnect, under the lock the resent fetch finds, with no stall",
-  { timeout: 30_000 },
+  { timeout: 40_000 },
   async ({ redisUrl, keyPrefix }) => {
     const proxy = await startTcpProxy(redisUrl);
     const { logger, lines } = createRecordingLogger();
@@ -37,9 +50,6 @@ integrationTest(
           schema: z.object({ accountId: z.string() }),
           handler: async ({ runId }) => {
             startedRunIds.push(runId);
-            if (startedRunIds.length === ACCOUNT_IDS.length) {
-              openGate();
-            }
             await gateOpened;
           },
         }),
@@ -47,6 +57,13 @@ integrationTest(
     });
 
     try {
+      await withRedis(redisUrl, (_redis, client) =>
+        createEngine(client, keyPrefix).fetch({
+          lockTokens: freshLockTokensOf(1),
+          concurrencyLimitsByTask: {},
+          lockDurationInMilliseconds: WAIT_WELL_UNDER_THE_LOCK_DURATION_IN_MILLISECONDS,
+        }),
+      );
       const runIdsInDispatchOrder: string[] = [];
       for (const accountId of ACCOUNT_IDS) {
         runIdsInDispatchOrder.push((await nextasking.dispatch("close-account", { accountId })).runId);
@@ -54,8 +71,17 @@ integrationTest(
       const fetchReplyCut = proxy.cutBeforeReplyTo((request) => isFetchRequest(request, keyPrefix));
       await nextasking.startWorker({ concurrency: ACCOUNT_IDS.length });
       await fetchReplyCut;
+      const lockTokensStoredByTheLostFetch = await lockTokensOf(redisUrl, keyPrefix, runIdsInDispatchOrder);
       await proxy.restore();
       await waitForLogMessage(lines, "connection restored", { timeout: 15_000 });
+      await vi.waitFor(
+        () => {
+          expect(startedRunIds).toHaveLength(ACCOUNT_IDS.length);
+        },
+        { timeout: WAIT_WELL_UNDER_THE_LOCK_DURATION_IN_MILLISECONDS },
+      );
+      const lockTokensTheAttemptsRunUnder = await lockTokensOf(redisUrl, keyPrefix, runIdsInDispatchOrder);
+      openGate();
       await vi.waitFor(
         () => {
           expect(lines.filter((line) => line.message === "run completed")).toHaveLength(ACCOUNT_IDS.length);
@@ -68,6 +94,8 @@ integrationTest(
         ),
       );
 
+      expect(lockTokensStoredByTheLostFetch.every((lockToken) => lockToken !== undefined)).toBe(true);
+      expect(lockTokensTheAttemptsRunUnder).toEqual(lockTokensStoredByTheLostFetch);
       expect([...startedRunIds].sort()).toEqual([...runIdsInDispatchOrder].sort());
       expect(stalledCounters).toEqual([0, 0, 0]);
       expectOneConnectionErrorAndOneConnectionRestored(lines);

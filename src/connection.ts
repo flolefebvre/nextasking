@@ -436,6 +436,7 @@ export function createRedisConnections(
         if (state === undefined) {
           return;
         }
+        clearTimeout(state.handshakeTimer);
         state.errorWhileDown = error;
         outageTracker.reportClientError(state.subject, error);
       },

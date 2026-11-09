@@ -299,6 +299,17 @@ describe("a connection that stops answering without closing", () => {
     expect(driver.forceReconnectCount).toBe(1);
   });
 
+  test("a handshake that fails with an error is left to the driver's own retries, never reconnected by force", async () => {
+    const { driver } = connectionScenarioOf();
+
+    driver.startHandshake();
+    driver.loseConnection(networkError("ECONNRESET"));
+    await vi.advanceTimersByTimeAsync(5 * GIVE_UP_AFTER_IN_MILLISECONDS);
+
+    expect(driver.forceReconnectCount).toBe(0);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   test("an answered connection idle for longer than giveUpAfter is never reconnected and logs nothing", async () => {
     const { connection, driver, lines } = connectionScenarioOf((fakeRedisDriver) => {
       fakeRedisDriver.becomeReady();

@@ -100,15 +100,32 @@ function shaOf({ lua }: RedisScript): string {
 }
 
 export const createNodeRedisDriver: CreateRedisDriver = (url, { onConnect, onReady, onError }) => {
-  const client = createClient({
-    url,
-    RESP: 2,
-    maintNotifications: "disabled",
-    commandOptions: { timeout: undefined },
-  });
-  client.on("connect", onConnect);
-  client.on("ready", onReady);
-  client.on("error", onError);
+  const createFreshClient = () => {
+    const createdClient = createClient({
+      url,
+      RESP: 2,
+      maintNotifications: "disabled",
+      commandOptions: { timeout: undefined },
+    });
+    const isCurrent = () => createdClient === client;
+    createdClient.on("connect", () => {
+      if (isCurrent()) {
+        onConnect();
+      }
+    });
+    createdClient.on("ready", () => {
+      if (isCurrent()) {
+        onReady();
+      }
+    });
+    createdClient.on("error", (error: Error) => {
+      if (isCurrent()) {
+        onError(error);
+      }
+    });
+    return createdClient;
+  };
+  let client = createFreshClient();
 
   const sentCommand = (commandArguments: readonly (string | number)[], abortSignal: AbortSignal | undefined) =>
     client.sendCommand(
@@ -145,8 +162,13 @@ export const createNodeRedisDriver: CreateRedisDriver = (url, { onConnect, onRea
     },
     connect,
     forceReconnect: () => {
-      client.destroy();
-      setImmediate(connect);
+      if (isDestroyed) {
+        return;
+      }
+      const abandonedClient = client;
+      client = createFreshClient();
+      abandonedClient.destroy();
+      connect();
     },
     destroy: () => {
       isDestroyed = true;

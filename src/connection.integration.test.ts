@@ -8,6 +8,7 @@ import { startTcpProxy } from "../tests/tcp-proxy.js";
 import type { TcpProxy } from "../tests/tcp-proxy.js";
 import { createRedisConnections, isRedisAwayError } from "./connection.js";
 import type { RedisConnection, RedisConnections } from "./connection.js";
+import { createNodeRedisDriver } from "./node-redis-driver.js";
 import { builtInCommandOf } from "./redis-client.js";
 
 const GIVE_UP_AFTER_IN_MILLISECONDS = 1000;
@@ -96,6 +97,78 @@ integrationTest(
         await connections.closeConnection(connection);
       }
     });
+  },
+);
+
+integrationTest(
+  "a connection reset before its first ready, then refused past giveUpAfter, opens exactly one connection once the server is back",
+  { timeout: 20_000 },
+  async ({ redisUrl }) => {
+    await withProxiedConnections(redisUrl, async ({ proxy, connections }) => {
+      proxy.stopAnswering();
+      const connection = connections.createCommandConnection();
+      try {
+        await vi.waitFor(() => expect(proxy.acceptedConnectionCount()).toBe(1), { timeout: 5_000 });
+        await proxy.cut();
+        proxy.answerAgain();
+        await sleep(GIVE_UP_AFTER_IN_MILLISECONDS + 2_500);
+        const acceptedBeforeTheRestore = proxy.acceptedConnectionCount();
+        await proxy.restore();
+        await readyAgain(connections, connection);
+        await sleep(3_000);
+        const acceptedAfterTheRestore = proxy.acceptedConnectionCount() - acceptedBeforeTheRestore;
+        const reply = await connection.instanceCalls.send(builtInCommandOf("ECHO", "back"));
+
+        expect(acceptedAfterTheRestore).toBe(1);
+        expect(reply).toBe("back");
+      } finally {
+        await connections.closeConnection(connection);
+      }
+    });
+  },
+);
+
+integrationTest(
+  "a driver reconnected by force while it waits out its reconnect backoff opens exactly one connection once the server is back",
+  { timeout: 20_000 },
+  async ({ redisUrl }) => {
+    const proxy = await startTcpProxy(redisUrl);
+    let errorCountWhileRefused = 0;
+    let markReady = () => undefined as void;
+    const ready = new Promise<void>((resolve) => {
+      markReady = resolve;
+    });
+    const driver = createNodeRedisDriver(proxy.url, {
+      onConnect: () => undefined,
+      onReady: markReady,
+      onError: () => {
+        errorCountWhileRefused += 1;
+      },
+    });
+    try {
+      await proxy.cut();
+      driver.connect();
+      await vi.waitFor(() => expect(errorCountWhileRefused).toBeGreaterThanOrEqual(3), { timeout: 5_000 });
+      for (let forcedReconnectCount = 0; forcedReconnectCount < 5; forcedReconnectCount += 1) {
+        driver.forceReconnect();
+        await sleep(150);
+      }
+      await sleep(2_500);
+      const errorCountBefore = errorCountWhileRefused;
+      await sleep(2_000);
+      const errorsInTwoSeconds = errorCountWhileRefused - errorCountBefore;
+      await proxy.restore();
+      await ready;
+      await sleep(3_000);
+      const reply = await driver.send(builtInCommandOf("ECHO", "back"));
+
+      expect(errorsInTwoSeconds).toBeLessThanOrEqual(2);
+      expect(proxy.acceptedConnectionCount()).toBe(1);
+      expect(reply).toBe("back");
+    } finally {
+      driver.destroy();
+      await proxy.stop();
+    }
   },
 );
 

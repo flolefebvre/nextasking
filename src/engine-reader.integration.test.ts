@@ -213,7 +213,7 @@ engineTest("getRun reads a run stored without a payload with an undefined payloa
 });
 
 engineTest(
-  "getRun reads as undefined a run never dispatched, a run of another task and a run of a newer record version",
+  "getRun reads as undefined a run never dispatched, an empty run id, a run of another task and a run of a newer record version",
   async (context) => {
     const { redis, keys } = context;
     await enqueueRuns(context, [runOf("other-task-run", "build-report"), runOf("newer-run", "send-email")]);
@@ -222,11 +222,12 @@ engineTest(
 
     const runs = [
       await reader.getRun("send-email", "never-dispatched-run"),
+      await reader.getRun("send-email", ""),
       await reader.getRun("send-email", "other-task-run"),
       await reader.getRun("send-email", "newer-run"),
     ];
 
-    expect(runs).toEqual([undefined, undefined, undefined]);
+    expect(runs).toEqual([undefined, undefined, undefined, undefined]);
   },
 );
 

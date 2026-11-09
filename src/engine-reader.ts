@@ -326,6 +326,9 @@ export function createEngineReader(config: EngineReaderConfig): EngineReader {
   return {
     getRun: async (taskName, runId) => {
       rejectUnknownTask(tasksByName, taskName);
+      if (runId === "") {
+        return undefined;
+      }
       const [run] = await readRuns([{ task: taskName, runId }]);
       return run;
     },

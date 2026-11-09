@@ -6,7 +6,7 @@ import { errorFromThrownValue, StalledRunError } from "./attempt-errors.js";
 import type { AnyTaskDefinition } from "./definitions.js";
 import type { DurationInMilliseconds, EpochMilliseconds } from "./durations.js";
 import type { LockToken } from "./engine/engine-keys.js";
-import type { Engine, LockedRun, PruneRequest, ThirdStall } from "./engine/engine.js";
+import type { Engine, LockedRun, PruneRequest, ThirdStall, TickReply, TickRequest } from "./engine/engine.js";
 import type { WorkerDefinitions } from "./engine-failure-notice.js";
 import {
   lockLostAbortLineOf,
@@ -21,7 +21,8 @@ import {
 import { executeLockedRunAttempt, failingAttemptOf, handBackAttemptOf, settleRequestOf } from "./locked-run-attempt.js";
 import type { AttemptResult } from "./locked-run-attempt.js";
 import type { Logger } from "./logger.js";
-import { delayUnlessAborted } from "./redis-outage.js";
+import { answeredDespiteOutage, delayUnlessAborted, untilAborted } from "./redis-outage.js";
+import type { RedisOutage } from "./redis-outage.js";
 import type { HandlerSender } from "./step-engine.js";
 import type { WorkerTiming } from "./worker-timing.js";
 
@@ -37,6 +38,7 @@ export type WorkerLoopConfig = {
   concurrency: number;
   sender: HandlerSender;
   waitForWakeUp: WaitForWakeUp;
+  redisOutage: RedisOutage;
 };
 
 export type WorkerLoop = {
@@ -52,6 +54,12 @@ type AttemptInFlight = {
   isExecuting: boolean;
   settlement: Promise<void>;
 };
+
+function failedCommandErrorsOf({ promote, renewals, taskNames, prune }: TickReply): Error[] {
+  return [promote, renewals, taskNames, prune].flatMap((commandReply) =>
+    commandReply?.kind === "failed" ? [commandReply.error] : [],
+  );
+}
 
 function freshLockTokenOf(): LockToken {
   return randomBytes(16).toString("hex");
@@ -77,7 +85,7 @@ function nextTaskNameInTurnOf(
 }
 
 export function startWorkerLoop(config: WorkerLoopConfig): WorkerLoop {
-  const { engine, definitions, timing, logger, concurrency } = config;
+  const { engine, definitions, timing, logger, concurrency, redisOutage } = config;
   const { lockDurationInMilliseconds } = timing;
   const concurrencyLimitsByTask = concurrencyLimitsByTaskOf(definitions.tasksByName);
   const attemptsInFlightByLockToken = new Map<LockToken, AttemptInFlight>();
@@ -91,6 +99,7 @@ export function startWorkerLoop(config: WorkerLoopConfig): WorkerLoop {
   let fetchPassOverEndsAt: EpochMilliseconds = 0;
   let promotePassOverEndsAt: EpochMilliseconds = 0;
   const fetchStopController = new AbortController();
+  const tickStopController = new AbortController();
   const loggedPassedOverRecordVersions = new Set<number | undefined>();
 
   const logPassOver = (recordVersions: readonly (number | undefined)[]) => {
@@ -101,6 +110,16 @@ export function startWorkerLoop(config: WorkerLoopConfig): WorkerLoop {
       loggedPassedOverRecordVersions.add(recordVersion);
     }
     writeLifecycleLines(logger, recordVersionsNotLoggedYet.map(passOverLineOf));
+  };
+
+  const writeWorkerError = (error: unknown) => {
+    writeLifecycleLines(logger, [workerErrorLineOf(errorFromThrownValue(error))]);
+  };
+
+  const writeWorkerErrorUnlessStopped = (stopSignal: AbortSignal) => (error: unknown) => {
+    if (!stopSignal.aborted) {
+      writeWorkerError(error);
+    }
   };
 
   const cueFetch = () => {
@@ -126,8 +145,11 @@ export function startWorkerLoop(config: WorkerLoopConfig): WorkerLoop {
         pendingWakeUp = undefined;
         cueFetch();
       },
-      () => {
+      (error: unknown) => {
         pendingWakeUp = undefined;
+        if (!redisOutage.isRedisAway(error)) {
+          writeWorkerError(error);
+        }
       },
     );
   };
@@ -172,6 +194,7 @@ export function startWorkerLoop(config: WorkerLoopConfig): WorkerLoop {
       abortAttempt: (abortCause) => {
         abortAttempt(attemptInFlight, abortCause);
       },
+      redisOutage,
       isWorkerDraining: () => false,
     });
   };
@@ -187,7 +210,8 @@ export function startWorkerLoop(config: WorkerLoopConfig): WorkerLoop {
     if (abortController.signal.aborted) {
       return;
     }
-    const settleReply = await engine.settle(settleRequestOf(task, lockedRun, attemptOutcome));
+    const settleRequest = settleRequestOf(task, lockedRun, attemptOutcome);
+    const settleReply = await answeredDespiteOutage(redisOutage, () => engine.settle(settleRequest));
     writeLifecycleLines(
       logger,
       settleLinesOf({
@@ -214,7 +238,7 @@ export function startWorkerLoop(config: WorkerLoopConfig): WorkerLoop {
     };
     attemptsInFlightByLockToken.set(lockedRun.lockToken, attemptInFlight);
     attemptInFlight.settlement = executeAttempt(task, attemptInFlight, fetchRepliedAt)
-      .catch(() => undefined)
+      .catch(writeWorkerError)
       .finally(() => {
         attemptsInFlightByLockToken.delete(lockedRun.lockToken);
         cueFetch();
@@ -228,7 +252,11 @@ export function startWorkerLoop(config: WorkerLoopConfig): WorkerLoop {
     }
     const lockTokens = Array.from({ length: Math.min(freeCapacity, timing.mostLockTokensPerFetch) }, freshLockTokenOf);
     const fetchSentAt = Date.now();
-    const reply = await engine.fetch({ lockTokens, concurrencyLimitsByTask, lockDurationInMilliseconds });
+    const reply = await answeredDespiteOutage(
+      redisOutage,
+      () => engine.fetch({ lockTokens, concurrencyLimitsByTask, lockDurationInMilliseconds }),
+      { stopSignal: fetchStopController.signal },
+    );
     if (reply.kind === "unknownVersion") {
       fetchPassOverEndsAt = Date.now() + timing.passOverWaitInMilliseconds;
       logPassOver([reply.recordVersion]);
@@ -237,6 +265,9 @@ export function startWorkerLoop(config: WorkerLoopConfig): WorkerLoop {
     const fetchRepliedAt = Date.now();
     logPassOver(reply.passedOverRecordVersions);
     writeLifecycleLines(logger, reply.parkedRuns.map(parkLineOf));
+    if (fetchRepliedAt > fetchSentAt + lockDurationInMilliseconds) {
+      return;
+    }
     for (const lockedRun of reply.lockedRuns) {
       startAttempt(lockedRun, fetchSentAt, fetchRepliedAt);
     }
@@ -245,7 +276,7 @@ export function startWorkerLoop(config: WorkerLoopConfig): WorkerLoop {
   const fetchLoopEnded = (async () => {
     while (isFetching) {
       isFetchCued = false;
-      await fetchOnce().catch(() => undefined);
+      await fetchOnce().catch(writeWorkerErrorUnlessStopped(fetchStopController.signal));
       if (!isFetching) {
         break;
       }
@@ -277,14 +308,15 @@ export function startWorkerLoop(config: WorkerLoopConfig): WorkerLoop {
       { error: new StalledRunError(runId, timing.stallCountThatFailsARun), reason: "stalled" },
       definitions,
     );
+    const settleRequest = settleRequestOf(
+      definitions.tasksByName.get(thirdStall.task),
+      { runId, lockToken: expiredLockToken, attempt },
+      attemptOutcome,
+    );
     try {
-      const settleReply = await engine.settle(
-        settleRequestOf(
-          definitions.tasksByName.get(thirdStall.task),
-          { runId, lockToken: expiredLockToken, attempt },
-          attemptOutcome,
-        ),
-      );
+      const settleReply = await answeredDespiteOutage(redisOutage, () => engine.settle(settleRequest), {
+        stopSignal: tickStopController.signal,
+      });
       if (settleReply.kind === "failed" || settleReply.kind === "unknownVersion") {
         writeLifecycleLines(
           logger,
@@ -298,7 +330,7 @@ export function startWorkerLoop(config: WorkerLoopConfig): WorkerLoop {
         );
       }
     } catch (error) {
-      writeLifecycleLines(logger, [workerErrorLineOf(errorFromThrownValue(error))]);
+      writeWorkerErrorUnlessStopped(tickStopController.signal)(error);
     }
   };
 
@@ -310,11 +342,17 @@ export function startWorkerLoop(config: WorkerLoopConfig): WorkerLoop {
         lockExpiresAtByWorkerClock < lockRenewalDeadline && !abortController.signal.aborted,
     );
     const prune = pruneRequestOfThisTick();
-    const reply = await engine.tick({
+    const tickRequest: TickRequest = {
       heldLocks: renewedAttempts.map(({ lockedRun: { runId, lockToken } }) => ({ runId, lockToken })),
       lockDurationInMilliseconds,
       ...(prune === undefined ? {} : { prune }),
       isPromoteIncluded: tickSentAt >= promotePassOverEndsAt,
+    };
+    const awayErrorOf = (reply: TickReply): Error | undefined =>
+      failedCommandErrorsOf(reply).find((error) => redisOutage.isRedisAway(error));
+    const reply = await answeredDespiteOutage(redisOutage, () => engine.tick(tickRequest), {
+      stopSignal: tickStopController.signal,
+      isAnswerComplete: (answeredReply) => awayErrorOf(answeredReply) === undefined,
     });
     lastPrunedTaskName = prune?.task;
     if (reply.renewals.kind === "replied") {
@@ -335,9 +373,9 @@ export function startWorkerLoop(config: WorkerLoopConfig): WorkerLoop {
     }
     writeLifecycleLines(
       logger,
-      [reply.promote, reply.renewals, reply.taskNames, reply.prune].flatMap((commandReply) =>
-        commandReply?.kind === "failed" ? [workerErrorLineOf(commandReply.error)] : [],
-      ),
+      failedCommandErrorsOf(reply)
+        .filter((error) => !redisOutage.isRedisAway(error))
+        .map(workerErrorLineOf),
     );
     if (reply.promote?.kind === "replied" && reply.promote.reply.kind === "unknownVersion") {
       promotePassOverEndsAt = Date.now() + timing.passOverWaitInMilliseconds;
@@ -348,6 +386,10 @@ export function startWorkerLoop(config: WorkerLoopConfig): WorkerLoop {
       writeLifecycleLines(logger, stalledRuns.map(stallLineOf));
       await Promise.all(thirdStalls.map(failThirdStall));
     }
+    const awayError = awayErrorOf(reply);
+    if (awayError !== undefined) {
+      await untilAborted(redisOutage.waitForRedis(awayError, tickStopController.signal), tickStopController.signal);
+    }
   };
 
   const tickTimer = setInterval(() => {
@@ -356,7 +398,7 @@ export function startWorkerLoop(config: WorkerLoopConfig): WorkerLoop {
       return;
     }
     tickInProgress = tickOnce()
-      .catch(() => undefined)
+      .catch(writeWorkerErrorUnlessStopped(tickStopController.signal))
       .finally(() => {
         tickInProgress = undefined;
         cueFetch();
@@ -372,6 +414,7 @@ export function startWorkerLoop(config: WorkerLoopConfig): WorkerLoop {
     },
     stopTicking: async () => {
       clearInterval(tickTimer);
+      tickStopController.abort();
       await tickInProgress;
     },
     waitForAttemptsInFlight: async () => {

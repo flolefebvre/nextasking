@@ -14,6 +14,8 @@ import { createEngineStepStore } from "./engine-step-store.js";
 import { runFieldsOf } from "./lifecycle-logs.js";
 import { loggerWithFields } from "./logger.js";
 import type { Logger } from "./logger.js";
+import { answeredDespiteOutage } from "./redis-outage.js";
+import type { RedisOutage } from "./redis-outage.js";
 import type { FailureReason } from "./run-queue.js";
 import { executeTaskHandler, openStepEngine } from "./step-engine.js";
 import type { HandlerOutcome, HandlerSender } from "./step-engine.js";
@@ -35,10 +37,25 @@ export type LockedRunAttempt = {
   definitions: WorkerDefinitions;
   sender: HandlerSender;
   logger: Logger;
+  redisOutage: RedisOutage;
   abortSignal: AbortSignal;
   abortAttempt: (abortCause: AttemptAbortCause) => void;
   isWorkerDraining: () => boolean;
 };
+
+function callsWaitingOutOutagesOf({ engine, sender, redisOutage, abortSignal }: LockedRunAttempt) {
+  const untilAnswered = <Answer>(call: () => Promise<Answer>) =>
+    answeredDespiteOutage(redisOutage, call, { stopSignal: abortSignal });
+  const stepCalls: Pick<Engine, "saveStep" | "readStep"> = {
+    saveStep: (request) => untilAnswered(() => engine.saveStep(request)),
+    readStep: (request) => untilAnswered(() => engine.readStep(request)),
+  };
+  const sendCalls: HandlerSender = {
+    dispatch: (...sendArguments) => untilAnswered(() => sender.dispatch(...sendArguments)),
+    emit: (...sendArguments) => untilAnswered(() => sender.emit(...sendArguments)),
+  };
+  return { stepCalls, sendCalls };
+}
 
 const ATTEMPT_OUTCOME_BY_HANDLER_OUTCOME_KIND: {
   [Kind in HandlerOutcome["kind"]]: (handlerOutcome: Extract<HandlerOutcome, { kind: Kind }>) => AttemptOutcome;
@@ -95,7 +112,8 @@ function failedAttemptOf(
 }
 
 export async function executeLockedRunAttempt(lockedRunAttempt: LockedRunAttempt): Promise<AttemptResult> {
-  const { engine, task, lockedRun, sender, logger, abortSignal, abortAttempt, isWorkerDraining } = lockedRunAttempt;
+  const { task, lockedRun, logger, abortSignal, abortAttempt, isWorkerDraining } = lockedRunAttempt;
+  const { stepCalls, sendCalls } = callsWaitingOutOutagesOf(lockedRunAttempt);
   const { runId, lockToken, attempt, sleepsWokenAt, scheduledAt } = lockedRun;
   let handlerOutcome: HandlerOutcome;
   try {
@@ -103,8 +121,8 @@ export async function executeLockedRunAttempt(lockedRunAttempt: LockedRunAttempt
       taskName: task.name,
       runId,
       lockToken,
-      store: createEngineStepStore(engine, { runId, lockToken }),
-      sender,
+      store: createEngineStepStore(stepCalls, { runId, lockToken }),
+      sender: sendCalls,
       abortSignal,
       isWorkerDraining,
       futureResumeTime: "suspend the run",

@@ -15,6 +15,12 @@ import { createInMemoryEngine } from "../tests/in-memory-engine.js";
 import type { InMemoryEngine } from "../tests/in-memory-engine.js";
 import { freshLockTokensOf } from "../tests/lock-tokens.js";
 import { createRecordingLogger } from "../tests/recording-logger.js";
+import {
+  createSimulatedRedisOutage,
+  engineAwayDuringOutage,
+  OUT_OF_MEMORY_REPLY,
+} from "../tests/simulated-redis-outage.js";
+import type { AwayEngineCalls, SimulatedRedisOutage } from "../tests/simulated-redis-outage.js";
 import type { RecordedLogLine } from "../tests/recording-logger.js";
 import { brokenKeyRunFailedListener, workerDefinitionsOf } from "../tests/worker-definitions.js";
 
@@ -53,7 +59,12 @@ function createHandlerGate(): HandlerGate {
   };
 }
 
-type LoopScenario = { engine: InMemoryEngine; lines: RecordedLogLine[]; loop: WorkerLoop };
+type LoopScenario = {
+  engine: InMemoryEngine;
+  lines: RecordedLogLine[];
+  loop: WorkerLoop;
+  simulatedRedisOutage: SimulatedRedisOutage;
+};
 
 const startedLoops: WorkerLoop[] = [];
 
@@ -65,15 +76,19 @@ function startedLoopOf(
     loopEngine = engine,
     waitForWakeUp = engine.waitForWakeUp,
     timing = DEFAULT_WORKER_TIMING,
+    recordingLogger = createRecordingLogger(),
+    simulatedRedisOutage = createSimulatedRedisOutage(recordingLogger.logger),
   }: {
     concurrency?: number;
     engine?: InMemoryEngine;
     loopEngine?: WorkerLoopEngine;
     waitForWakeUp?: WaitForWakeUp;
     timing?: WorkerTiming;
+    recordingLogger?: ReturnType<typeof createRecordingLogger>;
+    simulatedRedisOutage?: SimulatedRedisOutage;
   } = {},
 ): LoopScenario {
-  const { logger, lines } = createRecordingLogger();
+  const { logger, lines } = recordingLogger;
   const loop = startWorkerLoop({
     engine: loopEngine,
     definitions: workerDefinitionsOf(tasks),
@@ -82,9 +97,10 @@ function startedLoopOf(
     concurrency,
     sender: NO_SENDER,
     waitForWakeUp,
+    redisOutage: simulatedRedisOutage.redisOutage,
   });
   startedLoops.push(loop);
-  return { engine, lines, loop };
+  return { engine, lines, loop, simulatedRedisOutage };
 }
 
 function runsOf(task: string, count: number, extraFields: Partial<RunToCreate> = {}): RunToCreate[] {
@@ -820,13 +836,23 @@ test("the loop survives a rejected fetch and keeps fetching", async () => {
   expect(engine.storedRunOf("send-email-1")?.state).toBe("completed");
 });
 
-test("the loop survives a rejected wake-up wait without spinning, and a run enqueued afterwards still completes", async () => {
+async function unhandledRejectionsDuring(body: () => Promise<void>): Promise<unknown[]> {
   const unhandledRejections: unknown[] = [];
   const recordUnhandledRejection = (reason: unknown) => {
     unhandledRejections.push(reason);
   };
   process.on("unhandledRejection", recordUnhandledRejection);
   try {
+    await body();
+    await vi.advanceTimersByTimeAsync(0);
+  } finally {
+    process.off("unhandledRejection", recordUnhandledRejection);
+  }
+  return unhandledRejections;
+}
+
+test("the loop survives a rejected wake-up wait without spinning, and a run enqueued afterwards still completes", async () => {
+  const unhandledRejections = await unhandledRejectionsDuring(async () => {
     const sendEmail = defineTask("send-email", { schema: v.object({}), handler: async () => undefined });
     const engine = createInMemoryEngine();
     let waitCount = 0;
@@ -845,10 +871,9 @@ test("the loop survives a rejected wake-up wait without spinning, and a run enqu
 
     expect(engine.storedRunOf("send-email-1")?.state).toBe("completed");
     expect(waitCount).toBeLessThan(10);
-    expect(unhandledRejections).toEqual([]);
-  } finally {
-    process.off("unhandledRejection", recordUnhandledRejection);
-  }
+  });
+
+  expect(unhandledRejections).toEqual([]);
 });
 
 test("a wake-up landing while a fetch is in flight is followed by another fetch, with no tick in between", async () => {
@@ -885,4 +910,209 @@ test("a wake-up landing while a fetch is in flight is followed by another fetch,
 
   expect(requestsOf(engine, "tick")).toEqual([]);
   expect(engine.storedRunOf("second-run")?.state).toBe("executing");
+});
+
+function messagesOf(lines: readonly RecordedLogLine[]): string[] {
+  return lines.map(({ message }) => message);
+}
+
+type OutageScenario = LoopScenario & { handlerGate: HandlerGate };
+
+async function scenarioOfAnOutageWhileAStepRuns(awayEngineCalls: AwayEngineCalls): Promise<OutageScenario> {
+  const handlerGate = createHandlerGate();
+  const sendEmail = defineTask("send-email", {
+    schema: v.object({}),
+    handler: async ({ step }) => {
+      await step.run("look-up", () => "found");
+      await handlerGate.enter();
+      await step.run("charge", () => "paid");
+    },
+  });
+  const engine = createInMemoryEngine();
+  await engine.enqueue({ runs: runsOf("send-email", 1) });
+  const recordingLogger = createRecordingLogger();
+  const simulatedRedisOutage = createSimulatedRedisOutage(recordingLogger.logger);
+  const scenario = startedLoopOf([sendEmail] as AnyTaskDefinition[], {
+    engine,
+    loopEngine: engineAwayDuringOutage(engine, simulatedRedisOutage, awayEngineCalls),
+    recordingLogger,
+    simulatedRedisOutage,
+  });
+  await vi.advanceTimersByTimeAsync(0);
+  simulatedRedisOutage.startOutage();
+  handlerGate.release(1);
+  return { ...scenario, handlerGate };
+}
+
+test("during an outage no attempt fails, nothing is handed back, and no line but the connection pair is written", async () => {
+  const { engine, lines, simulatedRedisOutage } = await scenarioOfAnOutageWhileAStepRuns("rejected");
+  await vi.advanceTimersByTimeAsync(30_000);
+  const linesDuringTheOutage = [...lines];
+
+  simulatedRedisOutage.endOutage();
+  await vi.advanceTimersByTimeAsync(1_000);
+
+  expect(messagesOf(linesDuringTheOutage)).toEqual(["attempt started", "connection error"]);
+  expect(messagesOf(lines)).toEqual(["attempt started", "connection error", "connection restored", "run completed"]);
+  expect(requestsOf<SettleRequest>(engine, "settle").map(({ outcome }) => outcome.kind)).toEqual(["complete"]);
+});
+
+test("a handler step waiting on an outage is aborted by the local stop, sends no settle, and leaves no rejection unhandled", async () => {
+  let scenario: OutageScenario | undefined;
+  let linesBeforeTheOutageEnds: string[] = [];
+  const unhandledRejections = await unhandledRejectionsDuring(async () => {
+    scenario = await scenarioOfAnOutageWhileAStepRuns("pending until the outage ends");
+    await vi.advanceTimersByTimeAsync(2 * MINUTE_IN_MILLISECONDS);
+    linesBeforeTheOutageEnds = messagesOf(scenario.lines);
+    scenario.simulatedRedisOutage.endOutage();
+    await vi.advanceTimersByTimeAsync(0);
+  });
+
+  expect(linesBeforeTheOutageEnds).toEqual(["attempt started", "connection error", "attempt aborted: lock lost"]);
+  expect(requestsOf(scenario!.engine, "settle")).toEqual([]);
+  expect(unhandledRejections).toEqual([]);
+});
+
+test("an out-of-memory reply lasting several ticks, with answered reads in between, writes one connection pair", async () => {
+  const engine = createInMemoryEngine();
+  let isOutOfMemory = true;
+  const outOfMemory = { kind: "failed", error: OUT_OF_MEMORY_REPLY } as const;
+  const tickRefusedWhileOutOfMemory: WorkerLoopEngine["tick"] = async (request) =>
+    isOutOfMemory
+      ? { promote: outOfMemory, renewals: outOfMemory, taskNames: { kind: "replied", reply: [] }, prune: undefined }
+      : engine.tick(request);
+  const fetchRefusedWhileOutOfMemory: WorkerLoopEngine["fetch"] = async (request) =>
+    isOutOfMemory ? Promise.reject(OUT_OF_MEMORY_REPLY) : engine.fetch(request);
+  const { lines } = startedLoopOf([], {
+    engine,
+    loopEngine: { ...engine, tick: tickRefusedWhileOutOfMemory, fetch: fetchRefusedWhileOutOfMemory },
+  });
+  await vi.advanceTimersByTimeAsync(5_000);
+
+  isOutOfMemory = false;
+  await vi.advanceTimersByTimeAsync(3_000);
+
+  expect(messagesOf(lines)).toEqual(["connection error", "connection restored"]);
+  expect(lines[0]?.fields).toEqual({ err: OUT_OF_MEMORY_REPLY });
+});
+
+test("stopFetching and stopTicking resolve while Redis is away", async () => {
+  const engine = createInMemoryEngine();
+  const recordingLogger = createRecordingLogger();
+  const simulatedRedisOutage = createSimulatedRedisOutage(recordingLogger.logger);
+  simulatedRedisOutage.startOutage();
+  const { loop } = startedLoopOf([], {
+    engine,
+    loopEngine: engineAwayDuringOutage(engine, simulatedRedisOutage, "pending until the outage ends"),
+    recordingLogger,
+    simulatedRedisOutage,
+  });
+  await vi.advanceTimersByTimeAsync(3_000);
+  const stoppedParts: string[] = [];
+
+  void loop.stopFetching().then(() => stoppedParts.push("fetching"));
+  void loop.stopTicking().then(() => stoppedParts.push("ticking"));
+  await vi.advanceTimersByTimeAsync(0);
+
+  expect(stoppedParts.sort()).toEqual(["fetching", "ticking"]);
+  expect(messagesOf(recordingLogger.lines)).toEqual(["connection error"]);
+  simulatedRedisOutage.endOutage();
+});
+
+test("stopFetching ends a pass-over wait at once", async () => {
+  const engine = createInMemoryEngine();
+  const { loop } = startedLoopOf([], {
+    engine,
+    loopEngine: { ...engine, fetch: async () => ({ kind: "unknownVersion", recordVersion: 2 }) },
+  });
+  await vi.advanceTimersByTimeAsync(0);
+  let isStopped = false;
+
+  void loop.stopFetching().then(() => {
+    isStopped = true;
+  });
+  await vi.advanceTimersByTimeAsync(0);
+
+  expect(isStopped).toBe(true);
+});
+
+test("stopTicking ends a third stall's settle still in flight, and writes no line for it", async () => {
+  const sendEmail = defineTask("send-email", { schema: v.object({}), handler: async () => undefined });
+  const engine = createInMemoryEngine();
+  await engine.enqueue({ runs: runsOf("send-email", 1) });
+  await expireTheLockOfAFetchedRun(engine, 2);
+  const heldSettles = engine.holdCalls("settle");
+  const { loop, lines } = startedLoopOf([sendEmail] as AnyTaskDefinition[], { engine });
+  await vi.advanceTimersByTimeAsync(1_000);
+  let isStopped = false;
+
+  void loop.stopTicking().then(() => {
+    isStopped = true;
+  });
+  await vi.advanceTimersByTimeAsync(0);
+
+  expect(isStopped).toBe(true);
+  expect(requestsOf(engine, "settle")).toHaveLength(1);
+  expect(lines).toEqual([]);
+  heldSettles.release();
+});
+
+async function scenarioOfAFetchAnsweredAfterAnOutageOf(outageInMilliseconds: number): Promise<LoopScenario> {
+  const engine = createInMemoryEngine();
+  await engine.enqueue({ runs: runsOf("send-email", 1) });
+  engine.holdCalls("tick");
+  const recordingLogger = createRecordingLogger();
+  const simulatedRedisOutage = createSimulatedRedisOutage(recordingLogger.logger);
+  simulatedRedisOutage.startOutage();
+  const scenario = startedLoopOf([abortableTaskOf("send-email")], {
+    engine,
+    loopEngine: engineAwayDuringOutage(engine, simulatedRedisOutage, "rejected"),
+    recordingLogger,
+    simulatedRedisOutage,
+  });
+  await vi.advanceTimersByTimeAsync(outageInMilliseconds);
+  simulatedRedisOutage.endOutage();
+  await vi.advanceTimersByTimeAsync(0);
+  return scenario;
+}
+
+test("a fetch answered after a resend within the lock duration starts its attempts with the lock deadline of its first send", async () => {
+  const { lines } = await scenarioOfAFetchAnsweredAfterAnOutageOf(30_000);
+
+  await vi.advanceTimersByTimeAsync(2 * MINUTE_IN_MILLISECONDS - 30_000 - 1);
+  const linesBeforeTheFirstSendDeadline = messagesOf(lines);
+  await vi.advanceTimersByTimeAsync(1);
+
+  expect(linesBeforeTheFirstSendDeadline).toEqual(["connection error", "connection restored", "attempt started"]);
+  expect(linesWithMessage(lines, "attempt aborted: lock lost")).toEqual([LOCK_LOST_ABORT_LINE]);
+});
+
+test("a fetch answered past its first send time plus the lock duration starts no attempt", async () => {
+  const { engine, lines } = await scenarioOfAFetchAnsweredAfterAnOutageOf(2 * MINUTE_IN_MILLISECONDS + 1_000);
+
+  expect(messagesOf(lines)).toEqual(["connection error", "connection restored"]);
+  expect(engine.storedRunOf("send-email-1")?.state).toBe("executing");
+});
+
+test("an unreadable reply is logged once as worker error, and the loop goes on at its next cue", async () => {
+  const sendEmail = defineTask("send-email", { schema: v.object({}), handler: async () => undefined });
+  const engine = createInMemoryEngine();
+  await engine.enqueue({ runs: runsOf("send-email", 1) });
+  const unreadableReply = new Error('The fetch script sent a reply the engine cannot read: ["fetched"]');
+  let fetchCount = 0;
+  const fetchUnreadableOnce: WorkerLoopEngine["fetch"] = async (request) => {
+    fetchCount += 1;
+    return fetchCount === 1 ? Promise.reject(unreadableReply) : engine.fetch(request);
+  };
+  const { lines } = startedLoopOf([sendEmail] as AnyTaskDefinition[], {
+    engine,
+    loopEngine: { ...engine, fetch: fetchUnreadableOnce },
+  });
+
+  await vi.advanceTimersByTimeAsync(1_000);
+
+  expect(linesWithMessage(lines, "worker error")).toEqual([
+    { level: "error", message: "worker error", fields: { err: unreadableReply } },
+  ]);
+  expect(engine.storedRunOf("send-email-1")?.state).toBe("completed");
 });

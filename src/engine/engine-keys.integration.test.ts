@@ -66,16 +66,16 @@ for (const [caseName, sample] of Object.entries(SAMPLE_SEGMENTS_BY_CASE)) {
       ];
 
       const keysBuiltByLua = await withRedis(redisUrl, (redis) =>
-        redis.eval(
-          KEYS_BUILT_BY_THE_LUA_LIBRARY,
-          0,
-          hashTaggedPrefixOf(keyPrefix),
-          storedRunIdOf(sample.task, sample.runId),
-          sample.task,
-          sample.concurrencyKey,
-          sample.eventName,
-          sample.lockToken,
-        ),
+        redis.eval(KEYS_BUILT_BY_THE_LUA_LIBRARY, {
+          arguments: [
+            hashTaggedPrefixOf(keyPrefix),
+            storedRunIdOf(sample.task, sample.runId),
+            sample.task,
+            sample.concurrencyKey,
+            sample.eventName,
+            sample.lockToken,
+          ],
+        }),
       );
 
       expect(keysBuiltByLua).toEqual(expectedKeys);

@@ -32,21 +32,21 @@ async function endRunsOfANewerRecordVersionBefore(
   const { engine, redis, keys } = context;
   await endRuns(engine, "send-email", [...newerVersionRunIds, ...runIds], "complete");
   for (const runId of newerVersionRunIds) {
-    await redis.hset(keys.runRecord("send-email", runId), "version", RECORD_VERSION + 1);
+    await redis.hSet(keys.runRecord("send-email", runId), "version", RECORD_VERSION + 1);
   }
 }
 
 async function storedKeyCountOf({ redis, keys }: EngineTestContext, runId: RunId): Promise<number> {
-  return redis.exists(
+  return redis.exists([
     keys.runRecord("send-email", runId),
     keys.runPayload("send-email", runId),
     keys.runErrors("send-email", runId),
     keys.runSteps("send-email", runId),
-  );
+  ]);
 }
 
 async function completedRunIdsOf({ redis, keys }: EngineTestContext): Promise<string[]> {
-  return redis.zrange(keys.runIndex("send-email", "completed"), 0, -1);
+  return redis.zRange(keys.runIndex("send-email", "completed"), 0, -1);
 }
 
 engineTest(
@@ -93,7 +93,7 @@ engineTest(
     expect(storedKeyCountBefore).toBe(4);
     expect(reply).toEqual({ kind: "pruned", prunedRunCount: 1 });
     expect(await storedKeyCountOf(context, "run-1")).toBe(0);
-    expect(await redis.zscore(keys.runIndex("send-email", "failed"), storedRunIdOf("send-email", "run-1"))).toBeNull();
+    expect(await redis.zScore(keys.runIndex("send-email", "failed"), storedRunIdOf("send-email", "run-1"))).toBeNull();
   },
 );
 
@@ -132,20 +132,26 @@ engineTest(
     const dedupKey = keys.runDedup("send-email");
     const expiredEntryCount = EXPIRED_DEDUP_ENTRIES_TRIMMED_PER_PRUNE + 50;
     const liveExpiresAt = (await serverInstantInMillisecondsOf(redis)) + DAY_IN_MILLISECONDS;
-    await redis.zadd(
+    await redis.zAdd(
       dedupKey,
-      ...runIdsOf("expired-run", expiredEntryCount).flatMap((runId) => [1, storedRunIdOf("send-email", runId)]),
+      runIdsOf("expired-run", expiredEntryCount).map((runId) => ({
+        score: 1,
+        value: storedRunIdOf("send-email", runId),
+      })),
     );
-    await redis.zadd(dedupKey, liveExpiresAt, storedRunIdOf("send-email", "live-run"));
-    await redis.zadd(keys.runDedup("resize-image"), 1, storedRunIdOf("resize-image", "other-task-run"));
+    await redis.zAdd(dedupKey, { score: liveExpiresAt, value: storedRunIdOf("send-email", "live-run") });
+    await redis.zAdd(keys.runDedup("resize-image"), {
+      score: 1,
+      value: storedRunIdOf("resize-image", "other-task-run"),
+    });
 
     await engine.prune(SEND_EMAIL_PRUNE_REQUEST);
-    const entryCountAfterTheFirstPrune = await redis.zcard(dedupKey);
+    const entryCountAfterTheFirstPrune = await redis.zCard(dedupKey);
     await engine.prune(SEND_EMAIL_PRUNE_REQUEST);
 
     expect(entryCountAfterTheFirstPrune).toBe(expiredEntryCount + 1 - EXPIRED_DEDUP_ENTRIES_TRIMMED_PER_PRUNE);
-    expect(await redis.zrange(dedupKey, 0, -1)).toEqual([storedRunIdOf("send-email", "live-run")]);
-    expect(await redis.zcard(keys.runDedup("resize-image"))).toBe(1);
+    expect(await redis.zRange(dedupKey, 0, -1)).toEqual([storedRunIdOf("send-email", "live-run")]);
+    expect(await redis.zCard(keys.runDedup("resize-image"))).toBe(1);
   },
 );
 
@@ -167,9 +173,10 @@ engineTest(
       newerVersionRunIds.map((runId) => storedRunIdOf("send-email", runId)),
     );
     for (const runId of newerVersionRunIds) {
-      expect(await redis.exists(keys.runRecord("send-email", runId), keys.runPayload("send-email", runId)), runId).toBe(
-        2,
-      );
+      expect(
+        await redis.exists([keys.runRecord("send-email", runId), keys.runPayload("send-email", runId)]),
+        runId,
+      ).toBe(2);
     }
   },
 );

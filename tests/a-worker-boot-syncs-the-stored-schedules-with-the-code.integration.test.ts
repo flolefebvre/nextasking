@@ -60,16 +60,16 @@ integrationTest(
       await firstReleaseNextasking.startWorker();
       await closeNextaskingAndCheckItsDuration(firstReleaseNextasking);
       await withRedis(redisUrl, async (redis) => {
-        await redis.hset(keys.schedule("purge-expired-sessions"), "nextFiringAt", LEFT_UNTOUCHED_INSTANT, "retries", 2);
-        await redis.zadd(keys.schedules, LEFT_UNTOUCHED_INSTANT, "purge-expired-sessions");
-        await redis.hset(keys.schedule("compact-logs"), {
+        await redis.hSet(keys.schedule("purge-expired-sessions"), { nextFiringAt: LEFT_UNTOUCHED_INSTANT, retries: 2 });
+        await redis.zAdd(keys.schedules, { score: LEFT_UNTOUCHED_INSTANT, value: "purge-expired-sessions" });
+        await redis.hSet(keys.schedule("compact-logs"), {
           version: RECORD_VERSION,
           cron: "0 4 * * *",
           timezone: "Europe/Paris",
           nextFiringAt: LEFT_UNTOUCHED_INSTANT,
           retries: 5,
         });
-        await redis.zadd(keys.schedules, LEFT_UNTOUCHED_INSTANT, "compact-logs");
+        await redis.zAdd(keys.schedules, { score: LEFT_UNTOUCHED_INSTANT, value: "compact-logs" });
       });
       await secondReleaseNextasking.startWorker();
 

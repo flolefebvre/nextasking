@@ -26,7 +26,7 @@ async function savedSleepStepOf(context: EngineTestContext, lockedRun: LockedRun
 engineTest("a value step saved with the current token is stored verbatim and resets stalls", async (context) => {
   const { engine, redis, keys } = context;
   const { task, runId, lockToken } = await lockedRunOf(context);
-  await redis.hset(keys.runRecord(task, runId), "stalls", 2);
+  await redis.hSet(keys.runRecord(task, runId), "stalls", 2);
 
   const reply = await engine.saveStep({
     task,
@@ -37,8 +37,8 @@ engineTest("a value step saved with the current token is stored verbatim and res
   });
 
   expect(reply).toEqual({ kind: "saved", resumesAt: undefined });
-  expect(await redis.hgetall(keys.runSteps(task, runId))).toEqual({ "charge-card": '{"chargeId":"ch-1"}' });
-  expect(await redis.hget(keys.runRecord(task, runId), "stalls")).toBe("0");
+  expect(await redis.hGetAll(keys.runSteps(task, runId))).toEqual({ "charge-card": '{"chargeId":"ch-1"}' });
+  expect(await redis.hGet(keys.runRecord(task, runId), "stalls")).toBe("0");
 });
 
 engineTest("a sleep step is saved with its resume instant, the server's TIME plus the duration", async (context) => {
@@ -51,7 +51,7 @@ engineTest("a sleep step is saved with its resume instant, the server's TIME plu
     const resumesAt = reply.kind === "saved" ? Number(reply.resumesAt) : Number.NaN;
     expect(resumesAt).toBeGreaterThanOrEqual(instantBefore + 60_000);
     expect(resumesAt).toBeLessThanOrEqual(instantAfter + 60_000);
-    expect(await redis.hget(keys.runSteps("send-email", "run-1"), "wait-a-minute")).toBe(String(resumesAt));
+    expect(await redis.hGet(keys.runSteps("send-email", "run-1"), "wait-a-minute")).toBe(String(resumesAt));
   } finally {
     vi.useRealTimers();
   }
@@ -63,7 +63,7 @@ engineTest(
     const { engine, redis, keys, keyPrefix } = context;
     const lockedRun = await lockedRunOf(context);
     const { reply: firstReply } = await savedSleepStepOf(context, lockedRun, ONE_MINUTE_SLEEP);
-    await redis.hset(keys.runRecord("send-email", "run-1"), "stalls", 1);
+    await redis.hSet(keys.runRecord("send-email", "run-1"), "stalls", 1);
     const storedValuesBefore = await storedValuesByKeyOf(redis, keyPrefix);
 
     const secondReply = await engine.saveStep({
@@ -84,7 +84,7 @@ engineTest("a sleepUntil step is saved with the instant it was sent", async (con
   const { reply } = await savedSleepStepOf(context, lockedRun, { kind: "sleepUntil", resumesAt: NEW_YEAR_2030 });
 
   expect(reply).toEqual({ kind: "saved", resumesAt: NEW_YEAR_2030, isDue: false });
-  expect(await redis.hget(keys.runSteps("send-email", "run-1"), "wait-a-minute")).toBe(String(NEW_YEAR_2030));
+  expect(await redis.hGet(keys.runSteps("send-email", "run-1"), "wait-a-minute")).toBe(String(NEW_YEAR_2030));
 });
 
 engineTest("a sleep tells whether it is due by the server's TIME", async (context) => {
@@ -95,7 +95,7 @@ engineTest("a sleep tells whether it is due by the server's TIME", async (contex
 
     const pastSleepUntil = await sleepOf("wait-for-1970", { kind: "sleepUntil", resumesAt: 1000 });
     const oneDaySleep = await sleepOf("wait-a-day", { kind: "sleep", durationInMilliseconds: 86_400_000 });
-    await context.redis.hset(context.keys.runSteps("send-email", "run-1"), "wait-a-day", 1000);
+    await context.redis.hSet(context.keys.runSteps("send-email", "run-1"), "wait-a-day", 1000);
     const reachedAgainOnceDue = await sleepOf("wait-a-day", { kind: "sleep", durationInMilliseconds: 86_400_000 });
 
     expect(pastSleepUntil).toEqual({ kind: "saved", resumesAt: 1000, isDue: true });
@@ -110,7 +110,7 @@ engineTest("a value step saved twice keeps the first value and writes nothing th
   const { engine, redis, keys, keyPrefix } = context;
   const lockedRun = await lockedRunOf(context);
   await engine.saveStep({ ...lockedRun, stepId: "charge-card", step: { kind: "value", value: '"first"' } });
-  await redis.hset(keys.runRecord("send-email", "run-1"), "stalls", 1);
+  await redis.hSet(keys.runRecord("send-email", "run-1"), "stalls", 1);
   const storedValuesBefore = await storedValuesByKeyOf(redis, keyPrefix);
 
   const reply = await engine.saveStep({
@@ -153,8 +153,8 @@ for (const staleness of ["another token", "an ended lock", "a missing run"] as c
   engineTest(`a save or read with ${staleness} replies stale and writes nothing`, async (context) => {
     const { engine, redis, keys, keyPrefix } = context;
     const staleLock = await staleLockOf(context, staleness);
-    await redis.hset(keys.runSteps("send-email", "run-1"), "charge-card", '"charged"');
-    await redis.hset(keys.runRecord("send-email", "run-1"), "stalls", 1);
+    await redis.hSet(keys.runSteps("send-email", "run-1"), "charge-card", '"charged"');
+    await redis.hSet(keys.runRecord("send-email", "run-1"), "stalls", 1);
     const storedValuesBefore = await storedValuesByKeyOf(redis, keyPrefix);
 
     const saveReply = await engine.saveStep({
@@ -175,7 +175,7 @@ engineTest(
   async (context) => {
     const { engine, redis, keys, keyPrefix } = context;
     const lockedRun = await lockedRunOf(context);
-    await redis.hset(keys.runRecord("send-email", "run-1"), "version", 2);
+    await redis.hSet(keys.runRecord("send-email", "run-1"), "version", 2);
     const storedValuesBefore = await storedValuesByKeyOf(redis, keyPrefix);
 
     const saveReply = await engine.saveStep({ ...lockedRun, stepId: "wait-a-minute", step: ONE_MINUTE_SLEEP });
@@ -209,5 +209,5 @@ engineTest("a completed run has no steps and a failed run keeps them", async (co
   });
 
   expect(await redis.exists(keys.runSteps(completedRun!.task, completedRun!.runId))).toBe(0);
-  expect(await redis.hgetall(keys.runSteps(failedRun!.task, failedRun!.runId))).toEqual({ "charge-card": '"charged"' });
+  expect(await redis.hGetAll(keys.runSteps(failedRun!.task, failedRun!.runId))).toEqual({ "charge-card": '"charged"' });
 });

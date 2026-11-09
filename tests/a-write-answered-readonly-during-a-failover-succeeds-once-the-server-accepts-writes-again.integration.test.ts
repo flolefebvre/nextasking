@@ -24,8 +24,10 @@ integrationTest.skipIf(providedRedisUrl() !== undefined)(
     try {
       await withRedis(ownServer.url, async (admin) => {
         await nextasking.dispatch("send-welcome-email", { email: "ada@example.com" }, { runId: "welcome-ada" });
-        await admin.call("REPLICAOF", "127.0.0.1", UNREACHABLE_PRIMARY_PORT);
-        const promotedAgain = sleep(READ_ONLY_STRETCH_IN_MILLISECONDS).then(() => admin.call("REPLICAOF", "NO", "ONE"));
+        await admin.sendCommand(["REPLICAOF", "127.0.0.1", UNREACHABLE_PRIMARY_PORT]);
+        const promotedAgain = sleep(READ_ONLY_STRETCH_IN_MILLISECONDS).then(() =>
+          admin.sendCommand(["REPLICAOF", "NO", "ONE"]),
+        );
 
         const dispatched = await nextasking.dispatch(
           "send-welcome-email",

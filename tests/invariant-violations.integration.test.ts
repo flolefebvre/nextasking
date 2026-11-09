@@ -19,7 +19,7 @@ function ghostRunViolationOf(keyPrefix: string): string {
 }
 
 async function writeGhostRun(redisUrl: string, keyPrefix: string): Promise<void> {
-  await withRedis(redisUrl, (redis) => redis.zadd(engineKeysOf(keyPrefix).pending, 7, GHOST_RUN));
+  await withRedis(redisUrl, (redis) => redis.zAdd(engineKeysOf(keyPrefix).pending, { score: 7, value: GHOST_RUN }));
 }
 
 function runLeftExecutingViolation(): string {
@@ -37,17 +37,17 @@ async function writeRunExecutingUnderALiveLock(
     const lockedUntil = (await serverInstantInMillisecondsOf(redis)) + 60_000;
     await redis
       .multi()
-      .sadd(keys.tasks, "rebuild-index")
-      .hset(keys.runRecord("rebuild-index", "executing-run"), {
+      .sAdd(keys.tasks, "rebuild-index")
+      .hSet(keys.runRecord("rebuild-index", "executing-run"), {
         state: "executing",
         task: "rebuild-index",
         startedAt: 3000,
         lockedUntil,
         lockToken,
       })
-      .zadd(keys.locks, lockedUntil, executingRun)
-      .zadd(keys.runIndex("rebuild-index", "executing"), 3000, executingRun)
-      .sadd(keys.slotSet("rebuild-index", undefined), executingRun)
+      .zAdd(keys.locks, { score: lockedUntil, value: executingRun })
+      .zAdd(keys.runIndex("rebuild-index", "executing"), { score: 3000, value: executingRun })
+      .sAdd(keys.slotSet("rebuild-index", undefined), executingRun)
       .exec();
   });
 }
@@ -59,7 +59,7 @@ integrationTest(
 
     onTestFinished(() =>
       withRedis(redisUrl, async (redis) => {
-        await redis.zrem(engineKeysOf(keyPrefix).pending, GHOST_RUN);
+        await redis.zRem(engineKeysOf(keyPrefix).pending, GHOST_RUN);
       }),
     );
   },

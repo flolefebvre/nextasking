@@ -18,7 +18,7 @@ async function storedNightlyReportOf({ engine, redis, keys }: EngineTestContext)
       { task: "build-report", cron: "0 3 * * *", timezone: "UTC", nextFiringAt: NEXT_FIRING_AT, retries: 4 },
     ],
   });
-  await redis.hset(keys.schedule("build-report"), "previousFiringAt", PREVIOUS_FIRING_AT);
+  await redis.hSet(keys.schedule("build-report"), "previousFiringAt", PREVIOUS_FIRING_AT);
 }
 
 async function firingNowOf({ redis }: EngineTestContext, task = "build-report"): Promise<FireNowRequest> {
@@ -31,8 +31,8 @@ engineTest(
   async (context) => {
     const { engine, redis, keys } = context;
     await storedNightlyReportOf(context);
-    const scheduleBefore = await redis.hgetall(keys.schedule("build-report"));
-    const schedulesBefore = await redis.zrange(keys.schedules, 0, -1, "WITHSCORES");
+    const scheduleBefore = await redis.hGetAll(keys.schedule("build-report"));
+    const schedulesBefore = await redis.zRangeWithScores(keys.schedules, 0, -1);
     const firing = await firingNowOf(context);
 
     const reply = await engine.fireNow(firing);
@@ -46,20 +46,20 @@ engineTest(
       retries: 4,
       scheduledAt: firing.instant,
     });
-    expect(await redis.hgetall(keys.schedule("build-report"))).toEqual(scheduleBefore);
-    expect(await redis.zrange(keys.schedules, 0, -1, "WITHSCORES")).toEqual(schedulesBefore);
+    expect(await redis.hGetAll(keys.schedule("build-report"))).toEqual(scheduleBefore);
+    expect(await redis.zRangeWithScores(keys.schedules, 0, -1)).toEqual(schedulesBefore);
   },
 );
 
 engineTest("a firing now of a schedule stored without retries uses the default retries", async (context) => {
   const { engine, redis, keys } = context;
   await storedNightlyReportOf(context);
-  await redis.hdel(keys.schedule("build-report"), "retries");
+  await redis.hDel(keys.schedule("build-report"), "retries");
   const firing = await firingNowOf(context);
 
   await engine.fireNow(firing);
 
-  expect(await redis.hget(keys.runRecord("build-report", firing.runId), "retries")).toBe("5");
+  expect(await redis.hGet(keys.runRecord("build-report", firing.runId), "retries")).toBe("5");
 });
 
 engineTest("a firing now whose run id already exists creates no second run", async (context) => {
@@ -71,7 +71,7 @@ engineTest("a firing now whose run id already exists creates no second run", asy
   const reply = await engine.fireNow(firing);
 
   expect(reply).toEqual({ kind: "fired", runId: firing.runId, isRunCreated: false });
-  expect(await redis.zrange(keys.pending, 0, -1)).toEqual([storedRunIdOf("build-report", firing.runId)]);
+  expect(await redis.zRange(keys.pending, 0, -1)).toEqual([storedRunIdOf("build-report", firing.runId)]);
 });
 
 engineTest("a firing now of a task with no schedule record replies noSchedule and writes nothing", async (context) => {
@@ -90,7 +90,7 @@ engineTest(
   async (context) => {
     const { engine, redis, keys, keyPrefix } = context;
     await storedNightlyReportOf(context);
-    await redis.hset(keys.schedule("build-report"), "version", RECORD_VERSION + 1);
+    await redis.hSet(keys.schedule("build-report"), "version", RECORD_VERSION + 1);
     const storedValuesBefore = await storedValuesByKeyOf(redis, keyPrefix);
 
     const reply = await engine.fireNow(await firingNowOf(context));

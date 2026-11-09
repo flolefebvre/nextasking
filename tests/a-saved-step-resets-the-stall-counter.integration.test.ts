@@ -17,8 +17,8 @@ integrationTest(
       schema: z.object({ calendarId: z.string() }),
       handler: async ({ step, runId }) => {
         const recordKey = engineKeysOf(keyPrefix).runRecord("sync-calendar", runId);
-        await withRedis(redisUrl, (redis) => redis.hset(recordKey, "stalls", 2));
-        stallCountsBeforeEachStep.push(await withRedis(redisUrl, (redis) => redis.hget(recordKey, "stalls")));
+        await withRedis(redisUrl, (redis) => redis.hSet(recordKey, "stalls", 2));
+        stallCountsBeforeEachStep.push(await withRedis(redisUrl, (redis) => redis.hGet(recordKey, "stalls")));
         await step.run("fetch-events", () => [{ eventId: "event-1" }]);
       },
     });
@@ -34,7 +34,7 @@ integrationTest(
       const { runId } = await nextasking.dispatch("sync-calendar", { calendarId: "calendar-1" });
       await waitForLogMessage(lines, "run completed");
       const stallCountAfterTheStep = await withRedis(redisUrl, (redis) =>
-        redis.hget(engineKeysOf(keyPrefix).runRecord("sync-calendar", runId), "stalls"),
+        redis.hGet(engineKeysOf(keyPrefix).runRecord("sync-calendar", runId), "stalls"),
       );
 
       expect(stallCountsBeforeEachStep).toEqual(["2"]);

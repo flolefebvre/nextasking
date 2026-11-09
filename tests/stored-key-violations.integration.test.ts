@@ -1,4 +1,3 @@
-import type { Redis } from "ioredis";
 import { expect } from "vitest";
 
 import { engineKeysOf, storedRunIdOf } from "../src/engine/engine-keys.js";
@@ -7,6 +6,7 @@ import { integrationTest } from "./integration-test.js";
 import { serverInstantInMillisecondsOf } from "./server-instant.js";
 import { runsLeftExecutingIn, storedKeysSnapshotOf, storedKeyViolationsOf } from "./stored-key-violations.js";
 import { withRedis } from "./with-redis.js";
+import type { TestClient } from "./with-redis.js";
 
 const PENDING_RUN = storedRunIdOf("send-email", "pending-run");
 const DELAYED_RUN = storedRunIdOf("send-email", "delayed-run");
@@ -18,41 +18,41 @@ const GHOST_RUN = storedRunIdOf("send-email", "ghost-run");
 const LAPSED_LOCK_INSTANT = 9000;
 
 async function writeConsistentRuns(
-  redis: Redis,
+  redis: TestClient,
   keys: EngineKeys,
   { lockedUntil = LAPSED_LOCK_INSTANT }: { lockedUntil?: number } = {},
 ): Promise<void> {
   await redis
     .multi()
-    .sadd(keys.tasks, "send-email", "rebuild-index")
-    .hset(keys.runRecord("send-email", "pending-run"), { state: "pending", task: "send-email", order: 1 })
-    .zadd(keys.pending, 1, PENDING_RUN)
-    .zadd(keys.runIndex("send-email", "pending"), 1, PENDING_RUN)
-    .hset(keys.runRecord("send-email", "delayed-run"), { state: "delayed", task: "send-email", startsAt: 5000 })
-    .zadd(keys.due, 5000, DELAYED_RUN)
-    .zadd(keys.runIndex("send-email", "delayed"), 5000, DELAYED_RUN)
-    .hset(keys.runRecord("rebuild-index", "executing-run"), {
+    .sAdd(keys.tasks, ["send-email", "rebuild-index"])
+    .hSet(keys.runRecord("send-email", "pending-run"), { state: "pending", task: "send-email", order: 1 })
+    .zAdd(keys.pending, { score: 1, value: PENDING_RUN })
+    .zAdd(keys.runIndex("send-email", "pending"), { score: 1, value: PENDING_RUN })
+    .hSet(keys.runRecord("send-email", "delayed-run"), { state: "delayed", task: "send-email", startsAt: 5000 })
+    .zAdd(keys.due, { score: 5000, value: DELAYED_RUN })
+    .zAdd(keys.runIndex("send-email", "delayed"), { score: 5000, value: DELAYED_RUN })
+    .hSet(keys.runRecord("rebuild-index", "executing-run"), {
       state: "executing",
       task: "rebuild-index",
       concurrencyKey: "account-7",
       startedAt: 3000,
       lockedUntil,
     })
-    .zadd(keys.locks, lockedUntil, EXECUTING_RUN)
-    .zadd(keys.runIndex("rebuild-index", "executing"), 3000, EXECUTING_RUN)
-    .sadd(keys.slotSet("rebuild-index", "account-7"), EXECUTING_RUN)
-    .hset(keys.runRecord("rebuild-index", "parked-run"), {
+    .zAdd(keys.locks, { score: lockedUntil, value: EXECUTING_RUN })
+    .zAdd(keys.runIndex("rebuild-index", "executing"), { score: 3000, value: EXECUTING_RUN })
+    .sAdd(keys.slotSet("rebuild-index", "account-7"), EXECUTING_RUN)
+    .hSet(keys.runRecord("rebuild-index", "parked-run"), {
       state: "waitingForConcurrencySlot",
       task: "rebuild-index",
       concurrencyKey: "account-7",
       order: 2,
     })
-    .zadd(keys.waitingList("rebuild-index", "account-7"), 2, PARKED_RUN)
-    .zadd(keys.runIndex("rebuild-index", "waitingForConcurrencySlot"), 2, PARKED_RUN)
-    .hset(keys.runRecord("send-email", "completed-run"), { state: "completed", task: "send-email", finishedAt: 4000 })
-    .zadd(keys.runIndex("send-email", "completed"), 4000, COMPLETED_RUN)
-    .hset(keys.schedule("rebuild-index"), { nextFiringAt: 60000 })
-    .zadd(keys.schedules, 60000, "rebuild-index")
+    .zAdd(keys.waitingList("rebuild-index", "account-7"), { score: 2, value: PARKED_RUN })
+    .zAdd(keys.runIndex("rebuild-index", "waitingForConcurrencySlot"), { score: 2, value: PARKED_RUN })
+    .hSet(keys.runRecord("send-email", "completed-run"), { state: "completed", task: "send-email", finishedAt: 4000 })
+    .zAdd(keys.runIndex("send-email", "completed"), { score: 4000, value: COMPLETED_RUN })
+    .hSet(keys.schedule("rebuild-index"), { nextFiringAt: 60000 })
+    .zAdd(keys.schedules, { score: 60000, value: "rebuild-index" })
     .exec();
 }
 
@@ -68,76 +68,77 @@ integrationTest("records and indexes that agree pass the invariant checker", asy
 
 const CORRUPTIONS: {
   name: string;
-  corrupt: (redis: Redis, keys: EngineKeys) => Promise<unknown>;
+  corrupt: (redis: TestClient, keys: EngineKeys) => Promise<unknown>;
   expectedViolationsOf: (keys: EngineKeys) => string[];
 }[] = [
   {
     name: "an index member without a record",
-    corrupt: (redis, keys) => redis.zadd(keys.pending, 7, GHOST_RUN),
+    corrupt: (redis, keys) => redis.zAdd(keys.pending, { score: 7, value: GHOST_RUN }),
     expectedViolationsOf: (keys) => [`run "${GHOST_RUN}" sits in ${keys.pending} but has no record with a known state`],
   },
   {
     name: "a read index score that disagrees with the record",
-    corrupt: (redis, keys) => redis.zadd(keys.runIndex("send-email", "pending"), 99, PENDING_RUN),
+    corrupt: (redis, keys) => redis.zAdd(keys.runIndex("send-email", "pending"), { score: 99, value: PENDING_RUN }),
     expectedViolationsOf: (keys) => [
       `run "${PENDING_RUN}" has score 99 in ${keys.runIndex("send-email", "pending")} but 1 in its record`,
     ],
   },
   {
     name: "an engine structure score that disagrees with the record",
-    corrupt: (redis, keys) => redis.zadd(keys.locks, 1, EXECUTING_RUN),
+    corrupt: (redis, keys) => redis.zAdd(keys.locks, { score: 1, value: EXECUTING_RUN }),
     expectedViolationsOf: (keys) => [`run "${EXECUTING_RUN}" has score 1 in ${keys.locks} but 9000 in its record`],
   },
   {
     name: "a record left in the index of its former state",
-    corrupt: (redis, keys) => redis.zadd(keys.runIndex("send-email", "delayed"), 4000, COMPLETED_RUN),
+    corrupt: (redis, keys) => redis.zAdd(keys.runIndex("send-email", "delayed"), { score: 4000, value: COMPLETED_RUN }),
     expectedViolationsOf: (keys) => [
       `run "${COMPLETED_RUN}" sits in ${keys.runIndex("send-email", "delayed")} though its record is completed`,
     ],
   },
   {
     name: "a record missing from the read index of its state",
-    corrupt: (redis, keys) => redis.zrem(keys.runIndex("send-email", "delayed"), DELAYED_RUN),
+    corrupt: (redis, keys) => redis.zRem(keys.runIndex("send-email", "delayed"), DELAYED_RUN),
     expectedViolationsOf: (keys) => [
       `run "${DELAYED_RUN}" is delayed but missing from ${keys.runIndex("send-email", "delayed")}`,
     ],
   },
   {
     name: "a record missing from the engine structure of its state",
-    corrupt: (redis, keys) => redis.zrem(keys.pending, PENDING_RUN),
+    corrupt: (redis, keys) => redis.zRem(keys.pending, PENDING_RUN),
     expectedViolationsOf: (keys) => [`run "${PENDING_RUN}" is pending but missing from ${keys.pending}`],
   },
   {
     name: "a parked run in the waiting list of another key",
-    corrupt: (redis, keys) => redis.zadd(keys.waitingList("rebuild-index", "account-8"), 2, PARKED_RUN),
+    corrupt: (redis, keys) =>
+      redis.zAdd(keys.waitingList("rebuild-index", "account-8"), { score: 2, value: PARKED_RUN }),
     expectedViolationsOf: (keys) => [
       `run "${PARKED_RUN}" sits in ${keys.waitingList("rebuild-index", "account-8")} though its record is waitingForConcurrencySlot`,
     ],
   },
   {
     name: "a slot held by a run that is not executing",
-    corrupt: (redis, keys) => redis.sadd(keys.slotSet("rebuild-index", "account-7"), PARKED_RUN),
+    corrupt: (redis, keys) => redis.sAdd(keys.slotSet("rebuild-index", "account-7"), PARKED_RUN),
     expectedViolationsOf: (keys) => [
       `run "${PARKED_RUN}" holds a slot in ${keys.slotSet("rebuild-index", "account-7")} but is not an executing run of that key`,
     ],
   },
   {
     name: "a slot held in the slot set of another key",
-    corrupt: (redis, keys) => redis.sadd(keys.slotSet("rebuild-index", undefined), EXECUTING_RUN),
+    corrupt: (redis, keys) => redis.sAdd(keys.slotSet("rebuild-index", undefined), EXECUTING_RUN),
     expectedViolationsOf: (keys) => [
       `run "${EXECUTING_RUN}" holds a slot in ${keys.slotSet("rebuild-index", undefined)} but is not an executing run of that key`,
     ],
   },
   {
     name: "an executing run missing from the slot set of its key",
-    corrupt: (redis, keys) => redis.srem(keys.slotSet("rebuild-index", "account-7"), EXECUTING_RUN),
+    corrupt: (redis, keys) => redis.sRem(keys.slotSet("rebuild-index", "account-7"), EXECUTING_RUN),
     expectedViolationsOf: (keys) => [
       `run "${EXECUTING_RUN}" is executing but holds no slot in ${keys.slotSet("rebuild-index", "account-7")}`,
     ],
   },
   {
     name: "a record of a task missing from the tasks set",
-    corrupt: (redis, keys) => redis.srem(keys.tasks, "send-email"),
+    corrupt: (redis, keys) => redis.sRem(keys.tasks, "send-email"),
     expectedViolationsOf: (keys) =>
       [PENDING_RUN, DELAYED_RUN, COMPLETED_RUN].map(
         (storedRunId) => `run "${storedRunId}" is of task "send-email", missing from ${keys.tasks}`,
@@ -150,31 +151,31 @@ const CORRUPTIONS: {
   },
   {
     name: "errors left without their record",
-    corrupt: (redis, keys) => redis.rpush(keys.runErrors("send-email", "ghost-run"), "{}"),
+    corrupt: (redis, keys) => redis.rPush(keys.runErrors("send-email", "ghost-run"), "{}"),
     expectedViolationsOf: () => [`run "${GHOST_RUN}" has its errors key but no record`],
   },
   {
     name: "steps left without their record",
-    corrupt: (redis, keys) => redis.hset(keys.runSteps("send-email", "ghost-run"), "charge", "1"),
+    corrupt: (redis, keys) => redis.hSet(keys.runSteps("send-email", "ghost-run"), "charge", "1"),
     expectedViolationsOf: () => [`run "${GHOST_RUN}" has its steps key but no record`],
   },
   {
     name: "a schedule whose next firing disagrees with the schedules set",
-    corrupt: (redis, keys) => redis.zadd(keys.schedules, 1, "rebuild-index"),
+    corrupt: (redis, keys) => redis.zAdd(keys.schedules, { score: 1, value: "rebuild-index" }),
     expectedViolationsOf: (keys) => [
       `task "rebuild-index" has score 1 in ${keys.schedules} but next firing 60000 in ${keys.schedule("rebuild-index")}`,
     ],
   },
   {
     name: "a schedules member without a schedule record",
-    corrupt: (redis, keys) => redis.zadd(keys.schedules, 1, "send-email"),
+    corrupt: (redis, keys) => redis.zAdd(keys.schedules, { score: 1, value: "send-email" }),
     expectedViolationsOf: (keys) => [
       `task "send-email" has score 1 in ${keys.schedules} but next firing null in ${keys.schedule("send-email")}`,
     ],
   },
   {
     name: "a schedule record missing from the schedules set",
-    corrupt: (redis, keys) => redis.zrem(keys.schedules, "rebuild-index"),
+    corrupt: (redis, keys) => redis.zRem(keys.schedules, "rebuild-index"),
     expectedViolationsOf: (keys) => [`${keys.schedule("rebuild-index")} is missing from ${keys.schedules}`],
   },
   {

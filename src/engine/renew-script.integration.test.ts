@@ -50,9 +50,9 @@ engineTest(
       const lockedUntil = renewal?.kind === "renewed" ? renewal.lockedUntil : Number.NaN;
       expect(lockedUntil).toBeGreaterThanOrEqual(instantBefore + LOCK_DURATION_IN_MILLISECONDS);
       expect(lockedUntil).toBeLessThanOrEqual(instantAfter + LOCK_DURATION_IN_MILLISECONDS);
-      expect(await redis.hget(keys.runRecord(task, runId), "lockedUntil")).toBe(String(lockedUntil));
-      expect(Number(await redis.zscore(keys.locks, storedRunIdOf(task, runId)))).toBe(lockedUntil);
-      expect(await redis.pttl(keys.lock(lockToken))).toBeGreaterThan(SHORT_LOCK_DURATION_IN_MILLISECONDS);
+      expect(await redis.hGet(keys.runRecord(task, runId), "lockedUntil")).toBe(String(lockedUntil));
+      expect(Number(await redis.zScore(keys.locks, storedRunIdOf(task, runId)))).toBe(lockedUntil);
+      expect(await redis.pTTL(keys.lock(lockToken))).toBeGreaterThan(SHORT_LOCK_DURATION_IN_MILLISECONDS);
     }
   },
 );
@@ -62,7 +62,7 @@ engineTest(
   async (context) => {
     const { engine, redis, keys } = context;
     const [currentLock, otherLock] = await heldLocksOf(context, 2);
-    const otherRecordBefore = await redis.hgetall(keys.runRecord(otherLock!.task, otherLock!.runId));
+    const otherRecordBefore = await redis.hGetAll(keys.runRecord(otherLock!.task, otherLock!.runId));
 
     const renewals = await engine.renew({
       heldLocks: [currentLock!, { task: otherLock!.task, runId: otherLock!.runId, lockToken: "stale-token" }],
@@ -70,7 +70,7 @@ engineTest(
     });
 
     expect(renewals.map(({ kind }) => kind)).toEqual(["renewed", "stale"]);
-    expect(await redis.hgetall(keys.runRecord(otherLock!.task, otherLock!.runId))).toEqual(otherRecordBefore);
+    expect(await redis.hGetAll(keys.runRecord(otherLock!.task, otherLock!.runId))).toEqual(otherRecordBefore);
     expect(await redis.exists(keys.lock("stale-token"))).toBe(0);
   },
 );
@@ -90,7 +90,7 @@ const STALE_RENEWALS = [
     name: "a record of a newer version",
     heldLockOf: (heldLock: HeldLock) => heldLock,
     prepare: async ({ redis, keys }: EngineTestContext, { task, runId }: HeldLock) => {
-      await redis.hset(keys.runRecord(task, runId), "version", 2);
+      await redis.hSet(keys.runRecord(task, runId), "version", 2);
     },
   },
 ];

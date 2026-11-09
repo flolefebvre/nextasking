@@ -95,13 +95,10 @@ integrationTest(
       await waitForLogMessage(lines, "run failed");
       await closeNextaskingAndCheckItsDuration(worker);
       await withRedis(redisUrl, (redis) =>
-        redis.hset(
-          engineKeysOf(keyPrefix).runRecord("charge-invoice", runId),
-          "stalls",
-          2,
-          "firstFoundUnknownAt",
-          Date.now(),
-        ),
+        redis.hSet(engineKeysOf(keyPrefix).runRecord("charge-invoice", runId), {
+          stalls: 2,
+          firstFoundUnknownAt: Date.now(),
+        }),
       );
 
       await operator.replay("charge-invoice", runId);

@@ -104,7 +104,7 @@ async function settleEach(
 }
 
 async function recordFieldOf(context: EngineTestContext, task: string, runId: RunId, field: string): Promise<Date> {
-  return new Date(Number(await context.redis.hget(context.keys.runRecord(task, runId), field)));
+  return new Date(Number(await context.redis.hGet(context.keys.runRecord(task, runId), field)));
 }
 
 engineTest(
@@ -255,7 +255,7 @@ engineTest(
   async (context) => {
     const { redis, keys } = context;
     await enqueueRuns(context, [runOf("other-task-run", "build-report"), runOf("newer-run", "send-email")]);
-    await redis.hset(keys.runRecord("send-email", "newer-run"), "version", RECORD_VERSION + 1);
+    await redis.hSet(keys.runRecord("send-email", "newer-run"), "version", RECORD_VERSION + 1);
     const reader = readerOf(context);
 
     const runs = [
@@ -285,7 +285,7 @@ engineTest(
       runOf("delayed-run", "build-report", { delayInMilliseconds: 60_000 }),
       runOf("removed-task-run", "removed-task"),
     ]);
-    await redis.hset(keys.runRecord("send-email", "newer-run"), "version", RECORD_VERSION + 1);
+    await redis.hSet(keys.runRecord("send-email", "newer-run"), "version", RECORD_VERSION + 1);
     const reader = readerOf(context);
 
     const runCounts = await reader.countRuns();
@@ -296,7 +296,7 @@ engineTest(
     for (const taskName of [...TASK_NAMES, ...LISTENER_NAMES]) {
       for (const state of RUN_STATES) {
         expect(runCounts[taskName]?.[state], `${taskName} ${state}`).toBe(
-          await redis.zcard(keys.runIndex(taskName, state)),
+          await redis.zCard(keys.runIndex(taskName, state)),
         );
       }
     }
@@ -417,7 +417,7 @@ engineTest("listSchedules reads a schedule record of a newer version as no recor
   await engine.syncSchedules({
     schedulesToSync: [{ task: "build-report", cron: "0 * * * *", timezone: "UTC", nextFiringAt, retries: 0 }],
   });
-  await redis.hset(keys.schedule("build-report"), "version", RECORD_VERSION + 1);
+  await redis.hSet(keys.schedule("build-report"), "version", RECORD_VERSION + 1);
 
   const [buildReport] = await readerOf(context).listSchedules();
 
@@ -483,9 +483,8 @@ async function runIdsInPromisedOrderOf(
 ): Promise<RunId[]> {
   const indexEntries: { storedRunId: string; score: number }[] = [];
   for (const taskName of taskNames) {
-    const membersWithScores = await redis.zrange(keys.runIndex(taskName, state), 0, -1, "WITHSCORES");
-    for (let position = 0; position < membersWithScores.length; position += 2) {
-      indexEntries.push({ storedRunId: membersWithScores[position]!, score: Number(membersWithScores[position + 1]) });
+    for (const { value, score } of await redis.zRangeWithScores(keys.runIndex(taskName, state), 0, -1)) {
+      indexEntries.push({ storedRunId: value, score });
     }
   }
   const compareAsciiStoredRunIds = (left: string, right: string) => (left < right ? -1 : Number(left > right));
@@ -759,7 +758,7 @@ integrationTest(
       const { keys } = context;
       const keptRunIds = runIdsOf("kept-run", 3);
       await endRuns(context.engine, "send-email", [...keptRunIds, "newer-run"], "complete");
-      await redis.hset(keys.runRecord("send-email", "newer-run"), "version", RECORD_VERSION + 1);
+      await redis.hSet(keys.runRecord("send-email", "newer-run"), "version", RECORD_VERSION + 1);
       await enqueueRuns(context, [runOf("pending-run", "send-email")]);
       const latestScore = (await serverInstantInMillisecondsOf(redis)) + 60_000;
       const completedIndexKey = keys.runIndex("send-email", "completed");
@@ -767,7 +766,10 @@ integrationTest(
         storedRunIdOf("send-email", "ghost-run"),
         storedRunIdOf("send-email", "pending-run"),
       ];
-      await redis.zadd(completedIndexKey, latestScore, ghostStoredRunId, latestScore, pendingStoredRunId);
+      await redis.zAdd(completedIndexKey, [
+        { score: latestScore, value: ghostStoredRunId },
+        { score: latestScore, value: pendingStoredRunId },
+      ]);
       const corruptions = [
         `run "${ghostStoredRunId}" sits in ${completedIndexKey} but has no record with a known state`,
         `run "${pendingStoredRunId}" sits in ${completedIndexKey} though its record is pending`,

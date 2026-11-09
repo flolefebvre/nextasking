@@ -21,7 +21,7 @@ integrationTest(
         await step.run("pick-recipients", () => ["ada@example.com"]);
         const recordKey = engineKeysOf(keyPrefix).runRecord("send-newsletter", runId);
         expectInvariantViolation("run left executing", runLeftExecutingSentenceOf("send-newsletter", runId));
-        await withRedis(redisUrl, (redis) => redis.hset(recordKey, "lockToken", "token-of-another-attempt"));
+        await withRedis(redisUrl, (redis) => redis.hSet(recordKey, "lockToken", "token-of-another-attempt"));
         await step
           .run("send", () => "sent")
           .catch((error: unknown) => {

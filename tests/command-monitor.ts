@@ -1,6 +1,13 @@
+import { connectedTestClientOf } from "./with-redis.js";
+
 export type MonitoredCommand = { args: string[]; source: string };
 
-const MONITOR_LINE_PATTERN = /^\d+\.\d+ \[\d+ ([^\]]+)\]((?: "(?:[^"\\]|\\.)*")+)$/;
+export type CommandMonitor = {
+  monitoredCommands: () => MonitoredCommand[];
+  stop: () => void;
+};
+
+const MONITOR_LINE_PATTERN = /^\d+\.\d+ \[\d+ (\S+)\]((?: "(?:[^"\\]|\\.)*")+)$/;
 
 const QUOTED_ARGUMENT_PATTERN = / "((?:[^"\\]|\\.)*)"/g;
 
@@ -40,5 +47,24 @@ export function monitoredCommandOf(monitorLine: string): MonitoredCommand {
     args: [...quotedArguments!.matchAll(QUOTED_ARGUMENT_PATTERN)].map(([, quotedArgument]) =>
       unescapedArgumentOf(quotedArgument!),
     ),
+  };
+}
+
+export async function startCommandMonitor(redisUrl: string): Promise<CommandMonitor> {
+  const monitorClient = await connectedTestClientOf(redisUrl);
+  const monitorLines: string[] = [];
+  try {
+    await monitorClient.monitor((monitorLine) => {
+      monitorLines.push(monitorLine);
+    });
+  } catch (error) {
+    monitorClient.destroy();
+    throw error;
+  }
+  return {
+    monitoredCommands: () => monitorLines.map(monitoredCommandOf),
+    stop: () => {
+      monitorClient.destroy();
+    },
   };
 }

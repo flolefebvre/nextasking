@@ -7,9 +7,8 @@ import { closeNextaskingAndCheckItsDuration } from "./close-nextasking-and-check
 import { integrationTest } from "./integration-test.js";
 import { createRecordingLogger, waitForLogMessage } from "./recording-logger.js";
 import { serializedValueOf, storedValuesByKeyOf } from "./engine-test.js";
-import { monitoredCommandOf } from "./monitored-command.js";
-import type { MonitoredCommand } from "./monitored-command.js";
-import { connectedTestClientOf, withRedis } from "./with-redis.js";
+import { startCommandMonitor } from "./command-monitor.js";
+import { withRedis } from "./with-redis.js";
 import type { TestClient } from "./with-redis.js";
 
 async function seedReleaseZeroOneKeys(redis: TestClient, runsKeyStart: string): Promise<Map<string, Buffer | null>> {
@@ -40,19 +39,17 @@ integrationTest(
         }),
       ],
     });
-    const monitoredCommands: MonitoredCommand[] = [];
-    let monitorClient: TestClient | undefined;
+    let stopCommandMonitor = () => undefined as void;
 
     try {
       await withRedis(redisUrl, async (redis) => {
         const seededValuesByKey = await seedReleaseZeroOneKeys(redis, runsKeyStart);
-        monitorClient = await connectedTestClientOf(redisUrl);
-        await monitorClient.monitor((monitorLine) => {
-          const monitoredCommand = monitoredCommandOf(monitorLine);
-          if (monitoredCommand.args.some((argument) => argument.includes(keyPrefix))) {
-            monitoredCommands.push(monitoredCommand);
-          }
-        });
+        const commandMonitor = await startCommandMonitor(redisUrl);
+        stopCommandMonitor = commandMonitor.stop;
+        const monitoredCommands = () =>
+          commandMonitor
+            .monitoredCommands()
+            .filter(({ args }) => args.some((argument) => argument.includes(keyPrefix)));
 
         await nextasking.startWorker();
         const { runId } = await nextasking.dispatch("send-welcome-email", { email: "ada@example.com" });
@@ -61,10 +58,10 @@ integrationTest(
         await nextasking.listRuns({ state: "completed" });
         await nextasking.countRuns();
         await nextasking.listSchedules();
-        await vi.waitFor(() => expect(monitoredCommands.some(({ source }) => source.includes("lua"))).toBe(true), {
+        await vi.waitFor(() => expect(monitoredCommands().some(({ source }) => source.includes("lua"))).toBe(true), {
           timeout: 5_000,
         });
-        monitorClient.destroy();
+        commandMonitor.stop();
         const keysUnderThePrefix = (await redis.keys(`*${keyPrefix.replace(/[*?[\]\\]/g, "\\$&")}*`)).sort();
         const seededValuesAfter = new Map(
           [...seededValuesByKey.keys()].map((key) => [key, null as Buffer | null] as const),
@@ -74,7 +71,7 @@ integrationTest(
         }
 
         expect(
-          monitoredCommands.filter(({ args }) => args.some((argument) => argument.startsWith(`${keyPrefix}:`))),
+          monitoredCommands().filter(({ args }) => args.some((argument) => argument.startsWith(`${keyPrefix}:`))),
         ).toEqual([]);
         expect(keysUnderThePrefix.filter((key) => !key.startsWith(hashTaggedKeyStart))).toEqual([
           ...seededValuesByKey.keys(),
@@ -84,7 +81,7 @@ integrationTest(
         expect((await storedValuesByKeyOf(redis, keyPrefix)).size).toBeGreaterThan(0);
       });
     } finally {
-      monitorClient?.destroy();
+      stopCommandMonitor();
       await closeNextaskingAndCheckItsDuration(nextasking);
     }
   },

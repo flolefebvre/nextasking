@@ -1,11 +1,17 @@
 import { expect, test } from "vitest";
 
-import { monitoredCommandOf } from "./monitored-command.js";
+import { monitoredCommandOf } from "./command-monitor.js";
 
 test("a command from a client reads as its arguments, with the client's address as its source", () => {
   const monitorLine = '1794216403.668639 [0 172.17.0.1:46482] "SET" "{p}:plain" "hello"';
 
   expect(monitoredCommandOf(monitorLine)).toEqual({ source: "172.17.0.1:46482", args: ["SET", "{p}:plain", "hello"] });
+});
+
+test("a command from a client on IPv6 reads with its bracketed address as its source", () => {
+  const monitorLine = '1794217311.945876 [0 [::1]:39444] "SET" "{p}:ipv6" "hello"';
+
+  expect(monitoredCommandOf(monitorLine)).toEqual({ source: "[::1]:39444", args: ["SET", "{p}:ipv6", "hello"] });
 });
 
 test("a command a script runs reads with lua as its source", () => {

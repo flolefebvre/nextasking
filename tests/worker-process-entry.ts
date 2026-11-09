@@ -33,7 +33,7 @@ process.on("unhandledRejection", (reason) => {
   process.stderr.write(`${UNHANDLED_REJECTION_MARKER}${shownReason}\n`);
 });
 
-const recordsClient = connectedTestClientOf(config.redisUrl);
+const connectedRecordsClient = connectedTestClientOf(config.redisUrl);
 
 overrideWorkerTiming(config.timing ?? {});
 
@@ -42,7 +42,7 @@ const nextasking = createNextasking({
   prefix: config.keyPrefix,
   logger: ndjsonLogger,
   tasks: workerProcessTasks(async (taskName, record) => {
-    await (await recordsClient).rPush(fixtureRecordsKey(config.keyPrefix, taskName), JSON.stringify(record));
+    await (await connectedRecordsClient).rPush(fixtureRecordsKey(config.keyPrefix, taskName), JSON.stringify(record));
   }),
 });
 

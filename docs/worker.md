@@ -150,7 +150,7 @@ These timings are fixed. See [Deploys](deploys.md) for which release decides eac
 
 ## Give queues their own Valkey or Redis
 
-Point `connection` at a Valkey or Redis that holds only queues, not your cache or sessions. A cache evicts keys when memory runs short; a queue loses runs that way. A dedicated server also keeps a cache flush or a busy cache from stalling attempts.
+Point `connection` at a Valkey or Redis that holds only queues, not your cache or sessions. A cache evicts data when memory runs short; a queue loses runs that way. A dedicated server also keeps a cache flush or a busy cache from stalling attempts.
 
 Set `maxmemory-policy noeviction` on it. The worker reads the policy at boot from the `maxmemory_policy` line of `INFO`, and from `CONFIG GET maxmemory-policy` when `INFO` fails or has no such line. Managed services that block `CONFIG` still answer `INFO`, so the check runs there too:
 

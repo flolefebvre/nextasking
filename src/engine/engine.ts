@@ -56,6 +56,10 @@ export const UNKNOWN_TASK_FAILURE_DELAY_IN_MILLISECONDS: DurationInMilliseconds 
 
 export type SerializedPayload = string;
 
+export function deserializePayload(serializedPayload: SerializedPayload): unknown {
+  return serializedPayload === "" ? undefined : JSON.parse(serializedPayload);
+}
+
 export type SerializedStepValue = string;
 
 export type RunToCreate = {
@@ -458,7 +462,7 @@ const IS_FAILURE_REASON_BY_REASON: Readonly<Record<FailureReason, true>> = {
   "unknown task": true,
 };
 
-function isFailureReason(value: unknown): value is FailureReason {
+export function isFailureReason(value: unknown): value is FailureReason {
   return typeof value === "string" && Object.hasOwn(IS_FAILURE_REASON_BY_REASON, value);
 }
 

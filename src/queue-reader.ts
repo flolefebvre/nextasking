@@ -1,102 +1,41 @@
-import type { AnyTaskDefinition, EventDefinition, Payload, PayloadSchema } from "./definitions.js";
+import type { AnyTaskDefinition, EventDefinition } from "./definitions.js";
 import type { DurationInMilliseconds, EpochMilliseconds } from "./durations.js";
-import { UnknownEventError, UnknownTaskError } from "./errors.js";
+import { UnknownEventError } from "./errors.js";
 import { deriveFiringRunId, deriveJobId, deriveListenerRunId } from "./ids.js";
 import type { EventId, JobId, RunId } from "./ids.js";
+import { listLimitOf, rejectInvalidState, rejectUnknownTask, zeroRunCountsOf } from "./read-api.js";
+import type {
+  AnyListedRun,
+  AnyRun,
+  EventWithRunsOf,
+  ListRunsOptionsOf,
+  ListedScheduleOf,
+  RunCountsOf,
+  RunError,
+  RunListCursor,
+  RunPageOf,
+} from "./read-api.js";
 import { loadSavedStepResults } from "./redis-step-store.js";
 import { decodeRunListCursor, encodeRunListCursor } from "./run-list-cursor.js";
-import type { RunListCursor, RunListPosition } from "./run-list-cursor.js";
+import type { RunListPosition } from "./run-list-cursor.js";
 import type { ErrorRecord, RunQueue, StoredRun } from "./run-queue.js";
 import {
   BULLMQ_JOB_STATE_BY_SET,
   BULLMQ_SETS_BY_RUN_STATE,
-  RUN_STATES,
   attemptOf,
   runStateFieldsOf,
   runStateOf,
 } from "./run-states.js";
-import type { BullmqJobSet, BullmqJobState, RunState, RunStateFields } from "./run-states.js";
+import type { BullmqJobSet, BullmqJobState } from "./run-states.js";
 import { previousFiringInstantBefore } from "./schedules.js";
-import type { CronExpression, DeclaredSchedule, IanaTimeZone } from "./schedules.js";
-import type { SavedStepResult } from "./step-engine.js";
-
-export type RunError = {
-  attempt: number;
-  name: string;
-  message: string;
-  stack: string;
-  failedAt: Date;
-};
-
-type PayloadOfTask<Task> = Task extends { schema: infer Schema extends PayloadSchema } ? Payload<Schema> : undefined;
-
-type RunSummaryFields = {
-  runId: RunId;
-  attempt: number;
-  dispatchedAt: Date;
-  finishedAt?: Date;
-};
-
-export type RunOfTask<Task extends AnyTaskDefinition> = Task extends AnyTaskDefinition
-  ? { task: Task["name"] } & RunSummaryFields &
-      RunStateFields & {
-        payload: PayloadOfTask<Task>;
-        errors: RunError[];
-        steps: SavedStepResult[];
-      }
-  : never;
-
-export type ListedRunOfTask<Task extends AnyTaskDefinition> = Task extends AnyTaskDefinition
-  ? { task: Task["name"] } & RunSummaryFields & RunStateFields & { lastErrorMessage?: string }
-  : never;
-
-export type ListRunsOptionsOf<TaskName extends string, State extends RunState = RunState> = {
-  state: State;
-  task?: TaskName;
-  limit?: number;
-  cursor?: RunListCursor;
-};
-
-export type RunPageOf<ListedRunOfAnyTask> = {
-  runs: ListedRunOfAnyTask[];
-  nextCursor?: RunListCursor;
-};
-
-export type RunCountsOf<TaskName extends string> = { [Name in TaskName]: Record<RunState, number> };
-
-type AnyListedRun = ListedRunOfTask<AnyTaskDefinition>;
+import type { DeclaredSchedule } from "./schedules.js";
 
 export type FanOutState = "pending" | "completed" | "failed";
 
-type ListenerOf<Task, EventName extends string> = Extract<Task, { on: { name: EventName } }>;
-
-export type EventWithRunsOf<
-  Task extends AnyTaskDefinition,
-  Event extends EventDefinition,
-> = Event extends EventDefinition
-  ? {
-      event: Event["name"];
-      eventId: EventId;
-      fanOut: FanOutState | undefined;
-      runsByListener: {
-        [ListenerName in ListenerOf<Task, Event["name"]>["name"]]:
-          RunOfTask<Extract<Task, { name: ListenerName }>> | undefined;
-      };
-    }
-  : never;
-
-export type PreviousFiring = {
-  scheduledAt: Date;
-  runId: RunId;
-};
-
-export type ListedScheduleOf<TaskName extends string> = {
-  task: TaskName;
-  cron: CronExpression;
-  timezone: IanaTimeZone;
-  nextFiringAt?: Date;
-  previousFiring?: PreviousFiring;
-};
+export type EventWithFanOutOf<Task extends AnyTaskDefinition, Event extends EventDefinition> = EventWithRunsOf<
+  Task,
+  Event
+> & { fanOut: FanOutState | undefined };
 
 export type QueueReaderConfig = {
   openRunQueue: () => Promise<RunQueue>;
@@ -106,10 +45,10 @@ export type QueueReaderConfig = {
 };
 
 export type QueueReader = {
-  getRun: (taskName: string, runId: RunId) => Promise<RunOfTask<AnyTaskDefinition> | undefined>;
+  getRun: (taskName: string, runId: RunId) => Promise<AnyRun | undefined>;
   listRuns: (options: ListRunsOptionsOf<string>) => Promise<RunPageOf<AnyListedRun>>;
   countRuns: () => Promise<RunCountsOf<string>>;
-  getEvent: (eventName: string, eventId: EventId) => Promise<EventWithRunsOf<AnyTaskDefinition, EventDefinition>>;
+  getEvent: (eventName: string, eventId: EventId) => Promise<EventWithFanOutOf<AnyTaskDefinition, EventDefinition>>;
   listSchedules: () => Promise<ListedScheduleOf<string>[]>;
 };
 
@@ -124,8 +63,6 @@ const FAN_OUT_STATE_BY_BULLMQ_STATE: Partial<Record<BullmqJobState, FanOutState>
 };
 
 const FIRST_ITERATION = 1;
-
-const DEFAULT_LIST_LIMIT = 50;
 
 const JOBS_READ_PER_BATCH = 200;
 
@@ -191,34 +128,6 @@ function listedRunOf(record: RunJobRecord, bullmqState: BullmqJobState): AnyList
   return (lastErrorMessage === undefined ? runSummary : { ...runSummary, lastErrorMessage }) as AnyListedRun;
 }
 
-function rejectInvalidState(state: unknown): asserts state is RunState {
-  if (!RUN_STATES.includes(state as RunState)) {
-    const shownState = typeof state === "string" ? JSON.stringify(state) : String(state);
-    const shownStates = RUN_STATES.map((runState) => `"${runState}"`).join(", ");
-    throw new Error(`Invalid listRuns state: ${shownState} is not one of ${shownStates}`);
-  }
-}
-
-function listLimitOf(limit: unknown): number {
-  if (limit === undefined) {
-    return DEFAULT_LIST_LIMIT;
-  }
-  if (typeof limit !== "number" || !Number.isInteger(limit) || limit <= 0) {
-    const shownLimit = typeof limit === "string" ? JSON.stringify(limit) : String(limit);
-    throw new Error(`Invalid listRuns limit: ${shownLimit} is not a positive integer`);
-  }
-  return limit;
-}
-
-function zeroRunCountsOf(taskNames: Iterable<string>): RunCountsOf<string> {
-  return Object.fromEntries(
-    [...taskNames].map((taskName) => [
-      taskName,
-      Object.fromEntries(RUN_STATES.map((runState) => [runState, 0])) as Record<RunState, number>,
-    ]),
-  );
-}
-
 export type JobFieldValues = (string | null)[];
 
 export type JobFields = { jobKey: string; fieldValues: JobFieldValues };
@@ -262,10 +171,8 @@ export async function forEachBatchOfJobIds(
 }
 
 export function createQueueReader(config: QueueReaderConfig): QueueReader {
-  const rejectUnknownTask = (taskName: string): void => {
-    if (!config.tasksByName.has(taskName)) {
-      throw new UnknownTaskError(taskName, [...config.tasksByName.keys()]);
-    }
+  const rejectTaskUnknownToTheRelease = (taskName: string): void => {
+    rejectUnknownTask(config.tasksByName, taskName);
   };
 
   const readJobFieldsOfQueue = async (jobIds: readonly JobId[], fieldNames: readonly string[]) =>
@@ -284,7 +191,7 @@ export function createQueueReader(config: QueueReaderConfig): QueueReader {
   ) => forEachBatchOfJobIds(await config.openRunQueue(), set, firstOffset, useBatch);
 
   const getRun: QueueReader["getRun"] = async (taskName, runId) => {
-    rejectUnknownTask(taskName);
+    rejectTaskUnknownToTheRelease(taskName);
     const { bullmqQueue, client } = await config.openRunQueue();
     const jobId = deriveJobId(taskName, runId);
     const [[record], bullmqState] = await Promise.all([readRunJobRecords([jobId]), bullmqQueue.getJobState(jobId)]);
@@ -297,7 +204,7 @@ export function createQueueReader(config: QueueReaderConfig): QueueReader {
       payload: record.data.payload,
       errors: record.data.errors.map(runErrorOf),
       steps: await loadSavedStepResults(client, record.jobKey),
-    } as RunOfTask<AnyTaskDefinition>;
+    } as AnyRun;
   };
 
   return {
@@ -307,7 +214,7 @@ export function createQueueReader(config: QueueReaderConfig): QueueReader {
       const { state, task } = options;
       rejectInvalidState(state);
       if (task !== undefined) {
-        rejectUnknownTask(task);
+        rejectTaskUnknownToTheRelease(task);
       }
       const limit = listLimitOf(options.limit);
       const sets = BULLMQ_SETS_BY_RUN_STATE[state];

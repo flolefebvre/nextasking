@@ -40,7 +40,8 @@ export {
 export type { PayloadIssue } from "./errors.js";
 export type { EventId, RunId } from "./ids.js";
 export type { Logger } from "./logger.js";
-export type { FanOutState, PreviousFiring, RunError } from "./queue-reader.js";
+export type { FanOutState } from "./queue-reader.js";
+export type { PreviousFiring, RunError } from "./read-api.js";
 export { createNextasking } from "./registry.js";
 export type {
   EventName,

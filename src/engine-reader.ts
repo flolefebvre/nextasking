@@ -1,0 +1,401 @@
+import type { ChainableCommander, Redis } from "ioredis";
+
+import type { AnyTaskDefinition, EventDefinition } from "./definitions.js";
+import type { EpochMilliseconds } from "./durations.js";
+import { engineKeysOf } from "./engine/engine-keys.js";
+import { RECORD_VERSION, deserializePayload, isFailureReason } from "./engine/engine.js";
+import { defineIndexPageCommand, indexPageOf } from "./engine/index-page-script.js";
+import type { IndexPosition } from "./engine/index-page-script.js";
+import { decodeEngineRunListCursor, encodeEngineRunListCursor } from "./engine-run-list-cursor.js";
+import { UnknownEventError } from "./errors.js";
+import { deriveFiringRunId, deriveListenerRunId } from "./ids.js";
+import type { EventId, RunId } from "./ids.js";
+import { listLimitOf, rejectInvalidState, rejectUnknownTask, zeroRunCountsOf } from "./read-api.js";
+import type {
+  AnyListedRun,
+  AnyRun,
+  EventWithRunsOf,
+  ListRunsOptionsOf,
+  ListedScheduleOf,
+  RunCountsOf,
+  RunError,
+  RunPageOf,
+} from "./read-api.js";
+import type { ErrorRecord } from "./run-queue.js";
+import { RUN_STATES, isRunState } from "./run-states.js";
+import type { RunState, RunStateFields } from "./run-states.js";
+import type { DeclaredSchedule } from "./schedules.js";
+import { savedStepResultsOf } from "./step-engine.js";
+
+export type EngineReaderConfig = {
+  client: Redis;
+  prefix: string;
+  tasksByName: ReadonlyMap<string, AnyTaskDefinition>;
+  listenerNamesByEventName: ReadonlyMap<string, readonly string[]>;
+  declaredSchedules: readonly DeclaredSchedule[];
+};
+
+export type EngineReader = {
+  getRun: (taskName: string, runId: RunId) => Promise<AnyRun | undefined>;
+  listRuns: (options: ListRunsOptionsOf<string>) => Promise<RunPageOf<AnyListedRun>>;
+  countRuns: () => Promise<RunCountsOf<string>>;
+  getEvent: (eventName: string, eventId: EventId) => Promise<EventWithRunsOf<AnyTaskDefinition, EventDefinition>>;
+  listSchedules: () => Promise<ListedScheduleOf<string>[]>;
+};
+
+const RUN_RECORD_FIELDS = [
+  "version",
+  "task",
+  "state",
+  "attempt",
+  "dispatchedAt",
+  "finishedAt",
+  "startsAt",
+  "resumesAt",
+  "nextAttemptAt",
+  "reason",
+] as const;
+
+const SCHEDULE_RECORD_FIELDS = ["version", "nextFiringAt", "previousFiringAt"] as const;
+
+const COMMANDS_PER_RUN_READ = 4;
+
+const COMMANDS_PER_LISTED_RUN_READ = 2;
+
+type StoredValue = string | null;
+
+type AnyRunSummary = Omit<AnyListedRun, "lastErrorMessage">;
+
+type IndexEntry = IndexPosition & { task: string };
+
+type PipelineResult = [error: Error | null, reply: unknown];
+
+const KNOWN_RECORD_VERSION = String(RECORD_VERSION);
+
+function storedIntegerOf(storedValue: unknown): number | undefined {
+  if (typeof storedValue !== "string" || storedValue === "") {
+    return undefined;
+  }
+  const integer = Number(storedValue);
+  return Number.isSafeInteger(integer) ? integer : undefined;
+}
+
+function storedDateOf(storedValue: unknown): Date | undefined {
+  const instant: EpochMilliseconds | undefined = storedIntegerOf(storedValue);
+  return instant === undefined ? undefined : new Date(instant);
+}
+
+function storedValuesOf(reply: unknown, fieldCount: number): StoredValue[] | undefined {
+  return Array.isArray(reply) &&
+    reply.length === fieldCount &&
+    reply.every((value) => value === null || typeof value === "string")
+    ? (reply as StoredValue[])
+    : undefined;
+}
+
+function storedFieldsOf<Field extends string>(
+  reply: unknown,
+  fields: readonly Field[],
+): Record<Field, StoredValue> | undefined {
+  const storedValues = storedValuesOf(reply, fields.length);
+  return storedValues === undefined
+    ? undefined
+    : (Object.fromEntries(fields.map((field, position) => [field, storedValues[position]])) as Record<
+        Field,
+        StoredValue
+      >);
+}
+
+type StoredRunRecord = Record<(typeof RUN_RECORD_FIELDS)[number], StoredValue>;
+
+function dueStateFieldsOf(state: RunState, storedRecord: StoredRunRecord): RunStateFields | undefined {
+  const startsAt = storedDateOf(storedRecord.startsAt);
+  const resumesAt = storedDateOf(storedRecord.resumesAt);
+  const nextAttemptAt = storedDateOf(storedRecord.nextAttemptAt);
+  if (state === "delayed") {
+    return startsAt === undefined ? undefined : { state, startsAt };
+  }
+  if (state === "suspended") {
+    return resumesAt === undefined ? undefined : { state, resumesAt };
+  }
+  return nextAttemptAt === undefined ? undefined : { state: "backingOff", nextAttemptAt };
+}
+
+function runStateFieldsOf(state: RunState, storedRecord: StoredRunRecord): RunStateFields | undefined {
+  switch (state) {
+    case "delayed":
+    case "suspended":
+    case "backingOff":
+      return dueStateFieldsOf(state, storedRecord);
+    case "failed":
+      return isFailureReason(storedRecord.reason) ? { state, reason: storedRecord.reason } : undefined;
+    default:
+      return { state };
+  }
+}
+
+function runSummaryOf(runId: RunId, recordReply: unknown): AnyRunSummary | undefined {
+  const storedRecord = storedFieldsOf(recordReply, RUN_RECORD_FIELDS);
+  if (storedRecord?.version !== KNOWN_RECORD_VERSION || storedRecord.task === null) {
+    return undefined;
+  }
+  const { state } = storedRecord;
+  const attempt = storedIntegerOf(storedRecord.attempt);
+  const dispatchedAt = storedDateOf(storedRecord.dispatchedAt);
+  const stateFields = isRunState(state) ? runStateFieldsOf(state, storedRecord) : undefined;
+  if (attempt === undefined || dispatchedAt === undefined || stateFields === undefined) {
+    return undefined;
+  }
+  const finishedAt = storedDateOf(storedRecord.finishedAt);
+  return {
+    task: storedRecord.task,
+    runId,
+    ...stateFields,
+    attempt,
+    dispatchedAt,
+    ...(finishedAt === undefined ? {} : { finishedAt }),
+  } as AnyRunSummary;
+}
+
+function errorRecordOf(storedError: unknown): ErrorRecord | undefined {
+  if (typeof storedError !== "string") {
+    return undefined;
+  }
+  try {
+    const errorRecord = JSON.parse(storedError) as Partial<ErrorRecord> | null;
+    return typeof errorRecord?.message === "string" ? (errorRecord as ErrorRecord) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function runErrorsOf(errorsReply: unknown): RunError[] | undefined {
+  if (!Array.isArray(errorsReply)) {
+    return undefined;
+  }
+  const runErrors: RunError[] = [];
+  for (const storedError of errorsReply) {
+    const errorRecord = errorRecordOf(storedError);
+    if (errorRecord === undefined) {
+      return undefined;
+    }
+    runErrors.push({ ...errorRecord, failedAt: new Date(errorRecord.failedAt) });
+  }
+  return runErrors;
+}
+
+function readOrUndefined<Value>(read: () => Value): Value | undefined {
+  try {
+    return read();
+  } catch {
+    return undefined;
+  }
+}
+
+function runOf(
+  taskName: string,
+  runId: RunId,
+  [recordReply, payloadReply, errorsReply, stepsReply]: readonly unknown[],
+): AnyRun | undefined {
+  const runSummary = runSummaryOf(runId, recordReply);
+  if (runSummary?.task !== taskName || typeof payloadReply !== "string") {
+    return undefined;
+  }
+  const errors = runErrorsOf(errorsReply);
+  const payload = readOrUndefined(() => ({ value: deserializePayload(payloadReply) }));
+  const steps = readOrUndefined(() => savedStepResultsOf(stepsReply as Record<string, string>));
+  if (errors === undefined || payload === undefined || steps === undefined) {
+    return undefined;
+  }
+  return { ...runSummary, payload: payload.value, errors, steps } as AnyRun;
+}
+
+function listedRunOf(entry: IndexEntry, state: RunState, [recordReply, lastErrorReply]: readonly unknown[]) {
+  const runSummary = runSummaryOf(entry.runId, recordReply);
+  if (runSummary?.task !== entry.task || runSummary.state !== state) {
+    return undefined;
+  }
+  if (lastErrorReply === null) {
+    return runSummary as AnyListedRun;
+  }
+  const lastError = errorRecordOf(lastErrorReply);
+  return lastError === undefined ? undefined : ({ ...runSummary, lastErrorMessage: lastError.message } as AnyListedRun);
+}
+
+function compareRunIdBytes(leftRunId: RunId, rightRunId: RunId): number {
+  return Buffer.compare(Buffer.from(leftRunId, "utf8"), Buffer.from(rightRunId, "utf8"));
+}
+
+function compareInIndexOrder(left: IndexPosition, right: IndexPosition): number {
+  return right.score - left.score || compareRunIdBytes(right.runId, left.runId);
+}
+
+async function repliesOf(pipeline: ChainableCommander): Promise<unknown[]> {
+  const results = ((await pipeline.exec()) ?? []) as PipelineResult[];
+  return results.map(([error, reply]) => {
+    if (error !== null) {
+      throw error;
+    }
+    return reply;
+  });
+}
+
+function repliesInGroupsOf(replies: readonly unknown[], groupSize: number): unknown[][] {
+  return Array.from({ length: replies.length / groupSize }, (_, position) =>
+    replies.slice(position * groupSize, (position + 1) * groupSize),
+  );
+}
+
+export function createEngineReader(config: EngineReaderConfig): EngineReader {
+  const { client, tasksByName, listenerNamesByEventName, declaredSchedules } = config;
+  const keys = engineKeysOf(config.prefix);
+  const indexPageCommand = defineIndexPageCommand(client);
+
+  const appendRunRead = (pipeline: ChainableCommander, runId: RunId): void => {
+    pipeline.hmget(keys.runRecord(runId), ...RUN_RECORD_FIELDS);
+    pipeline.get(keys.runPayload(runId));
+    pipeline.lrange(keys.runErrors(runId), 0, -1);
+    pipeline.hgetall(keys.runSteps(runId));
+  };
+
+  const readRuns = async (runReads: readonly { task: string; runId: RunId }[]): Promise<(AnyRun | undefined)[]> => {
+    const pipeline = client.pipeline();
+    for (const { runId } of runReads) {
+      appendRunRead(pipeline, runId);
+    }
+    const repliesByRun = repliesInGroupsOf(await repliesOf(pipeline), COMMANDS_PER_RUN_READ);
+    return runReads.map(({ task, runId }, position) => runOf(task, runId, repliesByRun[position] ?? []));
+  };
+
+  const readIndexEntries = async (
+    state: RunState,
+    taskNames: readonly string[],
+    limit: number,
+    after: IndexPosition | undefined,
+  ): Promise<{ indexEntries: IndexEntry[]; isAnyIndexPageFull: boolean }> => {
+    const pipeline = client.pipeline();
+    for (const taskName of taskNames) {
+      indexPageCommand.appendTo(pipeline, { indexKey: keys.runIndex(taskName, state), limit, after });
+    }
+    const indexPages = (await repliesOf(pipeline)).map(indexPageOf);
+    return {
+      indexEntries: indexPages.flatMap((indexPage, position) =>
+        indexPage.map((indexPosition) => ({ ...indexPosition, task: taskNames[position] ?? "" })),
+      ),
+      isAnyIndexPageFull: indexPages.some((indexPage) => indexPage.length === limit),
+    };
+  };
+
+  const readListedRuns = async (state: RunState, indexEntries: readonly IndexEntry[]): Promise<AnyListedRun[]> => {
+    if (indexEntries.length === 0) {
+      return [];
+    }
+    const pipeline = client.pipeline();
+    for (const { runId } of indexEntries) {
+      pipeline.hmget(keys.runRecord(runId), ...RUN_RECORD_FIELDS);
+      pipeline.lindex(keys.runErrors(runId), -1);
+    }
+    const repliesByRun = repliesInGroupsOf(await repliesOf(pipeline), COMMANDS_PER_LISTED_RUN_READ);
+    return indexEntries.flatMap((entry, position) => {
+      const listedRun = listedRunOf(entry, state, repliesByRun[position] ?? []);
+      return listedRun === undefined ? [] : [listedRun];
+    });
+  };
+
+  return {
+    getRun: async (taskName, runId) => {
+      rejectUnknownTask(tasksByName, taskName);
+      const [run] = await readRuns([{ task: taskName, runId }]);
+      return run;
+    },
+
+    listRuns: async (options) => {
+      const { state, task } = options;
+      rejectInvalidState(state);
+      if (task !== undefined) {
+        rejectUnknownTask(tasksByName, task);
+      }
+      const limit = listLimitOf(options.limit);
+      const listedIndexes = { state, task: task ?? null };
+      const after = options.cursor === undefined ? undefined : decodeEngineRunListCursor(options.cursor, listedIndexes);
+      const taskNames = task === undefined ? [...tasksByName.keys()] : [task];
+      const { indexEntries, isAnyIndexPageFull } = await readIndexEntries(state, taskNames, limit, after);
+      const mergedEntries = indexEntries.sort(compareInIndexOrder);
+      const takenEntries = mergedEntries.slice(0, limit);
+      const lastTakenEntry = takenEntries.at(-1);
+      const runs = await readListedRuns(state, takenEntries);
+      const isWalkUnfinished = mergedEntries.length > takenEntries.length || isAnyIndexPageFull;
+      if (!isWalkUnfinished || lastTakenEntry === undefined) {
+        return { runs };
+      }
+      const indexPosition = { score: lastTakenEntry.score, runId: lastTakenEntry.runId };
+      return { runs, nextCursor: encodeEngineRunListCursor({ ...listedIndexes, indexPosition }) };
+    },
+
+    countRuns: async () => {
+      const taskNames = [...tasksByName.keys()];
+      const pipeline = client.pipeline();
+      for (const taskName of taskNames) {
+        for (const state of RUN_STATES) {
+          pipeline.zcard(keys.runIndex(taskName, state));
+        }
+      }
+      const replies = await repliesOf(pipeline);
+      const runCounts = zeroRunCountsOf(taskNames);
+      taskNames.forEach((taskName, taskPosition) => {
+        RUN_STATES.forEach((state, statePosition) => {
+          runCounts[taskName]![state] = Number(replies[taskPosition * RUN_STATES.length + statePosition]);
+        });
+      });
+      return runCounts;
+    },
+
+    getEvent: async (eventName, eventId) => {
+      const listenerNames = listenerNamesByEventName.get(eventName);
+      if (listenerNames === undefined) {
+        throw new UnknownEventError(eventName, [...listenerNamesByEventName.keys()]);
+      }
+      const listenerRuns = await readRuns(
+        listenerNames.map((listenerName) => ({
+          task: listenerName,
+          runId: deriveListenerRunId(eventId, listenerName),
+        })),
+      );
+      return {
+        event: eventName,
+        eventId,
+        runsByListener: Object.fromEntries(
+          listenerNames.map((listenerName, position) => [listenerName, listenerRuns[position]]),
+        ),
+      };
+    },
+
+    listSchedules: async () => {
+      const pipeline = client.pipeline();
+      for (const { taskName } of declaredSchedules) {
+        pipeline.hmget(keys.schedule(taskName), ...SCHEDULE_RECORD_FIELDS);
+      }
+      const replies = await repliesOf(pipeline);
+      return declaredSchedules.map(({ taskName, cron, timezone }, position) => {
+        const storedSchedule = storedFieldsOf(replies[position], SCHEDULE_RECORD_FIELDS);
+        const isScheduleRecordKnown = storedSchedule?.version === KNOWN_RECORD_VERSION;
+        const nextFiringAt = isScheduleRecordKnown ? storedIntegerOf(storedSchedule.nextFiringAt) : undefined;
+        const previousFiringAt = isScheduleRecordKnown ? storedIntegerOf(storedSchedule.previousFiringAt) : undefined;
+        return {
+          task: taskName,
+          cron,
+          timezone,
+          ...(nextFiringAt === undefined ? {} : { nextFiringAt: new Date(nextFiringAt) }),
+          ...(previousFiringAt === undefined
+            ? {}
+            : {
+                previousFiring: {
+                  scheduledAt: new Date(previousFiringAt),
+                  runId: deriveFiringRunId(taskName, previousFiringAt),
+                },
+              }),
+        };
+      });
+    },
+  };
+}

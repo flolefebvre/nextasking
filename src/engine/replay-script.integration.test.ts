@@ -145,3 +145,17 @@ engineTest(
     expect(await storedValuesByKeyOf(redis, keyPrefix)).toEqual(storedValuesBefore);
   },
 );
+
+engineTest(
+  "a replay of a task whose run id only another task holds replies notFound and writes nothing",
+  async (context) => {
+    const { engine, redis, keyPrefix } = context;
+    await failedRunWithAStepAtAttempt2Of(context);
+    const storedValuesBefore = await storedValuesByKeyOf(redis, keyPrefix);
+
+    const reply = await engine.replay({ task: "send-sms", runId: "run-1" });
+
+    expect(reply).toEqual({ kind: "notFound" });
+    expect(await storedValuesByKeyOf(redis, keyPrefix)).toEqual(storedValuesBefore);
+  },
+);

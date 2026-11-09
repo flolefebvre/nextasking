@@ -85,9 +85,19 @@ integrationTest(
         }
       };
 
+      let connectedFetcherCount = 0;
+      let markEveryFetcherConnected = () => undefined as void;
+      const everyFetcherConnected = new Promise<void>((resolve) => {
+        markEveryFetcherConnected = resolve;
+      });
       const runFetcher = (fetcher: number) =>
         withRedisClient(redisUrl, async (fetcherClient) => {
           const engine = createEngine(fetcherClient, keyPrefix);
+          connectedFetcherCount += 1;
+          if (connectedFetcherCount === FETCHER_COUNT) {
+            markEveryFetcherConnected();
+          }
+          await everyFetcherConnected;
           while (!isLoadOver) {
             const lockTokens = freshLockTokensOf(1 + Math.floor(random() * MOST_LOCK_TOKENS_PER_TEST_FETCH));
             const reply = await engine.fetch({

@@ -23,7 +23,7 @@ async function waitUntilEveryOutageIsRestored(lines: readonly RecordedLogLine[])
     );
   } catch {
     throw new Error(
-      `Left the nextasking instances open: no "connection restored" for each "connection error" within ${String(RECONNECT_TIMEOUT_IN_MILLISECONDS)} ms of restoring the proxy, and closing a worker whose clients are reconnecting never returns. ${reportOfRecordedLines(lines)}`,
+      `Left the nextasking instances open: no "connection restored" for each "connection error" within ${String(RECONNECT_TIMEOUT_IN_MILLISECONDS)} ms of restoring the proxy, and a worker closed before its clients are back cannot hand back a run still in flight, which it would leave executing under its lock. ${reportOfRecordedLines(lines)}`,
     );
   }
 }

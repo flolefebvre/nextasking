@@ -242,6 +242,7 @@ integrationTest.for([
   },
 ])(
   "a driver $ending while its socket is still connecting leaves no socket open",
+  { timeout: 2 * SOCKET_CLOSED_BOUND_IN_MILLISECONDS + 5_000 },
   async ({ endWhileConnecting }, { redisUrl }) => {
     const proxy = await startTcpProxy(redisUrl);
     try {

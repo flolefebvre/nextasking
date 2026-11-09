@@ -1,12 +1,10 @@
-import type { ChainableCommander, Redis } from "ioredis";
-
 import type { AnyTaskDefinition, EventDefinition, Payload, PayloadSchema } from "./definitions.js";
 import type { EpochMilliseconds } from "./durations.js";
 import { compareInSortedSetMemberOrder, engineKeysOf, runIdentityOf, storedRunIdOf } from "./engine/engine-keys.js";
 import type { RunIdentity } from "./engine/engine-keys.js";
 import { RECORD_VERSION, deserializePayload, isFailureReason, storedIntegerOf } from "./engine/engine.js";
-import type { ErrorRecord, PipelineResult, ScheduleSummary } from "./engine/engine.js";
-import { defineIndexPageCommand, indexPageOf } from "./engine/index-page-script.js";
+import type { ErrorRecord, ScheduleSummary } from "./engine/engine.js";
+import { indexPageCommandOf, indexPageOf } from "./engine/index-page-script.js";
 import type { IndexPosition } from "./engine/index-page-script.js";
 import { UnknownEventError, UnknownTaskError } from "./errors.js";
 import { deriveFiringRunId, deriveListenerRunId } from "./ids.js";
@@ -16,6 +14,8 @@ import type { ListedIndexes, RunListCursor } from "./run-list-cursor.js";
 import { RUN_STATES, isRunState } from "./run-states.js";
 import type { RunState, RunStateFields } from "./run-states.js";
 import type { CronExpression, IanaTimeZone } from "./schedules.js";
+import { builtInCommandOf } from "./redis-client.js";
+import type { CommandResult, RedisClient, RedisCommand } from "./redis-client.js";
 import { savedStepResultsOf } from "./step-engine.js";
 import type { SavedStepResult } from "./step-engine.js";
 
@@ -133,7 +133,7 @@ export function zeroRunCountsOf(taskNames: Iterable<string>): RunCountsOf<string
 }
 
 export type ReadApiConfig = {
-  client: Redis;
+  client: RedisClient;
   prefix: string;
   tasksByName: ReadonlyMap<string, AnyTaskDefinition>;
   listenerNamesByEventName: ReadonlyMap<string, readonly string[]>;
@@ -287,6 +287,22 @@ function readOrUndefined<Value>(read: () => Value): Value | undefined {
   }
 }
 
+function storedValuesByFieldOf(hashReply: unknown): Record<string, string> {
+  if (
+    !Array.isArray(hashReply) ||
+    hashReply.length % 2 !== 0 ||
+    !hashReply.every((element) => typeof element === "string")
+  ) {
+    throw new Error(`The HGETALL of a hash sent a reply the reader cannot read: ${JSON.stringify(hashReply)}`);
+  }
+  return Object.fromEntries(
+    Array.from({ length: hashReply.length / 2 }, (_, position) => [
+      hashReply[position * 2],
+      hashReply[position * 2 + 1],
+    ]),
+  ) as Record<string, string>;
+}
+
 function runOf(
   taskName: string,
   runId: RunId,
@@ -298,7 +314,7 @@ function runOf(
   }
   const errors = runErrorsOf(errorsReply);
   const payload = readOrUndefined(() => ({ value: deserializePayload(payloadReply) }));
-  const steps = readOrUndefined(() => savedStepResultsOf(stepsReply as Record<string, string>));
+  const steps = readOrUndefined(() => savedStepResultsOf(storedValuesByFieldOf(stepsReply)));
   if (errors === undefined || payload === undefined || steps === undefined) {
     return undefined;
   }
@@ -339,13 +355,12 @@ function indexEntryOf(indexKey: string, indexPosition: IndexPosition): IndexEntr
   return { indexPosition, runIdentity };
 }
 
-async function repliesOf(pipeline: ChainableCommander): Promise<unknown[]> {
-  const results = ((await pipeline.exec()) ?? []) as PipelineResult[];
-  return results.map(([error, reply]) => {
-    if (error !== null) {
-      throw error;
+function repliesOf(commandResults: readonly CommandResult[]): unknown[] {
+  return commandResults.map((commandResult) => {
+    if (commandResult.kind === "failed") {
+      throw commandResult.error;
     }
-    return reply;
+    return commandResult.reply;
   });
 }
 
@@ -358,21 +373,19 @@ function repliesInGroupsOf(replies: readonly unknown[], groupSize: number): unkn
 export function createReadApi(config: ReadApiConfig): ReadApi {
   const { client, tasksByName, listenerNamesByEventName, declaredSchedules } = config;
   const keys = engineKeysOf(config.prefix);
-  const indexPageCommand = defineIndexPageCommand(client);
+  const repliesToBatchOf = async (commands: readonly RedisCommand[]): Promise<unknown[]> =>
+    repliesOf(await client.sendBatch(commands));
 
-  const appendRunRead = (pipeline: ChainableCommander, { task, runId }: RunIdentity): void => {
-    pipeline.hmget(keys.runRecord(task, runId), ...RUN_RECORD_FIELDS);
-    pipeline.get(keys.runPayload(task, runId));
-    pipeline.lrange(keys.runErrors(task, runId), 0, -1);
-    pipeline.hgetall(keys.runSteps(task, runId));
-  };
+  const runReadCommandsOf = ({ task, runId }: RunIdentity): RedisCommand[] => [
+    builtInCommandOf("HMGET", keys.runRecord(task, runId), ...RUN_RECORD_FIELDS),
+    builtInCommandOf("GET", keys.runPayload(task, runId)),
+    builtInCommandOf("LRANGE", keys.runErrors(task, runId), 0, -1),
+    builtInCommandOf("HGETALL", keys.runSteps(task, runId)),
+  ];
 
   const readRuns = async (runReads: readonly RunIdentity[]): Promise<(AnyRun | undefined)[]> => {
-    const pipeline = client.pipeline();
-    for (const runRead of runReads) {
-      appendRunRead(pipeline, runRead);
-    }
-    const repliesByRun = repliesInGroupsOf(await repliesOf(pipeline), COMMANDS_PER_RUN_READ);
+    const replies = await repliesToBatchOf(runReads.flatMap(runReadCommandsOf));
+    const repliesByRun = repliesInGroupsOf(replies, COMMANDS_PER_RUN_READ);
     return runReads.map(({ task, runId }, position) => runOf(task, runId, repliesByRun[position] ?? []));
   };
 
@@ -382,12 +395,10 @@ export function createReadApi(config: ReadApiConfig): ReadApi {
     limit: number,
     after: IndexPosition | undefined,
   ): Promise<{ indexEntries: IndexEntry[]; isAnyIndexPageFull: boolean }> => {
-    const pipeline = client.pipeline();
     const indexKeys = taskNames.map((taskName) => keys.runIndex(taskName, state));
-    for (const indexKey of indexKeys) {
-      indexPageCommand.appendTo(pipeline, { indexKey, limit, after });
-    }
-    const indexPages = (await repliesOf(pipeline)).map(indexPageOf);
+    const indexPages = (
+      await repliesToBatchOf(indexKeys.map((indexKey) => indexPageCommandOf({ indexKey, limit, after })))
+    ).map(indexPageOf);
     return {
       indexEntries: indexPages.flatMap((indexPage, position) =>
         indexPage.map((indexPosition) => indexEntryOf(indexKeys[position] ?? "", indexPosition)),
@@ -400,12 +411,13 @@ export function createReadApi(config: ReadApiConfig): ReadApi {
     if (indexEntries.length === 0) {
       return [];
     }
-    const pipeline = client.pipeline();
-    for (const { runIdentity } of indexEntries) {
-      pipeline.hmget(keys.runRecord(runIdentity.task, runIdentity.runId), ...RUN_RECORD_FIELDS);
-      pipeline.lindex(keys.runErrors(runIdentity.task, runIdentity.runId), -1);
-    }
-    const repliesByRun = repliesInGroupsOf(await repliesOf(pipeline), COMMANDS_PER_LISTED_RUN_READ);
+    const replies = await repliesToBatchOf(
+      indexEntries.flatMap(({ runIdentity: { task, runId } }) => [
+        builtInCommandOf("HMGET", keys.runRecord(task, runId), ...RUN_RECORD_FIELDS),
+        builtInCommandOf("LINDEX", keys.runErrors(task, runId), -1),
+      ]),
+    );
+    const repliesByRun = repliesInGroupsOf(replies, COMMANDS_PER_LISTED_RUN_READ);
     return indexEntries.flatMap((entry, position) => {
       const listedRun = listedRunOf(entry, state, repliesByRun[position] ?? []);
       return listedRun === undefined ? [] : [listedRun];
@@ -447,13 +459,11 @@ export function createReadApi(config: ReadApiConfig): ReadApi {
 
     countRuns: async () => {
       const taskNames = [...tasksByName.keys()];
-      const pipeline = client.pipeline();
-      for (const taskName of taskNames) {
-        for (const state of RUN_STATES) {
-          pipeline.zcard(keys.runIndex(taskName, state));
-        }
-      }
-      const replies = await repliesOf(pipeline);
+      const replies = await repliesToBatchOf(
+        taskNames.flatMap((taskName) =>
+          RUN_STATES.map((state) => builtInCommandOf("ZCARD", keys.runIndex(taskName, state))),
+        ),
+      );
       const runCounts = zeroRunCountsOf(taskNames);
       taskNames.forEach((taskName, taskPosition) => {
         RUN_STATES.forEach((state, statePosition) => {
@@ -484,11 +494,9 @@ export function createReadApi(config: ReadApiConfig): ReadApi {
     },
 
     listSchedules: async () => {
-      const pipeline = client.pipeline();
-      for (const { task } of declaredSchedules) {
-        pipeline.hmget(keys.schedule(task), ...SCHEDULE_RECORD_FIELDS);
-      }
-      const replies = await repliesOf(pipeline);
+      const replies = await repliesToBatchOf(
+        declaredSchedules.map(({ task }) => builtInCommandOf("HMGET", keys.schedule(task), ...SCHEDULE_RECORD_FIELDS)),
+      );
       return declaredSchedules.map(({ task, cron, timezone }, position) => {
         const storedSchedule = storedFieldsOf(replies[position], SCHEDULE_RECORD_FIELDS);
         const isScheduleRecordKnown = storedSchedule?.version === KNOWN_RECORD_VERSION;

@@ -9,7 +9,7 @@ import { integrationTest } from "./integration-test.js";
 import { createRecordingLogger, waitForLogMessage } from "./recording-logger.js";
 import type { RecordedLogLine } from "./recording-logger.js";
 import { storedRun } from "./stored-run.js";
-import { withRedis } from "./with-redis.js";
+import { redisClientOf, withRedis } from "./with-redis.js";
 import { backdateFirstFoundUnknownAt } from "./engine-test.js";
 import { startWorkerProcess } from "./worker-process.js";
 import type { WorkerProcess } from "./worker-process.js";
@@ -145,7 +145,7 @@ integrationTest(
       await waitForLogMessage(olderReleaseWorker.logLines, "run handed back: unknown task");
       await withRedis(redisUrl, (redis) =>
         backdateFirstFoundUnknownAt(
-          { engine: createEngine(redis, keyPrefix), redis, keys: engineKeysOf(keyPrefix), keyPrefix },
+          { engine: createEngine(redisClientOf(redis), keyPrefix), redis, keys: engineKeysOf(keyPrefix), keyPrefix },
           "archive-account",
           runId,
           GIVE_UP_DELAY_IN_MILLISECONDS,

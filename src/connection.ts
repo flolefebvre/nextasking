@@ -1,3 +1,5 @@
+import type { EventEmitter } from "node:events";
+
 import { Redis } from "ioredis";
 import type { RedisOptions } from "ioredis";
 
@@ -5,7 +7,9 @@ import { parseDuration } from "./durations.js";
 import type { Duration, DurationInMilliseconds } from "./durations.js";
 import { RedisUnavailableError } from "./errors.js";
 import type { RedisCallIds } from "./errors.js";
+import { ioredisClientOf } from "./ioredis-client.js";
 import type { Logger } from "./logger.js";
+import type { RedisClient } from "./redis-client.js";
 import { delayUnlessAborted, untilAborted } from "./redis-outage.js";
 import type { RedisOutage } from "./redis-outage.js";
 import { isSettledWithin } from "./settled-within.js";
@@ -168,13 +172,23 @@ export function createConnectionOutageTracker(logger: Logger): ConnectionOutageT
   };
 }
 
-class OwnedRedisClient extends Redis {
+export type OwnedRedisClient = RedisClient &
+  EventEmitter & {
+    status: string;
+    quit(): Promise<unknown>;
+    disconnect(): void;
+  };
+
+class OwnedIoredisClient extends Redis implements OwnedRedisClient {
+  readonly send: RedisClient["send"];
+  readonly sendBatch: RedisClient["sendBatch"];
   private readonly url: string;
   private readonly clientOptions: RedisOptions;
-  private readonly adopt: (client: OwnedRedisClient) => void;
+  private readonly adopt: (client: OwnedIoredisClient) => void;
 
-  constructor(url: string, clientOptions: RedisOptions, adopt: (client: OwnedRedisClient) => void) {
+  constructor(url: string, clientOptions: RedisOptions, adopt: (client: OwnedIoredisClient) => void) {
     super(url, clientOptions);
+    ({ send: this.send, sendBatch: this.sendBatch } = ioredisClientOf(this));
     this.url = url;
     this.clientOptions = clientOptions;
     this.adopt = adopt;
@@ -182,17 +196,20 @@ class OwnedRedisClient extends Redis {
   }
 
   override duplicate(override?: Partial<RedisOptions>): Redis {
-    return new OwnedRedisClient(this.url, { ...this.clientOptions, ...override }, this.adopt);
+    return new OwnedIoredisClient(this.url, { ...this.clientOptions, ...override }, this.adopt);
   }
 }
 
 export type RedisConnections = {
   readonly giveUpAfterInMilliseconds: DurationInMilliseconds;
-  createClient: (role: RedisClientRole) => Redis;
-  waitUntilReadyWithinGiveUpAfter: (client: Redis) => Promise<void>;
-  waitUntilReadyWithoutDeadline: (client: Redis, stopSignal?: AbortSignal) => Promise<void>;
-  closeClient: (client: Redis, quitBoundInMilliseconds?: DurationInMilliseconds) => Promise<void>;
-  workerRedisOutageOf: (client: Redis, outOfMemoryRetryDelayInMilliseconds: DurationInMilliseconds) => RedisOutage;
+  createClient: (role: RedisClientRole) => OwnedRedisClient;
+  waitUntilReadyWithinGiveUpAfter: (client: OwnedRedisClient) => Promise<void>;
+  waitUntilReadyWithoutDeadline: (client: OwnedRedisClient, stopSignal?: AbortSignal) => Promise<void>;
+  closeClient: (client: OwnedRedisClient, quitBoundInMilliseconds?: DurationInMilliseconds) => Promise<void>;
+  workerRedisOutageOf: (
+    client: OwnedRedisClient,
+    outOfMemoryRetryDelayInMilliseconds: DurationInMilliseconds,
+  ) => RedisOutage;
   callOnRedis: <Result>(callIds: RedisCallIds, call: () => Promise<Result>) => Promise<Result>;
   onConnectionRestored: (listener: () => void) => () => void;
 };
@@ -200,9 +217,9 @@ export type RedisConnections = {
 export function createRedisConnections(connection: ConnectionConfig, logger: Logger): RedisConnections {
   const giveUpAfterInMilliseconds = giveUpAfterInMillisecondsOf(connection);
   const outageTracker = createConnectionOutageTracker(logger);
-  const lastErrorByClient = new WeakMap<Redis, unknown>();
+  const lastErrorByClient = new WeakMap<OwnedRedisClient, unknown>();
 
-  const adopt = (client: OwnedRedisClient) => {
+  const adopt = (client: OwnedIoredisClient) => {
     client.on("error", (error: unknown) => {
       lastErrorByClient.set(client, error);
       outageTracker.reportClientError(client, error);
@@ -224,11 +241,11 @@ export function createRedisConnections(connection: ConnectionConfig, logger: Log
     instance: { commandTimeout: giveUpAfterInMilliseconds, socketTimeout: giveUpAfterInMilliseconds },
   };
 
-  const pendingReadyWaitByClient = new WeakMap<Redis, Promise<void>>();
-  const endPendingReadyWaitByClient = new WeakMap<Redis, () => void>();
-  const closedClients = new WeakSet<Redis>();
+  const pendingReadyWaitByClient = new WeakMap<OwnedRedisClient, Promise<void>>();
+  const endPendingReadyWaitByClient = new WeakMap<OwnedRedisClient, () => void>();
+  const closedClients = new WeakSet<OwnedRedisClient>();
 
-  const startReadyWait = (client: Redis): Promise<void> => {
+  const startReadyWait = (client: OwnedRedisClient): Promise<void> => {
     const readyWait = new Promise<void>((resolve, reject) => {
       const endWait = () => {
         clearTimeout(giveUpTimer);
@@ -259,7 +276,7 @@ export function createRedisConnections(connection: ConnectionConfig, logger: Log
     return readyWait;
   };
 
-  const waitUntilReadyWithinGiveUpAfter = (client: Redis): Promise<void> => {
+  const waitUntilReadyWithinGiveUpAfter = (client: OwnedRedisClient): Promise<void> => {
     if (closedClients.has(client)) {
       return Promise.reject(new ClientClosedError());
     }
@@ -269,7 +286,7 @@ export function createRedisConnections(connection: ConnectionConfig, logger: Log
     return pendingReadyWaitByClient.get(client) ?? startReadyWait(client);
   };
 
-  const waitUntilReadyWithoutDeadline = async (client: Redis, stopSignal?: AbortSignal): Promise<void> => {
+  const waitUntilReadyWithoutDeadline = async (client: OwnedRedisClient, stopSignal?: AbortSignal): Promise<void> => {
     for (;;) {
       try {
         await untilAborted(waitUntilReadyWithinGiveUpAfter(client), stopSignal);
@@ -292,7 +309,7 @@ export function createRedisConnections(connection: ConnectionConfig, logger: Log
         outOfMemoryRetryDelayInMilliseconds,
       }),
     createClient: (role) =>
-      new OwnedRedisClient(
+      new OwnedIoredisClient(
         connection.url,
         {
           keepAlive: KEEP_ALIVE_INITIAL_DELAY_IN_MILLISECONDS,
@@ -346,7 +363,7 @@ function causeOf(unansweredError: unknown): unknown {
     : unansweredError;
 }
 
-export async function closeRedisClient(client: Redis): Promise<void> {
+export async function closeRedisClient(client: OwnedRedisClient): Promise<void> {
   if (client.status === "ready") {
     await client.quit();
     return;

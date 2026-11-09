@@ -3,12 +3,13 @@ import { expect, vi } from "vitest";
 import { engineTest, fetchedLockedRunsOf } from "../../tests/engine-test.js";
 import type { EngineTestContext } from "../../tests/engine-test.js";
 import { serverInstantInMillisecondsOf } from "../../tests/server-instant.js";
+import { redisClientOf } from "../../tests/with-redis.js";
 import type { EpochMilliseconds } from "../durations.js";
 import type { RunId } from "../ids.js";
 import { storedRunIdOf } from "./engine-keys.js";
 import type { StoredRunId } from "./engine-keys.js";
 import type { LockedRun } from "./engine.js";
-import { defineIndexPageCommand, indexPageOf } from "./index-page-script.js";
+import { indexPageCommandOf, indexPageOf } from "./index-page-script.js";
 import type { IndexPosition } from "./index-page-script.js";
 
 const EARLIER_RUN_IDS_IN_INDEX_ORDER: readonly RunId[] = [
@@ -58,14 +59,7 @@ async function indexPageAfter(
   limit: number,
   after: IndexPosition | undefined,
 ): Promise<IndexPosition[]> {
-  const indexPageCommand = defineIndexPageCommand(redis);
-  const pipeline = redis.pipeline();
-  indexPageCommand.appendTo(pipeline, { indexKey, limit, after });
-  const [[error, reply]] = (await pipeline.exec()) as [[Error | null, unknown]];
-  if (error !== null) {
-    throw error;
-  }
-  return indexPageOf(reply);
+  return indexPageOf(await redisClientOf(redis).send(indexPageCommandOf({ indexKey, limit, after })));
 }
 
 async function storedRunIdsAfter(

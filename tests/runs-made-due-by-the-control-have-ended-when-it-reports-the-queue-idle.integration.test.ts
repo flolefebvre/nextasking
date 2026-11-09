@@ -17,7 +17,7 @@ import { closeNextaskingAndCheckItsDuration } from "./close-nextasking-and-check
 import { integrationTest } from "./integration-test.js";
 import { createRecordingLogger } from "./recording-logger.js";
 import { createSimulatedRedisOutage } from "./simulated-redis-outage.js";
-import { withRedis } from "./with-redis.js";
+import { redisClientOf, withRedis } from "./with-redis.js";
 import { workerDefinitionsOf } from "./worker-definitions.js";
 
 const TRY_COUNT = 50;
@@ -50,7 +50,7 @@ integrationTest(
   async ({ redisUrl, keyPrefix }) => {
     await withRedis(redisUrl, async (redis) => {
       const keys = engineKeysOf(keyPrefix);
-      const engine = createEngine(redis, keyPrefix);
+      const engine = createEngine(redisClientOf(redis), keyPrefix);
       const { logger, lines } = createRecordingLogger();
       const loop = startWorkerLoop({
         engine,

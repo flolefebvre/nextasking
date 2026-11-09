@@ -1,7 +1,7 @@
 import { once } from "node:events";
 
 import { ReplyError } from "ioredis";
-import type { Redis } from "ioredis";
+
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 import {
@@ -12,8 +12,8 @@ import {
   isUnansweredError,
   reconnectDecisionOn,
 } from "./connection.js";
-import type { RedisConnections } from "./connection.js";
-import { asRedis, FakeRedisClient } from "../tests/fake-redis-clients.js";
+import type { OwnedRedisClient, RedisConnections } from "./connection.js";
+import { FakeRedisClient } from "../tests/fake-redis-clients.js";
 import { createRecordingLogger } from "../tests/recording-logger.js";
 
 const CONCURRENT_CALLER_COUNT = 20;
@@ -23,7 +23,7 @@ function networkError(code: string): Error {
 }
 
 async function withNeverConnectingClient(
-  body: (connections: RedisConnections, client: Redis) => Promise<void>,
+  body: (connections: RedisConnections, client: OwnedRedisClient) => Promise<void>,
 ): Promise<void> {
   const connections = createRedisConnections(
     { url: "redis://127.0.0.1:1", giveUpAfter: "1s" },
@@ -40,7 +40,10 @@ async function withNeverConnectingClient(
   }
 }
 
-function waitsOfConcurrentCallers(connections: RedisConnections, client: Redis): Promise<PromiseSettledResult<void>[]> {
+function waitsOfConcurrentCallers(
+  connections: RedisConnections,
+  client: OwnedRedisClient,
+): Promise<PromiseSettledResult<void>[]> {
   return Promise.allSettled(
     Array.from({ length: CONCURRENT_CALLER_COUNT }, () => connections.waitUntilReadyWithinGiveUpAfter(client)),
   );
@@ -471,7 +474,7 @@ describe("closeClient", () => {
     const fakeRedisClient = new FakeRedisClient();
     fakeRedisClient.becomeReady();
 
-    await connections.closeClient(asRedis(fakeRedisClient), 1000);
+    await connections.closeClient(fakeRedisClient, 1000);
 
     expect(fakeRedisClient.sentCommands).toEqual(["QUIT"]);
     expect(fakeRedisClient.disconnectCount).toBe(1);
@@ -485,7 +488,7 @@ describe("closeClient", () => {
     fakeRedisClient.quitReply = "never answered";
     let isClosed = false;
 
-    const closing = connections.closeClient(asRedis(fakeRedisClient), 1000).then(() => {
+    const closing = connections.closeClient(fakeRedisClient, 1000).then(() => {
       isClosed = true;
     });
     await vi.advanceTimersByTimeAsync(999);
@@ -505,8 +508,8 @@ describe("closeClient", () => {
     const readyClient = new FakeRedisClient();
     readyClient.becomeReady();
 
-    await connections.closeClient(asRedis(reconnectingClient), 1000);
-    await connections.closeClient(asRedis(readyClient));
+    await connections.closeClient(reconnectingClient, 1000);
+    await connections.closeClient(readyClient);
 
     expect([reconnectingClient.sentCommands, readyClient.sentCommands]).toEqual([[], []]);
     expect([reconnectingClient.disconnectCount, readyClient.disconnectCount]).toEqual([1, 1]);

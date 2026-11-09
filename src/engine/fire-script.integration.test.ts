@@ -8,6 +8,7 @@ import { deriveFiringRunId } from "../ids.js";
 import { storedRunIdOf } from "./engine-keys.js";
 import { createEngine, RECORD_VERSION } from "./engine.js";
 import type { FireReply, FireRequest } from "./engine.js";
+import { redisClientOf } from "../../tests/with-redis.js";
 
 const ONE_HOUR_IN_MILLISECONDS = 3_600_000;
 
@@ -59,7 +60,7 @@ engineTest(
     const otherRedis = redis.duplicate();
     otherRedis.on("error", () => undefined);
     try {
-      const otherEngine = createEngine(otherRedis, keyPrefix);
+      const otherEngine = createEngine(redisClientOf(otherRedis), keyPrefix);
 
       const replies = await Promise.all([engine.fire(firing), otherEngine.fire(firing)]);
 

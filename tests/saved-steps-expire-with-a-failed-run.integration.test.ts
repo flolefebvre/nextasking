@@ -10,7 +10,7 @@ import { integrationTest } from "./integration-test.js";
 import { createRecordingLogger, waitForLogMessage } from "./recording-logger.js";
 import { savedSteps } from "./saved-steps.js";
 import { storedRun } from "./stored-run.js";
-import { withRedis } from "./with-redis.js";
+import { redisClientOf, withRedis } from "./with-redis.js";
 
 const FIFTEEN_DAYS_IN_MILLISECONDS = 15 * 24 * 60 * 60 * 1000;
 
@@ -40,7 +40,7 @@ integrationTest(
       const stepsOfTheFailedRun = await savedSteps(redisUrl, keyPrefix, "import-contacts", runId);
       await withRedis(redisUrl, (redis) =>
         backdateEndedRun(
-          { engine: createEngine(redis, keyPrefix), redis, keys: engineKeysOf(keyPrefix), keyPrefix },
+          { engine: createEngine(redisClientOf(redis), keyPrefix), redis, keys: engineKeysOf(keyPrefix), keyPrefix },
           "import-contacts",
           runId,
           FIFTEEN_DAYS_IN_MILLISECONDS,

@@ -13,12 +13,7 @@ import type { InstanceLifecycle } from "./instance-lifecycle.js";
 import { MISSING_MANUAL_SIGNAL_HANDLING_WARNING } from "./shutdown-signals.js";
 import type { HandlerSender } from "./step-engine.js";
 import { DEFAULT_WORKER_TIMING } from "./worker-timing.js";
-import {
-  asRedis,
-  createFakeRedisClients,
-  engineOnFakeClient,
-  wakeUpWaitOnFakeClient,
-} from "../tests/fake-redis-clients.js";
+import { createFakeRedisClients, engineOnFakeClient, wakeUpWaitOnFakeClient } from "../tests/fake-redis-clients.js";
 import type { FakeRedisClient, FakeRedisClients } from "../tests/fake-redis-clients.js";
 import { createHandlerGate, gatedBetweenTwoSteps, gatedWithNoStep } from "../tests/handler-gate.js";
 import type { HandlerGate } from "../tests/handler-gate.js";
@@ -80,7 +75,7 @@ function lifecycleScenarioOf({
   tasks = [],
   engine = createInMemoryEngine(),
   prepareClient = readyAtTheFloor,
-  engineOn = (inMemoryEngine, fakeRedisClient) => engineOnFakeClient(inMemoryEngine, asRedis(fakeRedisClient)),
+  engineOn = (inMemoryEngine, fakeRedisClient) => engineOnFakeClient(inMemoryEngine, fakeRedisClient),
   senderOn = () => NO_SENDER,
   env = { NODE_ENV: "development" },
 }: LifecycleScenarioOptions = {}): LifecycleScenario {
@@ -558,7 +553,7 @@ describe("the close of a running worker", () => {
   test("during an outage with an attempt waiting on its settle, resolves within the bound with no timer, ready listener or worker error left", async () => {
     const { lifecycle, lines, handlerGate, commandClient } = await scenarioOfARunningWorker(gatedWithNoStep, {
       engineOn: (engine, fakeRedisClient) => {
-        const engineOnTheClient = engineOnFakeClient(engine, asRedis(fakeRedisClient));
+        const engineOnTheClient = engineOnFakeClient(engine, fakeRedisClient);
         return {
           ...engineOnTheClient,
           settle: (request) =>

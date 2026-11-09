@@ -7,7 +7,7 @@ import { integrationTest } from "../../tests/integration-test.js";
 import { storedKeyViolationsOf } from "../../tests/stored-key-violations.js";
 import { freshLockTokensOf } from "../../tests/lock-tokens.js";
 import { serverInstantInMillisecondsOf } from "../../tests/server-instant.js";
-import { withRedis } from "../../tests/with-redis.js";
+import { redisClientOf, withRedis } from "../../tests/with-redis.js";
 import { REPLIED_EMPTY_PROMOTE, REPLIED_ONE_RENEWAL, repliedOf } from "../../tests/tick-replies.js";
 import { engineKeysOf, storedRunIdOf } from "./engine-keys.js";
 import { createEngine, RECORD_VERSION, wakeUpWaitOf } from "./engine.js";
@@ -217,7 +217,7 @@ engineTest(
 
     await withBlockingClient(redis, async (blockingClient) => {
       const waitStartedAt = Date.now();
-      await wakeUpWaitOf(blockingClient, keyPrefix)(LONG_WAKE_UP_TIMEOUT_IN_MILLISECONDS);
+      await wakeUpWaitOf(redisClientOf(blockingClient), keyPrefix)(LONG_WAKE_UP_TIMEOUT_IN_MILLISECONDS);
 
       expect(Date.now() - waitStartedAt).toBeLessThan(LONG_WAKE_UP_TIMEOUT_IN_MILLISECONDS);
       expect(await redis.exists(keys.wakeUpMarker)).toBe(0);
@@ -230,7 +230,7 @@ engineTest(
   async ({ engine, redis, keyPrefix }) => {
     await withBlockingClient(redis, async (blockingClient) => {
       const waitStartedAt = Date.now();
-      const wakeUpWait = wakeUpWaitOf(blockingClient, keyPrefix)(LONG_WAKE_UP_TIMEOUT_IN_MILLISECONDS);
+      const wakeUpWait = wakeUpWaitOf(redisClientOf(blockingClient), keyPrefix)(LONG_WAKE_UP_TIMEOUT_IN_MILLISECONDS);
       await engine.enqueue({ runs: [{ runId: "welcome-ada", task: "send-email", payload: "{}", retries: 0 }] });
       await wakeUpWait;
 
@@ -242,7 +242,7 @@ engineTest(
 engineTest("a wake-up wait on no marker returns at its fractional timeout", async ({ redis, keyPrefix }) => {
   await withBlockingClient(redis, async (blockingClient) => {
     const waitStartedAt = Date.now();
-    await wakeUpWaitOf(blockingClient, keyPrefix)(300);
+    await wakeUpWaitOf(redisClientOf(blockingClient), keyPrefix)(300);
 
     expect(Date.now() - waitStartedAt).toBeGreaterThanOrEqual(250);
   });
@@ -252,7 +252,7 @@ integrationTest(
   "a fetch of a record whose task is not the task of its stored run id throws an unreadable reply",
   async ({ redisUrl, keyPrefix, expectInvariantViolation }) => {
     await withRedis(redisUrl, async (redis) => {
-      const engine = createEngine(redis, keyPrefix);
+      const engine = createEngine(redisClientOf(redis), keyPrefix);
       const keys = engineKeysOf(keyPrefix);
       const storedRunId = storedRunIdOf("send-receipt", "order-1");
       const corruptions = [
@@ -282,8 +282,17 @@ integrationTest(
   "an enqueue whose reply holds a member that is not a stored run id throws an unreadable reply",
   async ({ redisUrl, keyPrefix }) => {
     await withRedis(redisUrl, async (redis) => {
-      const engine = createEngine(redis, keyPrefix);
-      Reflect.set(redis, "nextaskingEnqueue", async () => ["enqueued", ["order-1"], []]);
+      const client = redisClientOf(redis);
+      const engine = createEngine(
+        {
+          ...client,
+          send: async (command) =>
+            command.kind === "script" && command.script.name === "nextaskingEnqueue"
+              ? ["enqueued", ["order-1"], []]
+              : client.send(command),
+        },
+        keyPrefix,
+      );
 
       const enqueue = engine.enqueue({
         runs: [{ runId: "order-1", task: "send-receipt", payload: "{}", retries: 0 }],

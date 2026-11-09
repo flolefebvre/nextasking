@@ -1,6 +1,6 @@
-import type { Redis } from "ioredis";
-
 import type { Logger } from "./logger.js";
+import { builtInCommandOf } from "./redis-client.js";
+import type { RedisClient } from "./redis-client.js";
 
 const NO_EVICTION_POLICY = "noeviction";
 
@@ -14,9 +14,7 @@ export function maxmemoryPolicyRejectionOf(policy: string): Error | undefined {
       );
 }
 
-export type MaxmemoryPolicySource = Pick<Redis, "info" | "config">;
-
-type SendInfo = () => Promise<string>;
+type SendInfo = () => Promise<unknown>;
 
 type PolicyQuery = { kind: "answered"; policy: string } | { kind: "failed"; error: unknown };
 
@@ -56,14 +54,14 @@ function infoFieldOf(infoReply: string, fieldName: string): string | undefined {
 function queryPolicyFromInfo(sendInfo: SendInfo): Promise<PolicyQuery> {
   return queryPolicy({
     send: sendInfo,
-    policyIn: (reply) => infoFieldOf(reply, INFO_MAXMEMORY_POLICY_FIELD),
+    policyIn: (reply) => (typeof reply === "string" ? infoFieldOf(reply, INFO_MAXMEMORY_POLICY_FIELD) : undefined),
     missingPolicyErrorOf: () => new Error("INFO has no maxmemory_policy line"),
   });
 }
 
-function queryPolicyFromConfig(source: MaxmemoryPolicySource): Promise<PolicyQuery> {
+function queryPolicyFromConfig(source: RedisClient): Promise<PolicyQuery> {
   return queryPolicy<unknown>({
-    send: () => source.config("GET", "maxmemory-policy"),
+    send: () => source.send(builtInCommandOf("CONFIG", "GET", "maxmemory-policy")),
     policyIn: (reply) => {
       const policy = Array.isArray(reply) ? (reply as unknown[])[1] : undefined;
       return typeof policy === "string" ? policy : undefined;
@@ -72,7 +70,7 @@ function queryPolicyFromConfig(source: MaxmemoryPolicySource): Promise<PolicyQue
   });
 }
 
-async function readMaxmemoryPolicy(source: MaxmemoryPolicySource, sendInfo: SendInfo): Promise<MaxmemoryPolicyReading> {
+async function readMaxmemoryPolicy(source: RedisClient, sendInfo: SendInfo): Promise<MaxmemoryPolicyReading> {
   const infoQuery = await queryPolicyFromInfo(sendInfo);
   if (infoQuery.kind === "answered") {
     return { kind: "read", policy: infoQuery.policy };
@@ -125,6 +123,12 @@ export function serverVersionReadingOf(infoReply: string): ServerVersionReading 
   return { kind: "unreadable", error: new Error("INFO has neither a valkey_version nor a redis_version line") };
 }
 
+function serverVersionReadingOfReply(infoReply: unknown): ServerVersionReading {
+  return typeof infoReply === "string"
+    ? serverVersionReadingOf(infoReply)
+    : { kind: "unreadable", error: new Error(`INFO sent ${JSON.stringify(infoReply)}, which is not text`) };
+}
+
 export function serverFloorRejectionOf({
   serverName,
   version,
@@ -140,14 +144,17 @@ export type ServerInfoReading = {
   serverVersionReading: ServerVersionReading;
 };
 
-export async function readServerInfo(source: MaxmemoryPolicySource): Promise<ServerInfoReading> {
-  const infoReply = source.info();
+export async function readServerInfo(source: RedisClient): Promise<ServerInfoReading> {
+  const infoReply = source.send(builtInCommandOf("INFO"));
   infoReply.catch(() => undefined);
   const maxmemoryPolicyReading = await readMaxmemoryPolicy(source, () => infoReply);
-  const serverVersionReading = await infoReply.then(serverVersionReadingOf, (error: unknown): ServerVersionReading => ({
-    kind: "unreadable",
-    error,
-  }));
+  const serverVersionReading = await infoReply.then(
+    serverVersionReadingOfReply,
+    (error: unknown): ServerVersionReading => ({
+      kind: "unreadable",
+      error,
+    }),
+  );
   return { maxmemoryPolicyReading, serverVersionReading };
 }
 

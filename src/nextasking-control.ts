@@ -1,8 +1,7 @@
-import type { Redis } from "ioredis";
 import { setTimeout as sleep } from "node:timers/promises";
 
 import { closeRedisClient, createRedisConnections } from "./connection.js";
-import type { ConnectionConfig } from "./connection.js";
+import type { ConnectionConfig, OwnedRedisClient } from "./connection.js";
 import { retriesOf } from "./definitions.js";
 import { parseDuration } from "./durations.js";
 import type { Duration, DurationInMilliseconds } from "./durations.js";
@@ -13,6 +12,8 @@ import type { BusyRunCounts, Engine, MadeDueRun } from "./engine/engine.js";
 import { deriveFiringRunId } from "./ids.js";
 import type { RunId } from "./ids.js";
 import { silentLogger } from "./logger.js";
+import { builtInCommandOf } from "./redis-client.js";
+import type { RedisClient } from "./redis-client.js";
 import { DEFAULT_PREFIX } from "./registry.js";
 
 export type NextaskingControlOptions = {
@@ -29,7 +30,7 @@ export type NextaskingControl = {
   readonly [Symbol.asyncDispose]: () => Promise<void>;
 };
 
-type OpenEngine = { client: Redis; engine: Engine };
+type OpenEngine = { client: OwnedRedisClient; engine: Engine };
 
 function timeoutInMillisecondsOf(callName: string, timeout: Duration): DurationInMilliseconds {
   try {
@@ -144,20 +145,33 @@ export function createNextaskingControl(options: NextaskingControlOptions): Next
   };
 }
 
-async function unlinkKeysOtherThanTheSchedules(client: Redis, keys: EngineKeys, prefix: string): Promise<void> {
+type ScanPage = [nextCursor: string, scannedKeys: string[]];
+
+function scanPageOf(reply: unknown): ScanPage {
+  if (
+    Array.isArray(reply) &&
+    reply.length === 2 &&
+    typeof reply[0] === "string" &&
+    Array.isArray(reply[1]) &&
+    reply[1].every((scannedKey) => typeof scannedKey === "string")
+  ) {
+    return reply as ScanPage;
+  }
+  throw new Error(`The SCAN of the keys under the prefix sent a reply reset() cannot read: ${JSON.stringify(reply)}`);
+}
+
+async function unlinkKeysOtherThanTheSchedules(client: RedisClient, keys: EngineKeys, prefix: string): Promise<void> {
   const escapedPrefix = hashTaggedPrefixOf(prefix).replace(GLOB_SPECIAL_CHARACTERS, (character) => `\\${character}`);
   let cursor = "0";
   do {
-    const [nextCursor, scannedKeys] = await client.scan(
-      cursor,
-      "MATCH",
-      `${escapedPrefix}:*`,
-      "COUNT",
-      KEYS_SCANNED_PER_CALL,
+    const [nextCursor, scannedKeys] = scanPageOf(
+      await client.send(
+        builtInCommandOf("SCAN", cursor, "MATCH", `${escapedPrefix}:*`, "COUNT", KEYS_SCANNED_PER_CALL),
+      ),
     );
     const unlinkedKeys = scannedKeys.filter((scannedKey) => !keys.isScheduleKey(scannedKey));
     if (unlinkedKeys.length > 0) {
-      await client.unlink(...unlinkedKeys);
+      await client.send(builtInCommandOf("UNLINK", ...unlinkedKeys));
     }
     cursor = nextCursor;
   } while (cursor !== "0");

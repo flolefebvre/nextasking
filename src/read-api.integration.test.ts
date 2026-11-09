@@ -7,7 +7,7 @@ import type { EngineTestContext } from "../tests/engine-test.js";
 import { integrationTest } from "../tests/integration-test.js";
 import { storedKeyViolationsOf } from "../tests/stored-key-violations.js";
 import { serverInstantInMillisecondsOf } from "../tests/server-instant.js";
-import { withRedis } from "../tests/with-redis.js";
+import { redisClientOf, withRedis } from "../tests/with-redis.js";
 import { defineScheduledTask } from "./definitions.js";
 import type { AnyTaskDefinition } from "./definitions.js";
 import { engineKeysOf, runIdentityOf, storedRunIdOf } from "./engine/engine-keys.js";
@@ -49,7 +49,7 @@ function taskDefinitionOf(taskName: string): AnyTaskDefinition {
 function readerOf({ redis, keyPrefix }: EngineTestContext): ReadApi {
   const taskNames = [...TASK_NAMES, ...LISTENER_NAMES];
   return createReadApi({
-    client: redis,
+    client: redisClientOf(redis),
     prefix: keyPrefix,
     tasksByName: new Map(taskNames.map((taskName) => [taskName, taskDefinitionOf(taskName)])),
     listenerNamesByEventName: new Map([["invoice.paid", LISTENER_NAMES]]),
@@ -126,6 +126,35 @@ engineTest(
       steps: [{ id: "charge", result: "paid" }],
     });
     expect(run?.errors[0]?.failedAt.getTime()).toBeLessThanOrEqual(secondAttempt!.startedAt);
+  },
+);
+
+engineTest(
+  "getRun reads every saved value, including those whose step ids are integer-like or __proto__",
+  async (context) => {
+    const { engine } = context;
+    await enqueueRuns(context, [runOf("run-1", "send-email")]);
+    const [attempt] = await fetchedLockedRunsOf(context, 1);
+    for (const [stepId, value] of [
+      ["charge", '["paid"]'],
+      ["__proto__", '["polluted"]'],
+      ["10", '["ten"]'],
+      ["2", '["two"]'],
+    ]) {
+      await engine.saveStep({ ...attempt!, stepId: stepId!, step: { kind: "value", value: value! } });
+    }
+
+    const run = await readerOf(context).getRun("send-email", "run-1");
+
+    expect(run?.steps).toEqual(
+      expect.arrayContaining([
+        { id: "2", result: "two" },
+        { id: "10", result: "ten" },
+        { id: "charge", result: "paid" },
+        { id: "__proto__", result: "polluted" },
+      ]),
+    );
+    expect(run?.steps).toHaveLength(4);
   },
 );
 
@@ -718,7 +747,12 @@ integrationTest(
   async ({ redisUrl, keyPrefix, expectInvariantViolation }) => {
     await withRedis(redisUrl, async (redis) => {
       const keys = engineKeysOf(keyPrefix);
-      const context: EngineTestContext = { engine: createEngine(redis, keyPrefix), redis, keys, keyPrefix };
+      const context: EngineTestContext = {
+        engine: createEngine(redisClientOf(redis), keyPrefix),
+        redis,
+        keys,
+        keyPrefix,
+      };
       const keptRunIds = runIdsOf("kept-run", 3);
       await endRuns(context.engine, "send-email", [...keptRunIds, "newer-run"], "complete");
       await redis.hset(keys.runRecord("send-email", "newer-run"), "version", RECORD_VERSION + 1);

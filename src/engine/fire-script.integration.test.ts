@@ -16,7 +16,7 @@ async function scheduledFiringOf(
 ): Promise<FireRequest> {
   const instant: EpochMilliseconds = (await serverInstantInMillisecondsOf(redis)) + offsetFromNowInMilliseconds;
   await engine.syncSchedules({
-    schedulesToSync: [{ task: "build-report", cron: "0 * * * *", timezone: "UTC", nextFiringAt: instant }],
+    schedulesToSync: [{ task: "build-report", cron: "0 * * * *", timezone: "UTC", nextFiringAt: instant, retries: 2 }],
   });
   return {
     task: "build-report",

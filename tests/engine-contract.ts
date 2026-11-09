@@ -14,6 +14,7 @@ import type {
   SettleOutcome,
   SettleReply,
 } from "../src/engine/engine.js";
+import { MOST_DUE_RUNS_PROMOTED_PER_PROMOTE } from "../src/engine/promote-script.js";
 import { deriveFiringRunId } from "../src/ids.js";
 import type { RunId } from "../src/ids.js";
 import type { ErrorRecord } from "../src/run-queue.js";
@@ -128,7 +129,7 @@ async function statesOf(harness: EngineContractHarness, runIds: readonly RunId[]
 const HOUR_IN_MILLISECONDS = 60 * MINUTE_IN_MILLISECONDS;
 
 function hourlyReportOf(nextFiringAt: EpochMilliseconds, task = "build-report"): ScheduleToSync {
-  return { task, cron: "0 * * * *", timezone: "UTC", nextFiringAt };
+  return { task, cron: "0 * * * *", timezone: "UTC", nextFiringAt, retries: 2 };
 }
 
 function firingOf({ task, nextFiringAt }: ScheduleToSync): FireRequest {
@@ -727,6 +728,23 @@ export function defineEngineContractTests(contractTest: EngineContractTest): voi
   );
 
   contractTest(
+    "a sync where only the retries differ reports no change and keeps the schedule's planned firing",
+    async (harness) => {
+      const { engine } = harness;
+      const schedule = hourlyReportOf(await harness.pastInstant());
+      await engine.syncSchedules({ schedulesToSync: [schedule] });
+
+      const reply = await engine.syncSchedules({
+        schedulesToSync: [{ ...schedule, retries: 7, nextFiringAt: schedule.nextFiringAt + HOUR_IN_MILLISECONDS }],
+      });
+      const fireReply = await engine.fire(firingOf(schedule));
+
+      expect(reply).toEqual({ kind: "synced", added: [], changed: [], removed: [] });
+      expect(fireReply).toMatchObject({ kind: "fired", isRunCreated: true });
+    },
+  );
+
+  contractTest(
     "a tick reads the due schedules among the task names it is given, with the server's instant",
     async (harness) => {
       const { engine } = harness;
@@ -747,7 +765,10 @@ export function defineEngineContractTests(contractTest: EngineContractTest): voi
         scheduledTaskNames: ["due-report", "later-report", "report-without-a-record"],
       });
 
-      expect(reply.dueSchedules).toEqual(repliedOf({ serverInstant: expect.any(Number), dueSchedules: [dueReport] }));
+      const { task, cron, timezone, nextFiringAt } = dueReport;
+      expect(reply.dueSchedules).toEqual(
+        repliedOf({ serverInstant: expect.any(Number), dueSchedules: [{ task, cron, timezone, nextFiringAt }] }),
+      );
       const serverInstant = reply.dueSchedules?.kind === "replied" ? reply.dueSchedules.reply.serverInstant : 0;
       expect(serverInstant).toBeGreaterThan(pastInstant);
     },
@@ -758,19 +779,55 @@ export function defineEngineContractTests(contractTest: EngineContractTest): voi
     async (harness) => {
       const { engine } = harness;
       await suspendedOnANapOf(engine, await onlyLockedRunOf(engine, "sleeping-run"));
-      await engine.enqueue({ runs: sendEmailRunsOf(["delayed-run"], { delayInMilliseconds: HOUR_IN_MILLISECONDS }) });
+      await engine.enqueue({
+        runs: sendEmailRunsOf(["delayed-run"], { delayInMilliseconds: 2 * HOUR_IN_MILLISECONDS }),
+      });
 
       const reply = await engine.makeDue();
       const states = await statesOf(harness, ["sleeping-run", "delayed-run"]);
       const wokenRun = (await lockedRunsOf(engine, 2)).find(({ runId }) => runId === "sleeping-run");
 
-      expect(reply).toEqual({ kind: "madeDue", madeDueRunCount: 2 });
+      expect(reply).toEqual({
+        kind: "madeDue",
+        madeDueRuns: [
+          { task: "send-email", runId: "sleeping-run" },
+          { task: "send-email", runId: "delayed-run" },
+        ],
+      });
       expect(states).toEqual(["pending", "pending"]);
       expect(wokenRun).toMatchObject({ isResume: true, sleepsWokenAt: expect.any(Number) });
       expect(await engine.readStep({ ...wokenRun!, stepId: "nap" })).toEqual({
         kind: "read",
         savedValue: String(wokenRun!.sleepsWokenAt),
       });
+    },
+  );
+
+  contractTest(
+    `a makeDue given a task moves only its runs, even behind more than ${String(MOST_DUE_RUNS_PROMOTED_PER_PROMOTE)} timed runs of another task`,
+    async (harness) => {
+      const { engine } = harness;
+      const emailRunIds = Array.from(
+        { length: MOST_DUE_RUNS_PROMOTED_PER_PROMOTE + 1 },
+        (_, position) => `email-run-${String(position)}`,
+      );
+      await engine.enqueue({ runs: sendEmailRunsOf(emailRunIds, { delayInMilliseconds: MINUTE_IN_MILLISECONDS }) });
+      await engine.enqueue({
+        runs: [
+          {
+            runId: "report-run",
+            task: "build-report",
+            payload: "{}",
+            retries: 2,
+            delayInMilliseconds: HOUR_IN_MILLISECONDS,
+          },
+        ],
+      });
+
+      const reply = await engine.makeDue({ task: "build-report" });
+
+      expect(reply).toEqual({ kind: "madeDue", madeDueRuns: [{ task: "build-report", runId: "report-run" }] });
+      expect(await statesOf(harness, ["report-run", "email-run-0"])).toEqual(["pending", "delayed"]);
     },
   );
 

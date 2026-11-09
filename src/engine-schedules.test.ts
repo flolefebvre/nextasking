@@ -1,7 +1,7 @@
 import * as v from "valibot";
 import { expect, test } from "vitest";
 
-import { defineScheduledTask, defineTask } from "./definitions.js";
+import { defineScheduledTask, defineTask, retriesOf } from "./definitions.js";
 import type { AnyTaskDefinition } from "./definitions.js";
 import type { EpochMilliseconds } from "./durations.js";
 import { nextFiringInstantAfter, syncDeclaredSchedules } from "./engine-schedules.js";
@@ -118,6 +118,27 @@ test("a boot sync of a release with a changed cron and a schedule gone writes sc
     },
     { level: "info", message: "schedule removed", fields: { task: "send-digest", cron: "0 3 * * *", timezone: "UTC" } },
   ]);
+});
+
+test("a boot sync stores each scheduled task's retries, and a release changing only them writes no line", async () => {
+  let serverInstant = SERVER_INSTANT;
+  const engine = createInMemoryEngine({ now: () => serverInstant });
+  await scheduleSyncOf(engine, [scheduledTaskOf("build-report", { cron: "0 * * * *" })]).sync();
+  const retriesBefore = engine.storedScheduleOf("build-report")?.retries;
+  serverInstant += 60 * 60 * 1000;
+  const { sync, lines } = scheduleSyncOf(engine, [
+    defineScheduledTask("build-report", {
+      schedule: { cron: "0 * * * *" },
+      retries: 1,
+      handler: async () => undefined,
+    }) as AnyTaskDefinition,
+  ]);
+
+  await sync();
+
+  expect(retriesBefore).toBe(retriesOf(undefined));
+  expect(engine.storedScheduleOf("build-report")).toMatchObject({ retries: 1, nextFiringAt: Date.UTC(2030, 0, 1, 11) });
+  expect(lines).toEqual([]);
 });
 
 test("a boot sync refused for a newer schedule record resolves with one worker error naming the version", async () => {

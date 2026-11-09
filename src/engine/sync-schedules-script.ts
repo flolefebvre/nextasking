@@ -12,7 +12,7 @@ export const SYNC_SCHEDULES_SCRIPT = `${SYNC_SCHEDULES_KEYS_ASSIGNMENT}
 
 local scheduleCount = nonNegativeIntegerArgumentOf(ARGV[3], "scheduleCount")
 local firstScheduleArgument = 4
-local argumentsPerSchedule = 4
+local argumentsPerSchedule = 5
 if #ARGV ~= firstScheduleArgument - 1 + scheduleCount * argumentsPerSchedule then
   error("invalid argument: " .. tostring(scheduleCount) .. " schedules need " .. tostring(scheduleCount * argumentsPerSchedule) .. " schedule arguments")
 end
@@ -25,6 +25,7 @@ for position = 1, scheduleCount do
     cron = ARGV[scheduleArgument + 1],
     timezone = ARGV[scheduleArgument + 2],
     nextFiringAt = nonNegativeIntegerArgumentOf(ARGV[scheduleArgument + 3], "nextFiringAt"),
+    retries = nonNegativeIntegerArgumentOf(ARGV[scheduleArgument + 4], "retries"),
   }
   if schedule.task == "" or schedule.cron == "" or schedule.timezone == "" then
     error("invalid argument: a schedule carries its task, cron and timezone")
@@ -60,12 +61,13 @@ local function writeSchedule(schedule)
     "version", supportedRecordVersion,
     "cron", schedule.cron,
     "timezone", schedule.timezone,
-    "nextFiringAt", schedule.nextFiringAt)
+    "nextFiringAt", schedule.nextFiringAt,
+    "retries", schedule.retries)
   redis.call("ZADD", engineKeys.schedules, schedule.nextFiringAt, schedule.task)
 end
 
 for _, schedule in ipairs(schedulesToSync) do
-  local stored = redis.call("HMGET", scheduleKey(schedule.task), "cron", "timezone")
+  local stored = redis.call("HMGET", scheduleKey(schedule.task), "cron", "timezone", "retries")
   local summary = { schedule.task, schedule.cron, schedule.timezone }
   if not stored[1] then
     writeSchedule(schedule)
@@ -73,6 +75,8 @@ for _, schedule in ipairs(schedulesToSync) do
   elseif stored[1] ~= schedule.cron or stored[2] ~= schedule.timezone then
     writeSchedule(schedule)
     table.insert(changed, summary)
+  elseif tonumber(stored[3]) ~= schedule.retries then
+    redis.call("HSET", scheduleKey(schedule.task), "retries", schedule.retries)
   end
 end
 

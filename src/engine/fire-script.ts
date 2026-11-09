@@ -42,21 +42,7 @@ if instant > now then
   return { "notDue" }
 end
 
-local firingRun = {
-  runId = runId,
-  task = task,
-  payload = "",
-  retries = retries,
-  concurrencyKey = "",
-  eventName = "",
-  eventId = "",
-  delayInMilliseconds = 0,
-}
-local createdRunIds = enqueueRuns({ firingRun }, "", "", now, 0)
-local isRunCreated = #createdRunIds == 1
-if isRunCreated then
-  redis.call("HSET", runRecordKey(runId), "scheduledAt", instant)
-end
+local isRunCreated = createFiringRun(task, runId, retries, instant, now)
 redis.call("HSET", recordKey, "nextFiringAt", instantAfter, "previousFiringAt", instant)
 redis.call("ZADD", engineKeys.schedules, instantAfter, task)
 

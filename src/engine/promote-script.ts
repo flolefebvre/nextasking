@@ -45,8 +45,9 @@ for _, runId in ipairs(redis.call("ZRANGE", engineKeys.locks, "-inf", now, "BYSC
   end
 end
 
-local promotedRunCount, passedOverRecordCount, firstUnknownVersion =
-  promoteDueRuns(now, mostDueRunsPromoted, mostRecordsPassedOver, nil)
+local promotedRuns, passedOverRecordCount, firstUnknownVersion =
+  promoteDueRuns(dueRunWalkOf({ engineKeys.due }, now), mostDueRunsPromoted, mostRecordsPassedOver, nil)
+local promotedRunCount = #promotedRuns
 
 if passedOverRecordCount == mostRecordsPassedOver and promotedRunCount == 0 and #stalledRuns == 0 and #thirdStalls == 0 then
   return { "unknownVersion", firstUnknownVersion }

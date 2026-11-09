@@ -341,7 +341,7 @@ engineTest("listSchedules shows the previous firing kept across a cron change", 
   const firedAt = (await serverInstantInMillisecondsOf(redis)) - 1000;
   const nextFiringAt = firedAt + 3_600_000;
   await engine.syncSchedules({
-    schedulesToSync: [{ task: "build-report", cron: "0 * * * *", timezone: "UTC", nextFiringAt: firedAt }],
+    schedulesToSync: [{ task: "build-report", cron: "0 * * * *", timezone: "UTC", nextFiringAt: firedAt, retries: 0 }],
   });
   await engine.fire({
     task: "build-report",
@@ -351,7 +351,9 @@ engineTest("listSchedules shows the previous firing kept across a cron change", 
     retries: 0,
   });
   await engine.syncSchedules({
-    schedulesToSync: [{ task: "build-report", cron: "30 * * * *", timezone: "UTC", nextFiringAt: nextFiringAt + 1 }],
+    schedulesToSync: [
+      { task: "build-report", cron: "30 * * * *", timezone: "UTC", nextFiringAt: nextFiringAt + 1, retries: 0 },
+    ],
   });
 
   const [buildReport] = await readerOf(context).listSchedules();
@@ -369,7 +371,7 @@ engineTest("listSchedules reads a schedule record of a newer version as no recor
   const { engine, redis, keys } = context;
   const nextFiringAt = (await serverInstantInMillisecondsOf(redis)) + 3_600_000;
   await engine.syncSchedules({
-    schedulesToSync: [{ task: "build-report", cron: "0 * * * *", timezone: "UTC", nextFiringAt }],
+    schedulesToSync: [{ task: "build-report", cron: "0 * * * *", timezone: "UTC", nextFiringAt, retries: 0 }],
   });
   await redis.hset(keys.schedule("build-report"), "version", RECORD_VERSION + 1);
 

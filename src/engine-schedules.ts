@@ -42,6 +42,7 @@ export async function syncDeclaredSchedules({ engine, definitions, logger }: Sch
   const schedulesToSync = declaredSchedulesOf(definitions).map((declaredSchedule) => ({
     ...declaredSchedule,
     nextFiringAt: nextFiringInstantAfter(declaredSchedule, serverInstant),
+    retries: retriesOf(definitions.tasksByName.get(declaredSchedule.task)),
   }));
   writeLifecycleLines(logger, scheduleSyncLinesOf(await engine.syncSchedules({ schedulesToSync })));
 }

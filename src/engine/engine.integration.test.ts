@@ -113,8 +113,8 @@ engineTest(
     const instantBefore = await serverInstantInMillisecondsOf(redis);
     await engine.syncSchedules({
       schedulesToSync: [
-        { ...HOURLY_REPORT, nextFiringAt: instantBefore - 1000 },
-        { ...HOURLY_REPORT, task: "newer-report", nextFiringAt: instantBefore - 1000 },
+        { ...HOURLY_REPORT, nextFiringAt: instantBefore - 1000, retries: 2 },
+        { ...HOURLY_REPORT, task: "newer-report", nextFiringAt: instantBefore - 1000, retries: 2 },
       ],
     });
     await redis.hset(keys.schedule("newer-report"), "version", RECORD_VERSION + 1);

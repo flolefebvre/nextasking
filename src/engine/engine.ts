@@ -19,9 +19,11 @@ import {
   MOST_RUNS_PARKED_PER_FETCH,
   NEWER_VERSION_RECORDS_PASSED_OVER_PER_FETCH,
 } from "./fetch-script.js";
+import { FIRE_NOW_SCRIPT, fireNowKeysOf } from "./fire-now-script.js";
 import { FIRE_SCRIPT, fireKeysOf } from "./fire-script.js";
 import { LUA_LIBRARY } from "./lua-library.js";
 import { MAKE_DUE_SCRIPT, makeDueKeysOf } from "./make-due-script.js";
+import { BUSY_RUN_COUNTS_SCRIPT, busyRunCountsKeysOf } from "./busy-run-counts-script.js";
 import {
   MOST_DUE_RUNS_PROMOTED_PER_PROMOTE,
   NEWER_VERSION_RECORDS_PASSED_OVER_PER_PROMOTE,
@@ -237,16 +239,17 @@ export type FireRequest = {
   retries: number;
 };
 
-export type FireReply =
-  | { kind: "fired"; runId: RunId; isRunCreated: boolean }
-  | AlreadyReply
-  | NotDueReply
-  | NoScheduleReply
-  | UnknownVersionReply;
+export type FireReply = FiredReply | AlreadyReply | NotDueReply | NoScheduleReply | UnknownVersionReply;
+
+export type FireNowRequest = { task: string; instant: EpochMilliseconds; runId: RunId; defaultRetries: number };
+
+export type FiredReply = { kind: "fired"; runId: RunId; isRunCreated: boolean };
+
+export type FireNowReply = FiredReply | NoScheduleReply | UnknownVersionReply;
 
 export type ScheduleSummary = { task: string; cron: string; timezone: string };
 
-export type ScheduleToSync = ScheduleSummary & { nextFiringAt: EpochMilliseconds };
+export type ScheduleToSync = ScheduleSummary & { nextFiringAt: EpochMilliseconds; retries: number };
 
 export type SyncSchedulesRequest = { schedulesToSync: readonly ScheduleToSync[] };
 
@@ -264,7 +267,18 @@ export type ReplayRequest = { runId: RunId };
 
 export type ReplayReply = { kind: "replayed"; task: string } | NotFoundReply | WrongStateReply | UnknownVersionReply;
 
-export type MakeDueReply = { kind: "madeDue"; madeDueRunCount: number };
+export type MakeDueRequest = { task?: string };
+
+export type MadeDueRun = { task: string; runId: RunId };
+
+export type MakeDueReply = { kind: "madeDue"; madeDueRuns: MadeDueRun[] };
+
+export type BusyRunCounts = {
+  pendingRunCount: number;
+  executingRunCount: number;
+  waitingForConcurrencySlotRunCount: number;
+  dueRunCount: number;
+};
 
 export type DueSchedule = ScheduleSummary & { nextFiringAt: EpochMilliseconds };
 
@@ -298,12 +312,30 @@ export type Engine = {
   saveStep: (request: SaveStepRequest) => Promise<SaveStepReply>;
   readStep: (request: ReadStepRequest) => Promise<ReadStepReply>;
   fire: (request: FireRequest) => Promise<FireReply>;
+  fireNow: (request: FireNowRequest) => Promise<FireNowReply>;
   syncSchedules: (request: SyncSchedulesRequest) => Promise<SyncSchedulesReply>;
   prune: (request: PruneRequest) => Promise<PruneReply>;
   replay: (request: ReplayRequest) => Promise<ReplayReply>;
-  makeDue: () => Promise<MakeDueReply>;
+  makeDue: (request?: MakeDueRequest) => Promise<MakeDueReply>;
+  busyRunCounts: () => Promise<BusyRunCounts>;
   serverInstant: () => Promise<EpochMilliseconds>;
 };
+
+function busyRunCountsOf(reply: unknown): BusyRunCounts {
+  if (Array.isArray(reply) && reply.length === 5 && reply[0] === "counted") {
+    const counts = reply.slice(1).map(Number);
+    if (counts.every((count) => Number.isSafeInteger(count))) {
+      const [pendingRunCount, executingRunCount, waitingForConcurrencySlotRunCount, dueRunCount] = counts as [
+        number,
+        number,
+        number,
+        number,
+      ];
+      return { pendingRunCount, executingRunCount, waitingForConcurrencySlotRunCount, dueRunCount };
+    }
+  }
+  throw unreadableReplyError("busyRunCounts", reply);
+}
 
 function unreadableReplyError(scriptName: string, reply: unknown): Error {
   return new Error(`The ${scriptName} script sent a reply the engine cannot read: ${JSON.stringify(reply)}`);
@@ -599,6 +631,10 @@ function fireReplyOf(reply: unknown): FireReply {
       return fireRefusal;
     }
   }
+  return firedReplyOf(reply) ?? throwUnreadableReply("fire", reply);
+}
+
+function firedReplyOf(reply: unknown): FiredReply | undefined {
   if (
     Array.isArray(reply) &&
     reply.length === 3 &&
@@ -608,7 +644,22 @@ function fireReplyOf(reply: unknown): FireReply {
   ) {
     return { kind: "fired", runId: reply[1], isRunCreated: reply[2] === 1 };
   }
-  throw unreadableReplyError("fire", reply);
+  return undefined;
+}
+
+function throwUnreadableReply(scriptName: string, reply: unknown): never {
+  throw unreadableReplyError(scriptName, reply);
+}
+
+function fireNowReplyOf(reply: unknown): FireNowReply {
+  const unknownVersionReply = unknownVersionReplyOf(reply);
+  if (unknownVersionReply !== undefined) {
+    return unknownVersionReply;
+  }
+  if (Array.isArray(reply) && reply.length === 1 && reply[0] === "noSchedule") {
+    return { kind: "noSchedule" };
+  }
+  return firedReplyOf(reply) ?? throwUnreadableReply("fireNow", reply);
 }
 
 function scheduleSummaryOf(reply: unknown): ScheduleSummary | undefined {
@@ -676,9 +727,20 @@ function pruneArgumentsOf({ completedRetention, failedRetention }: PruneRequest)
   ];
 }
 
+function madeDueRunOf(reply: unknown): MadeDueRun | undefined {
+  if (!isStringList(reply) || reply.length !== 2) {
+    return undefined;
+  }
+  const [task, runId] = reply as [string, RunId];
+  return { task, runId };
+}
+
 function makeDueReplyOf(reply: unknown): MakeDueReply {
-  if (Array.isArray(reply) && reply.length === 2 && reply[0] === "madeDue" && Number.isSafeInteger(reply[1])) {
-    return { kind: "madeDue", madeDueRunCount: Number(reply[1]) };
+  if (Array.isArray(reply) && reply.length === 2 && reply[0] === "madeDue" && Array.isArray(reply[1])) {
+    const madeDueRuns = definedElementsOf((reply[1] as unknown[]).map(madeDueRunOf));
+    if (madeDueRuns !== undefined) {
+      return { kind: "madeDue", madeDueRuns };
+    }
   }
   throw unreadableReplyError("makeDue", reply);
 }
@@ -943,12 +1005,18 @@ export function createEngine(client: Redis, prefix: string): Engine {
   const runSaveStepScript = scriptRunnerWithKeysOf("nextaskingSaveStep", SAVE_STEP_SCRIPT, 1);
   const runReadStepScript = scriptRunnerWithKeysOf("nextaskingReadStep", READ_STEP_SCRIPT, 1);
   const runMakeDueScript = scriptRunnerOf("nextaskingMakeDue", MAKE_DUE_SCRIPT, makeDueKeysOf(keys));
+  const runBusyRunCountsScript = scriptRunnerOf(
+    "nextaskingBusyRunCounts",
+    BUSY_RUN_COUNTS_SCRIPT,
+    busyRunCountsKeysOf(keys),
+  );
   const runSyncSchedulesScript = scriptRunnerOf(
     "nextaskingSyncSchedules",
     SYNC_SCHEDULES_SCRIPT,
     syncSchedulesKeysOf(keys),
   );
   const runFireScript = scriptRunnerOf("nextaskingFire", FIRE_SCRIPT, fireKeysOf(keys));
+  const runFireNowScript = scriptRunnerOf("nextaskingFireNow", FIRE_NOW_SCRIPT, fireNowKeysOf(keys));
   const runReplayScript = scriptRunnerOf("nextaskingReplay", REPLAY_SCRIPT, replayKeysOf(keys));
   const runPruneScript = scriptRunnerWithKeysOf("nextaskingPrune", PRUNE_SCRIPT, 3);
   return {
@@ -958,16 +1026,29 @@ export function createEngine(client: Redis, prefix: string): Engine {
       pruneReplyOf(await runPruneScript(pruneKeysOf(keys, request.task), pruneArgumentsOf(request))),
     fire: async ({ task, instant, instantAfter, runId, retries }) =>
       fireReplyOf(await runFireScript([task, instant, instantAfter, runId, retries])),
+    fireNow: async ({ task, instant, runId, defaultRetries }) =>
+      fireNowReplyOf(await runFireNowScript([task, instant, runId, defaultRetries])),
     syncSchedules: async ({ schedulesToSync }) =>
       syncSchedulesReplyOf(
         await runSyncSchedulesScript([
           schedulesToSync.length,
-          ...schedulesToSync.flatMap(({ task, cron, timezone, nextFiringAt }) => [task, cron, timezone, nextFiringAt]),
+          ...schedulesToSync.flatMap(({ task, cron, timezone, nextFiringAt, retries }) => [
+            task,
+            cron,
+            timezone,
+            nextFiringAt,
+            retries,
+          ]),
         ]),
       ),
-    makeDue: async () =>
+    busyRunCounts: async () => busyRunCountsOf(await runBusyRunCountsScript([])),
+    makeDue: async ({ task } = {}) =>
       makeDueReplyOf(
-        await runMakeDueScript([MOST_DUE_RUNS_PROMOTED_PER_PROMOTE, NEWER_VERSION_RECORDS_PASSED_OVER_PER_PROMOTE]),
+        await runMakeDueScript([
+          MOST_DUE_RUNS_PROMOTED_PER_PROMOTE,
+          NEWER_VERSION_RECORDS_PASSED_OVER_PER_PROMOTE,
+          task ?? "",
+        ]),
       ),
     saveStep: async ({ runId, lockToken, stepId, step }) =>
       saveStepReplyOf(

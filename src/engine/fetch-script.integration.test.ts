@@ -172,7 +172,9 @@ engineTest(
     await engine.fetch(fetchRequestOf(2, limitsByTask));
     const plannedInstant = (await serverInstantInMillisecondsOf(redis)) - 60_000;
     await engine.syncSchedules({
-      schedulesToSync: [{ task: "build-report", cron: "0 * * * *", timezone: "UTC", nextFiringAt: plannedInstant }],
+      schedulesToSync: [
+        { task: "build-report", cron: "0 * * * *", timezone: "UTC", nextFiringAt: plannedInstant, retries: 0 },
+      ],
     });
     await engine.fire({
       task: "build-report",

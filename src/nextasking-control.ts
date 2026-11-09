@@ -4,7 +4,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 
 import { createRedisConnections } from "./connection.js";
 import type { ConnectionConfig } from "./connection.js";
-import { parseDuration } from "./durations.js";
+import { timeoutInMillisecondsOf } from "./control-timeout.js";
 import type { Duration, DurationInMilliseconds } from "./durations.js";
 import { deriveFiringRunId } from "./ids.js";
 import type { RunId } from "./ids.js";
@@ -266,12 +266,4 @@ function shownBusyCountsOf(busyCounts: BusyCountsByKind): string {
     `${busyCounts.fanOutsLeft} fan-outs left`,
     `${busyCounts.firingsStarting} firings starting a run`,
   ].join(", ");
-}
-
-function timeoutInMillisecondsOf(callName: string, timeout: Duration): DurationInMilliseconds {
-  try {
-    return parseDuration(timeout);
-  } catch (error) {
-    throw new Error(`Invalid ${callName} timeout: ${(error as Error).message}`, { cause: error });
-  }
 }

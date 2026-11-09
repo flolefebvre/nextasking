@@ -51,7 +51,10 @@ engineTest("makeDue moves every delayed, suspended and backingOff run to pending
 
   const reply = await engine.makeDue();
 
-  expect(reply).toEqual({ kind: "madeDue", madeDueRunCount: 3 });
+  expect(reply).toEqual({
+    kind: "madeDue",
+    madeDueRuns: ["backing-off-run", "delayed-run", "suspended-run"].map((runId) => ({ task: "send-email", runId })),
+  });
   expect(await redis.zcard(keys.due)).toBe(0);
   const pendingRunIds = await redis.zrange(keys.pending, 0, -1);
   expect(pendingRunIds[0]).toBe("pending-run");
@@ -101,7 +104,7 @@ engineTest("makeDue with no timed run writes nothing", async (context) => {
 
   const reply = await engine.makeDue();
 
-  expect(reply).toEqual({ kind: "madeDue", madeDueRunCount: 0 });
+  expect(reply).toEqual({ kind: "madeDue", madeDueRuns: [] });
   expect(await storedValuesByKeyOf(redis, keyPrefix)).toEqual(storedValuesBefore);
 });
 
@@ -116,7 +119,7 @@ engineTest("makeDue passes over a record of a newer version and leaves it in pla
 
   const reply = await engine.makeDue();
 
-  expect(reply).toEqual({ kind: "madeDue", madeDueRunCount: 1 });
+  expect(reply).toEqual({ kind: "madeDue", madeDueRuns: [{ task: "send-email", runId: "older-run" }] });
   expect(await redis.zrange(keys.due, 0, -1)).toEqual(["newer-run"]);
   expect(await redis.hget(keys.runRecord("older-run"), "state")).toBe("pending");
 });
@@ -132,7 +135,40 @@ engineTest(`makeDue moves at most ${String(MOST_DUE_RUNS_PROMOTED_PER_PROMOTE)} 
   const firstReply = await engine.makeDue();
   const secondReply = await engine.makeDue();
 
-  expect(firstReply).toEqual({ kind: "madeDue", madeDueRunCount: MOST_DUE_RUNS_PROMOTED_PER_PROMOTE });
-  expect(secondReply).toEqual({ kind: "madeDue", madeDueRunCount: 1 });
+  expect(firstReply.madeDueRuns).toHaveLength(MOST_DUE_RUNS_PROMOTED_PER_PROMOTE);
+  expect(secondReply.madeDueRuns).toHaveLength(1);
   expect(await redis.zcard(keys.due)).toBe(0);
+});
+
+engineTest("makeDue given a task moves only that task's timed runs and names each", async (context) => {
+  const { engine, redis, keys } = context;
+  await timedRunsOf(context);
+  await engine.enqueue({
+    runs: [
+      { runId: "report-run", task: "build-report", payload: "{}", retries: 3, delayInMilliseconds: 1 },
+      { runId: "later-report-run", task: "build-report", payload: "{}", retries: 3, delayInMilliseconds: 2 },
+    ],
+  });
+
+  const reply = await engine.makeDue({ task: "build-report" });
+
+  expect(reply).toEqual({
+    kind: "madeDue",
+    madeDueRuns: [
+      { task: "build-report", runId: "report-run" },
+      { task: "build-report", runId: "later-report-run" },
+    ],
+  });
+  expect(new Set(await redis.zrange(keys.due, 0, -1))).toEqual(
+    new Set(["suspended-run", "backing-off-run", "delayed-run"]),
+  );
+});
+
+engineTest("makeDue given a task merges its three timed states in due order", async (context) => {
+  const { engine } = context;
+  await timedRunsOf(context);
+
+  const reply = await engine.makeDue({ task: "send-email" });
+
+  expect(reply.madeDueRuns.map(({ runId }) => runId)).toEqual(["backing-off-run", "delayed-run", "suspended-run"]);
 });

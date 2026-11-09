@@ -197,10 +197,35 @@ local function leaveState(runId, task, state)
   end
 end
 
-local function promoteDueRuns(dueBefore, mostDueRunsPromoted, mostRecordsPassedOver, beforePromotingSuspendedRun)
-  local promotedRunCount, passedOverRecordCount, firstUnknownVersion = 0, 0, nil
-  while promotedRunCount < mostDueRunsPromoted and passedOverRecordCount < mostRecordsPassedOver do
-    local runId = redis.call("ZRANGE", engineKeys.due, "-inf", dueBefore, "BYSCORE", "LIMIT", passedOverRecordCount, 1)[1]
+local function dueRunWalkOf(dueIndexKeys, dueBefore)
+  local passedOverCountByIndexKey, indexKeyOfNextRun = {}, nil
+  for _, indexKey in ipairs(dueIndexKeys) do
+    passedOverCountByIndexKey[indexKey] = 0
+  end
+  return {
+    nextRunId = function()
+      local nextRunId, nextDueInstant = nil, nil
+      for _, indexKey in ipairs(dueIndexKeys) do
+        local head = redis.call("ZRANGE", indexKey, "-inf", dueBefore, "BYSCORE",
+          "LIMIT", passedOverCountByIndexKey[indexKey], 1, "WITHSCORES")
+        local dueInstant = tonumber(head[2])
+        if head[1] and (not nextRunId or dueInstant < nextDueInstant
+          or (dueInstant == nextDueInstant and head[1] < nextRunId)) then
+          nextRunId, nextDueInstant, indexKeyOfNextRun = head[1], dueInstant, indexKey
+        end
+      end
+      return nextRunId
+    end,
+    passOverNextRun = function()
+      passedOverCountByIndexKey[indexKeyOfNextRun] = passedOverCountByIndexKey[indexKeyOfNextRun] + 1
+    end,
+  }
+end
+
+local function promoteDueRuns(dueRunWalk, mostDueRunsPromoted, mostRecordsPassedOver, beforePromotingSuspendedRun)
+  local promotedRuns, passedOverRecordCount, firstUnknownVersion = {}, 0, nil
+  while #promotedRuns < mostDueRunsPromoted and passedOverRecordCount < mostRecordsPassedOver do
+    local runId = dueRunWalk.nextRunId()
     if not runId then
       break
     end
@@ -210,6 +235,7 @@ local function promoteDueRuns(dueBefore, mostDueRunsPromoted, mostRecordsPassedO
         firstUnknownVersion = refusal[2]
       end
       passedOverRecordCount = passedOverRecordCount + 1
+      dueRunWalk.passOverNextRun()
     else
       local record = redis.call("HMGET", runRecordKey(runId), "task", "state")
       local task, state = record[1], record[2]
@@ -219,10 +245,10 @@ local function promoteDueRuns(dueBefore, mostDueRunsPromoted, mostRecordsPassedO
       leaveState(runId, task, state)
       redis.call("HDEL", runRecordKey(runId), "startsAt", "nextAttemptAt")
       enterPending(runId, task, nil)
-      promotedRunCount = promotedRunCount + 1
+      table.insert(promotedRuns, { task, runId })
     end
   end
-  return promotedRunCount, passedOverRecordCount, firstUnknownVersion
+  return promotedRuns, passedOverRecordCount, firstUnknownVersion
 end
 
 local function releaseSlotAndWakeParkedRuns(runId, task, concurrencyKey, concurrencyLimit)
@@ -314,5 +340,24 @@ local function enqueueRuns(runsToCreate, dedupEventName, dedupEventId, now, dedu
     redis.call("ZADD", eventDedupKey(dedupEventName), now + dedupWindowInMilliseconds, dedupEventId)
   end
   return createdRunIds, skippedRunIds
+end
+
+local function createFiringRun(task, runId, retries, scheduledAt, now)
+  local firingRun = {
+    runId = runId,
+    task = task,
+    payload = "",
+    retries = retries,
+    concurrencyKey = "",
+    eventName = "",
+    eventId = "",
+    delayInMilliseconds = 0,
+  }
+  local createdRunIds = enqueueRuns({ firingRun }, "", "", now, 0)
+  local isRunCreated = #createdRunIds == 1
+  if isRunCreated then
+    redis.call("HSET", runRecordKey(runId), "scheduledAt", scheduledAt)
+  end
+  return isRunCreated
 end
 `;

@@ -38,7 +38,7 @@ pnpm typecheck:dist       Typecheck tests/dist-consumer against the built dist, 
 pnpm format               Prettier, rewriting files in place
 pnpm format:check         Prettier in check mode (fails on unformatted files)
 pnpm lint                 ESLint flat config (eslint.config.mjs), warnings are failures
-pnpm duplication          jscpd copy/paste detection (.jscpd.json); any clone is a failure
+pnpm duplication          jscpd copy/paste detection (.jscpd.json), import declarations not counted; any clone is a failure
 pnpm typecheck            TypeScript with no emit
 pnpm test                 Vitest, once, the unit and integration projects (integration needs Docker)
 pnpm test:unit            Vitest, once, the unit project alone (no Docker)

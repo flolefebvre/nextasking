@@ -341,4 +341,23 @@ local function enqueueRuns(runsToCreate, dedupEventName, dedupEventId, now, dedu
   end
   return createdRunIds, skippedRunIds
 end
+
+local function createFiringRun(task, runId, retries, scheduledAt, now)
+  local firingRun = {
+    runId = runId,
+    task = task,
+    payload = "",
+    retries = retries,
+    concurrencyKey = "",
+    eventName = "",
+    eventId = "",
+    delayInMilliseconds = 0,
+  }
+  local createdRunIds = enqueueRuns({ firingRun }, "", "", now, 0)
+  local isRunCreated = #createdRunIds == 1
+  if isRunCreated then
+    redis.call("HSET", runRecordKey(runId), "scheduledAt", scheduledAt)
+  end
+  return isRunCreated
+end
 `;

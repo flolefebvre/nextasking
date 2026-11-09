@@ -19,6 +19,7 @@ import {
   MOST_RUNS_PARKED_PER_FETCH,
   NEWER_VERSION_RECORDS_PASSED_OVER_PER_FETCH,
 } from "./fetch-script.js";
+import { FIRE_NOW_SCRIPT, fireNowKeysOf } from "./fire-now-script.js";
 import { FIRE_SCRIPT, fireKeysOf } from "./fire-script.js";
 import { LUA_LIBRARY } from "./lua-library.js";
 import { MAKE_DUE_SCRIPT, makeDueKeysOf } from "./make-due-script.js";
@@ -237,12 +238,13 @@ export type FireRequest = {
   retries: number;
 };
 
-export type FireReply =
-  | { kind: "fired"; runId: RunId; isRunCreated: boolean }
-  | AlreadyReply
-  | NotDueReply
-  | NoScheduleReply
-  | UnknownVersionReply;
+export type FireReply = FiredReply | AlreadyReply | NotDueReply | NoScheduleReply | UnknownVersionReply;
+
+export type FireNowRequest = { task: string; instant: EpochMilliseconds; runId: RunId; defaultRetries: number };
+
+export type FiredReply = { kind: "fired"; runId: RunId; isRunCreated: boolean };
+
+export type FireNowReply = FiredReply | NoScheduleReply | UnknownVersionReply;
 
 export type ScheduleSummary = { task: string; cron: string; timezone: string };
 
@@ -302,6 +304,7 @@ export type Engine = {
   saveStep: (request: SaveStepRequest) => Promise<SaveStepReply>;
   readStep: (request: ReadStepRequest) => Promise<ReadStepReply>;
   fire: (request: FireRequest) => Promise<FireReply>;
+  fireNow: (request: FireNowRequest) => Promise<FireNowReply>;
   syncSchedules: (request: SyncSchedulesRequest) => Promise<SyncSchedulesReply>;
   prune: (request: PruneRequest) => Promise<PruneReply>;
   replay: (request: ReplayRequest) => Promise<ReplayReply>;
@@ -603,6 +606,10 @@ function fireReplyOf(reply: unknown): FireReply {
       return fireRefusal;
     }
   }
+  return firedReplyOf(reply) ?? throwUnreadableReply("fire", reply);
+}
+
+function firedReplyOf(reply: unknown): FiredReply | undefined {
   if (
     Array.isArray(reply) &&
     reply.length === 3 &&
@@ -612,7 +619,22 @@ function fireReplyOf(reply: unknown): FireReply {
   ) {
     return { kind: "fired", runId: reply[1], isRunCreated: reply[2] === 1 };
   }
-  throw unreadableReplyError("fire", reply);
+  return undefined;
+}
+
+function throwUnreadableReply(scriptName: string, reply: unknown): never {
+  throw unreadableReplyError(scriptName, reply);
+}
+
+function fireNowReplyOf(reply: unknown): FireNowReply {
+  const unknownVersionReply = unknownVersionReplyOf(reply);
+  if (unknownVersionReply !== undefined) {
+    return unknownVersionReply;
+  }
+  if (Array.isArray(reply) && reply.length === 1 && reply[0] === "noSchedule") {
+    return { kind: "noSchedule" };
+  }
+  return firedReplyOf(reply) ?? throwUnreadableReply("fireNow", reply);
 }
 
 function scheduleSummaryOf(reply: unknown): ScheduleSummary | undefined {
@@ -964,6 +986,7 @@ export function createEngine(client: Redis, prefix: string): Engine {
     syncSchedulesKeysOf(keys),
   );
   const runFireScript = scriptRunnerOf("nextaskingFire", FIRE_SCRIPT, fireKeysOf(keys));
+  const runFireNowScript = scriptRunnerOf("nextaskingFireNow", FIRE_NOW_SCRIPT, fireNowKeysOf(keys));
   const runReplayScript = scriptRunnerOf("nextaskingReplay", REPLAY_SCRIPT, replayKeysOf(keys));
   const runPruneScript = scriptRunnerWithKeysOf("nextaskingPrune", PRUNE_SCRIPT, 3);
   return {
@@ -973,6 +996,8 @@ export function createEngine(client: Redis, prefix: string): Engine {
       pruneReplyOf(await runPruneScript(pruneKeysOf(keys, request.task), pruneArgumentsOf(request))),
     fire: async ({ task, instant, instantAfter, runId, retries }) =>
       fireReplyOf(await runFireScript([task, instant, instantAfter, runId, retries])),
+    fireNow: async ({ task, instant, runId, defaultRetries }) =>
+      fireNowReplyOf(await runFireNowScript([task, instant, runId, defaultRetries])),
     syncSchedules: async ({ schedulesToSync }) =>
       syncSchedulesReplyOf(
         await runSyncSchedulesScript([

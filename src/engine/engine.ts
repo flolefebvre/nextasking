@@ -1,11 +1,11 @@
 import { randomUUID } from "node:crypto";
 
-import type { ChainableCommander, Redis } from "ioredis";
-
 import type { RunFailedPayload } from "../built-in-events.js";
 import type { ConcurrencyKey } from "../definitions.js";
 import type { DurationInMilliseconds, EpochMilliseconds } from "../durations.js";
 import type { EventId, RunId, StepId } from "../ids.js";
+import { builtInCommandOf, scriptCommandOf } from "../redis-client.js";
+import type { CommandArgument, CommandResult, RedisClient, RedisCommand } from "../redis-client.js";
 import type { FailureReason } from "../run-states.js";
 import { isRunState } from "../run-states.js";
 import type { RunState } from "../run-states.js";
@@ -35,8 +35,6 @@ import { READ_STEP_SCRIPT, readStepKeysOf } from "./read-step-script.js";
 import { RENEW_SCRIPT, renewKeysOf } from "./renew-script.js";
 import { REPLAY_SCRIPT, replayKeysOf } from "./replay-script.js";
 import { SAVE_STEP_SCRIPT, saveStepKeysOf } from "./save-step-script.js";
-import { defineScriptCommand } from "./script-commands.js";
-import type { ScriptArgument } from "./script-commands.js";
 import { SETTLE_SCRIPT, settleKeysOf } from "./settle-script.js";
 import { SYNC_SCHEDULES_SCRIPT, syncSchedulesKeysOf } from "./sync-schedules-script.js";
 
@@ -636,7 +634,7 @@ function readStepReplyOf(reply: unknown): ReadStepReply {
   throw unreadableReplyError("readStep", reply);
 }
 
-function stepArgumentOf(step: StepToSave): ScriptArgument {
+function stepArgumentOf(step: StepToSave): CommandArgument {
   if (step.kind === "value") {
     return step.value;
   }
@@ -747,7 +745,7 @@ function pruneReplyOf(reply: unknown): PruneReply {
   throw unreadableReplyError("prune", reply);
 }
 
-function pruneArgumentsOf({ completedRetention, failedRetention }: PruneRequest): ScriptArgument[] {
+function pruneArgumentsOf({ completedRetention, failedRetention }: PruneRequest): CommandArgument[] {
   return [
     completedRetention.maxAgeInMilliseconds,
     completedRetention.maxRunCount,
@@ -799,7 +797,7 @@ function enqueueReplyOf(reply: unknown): EnqueueReply {
   throw unreadableReplyError("enqueue", reply);
 }
 
-function runArgumentsOf(run: RunToCreate): ScriptArgument[] {
+function runArgumentsOf(run: RunToCreate): CommandArgument[] {
   return [
     storedRunIdOf(run.task, run.runId),
     run.task,
@@ -840,7 +838,7 @@ function errorWithTextsCutOf<CutError extends { message: string; stack: string }
   return { ...error, message: errorTextCutOf(error.message), stack: errorTextCutOf(error.stack) };
 }
 
-function failureNoticeArgumentsOf(failureNotice: FailureNotice | undefined): ScriptArgument[] {
+function failureNoticeArgumentsOf(failureNotice: FailureNotice | undefined): CommandArgument[] {
   if (failureNotice === undefined || failureNotice.runs.length === 0) {
     return [...NO_TEXT_AROUND_FAILED_AT, "", "", 0];
   }
@@ -854,7 +852,7 @@ function failureNoticeArgumentsOf(failureNotice: FailureNotice | undefined): Scr
   ];
 }
 
-function settleArgumentsOf(outcome: SettleOutcome): ScriptArgument[] {
+function settleArgumentsOf(outcome: SettleOutcome): CommandArgument[] {
   return [
     ...("error" in outcome ? textAroundFailedAtOf(errorWithTextsCutOf(outcome.error)) : NO_TEXT_AROUND_FAILED_AT),
     outcome.kind === "retry" ? outcome.backoffInMilliseconds : "",
@@ -865,29 +863,25 @@ function settleArgumentsOf(outcome: SettleOutcome): ScriptArgument[] {
   ];
 }
 
-type ScriptRunner = (scriptArguments: readonly ScriptArgument[]) => Promise<unknown>;
+type ScriptRunner = (scriptArguments: readonly CommandArgument[]) => Promise<unknown>;
 
-type PipelinedScriptRunnerWithKeys = ((
+type BatchableScriptRunnerWithKeys = ((
   scriptKeys: readonly string[],
-  scriptArguments: readonly ScriptArgument[],
+  scriptArguments: readonly CommandArgument[],
 ) => Promise<unknown>) & {
-  appendTo: (
-    pipeline: ChainableCommander,
-    scriptKeys: readonly string[],
-    scriptArguments: readonly ScriptArgument[],
-  ) => void;
+  commandOf: (scriptKeys: readonly string[], scriptArguments: readonly CommandArgument[]) => RedisCommand;
 };
 
-type PipelinedScriptRunner = ScriptRunner & {
-  appendTo: (pipeline: ChainableCommander, scriptArguments: readonly ScriptArgument[]) => void;
+type BatchableScriptRunner = ScriptRunner & {
+  commandOf: (scriptArguments: readonly CommandArgument[]) => RedisCommand;
 };
 
-const PROMOTE_ARGUMENTS: readonly ScriptArgument[] = [
+const PROMOTE_ARGUMENTS: readonly CommandArgument[] = [
   MOST_DUE_RUNS_PROMOTED_PER_PROMOTE,
   NEWER_VERSION_RECORDS_PASSED_OVER_PER_PROMOTE,
 ];
 
-function renewArgumentsOf({ heldLocks, lockDurationInMilliseconds }: RenewRequest): ScriptArgument[] {
+function renewArgumentsOf({ heldLocks, lockDurationInMilliseconds }: RenewRequest): CommandArgument[] {
   return [
     lockDurationInMilliseconds,
     heldLocks.length,
@@ -912,17 +906,15 @@ function serverInstantOf(reply: unknown): EpochMilliseconds {
   throw new Error(`The TIME of the server sent a reply the engine cannot read: ${JSON.stringify(reply)}`);
 }
 
-export type PipelineResult = [error: Error | null, reply: unknown];
-
 function tickCommandReplyOf<Reply>(
-  [error, reply]: PipelineResult,
+  commandResult: CommandResult,
   readReply: (reply: unknown) => Reply,
 ): TickCommandReply<Reply> {
-  if (error !== null) {
-    return { kind: "failed", error };
+  if (commandResult.kind === "failed") {
+    return commandResult;
   }
   try {
-    return { kind: "replied", reply: readReply(reply) };
+    return { kind: "replied", reply: readReply(commandResult.reply) };
   } catch (readError) {
     return { kind: "failed", error: readError as Error };
   }
@@ -949,18 +941,22 @@ function unreadableScheduleError(task: string, storedFields: unknown): Error {
   return new Error(`The schedule record of task "${task}" cannot be read: ${JSON.stringify(storedFields)}`);
 }
 
+function replyOf(commandResult: CommandResult | undefined): unknown {
+  return commandResult?.kind === "replied" ? commandResult.reply : undefined;
+}
+
 function dueSchedulesReplyOf(
-  [timeResult, ...scheduleResults]: readonly PipelineResult[],
+  [timeResult, ...scheduleResults]: readonly CommandResult[],
   scheduledTaskNames: readonly string[],
 ): TickCommandReply<DueSchedulesReply> {
-  const error = [timeResult, ...scheduleResults].find((result) => result?.[0] != null)?.[0];
-  if (error != null) {
-    return { kind: "failed", error };
+  const failedResult = [timeResult, ...scheduleResults].find((result) => result?.kind === "failed");
+  if (failedResult !== undefined) {
+    return failedResult;
   }
-  return tickCommandReplyOf([null, timeResult?.[1]], (timeReply) => {
+  return tickCommandReplyOf({ kind: "replied", reply: replyOf(timeResult) }, (timeReply) => {
     const serverInstant = serverInstantOf(timeReply);
     const dueSchedules = scheduledTaskNames.flatMap((task, position) => {
-      const dueSchedule = dueScheduleOf(task, scheduleResults[position]?.[1], serverInstant);
+      const dueSchedule = dueScheduleOf(task, replyOf(scheduleResults[position]), serverInstant);
       return dueSchedule === undefined ? [] : [dueSchedule];
     });
     return { serverInstant, dueSchedules };
@@ -971,12 +967,9 @@ function scheduledTaskNamesOf(request: TickRequest): readonly string[] {
   return request.scheduledTaskNames ?? [];
 }
 
-function tickReplyOf(results: PipelineResult[] | null, request: TickRequest): TickReply {
-  if (results === null) {
-    throw new Error("The tick pipeline was discarded before it ran");
-  }
+function tickReplyOf(results: readonly CommandResult[], request: TickRequest): TickReply {
   const remainingResults = [...results];
-  const nextResultsOf = (count: number): PipelineResult[] => {
+  const nextResultsOf = (count: number): CommandResult[] => {
     if (remainingResults.length < count) {
       throw new Error(`The tick pipeline answered ${String(results.length)} commands, fewer than it sent`);
     }
@@ -1000,47 +993,34 @@ function tickReplyOf(results: PipelineResult[] | null, request: TickRequest): Ti
 const MILLISECONDS_PER_SECOND = 1000;
 
 export function wakeUpWaitOf(
-  blockingClient: Pick<Redis, "bzpopmin">,
+  blockingClient: RedisClient,
   prefix: string,
 ): (timeoutInMilliseconds: DurationInMilliseconds) => Promise<void> {
   const { wakeUpMarker } = engineKeysOf(prefix);
   return async (timeoutInMilliseconds) => {
-    await blockingClient.bzpopmin(wakeUpMarker, timeoutInMilliseconds / MILLISECONDS_PER_SECOND);
+    await blockingClient.send(
+      builtInCommandOf("BZPOPMIN", wakeUpMarker, timeoutInMilliseconds / MILLISECONDS_PER_SECOND),
+    );
   };
 }
 
-export function createEngine(client: Redis, prefix: string): Engine {
+export function createEngine(client: RedisClient, prefix: string): Engine {
   const keys = engineKeysOf(prefix);
-  const sharedArguments: ScriptArgument[] = [hashTaggedPrefixOf(prefix), RECORD_VERSION];
-  const scriptRunnerWithKeysOf = (
-    commandName: string,
-    script: string,
-    keyCount: number,
-  ): PipelinedScriptRunnerWithKeys => {
-    const command = defineScriptCommand(client, commandName, `${LUA_LIBRARY}\n${script}`, keyCount);
-    const runScript = (scriptKeys: readonly string[], scriptArguments: readonly ScriptArgument[]) =>
-      command.call(scriptKeys, [...sharedArguments, ...scriptArguments]);
-    return Object.assign(runScript, {
-      appendTo: (
-        pipeline: ChainableCommander,
-        scriptKeys: readonly string[],
-        scriptArguments: readonly ScriptArgument[],
-      ) => {
-        command.appendTo(pipeline, scriptKeys, [...sharedArguments, ...scriptArguments]);
-      },
-    });
+  const sharedArguments: CommandArgument[] = [hashTaggedPrefixOf(prefix), RECORD_VERSION];
+  const scriptRunnerWithKeysOf = (scriptName: string, lua: string, keyCount: number): BatchableScriptRunnerWithKeys => {
+    const script = { name: scriptName, lua: `${LUA_LIBRARY}\n${lua}`, keyCount };
+    const commandOf = (scriptKeys: readonly string[], scriptArguments: readonly CommandArgument[]) =>
+      scriptCommandOf(script, scriptKeys, [...sharedArguments, ...scriptArguments]);
+    const runScript = async (scriptKeys: readonly string[], scriptArguments: readonly CommandArgument[]) =>
+      client.send(commandOf(scriptKeys, scriptArguments));
+    return Object.assign(runScript, { commandOf });
   };
-  const scriptRunnerOf = (
-    commandName: string,
-    script: string,
-    scriptKeys: readonly string[],
-  ): PipelinedScriptRunner => {
-    const runScriptWithKeys = scriptRunnerWithKeysOf(commandName, script, scriptKeys.length);
-    const runScript = (scriptArguments: readonly ScriptArgument[]) => runScriptWithKeys(scriptKeys, scriptArguments);
+  const scriptRunnerOf = (scriptName: string, lua: string, scriptKeys: readonly string[]): BatchableScriptRunner => {
+    const runScriptWithKeys = scriptRunnerWithKeysOf(scriptName, lua, scriptKeys.length);
+    const runScript = (scriptArguments: readonly CommandArgument[]) => runScriptWithKeys(scriptKeys, scriptArguments);
     return Object.assign(runScript, {
-      appendTo: (pipeline: ChainableCommander, scriptArguments: readonly ScriptArgument[]) => {
-        runScriptWithKeys.appendTo(pipeline, scriptKeys, scriptArguments);
-      },
+      commandOf: (scriptArguments: readonly CommandArgument[]) =>
+        runScriptWithKeys.commandOf(scriptKeys, scriptArguments),
     });
   };
   const runEnqueueScript = scriptRunnerOf("nextaskingEnqueue", ENQUEUE_SCRIPT, enqueueKeysOf(keys));
@@ -1066,7 +1046,7 @@ export function createEngine(client: Redis, prefix: string): Engine {
   const runReplayScript = scriptRunnerOf("nextaskingReplay", REPLAY_SCRIPT, replayKeysOf(keys));
   const runPruneScript = scriptRunnerWithKeysOf("nextaskingPrune", PRUNE_SCRIPT, 3);
   return {
-    serverInstant: async () => serverInstantOf(await client.time()),
+    serverInstant: async () => serverInstantOf(await client.send(builtInCommandOf("TIME"))),
     replay: async ({ task, runId }) => replayReplyOf(await runReplayScript([storedRunIdOf(task, runId)])),
     prune: async (request) =>
       pruneReplyOf(await runPruneScript(pruneKeysOf(keys, request.task), pruneArgumentsOf(request))),
@@ -1112,23 +1092,24 @@ export function createEngine(client: Redis, prefix: string): Engine {
       ),
     promote: async () => promoteReplyOf(await runPromoteScript(PROMOTE_ARGUMENTS)),
     tick: async (request) => {
-      const pipeline = client.pipeline();
+      const commands: RedisCommand[] = [];
       if (request.isPromoteIncluded !== false) {
-        runPromoteScript.appendTo(pipeline, PROMOTE_ARGUMENTS);
+        commands.push(runPromoteScript.commandOf(PROMOTE_ARGUMENTS));
       }
-      runRenewScript.appendTo(pipeline, renewArgumentsOf(request));
-      pipeline.smembers(keys.tasks);
+      commands.push(runRenewScript.commandOf(renewArgumentsOf(request)), builtInCommandOf("SMEMBERS", keys.tasks));
       if (request.prune !== undefined) {
-        runPruneScript.appendTo(pipeline, pruneKeysOf(keys, request.prune.task), pruneArgumentsOf(request.prune));
+        commands.push(runPruneScript.commandOf(pruneKeysOf(keys, request.prune.task), pruneArgumentsOf(request.prune)));
       }
       const scheduledTaskNames = scheduledTaskNamesOf(request);
       if (scheduledTaskNames.length > 0) {
-        pipeline.time();
-        for (const task of scheduledTaskNames) {
-          pipeline.hmget(keys.schedule(task), ...SCHEDULE_FIELDS_READ_BY_THE_TICK);
-        }
+        commands.push(
+          builtInCommandOf("TIME"),
+          ...scheduledTaskNames.map((task) =>
+            builtInCommandOf("HMGET", keys.schedule(task), ...SCHEDULE_FIELDS_READ_BY_THE_TICK),
+          ),
+        );
       }
-      return tickReplyOf(await pipeline.exec(), request);
+      return tickReplyOf(await client.sendBatch(commands), request);
     },
     settle: async ({ task, runId, lockToken, outcome, concurrencyLimit }) =>
       settleReplyOf(

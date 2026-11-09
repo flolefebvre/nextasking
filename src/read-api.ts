@@ -5,7 +5,7 @@ import type { EpochMilliseconds } from "./durations.js";
 import { compareInSortedSetMemberOrder, engineKeysOf, runIdentityOf, storedRunIdOf } from "./engine/engine-keys.js";
 import type { RunIdentity } from "./engine/engine-keys.js";
 import { RECORD_VERSION, deserializePayload, isFailureReason, storedIntegerOf } from "./engine/engine.js";
-import type { ErrorRecord, PipelineResult, ScheduleSummary } from "./engine/engine.js";
+import type { ErrorRecord, ScheduleSummary } from "./engine/engine.js";
 import { defineIndexPageCommand, indexPageOf } from "./engine/index-page-script.js";
 import type { IndexPosition } from "./engine/index-page-script.js";
 import { UnknownEventError, UnknownTaskError } from "./errors.js";
@@ -340,7 +340,7 @@ function indexEntryOf(indexKey: string, indexPosition: IndexPosition): IndexEntr
 }
 
 async function repliesOf(pipeline: ChainableCommander): Promise<unknown[]> {
-  const results = ((await pipeline.exec()) ?? []) as PipelineResult[];
+  const results = ((await pipeline.exec()) ?? []) as [error: Error | null, reply: unknown][];
   return results.map(([error, reply]) => {
     if (error !== null) {
       throw error;

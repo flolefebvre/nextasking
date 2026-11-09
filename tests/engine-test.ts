@@ -10,7 +10,7 @@ import { integrationTest } from "./integration-test.js";
 import type { ExpectInvariantViolation } from "./invariant-violations.js";
 import { freshLockTokensOf } from "./lock-tokens.js";
 import { serverInstantInMillisecondsOf } from "./server-instant.js";
-import { withRedis } from "./with-redis.js";
+import { redisClientOf, withRedis } from "./with-redis.js";
 
 export type EngineTestContext = { engine: Engine; redis: Redis; keys: EngineKeys; keyPrefix: string };
 
@@ -21,7 +21,7 @@ export function engineTest(
   integrationTest(name, async ({ redisUrl, keyPrefix, expectInvariantViolation }) => {
     await withRedis(redisUrl, async (redis) => {
       await body({
-        engine: createEngine(redis, keyPrefix),
+        engine: createEngine(redisClientOf(redis), keyPrefix),
         redis,
         keys: engineKeysOf(keyPrefix),
         keyPrefix,

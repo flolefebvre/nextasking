@@ -5,7 +5,7 @@ import { fetchedLockedRunsOf } from "../tests/engine-test.js";
 import type { EngineTestContext } from "../tests/engine-test.js";
 import { integrationTest } from "../tests/integration-test.js";
 import { serverInstantInMillisecondsOf } from "../tests/server-instant.js";
-import { withRedis } from "../tests/with-redis.js";
+import { redisClientOf, withRedis } from "../tests/with-redis.js";
 import { engineKeysOf, hashTaggedPrefixOf } from "./engine/engine-keys.js";
 import { createEngine, RECORD_VERSION } from "./engine/engine.js";
 import type { RunToCreate } from "./engine/engine.js";
@@ -21,7 +21,13 @@ function controlTest(name: string, body: (context: ControlTestContext) => Promis
   integrationTest(name, async ({ redisUrl, keyPrefix }) => {
     await withRedis(redisUrl, async (redis) => {
       await using control = createNextaskingControl({ connection: { url: redisUrl }, prefix: keyPrefix });
-      await body({ engine: createEngine(redis, keyPrefix), redis, keys: engineKeysOf(keyPrefix), keyPrefix, control });
+      await body({
+        engine: createEngine(redisClientOf(redis), keyPrefix),
+        redis,
+        keys: engineKeysOf(keyPrefix),
+        keyPrefix,
+        control,
+      });
     });
   });
 }

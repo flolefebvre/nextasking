@@ -7,7 +7,7 @@ import type { EngineTestContext } from "../tests/engine-test.js";
 import { integrationTest } from "../tests/integration-test.js";
 import { storedKeyViolationsOf } from "../tests/stored-key-violations.js";
 import { serverInstantInMillisecondsOf } from "../tests/server-instant.js";
-import { withRedis } from "../tests/with-redis.js";
+import { redisClientOf, withRedis } from "../tests/with-redis.js";
 import { defineScheduledTask } from "./definitions.js";
 import type { AnyTaskDefinition } from "./definitions.js";
 import { engineKeysOf, runIdentityOf, storedRunIdOf } from "./engine/engine-keys.js";
@@ -718,7 +718,12 @@ integrationTest(
   async ({ redisUrl, keyPrefix, expectInvariantViolation }) => {
     await withRedis(redisUrl, async (redis) => {
       const keys = engineKeysOf(keyPrefix);
-      const context: EngineTestContext = { engine: createEngine(redis, keyPrefix), redis, keys, keyPrefix };
+      const context: EngineTestContext = {
+        engine: createEngine(redisClientOf(redis), keyPrefix),
+        redis,
+        keys,
+        keyPrefix,
+      };
       const keptRunIds = runIdsOf("kept-run", 3);
       await endRuns(context.engine, "send-email", [...keptRunIds, "newer-run"], "complete");
       await redis.hset(keys.runRecord("send-email", "newer-run"), "version", RECORD_VERSION + 1);

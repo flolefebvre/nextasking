@@ -9,6 +9,7 @@ import type { Duration, DurationInMilliseconds } from "./durations.js";
 import { engineKeysOf, hashTaggedPrefixOf } from "./engine/engine-keys.js";
 import type { EngineKeys } from "./engine/engine-keys.js";
 import { createEngine } from "./engine/engine.js";
+import { ioredisClientOf } from "./ioredis-client.js";
 import type { BusyRunCounts, Engine, MadeDueRun } from "./engine/engine.js";
 import { deriveFiringRunId } from "./ids.js";
 import type { RunId } from "./ids.js";
@@ -57,7 +58,7 @@ export function createNextaskingControl(options: NextaskingControlOptions): Next
     connections.callOnRedis({}, async () => {
       if (openEngine === undefined) {
         const client = connections.createClient("instance");
-        openEngine = { client, engine: createEngine(client, prefix) };
+        openEngine = { client, engine: createEngine(ioredisClientOf(client), prefix) };
       }
       await connections.waitUntilReadyWithinGiveUpAfter(openEngine.client);
       return call(openEngine);

@@ -13,7 +13,7 @@ import { createRecordingLogger } from "./recording-logger.js";
 import { serverInstantInMillisecondsOf } from "./server-instant.js";
 import { storedRunIdentities } from "./stored-run-identities.js";
 import { storedRun } from "./stored-run.js";
-import { withRedis } from "./with-redis.js";
+import { redisClientOf, withRedis } from "./with-redis.js";
 
 integrationTest(
   "a repeated event id emits nothing within its 24-hour dedup window, and after it starts only the listeners whose run is gone",
@@ -60,7 +60,7 @@ integrationTest(
           eventId,
         );
         await backdateEndedRun(
-          { engine: createEngine(redis, keyPrefix), redis, keys, keyPrefix },
+          { engine: createEngine(redisClientOf(redis), keyPrefix), redis, keys, keyPrefix },
           "record-payment",
           recordPaymentRunId,
           2 * DAY_IN_MILLISECONDS,

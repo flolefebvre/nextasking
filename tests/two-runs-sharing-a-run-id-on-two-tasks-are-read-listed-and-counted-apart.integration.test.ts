@@ -13,7 +13,7 @@ import { engineTest } from "./engine-test.js";
 import type { EngineTestContext } from "./engine-test.js";
 import { integrationTest } from "./integration-test.js";
 import { storedKeyViolationsOf } from "./stored-key-violations.js";
-import { withRedis } from "./with-redis.js";
+import { redisClientOf, withRedis } from "./with-redis.js";
 
 const SHARED_RUN_IDENTITIES: RunIdentity[] = [
   { task: "send-receipt", runId: "order-1" },
@@ -106,7 +106,7 @@ integrationTest(
   async ({ redisUrl, keyPrefix, expectInvariantViolation }) => {
     await withRedis(redisUrl, async (redis) => {
       const keys = engineKeysOf(keyPrefix);
-      const engine = createEngine(redis, keyPrefix);
+      const engine = createEngine(redisClientOf(redis), keyPrefix);
       await endRuns(engine, "send-receipt", ["order-1"], "complete");
       const indexKey = keys.runIndex("send-receipt", "completed");
       expectInvariantViolation("stored keys", `run "order-2" sits in ${indexKey} but has no record with a known state`);

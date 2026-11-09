@@ -4,7 +4,7 @@ import { expect, vi } from "vitest";
 import { DAY_IN_MILLISECONDS, SEND_EMAIL_PRUNE_REQUEST } from "../../tests/ended-runs.js";
 import { backdateEndedRun, engineTest, expireLock, fetchedLockedRunsOf } from "../../tests/engine-test.js";
 import { integrationTest } from "../../tests/integration-test.js";
-import { invariantViolationsOf } from "../../tests/invariant-violations.js";
+import { storedKeyViolationsOf } from "../../tests/stored-key-violations.js";
 import { freshLockTokensOf } from "../../tests/lock-tokens.js";
 import { serverInstantInMillisecondsOf } from "../../tests/server-instant.js";
 import { withRedis } from "../../tests/with-redis.js";
@@ -264,7 +264,7 @@ integrationTest(
       });
 
       await expect(fetch).rejects.toThrow("The fetch script sent a reply the engine cannot read");
-      expect(await invariantViolationsOf(redis, keyPrefix)).toContain(
+      expect(await storedKeyViolationsOf(redis, keyPrefix)).toContain(
         `run "${storedRunIdOf("send-receipt", "order-1")}" has a record of task "update-stock" under an id of task "send-receipt"`,
       );
     });

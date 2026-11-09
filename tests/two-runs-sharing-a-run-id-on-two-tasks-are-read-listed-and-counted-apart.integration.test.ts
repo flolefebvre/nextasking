@@ -12,7 +12,7 @@ import { endRuns } from "./ended-runs.js";
 import { engineTest } from "./engine-test.js";
 import type { EngineTestContext } from "./engine-test.js";
 import { integrationTest } from "./integration-test.js";
-import { invariantViolationsOf } from "./invariant-violations.js";
+import { storedKeyViolationsOf } from "./stored-key-violations.js";
 import { withRedis } from "./with-redis.js";
 
 const SHARED_RUN_IDENTITIES: RunIdentity[] = [
@@ -116,7 +116,7 @@ integrationTest(
       await expect(listing).rejects.toThrow(
         `The run index ${indexKey} holds a member that is not a stored run id: "order-2"`,
       );
-      expect(await invariantViolationsOf(redis, keyPrefix)).toEqual([
+      expect(await storedKeyViolationsOf(redis, keyPrefix)).toEqual([
         `run "order-2" sits in ${indexKey} but has no record with a known state`,
       ]);
     });

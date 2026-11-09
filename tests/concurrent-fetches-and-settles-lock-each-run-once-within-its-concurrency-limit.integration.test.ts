@@ -7,7 +7,7 @@ import { createEngine } from "../src/engine/engine.js";
 import type { LockedRun, RunToCreate, SettleOutcome } from "../src/engine/engine.js";
 import { RUN_STATES } from "../src/run-states.js";
 import { integrationTest } from "./integration-test.js";
-import { expectNoInvariantViolations } from "./invariant-violations.js";
+import { expectNoStoredKeyViolations } from "./stored-key-violations.js";
 import { freshLockTokensOf } from "./lock-tokens.js";
 import { seededRandomnessOfThisRun } from "./seeded-random.js";
 import { withRedis } from "./with-redis.js";
@@ -164,7 +164,7 @@ integrationTest(
       expect(Object.fromEntries(runCountsByState.filter(([, runCount]) => runCount > 0)), seedMessage).toEqual({
         completed: RUN_COUNT,
       });
-      await expectNoInvariantViolations(redis, keyPrefix);
+      await expectNoStoredKeyViolations(redis, keyPrefix);
     });
   },
 );

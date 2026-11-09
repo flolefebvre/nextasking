@@ -5,7 +5,7 @@ import { DAY_IN_MILLISECONDS, endRuns, runIdsOf, SEND_EMAIL_PRUNE_REQUEST } from
 import { backdateEndedRun, engineTest, fetchedLockedRunsOf } from "../tests/engine-test.js";
 import type { EngineTestContext } from "../tests/engine-test.js";
 import { integrationTest } from "../tests/integration-test.js";
-import { invariantViolationsOf } from "../tests/invariant-violations.js";
+import { storedKeyViolationsOf } from "../tests/stored-key-violations.js";
 import { serverInstantInMillisecondsOf } from "../tests/server-instant.js";
 import { withRedis } from "../tests/with-redis.js";
 import { defineScheduledTask } from "./definitions.js";
@@ -735,13 +735,13 @@ integrationTest(
 
       expect(pages[0]).toEqual([]);
       expect([...runIdsOfPages(pages)].sort()).toEqual(keptRunIds);
-      expect(await invariantViolationsOf(redis, keyPrefix)).toEqual(
+      expect(await storedKeyViolationsOf(redis, keyPrefix)).toEqual(
         expect.arrayContaining([
           `run "${ghostStoredRunId}" sits in ${completedIndexKey} but has no record with a known state`,
           `run "${pendingStoredRunId}" sits in ${completedIndexKey} though its record is pending`,
         ]),
       );
-      expect(await invariantViolationsOf(redis, keyPrefix)).toHaveLength(2);
+      expect(await storedKeyViolationsOf(redis, keyPrefix)).toHaveLength(2);
     });
   },
 );

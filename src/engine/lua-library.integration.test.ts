@@ -2,7 +2,7 @@ import type { Redis } from "ioredis";
 import { expect } from "vitest";
 
 import { integrationTest } from "../../tests/integration-test.js";
-import { expectNoInvariantViolations } from "../../tests/invariant-violations.js";
+import { expectNoStoredKeyViolations } from "../../tests/stored-key-violations.js";
 import { serverInstantInMillisecondsOf } from "../../tests/server-instant.js";
 import { withRedis } from "../../tests/with-redis.js";
 import { engineKeysOf, hashTaggedPrefixOf, storedRunIdOf } from "./engine-keys.js";
@@ -94,7 +94,7 @@ for (const instantInMilliseconds of INSTANTS_IN_MILLISECONDS) {
         const reply = await probeReplyOf(redis, keyPrefix, RECORD_VERSION, "iso timestamp", instantInMilliseconds);
 
         expect(reply).toBe(isoTimestamp);
-        await expectNoInvariantViolations(redis, keyPrefix);
+        await expectNoStoredKeyViolations(redis, keyPrefix);
       });
     },
   );
@@ -117,7 +117,7 @@ integrationTest(
       );
 
       expect(reply).toBe('{"failedAt":"2024-02-29T08:05:03.042Z"}');
-      await expectNoInvariantViolations(redis, keyPrefix);
+      await expectNoStoredKeyViolations(redis, keyPrefix);
     });
   },
 );
@@ -144,7 +144,7 @@ for (const { name, storedVersion, reportedVersion } of UNKNOWN_VERSIONS) {
 
         expect(reply).toEqual(["unknownVersion", reportedVersion]);
         expect(await redis.hgetall(recordKey)).toEqual(recordBefore);
-        await expectNoInvariantViolations(redis, keyPrefix);
+        await expectNoStoredKeyViolations(redis, keyPrefix);
       });
     },
   );
@@ -158,7 +158,7 @@ integrationTest(
 
       expect(reply).toEqual(["unknownVersion", null]);
       expect(await redis.exists(engineKeysOf(keyPrefix).runRecord("send-email", "missing-run"))).toBe(0);
-      await expectNoInvariantViolations(redis, keyPrefix);
+      await expectNoStoredKeyViolations(redis, keyPrefix);
     });
   },
 );
@@ -183,7 +183,7 @@ integrationTest(
       expect(replyOnTheCurrentVersion).toEqual(["written"]);
       expect(replyOnAnOlderVersion).toEqual(["written"]);
       expect(await redis.hget(keys.runRecord("send-email", "older-run"), "version")).toBe(String(RECORD_VERSION));
-      await expectNoInvariantViolations(redis, keyPrefix);
+      await expectNoStoredKeyViolations(redis, keyPrefix);
     });
   },
 );
@@ -197,7 +197,7 @@ integrationTest("the library's clock is the server's TIME", async ({ redisUrl, k
     const instantAfter = await serverInstantInMillisecondsOf(redis);
     expect(instantInTheScript).toBeGreaterThanOrEqual(instantBefore);
     expect(instantInTheScript).toBeLessThanOrEqual(instantAfter);
-    await expectNoInvariantViolations(redis, keyPrefix);
+    await expectNoStoredKeyViolations(redis, keyPrefix);
   });
 });
 
@@ -215,7 +215,7 @@ integrationTest(
       expect(await redis.zcard(keys.due)).toBe(0);
       expect(await redis.zcard(keys.runIndex("send-email", "delayed"))).toBe(0);
       expect(await redis.zcard(keys.wakeUpMarker)).toBe(1);
-      await expectNoInvariantViolations(redis, keyPrefix);
+      await expectNoStoredKeyViolations(redis, keyPrefix);
     });
   },
 );

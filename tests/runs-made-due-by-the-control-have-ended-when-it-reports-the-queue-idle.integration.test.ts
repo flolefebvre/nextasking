@@ -15,7 +15,7 @@ import type { HandlerSender } from "../src/step-engine.js";
 import { startWorkerLoop } from "../src/worker-loop.js";
 import { DEFAULT_WORKER_TIMING } from "../src/worker-timing.js";
 import { integrationTest } from "./integration-test.js";
-import { expectNoInvariantViolations } from "./invariant-violations.js";
+import { expectNoStoredKeyViolations } from "./stored-key-violations.js";
 import { createRecordingLogger } from "./recording-logger.js";
 import { createSimulatedRedisOutage } from "./simulated-redis-outage.js";
 import { withRedis } from "./with-redis.js";
@@ -96,7 +96,7 @@ integrationTest(
       expect(statesSeenAtIdleByTry.filter((states) => !states.endsWith(": completed, completed"))).toEqual([]);
       expect(statesSeenAtIdleByTry).toHaveLength(TRY_COUNT);
       expect(lines.filter(({ level }) => level === "error")).toEqual([]);
-      await expectNoInvariantViolations(redis, keyPrefix);
+      await expectNoStoredKeyViolations(redis, keyPrefix);
     });
   },
 );

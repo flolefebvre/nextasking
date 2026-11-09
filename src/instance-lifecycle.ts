@@ -8,8 +8,10 @@ import type { WorkerDefinitions } from "./engine-failure-notice.js";
 import { syncDeclaredSchedules } from "./engine-schedules.js";
 import { InstanceClosedError } from "./errors.js";
 import type { Logger } from "./logger.js";
-import { untilAborted } from "./redis-outage.js";
+import { answeredDespiteOutage, untilAborted } from "./redis-outage.js";
+import type { RedisOutage } from "./redis-outage.js";
 import { checkServerInfoReading, readServerInfo } from "./server-info.js";
+import type { ServerInfoReading } from "./server-info.js";
 import { isSettledWithin } from "./settled-within.js";
 import {
   MISSING_MANUAL_SIGNAL_HANDLING_WARNING,
@@ -49,6 +51,13 @@ type RunningWorker = {
   blockingClient: Redis;
   timing: WorkerTiming;
   shutdownTimeoutInMilliseconds: DurationInMilliseconds;
+};
+
+type WorkerBoot = {
+  opened: OpenedCommandClient;
+  timing: WorkerTiming;
+  workerOptions: WorkerOptions;
+  redisOutage: RedisOutage;
 };
 
 let isWorkerStartedInThisProcess = false;
@@ -105,36 +114,46 @@ export function createInstanceLifecycle(config: InstanceLifecycleConfig): Instan
     }
   };
 
-  const startTheWorker = (
-    { commandClient, engine }: OpenedCommandClient,
-    timing: WorkerTiming,
-    { concurrency, shutdownTimeoutInMilliseconds }: WorkerOptions,
-  ) => {
+  const startTheWorker = ({ opened: { engine }, timing, workerOptions, redisOutage }: WorkerBoot) => {
     const blockingClient = connections.createClient("worker");
     const loop = startWorkerLoop({
       engine,
       definitions,
       timing,
       logger,
-      concurrency,
+      concurrency: workerOptions.concurrency,
       sender: config.senderOn(engine),
       waitForWakeUp: config.wakeUpWaitOn(blockingClient),
-      redisOutage: connections.workerRedisOutageOf(commandClient, timing.tickIntervalInMilliseconds),
+      redisOutage,
     });
-    runningWorker = { loop, blockingClient, timing, shutdownTimeoutInMilliseconds };
+    runningWorker = {
+      loop,
+      blockingClient,
+      timing,
+      shutdownTimeoutInMilliseconds: workerOptions.shutdownTimeoutInMilliseconds,
+    };
     logger.info({}, "worker started");
   };
 
-  const bootTheWorker = async (
-    opened: OpenedCommandClient,
-    serverInfoReading: ReturnType<typeof readServerInfo>,
-    timing: WorkerTiming,
-    workerOptions: WorkerOptions,
-  ) => {
-    checkServerInfoReading(await untilAborted(serverInfoReading, closeController.signal), logger);
-    await untilAborted(syncDeclaredSchedules({ engine: opened.engine, definitions, logger }), closeController.signal);
+  const answeredUnlessClosed = <Answer>(redisOutage: RedisOutage, call: () => Promise<Answer>): Promise<Answer> =>
+    untilAborted(
+      answeredDespiteOutage(redisOutage, call, { resendStopSignal: closeController.signal }),
+      closeController.signal,
+    );
+
+  const bootTheWorker = async (workerBoot: WorkerBoot, serverInfoReading: Promise<ServerInfoReading>) => {
+    const { opened, redisOutage } = workerBoot;
+    checkServerInfoReading(await serverInfoReading, logger);
+    await syncDeclaredSchedules({
+      engine: {
+        serverInstant: () => answeredUnlessClosed(redisOutage, () => opened.engine.serverInstant()),
+        syncSchedules: (request) => answeredUnlessClosed(redisOutage, () => opened.engine.syncSchedules(request)),
+      },
+      definitions,
+      logger,
+    });
     rejectIfClosed();
-    startTheWorker(opened, timing, workerOptions);
+    startTheWorker(workerBoot);
   };
 
   const finishBootInBackground = async (
@@ -163,12 +182,13 @@ export function createInstanceLifecycle(config: InstanceLifecycleConfig): Instan
     isThisInstanceTheProcessWorker = true;
     const timing = config.timing ?? workerTiming();
     const opened = openCommandClient();
-    const serverInfoReading = readServerInfo(opened.commandClient);
+    const redisOutage = connections.workerRedisOutageOf(opened.commandClient, timing.tickIntervalInMilliseconds);
+    const serverInfoReading = answeredUnlessClosed(redisOutage, () => readServerInfo(opened.commandClient));
     ignoreRejection(serverInfoReading);
-    const boot = bootTheWorker(opened, serverInfoReading, timing, workerOptions);
+    const boot = bootTheWorker({ opened, timing, workerOptions, redisOutage }, serverInfoReading);
     ignoreRejection(boot);
     const isFirstRoundTripAnswered = await isSettledWithin(
-      untilAborted(serverInfoReading, closeController.signal).catch(() => undefined),
+      serverInfoReading.catch(() => undefined),
       connections.giveUpAfterInMilliseconds,
     );
     if (isFirstRoundTripAnswered) {

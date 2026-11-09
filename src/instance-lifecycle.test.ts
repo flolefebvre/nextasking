@@ -85,7 +85,9 @@ function lifecycleScenarioOf({
   env = { NODE_ENV: "development" },
 }: LifecycleScenarioOptions = {}): LifecycleScenario {
   const { logger, lines } = createRecordingLogger();
-  const fakeRedisClients = createFakeRedisClients();
+  const fakeRedisClients = createFakeRedisClients({
+    instanceCommandTimeoutInMilliseconds: GIVE_UP_AFTER_IN_MILLISECONDS,
+  });
   fakeRedisClients.onCreate(prepareClient);
   const connections = {
     ...createRedisConnections({ url: "redis://127.0.0.1:1", giveUpAfter: "5s" }, logger),
@@ -275,12 +277,39 @@ describe("the boot", () => {
     const isStartedBeforeGiveUpAfter = started.isSettled();
     await vi.advanceTimersByTimeAsync(1);
     const isStartedAtGiveUpAfter = started.isSettled();
+    await vi.advanceTimersByTimeAsync(3 * GIVE_UP_AFTER_IN_MILLISECONDS);
     const linesWhileDown = messagesOf(lines);
     commandClient().becomeReady();
     await vi.advanceTimersByTimeAsync(0);
 
     expect([isStartedBeforeGiveUpAfter, isStartedAtGiveUpAfter]).toEqual([false, true]);
     expect(linesWhileDown).toEqual([]);
+    expect(commandClient().sentCommands.filter((commandName) => commandName === "INFO").length).toBeGreaterThan(1);
+    expect(messagesOf(lines)).toEqual(["worker started"]);
+  });
+
+  test("a connection lost between the INFO and the schedule sync waits for Redis, resends, and starts the worker", async () => {
+    const { lifecycle, lines, commandClient } = lifecycleScenarioOf({
+      prepareClient: (fakeRedisClient) => {
+        fakeRedisClient.infoReply = async () => {
+          fakeRedisClient.startReconnecting();
+          return infoReplyWith(VALKEY_AT_THE_FLOOR);
+        };
+        fakeRedisClient.becomeReady();
+      },
+    });
+
+    const starting = lifecycle.startWorker();
+    await vi.advanceTimersByTimeAsync(3 * GIVE_UP_AFTER_IN_MILLISECONDS);
+    const linesWhileDown = messagesOf(lines);
+    commandClient().becomeReady();
+    await vi.advanceTimersByTimeAsync(0);
+    await starting;
+
+    expect(linesWhileDown).toEqual([]);
+    expect(
+      commandClient().sentCommands.filter((commandName) => commandName === "serverInstant").length,
+    ).toBeGreaterThan(1);
     expect(messagesOf(lines)).toEqual(["worker started"]);
   });
 
@@ -439,6 +468,25 @@ describe("the close of a running worker", () => {
     expect(messagesOf(lines).slice(-2)).toEqual(["run yielded at shutdown", "worker stopped"]);
     expect(commandClient().sentCommands.at(-1)).toBe("QUIT");
     expect(commandClient().disconnectCount).toBe(1);
+  });
+
+  test("completes the run of a handler that ignores the deadline abort and finishes inside the grace", async () => {
+    const { lifecycle, engine, lines, handlerGate } = await scenarioOfARunningWorker(gatedWithNoStep);
+
+    const closing = lifecycle.close();
+    await vi.advanceTimersByTimeAsync(SHUTDOWN_TIMEOUT_IN_MILLISECONDS + 200);
+    handlerGate.release(1);
+    await vi.advanceTimersByTimeAsync(CLOSE_BOUND_IN_MILLISECONDS);
+    await closing;
+
+    expect(engine.storedRunOf("send-email-1")?.state).toBe("completed");
+    expect(messagesOf(lines)).toEqual([
+      "worker started",
+      "attempt started",
+      "attempts aborted at shutdown deadline",
+      "run completed",
+      "worker stopped",
+    ]);
   });
 
   test("aborts the attempts still running at the deadline and resolves within the deadline plus 2 s, and a handler ending afterwards sends nothing", async () => {

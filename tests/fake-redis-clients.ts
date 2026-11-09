@@ -3,6 +3,7 @@ import { EventEmitter } from "node:events";
 import type { Redis } from "ioredis";
 
 import type { RedisClientRole } from "../src/connection.js";
+import type { DurationInMilliseconds } from "../src/durations.js";
 import type { Engine } from "../src/engine/engine.js";
 import { untilAborted } from "../src/redis-outage.js";
 import type { WaitForWakeUp } from "../src/worker-loop.js";
@@ -18,6 +19,7 @@ export class FakeRedisClient extends EventEmitter {
   disconnectCount = 0;
   quitReply: FakeQuitReply = "answered";
   disconnectEffect: FakeDisconnect = "rejects every command";
+  commandTimeoutInMilliseconds: DurationInMilliseconds | undefined;
   infoReply: () => Promise<string> = () => Promise.reject(new Error("this fake client has no INFO reply"));
   configReply: () => Promise<unknown> = () => Promise.reject(new Error("this fake client has no CONFIG reply"));
   private readonly disconnectController = new AbortController();
@@ -56,7 +58,35 @@ export class FakeRedisClient extends EventEmitter {
         : new Promise<void>((resolve) => {
             this.readyWaiters.push(resolve);
           }).then(call);
-    return untilAborted(answered, this.disconnectSignal);
+    return untilAborted(this.timedOutUnlessAnswered(answered), this.disconnectSignal);
+  }
+
+  private timedOutUnlessAnswered<Reply>(answered: Promise<Reply>): Promise<Reply> {
+    const { commandTimeoutInMilliseconds } = this;
+    if (commandTimeoutInMilliseconds === undefined) {
+      return answered;
+    }
+    return new Promise<Reply>((resolve, reject) => {
+      const endTimeout = () => {
+        clearTimeout(timeoutTimer);
+        this.disconnectSignal.removeEventListener("abort", endTimeout);
+      };
+      const timeoutTimer = setTimeout(() => {
+        endTimeout();
+        reject(new Error("Command timed out"));
+      }, commandTimeoutInMilliseconds);
+      this.disconnectSignal.addEventListener("abort", endTimeout, { once: true });
+      answered.then(
+        (reply) => {
+          endTimeout();
+          resolve(reply);
+        },
+        (error: unknown) => {
+          endTimeout();
+          reject(error as Error);
+        },
+      );
+    });
   }
 
   info(...sections: string[]): Promise<string> {
@@ -99,12 +129,19 @@ export type FakeRedisClients = {
   onCreate: (prepare: (fakeRedisClient: FakeRedisClient, role: RedisClientRole) => void) => void;
 };
 
-export function createFakeRedisClients(): FakeRedisClients {
+export type FakeRedisClientsOptions = { instanceCommandTimeoutInMilliseconds?: DurationInMilliseconds };
+
+export function createFakeRedisClients({
+  instanceCommandTimeoutInMilliseconds,
+}: FakeRedisClientsOptions = {}): FakeRedisClients {
   const createdClients: { role: RedisClientRole; fakeRedisClient: FakeRedisClient }[] = [];
   let prepareClient: (fakeRedisClient: FakeRedisClient, role: RedisClientRole) => void = () => undefined;
   return {
     createClient: (role) => {
       const fakeRedisClient = new FakeRedisClient();
+      if (role === "instance") {
+        fakeRedisClient.commandTimeoutInMilliseconds = instanceCommandTimeoutInMilliseconds;
+      }
       prepareClient(fakeRedisClient, role);
       createdClients.push({ role, fakeRedisClient });
       return asRedis(fakeRedisClient);

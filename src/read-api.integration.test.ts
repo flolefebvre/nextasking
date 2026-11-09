@@ -3,6 +3,7 @@ import { expect, vi } from "vitest";
 import { DAY_IN_MILLISECONDS, endRuns, runIdsOf, SEND_EMAIL_PRUNE_REQUEST } from "../tests/ended-runs.js";
 import { backdateEndedRun, engineTest, engineTestContextOf, fetchedLockedRunsOf } from "../tests/engine-test.js";
 import type { EngineTestContext } from "../tests/engine-test.js";
+import type { EpochMilliseconds } from "./durations.js";
 import { integrationTest } from "../tests/integration-test.js";
 import { storedKeyViolationsOf } from "../tests/stored-key-violations.js";
 import { serverInstantInMillisecondsOf } from "../tests/server-instant.js";
@@ -46,7 +47,7 @@ function taskDefinitionOf(taskName: string): AnyTaskDefinition {
   return defineScheduledTask(taskName, { schedule: { cron: "0 * * * *" }, handler: async () => undefined });
 }
 
-function readerOf({ client, keyPrefix }: EngineTestContext): ReadApi {
+function readerOf({ client, keyPrefix }: EngineTestContext, supportedRecordVersion = RECORD_VERSION): ReadApi {
   const taskNames = [...TASK_NAMES, ...LISTENER_NAMES];
   return createReadApi({
     client,
@@ -54,6 +55,7 @@ function readerOf({ client, keyPrefix }: EngineTestContext): ReadApi {
     tasksByName: new Map(taskNames.map((taskName) => [taskName, taskDefinitionOf(taskName)])),
     listenerNamesByEventName: new Map([["invoice.paid", LISTENER_NAMES]]),
     declaredSchedules: DECLARED_SCHEDULES,
+    supportedRecordVersion,
   });
 }
 
@@ -269,6 +271,16 @@ engineTest(
   },
 );
 
+engineTest("getRun reads a run of an older record version as a run", async (context) => {
+  const { redis, keys } = context;
+  await enqueueRuns(context, [runOf("older-run", "send-email")]);
+  await redis.hSet(keys.runRecord("send-email", "older-run"), "version", RECORD_VERSION - 1);
+
+  const run = await readerOf(context).getRun("send-email", "older-run");
+
+  expect(run).toMatchObject({ runId: "older-run", task: "send-email", state: "pending" });
+});
+
 engineTest("getRun throws UnknownTaskError for a task the release does not define", async (context) => {
   const getRun = readerOf(context).getRun("removed-task", "run-1");
 
@@ -411,17 +423,52 @@ engineTest("listSchedules shows the previous firing kept across a cron change", 
   });
 });
 
-engineTest("listSchedules reads a schedule record of a newer version as no record", async (context) => {
-  const { engine, redis, keys } = context;
+async function nextFiringAtOfAScheduleStoredAtVersion(
+  { engine, redis, keys }: EngineTestContext,
+  recordVersion: number,
+): Promise<EpochMilliseconds> {
   const nextFiringAt = (await serverInstantInMillisecondsOf(redis)) + 3_600_000;
   await engine.syncSchedules({
     schedulesToSync: [{ task: "build-report", cron: "0 * * * *", timezone: "UTC", nextFiringAt, retries: 0 }],
   });
-  await redis.hSet(keys.schedule("build-report"), "version", RECORD_VERSION + 1);
+  await redis.hSet(keys.schedule("build-report"), "version", recordVersion);
+  return nextFiringAt;
+}
+
+engineTest("listSchedules reads a schedule record of a newer version as no record", async (context) => {
+  await nextFiringAtOfAScheduleStoredAtVersion(context, RECORD_VERSION + 1);
 
   const [buildReport] = await readerOf(context).listSchedules();
 
   expect(buildReport).toEqual({ task: "build-report", cron: "0 * * * *", timezone: "UTC" });
+});
+
+engineTest(
+  "a reader of an older release reads a run and a schedule record of the current version as no record",
+  async (context) => {
+    await nextFiringAtOfAScheduleStoredAtVersion(context, RECORD_VERSION);
+    await enqueueRuns(context, [runOf("current-run", "send-email")]);
+    const olderReader = readerOf(context, RECORD_VERSION - 1);
+
+    const run = await olderReader.getRun("send-email", "current-run");
+    const [buildReport] = await olderReader.listSchedules();
+
+    expect(run).toBeUndefined();
+    expect(buildReport).toEqual({ task: "build-report", cron: "0 * * * *", timezone: "UTC" });
+  },
+);
+
+engineTest("listSchedules reads a schedule record of an older version as its record", async (context) => {
+  const nextFiringAt = await nextFiringAtOfAScheduleStoredAtVersion(context, RECORD_VERSION - 1);
+
+  const [buildReport] = await readerOf(context).listSchedules();
+
+  expect(buildReport).toEqual({
+    task: "build-report",
+    cron: "0 * * * *",
+    timezone: "UTC",
+    nextFiringAt: new Date(nextFiringAt),
+  });
 });
 
 engineTest(

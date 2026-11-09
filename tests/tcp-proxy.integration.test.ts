@@ -6,7 +6,9 @@ import { expect, vi } from "vitest";
 
 import { integrationTest } from "./integration-test.js";
 import { startTcpProxy } from "./tcp-proxy.js";
+import type { TcpProxy } from "./tcp-proxy.js";
 import { withRedis } from "./with-redis.js";
+import type { TestClient } from "./with-redis.js";
 
 async function connectedSocketOf(url: string): Promise<Socket> {
   const { hostname, port } = new URL(url);
@@ -24,35 +26,77 @@ function setCommandOf(key: string): string {
 
 const WINDOW_FOR_A_SILENCED_REQUEST_TO_ARRIVE_IN_MILLISECONDS = 500;
 
+type SocketsThroughAProxy = {
+  proxy: TcpProxy;
+  redis: TestClient;
+  connectedSocket: () => Promise<Socket>;
+};
+
+async function withSocketsThroughAProxy(
+  redisUrl: string,
+  use: (socketsThroughAProxy: SocketsThroughAProxy) => Promise<void>,
+): Promise<void> {
+  const proxy = await startTcpProxy(redisUrl);
+  const sockets: Socket[] = [];
+  const connectedSocket = async () => {
+    const socket = await connectedSocketOf(proxy.url);
+    sockets.push(socket);
+    return socket;
+  };
+  try {
+    await withRedis(redisUrl, (redis) => use({ proxy, redis, connectedSocket }));
+  } finally {
+    for (const socket of sockets) {
+      socket.destroy();
+    }
+    await proxy.stop();
+  }
+}
+
 integrationTest(
   "a request sent on a silenced connection never reaches the server, while one held on a connection accepted during the silence reaches it once the proxy answers again",
   { timeout: 15_000 },
   async ({ redisUrl, keyPrefix }) => {
-    const proxy = await startTcpProxy(redisUrl);
-    const sockets: Socket[] = [];
-    try {
-      await withRedis(redisUrl, async (redis) => {
-        const silencedSocket = await connectedSocketOf(proxy.url);
-        sockets.push(silencedSocket);
-        await vi.waitFor(() => expect(proxy.acceptedConnectionCount()).toBe(1), { timeout: 5_000 });
+    await withSocketsThroughAProxy(redisUrl, async ({ proxy, redis, connectedSocket }) => {
+      const silencedSocket = await connectedSocket();
+      await vi.waitFor(() => expect(proxy.acceptedConnectionCount()).toBe(1), { timeout: 5_000 });
 
-        proxy.stopAnswering();
-        silencedSocket.write(setCommandOf(`${keyPrefix}silenced`));
-        const heldSocket = await connectedSocketOf(proxy.url);
-        sockets.push(heldSocket);
-        heldSocket.write(setCommandOf(`${keyPrefix}held`));
-        proxy.answerAgain();
-        await vi.waitFor(async () => expect(await redis.get(`${keyPrefix}held`)).toBe("1"), { timeout: 5_000 });
-        await sleep(WINDOW_FOR_A_SILENCED_REQUEST_TO_ARRIVE_IN_MILLISECONDS);
+      proxy.stopAnswering();
+      silencedSocket.write(setCommandOf(`${keyPrefix}silenced`));
+      const heldSocket = await connectedSocket();
+      heldSocket.write(setCommandOf(`${keyPrefix}held`));
+      proxy.answerAgain();
+      await vi.waitFor(async () => expect(await redis.get(`${keyPrefix}held`)).toBe("1"), { timeout: 5_000 });
+      await sleep(WINDOW_FOR_A_SILENCED_REQUEST_TO_ARRIVE_IN_MILLISECONDS);
 
-        expect(await redis.get(`${keyPrefix}silenced`)).toBeNull();
-      });
-    } finally {
-      for (const socket of sockets) {
-        socket.destroy();
-      }
-      await proxy.stop();
-    }
+      expect(await redis.get(`${keyPrefix}silenced`)).toBeNull();
+    });
+  },
+);
+
+integrationTest(
+  "a held request and the ones after it on its connection reach the server only once released, while other connections go through",
+  { timeout: 15_000 },
+  async ({ redisUrl, keyPrefix }) => {
+    await withSocketsThroughAProxy(redisUrl, async ({ proxy, redis, connectedSocket }) => {
+      const heldSocket = await connectedSocket();
+      const otherSocket = await connectedSocket();
+      const heldRequest = proxy.holdRequest((request) => request.includes(`${keyPrefix}held`));
+
+      heldSocket.write(setCommandOf(`${keyPrefix}before`));
+      heldSocket.write(setCommandOf(`${keyPrefix}held`));
+      heldSocket.write(setCommandOf(`${keyPrefix}after`));
+      const { release } = await heldRequest;
+      otherSocket.write(setCommandOf(`${keyPrefix}other`));
+      await vi.waitFor(async () => expect(await redis.get(`${keyPrefix}other`)).toBe("1"), { timeout: 5_000 });
+      await sleep(WINDOW_FOR_A_SILENCED_REQUEST_TO_ARRIVE_IN_MILLISECONDS);
+      const valuesWhileHeld = await redis.mGet([`${keyPrefix}before`, `${keyPrefix}held`, `${keyPrefix}after`]);
+      release();
+      await vi.waitFor(async () => expect(await redis.get(`${keyPrefix}after`)).toBe("1"), { timeout: 5_000 });
+
+      expect(valuesWhileHeld).toEqual(["1", null, null]);
+      expect(await redis.get(`${keyPrefix}held`)).toBe("1");
+    });
   },
 );
 

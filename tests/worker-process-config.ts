@@ -7,7 +7,10 @@ export type WorkerProcessConfig = {
   timing?: Partial<WorkerTiming>;
   connection?: ConnectionConfig;
   startWorkerOptions?: StartWorkerOptions;
+  isFailureNoticeRecorded?: boolean;
 };
+
+export const FAILURE_NOTICE_RECORDING_LISTENER_NAME = "record-failure-notice";
 
 export const WORKER_PROCESS_CONFIG_VARIABLE = "NEXTASKING_WORKER_PROCESS_CONFIG";
 

@@ -125,7 +125,10 @@ export function startWorkerLoop(config: WorkerLoopConfig): WorkerLoop {
     for (const recordVersion of recordVersionsNotLoggedYet) {
       loggedPassedOverRecordVersions.add(recordVersion);
     }
-    writeLifecycleLines(logger, recordVersionsNotLoggedYet.map(passOverLineOf));
+    writeLifecycleLines(
+      logger,
+      recordVersionsNotLoggedYet.map((recordVersion) => passOverLineOf(recordVersion, timing.supportedRecordVersion)),
+    );
   };
 
   const writeWorkerError = (error: unknown) => {

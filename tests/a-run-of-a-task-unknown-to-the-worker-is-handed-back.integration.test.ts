@@ -87,6 +87,7 @@ integrationTest(
       keyPrefix,
       async ({ nextasking, lines, olderReleaseWorker, handledAccountIds }) => {
         const { runId } = await nextasking.dispatch("archive-account", { accountId: "account-7" });
+        const orderAtDispatch = (await storedRun(redisUrl, keyPrefix, "archive-account", runId))?.order;
         await vi.waitFor(
           () => {
             expect(
@@ -121,8 +122,10 @@ integrationTest(
           attempt: "1",
           stalls: "0",
           firstFoundUnknownAt: expect.stringMatching(EPOCH_MILLISECONDS),
+          order: orderAtDispatch,
           errors: [],
         });
+        expect(Number(orderAtDispatch)).toBeGreaterThan(0);
         expect(slotsHeldWhileHandedBack).toBe(0);
         expect(lines.find((line) => line.message === "attempt started")?.fields).toEqual({
           task: "archive-account",

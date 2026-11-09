@@ -8,6 +8,7 @@ import type { Duration, DurationInMilliseconds } from "./durations.js";
 import { engineKeysOf, hashTaggedPrefixOf } from "./engine/engine-keys.js";
 import type { EngineKeys } from "./engine/engine-keys.js";
 import { createEngine } from "./engine/engine.js";
+import { workerTiming } from "./worker-timing.js";
 import type { BusyRunCounts, Engine, MadeDueRun } from "./engine/engine.js";
 import { deriveFiringRunId } from "./ids.js";
 import type { RunId } from "./ids.js";
@@ -60,7 +61,10 @@ export function createNextaskingControl(options: NextaskingControlOptions): Next
     connections.callOnRedis({}, async () => {
       if (openEngine === undefined) {
         const connection = connections.createCommandConnection();
-        openEngine = { connection, engine: createEngine(connection.instanceCalls, prefix) };
+        openEngine = {
+          connection,
+          engine: createEngine(connection.instanceCalls, prefix, workerTiming().supportedRecordVersion),
+        };
       }
       return call(openEngine);
     });

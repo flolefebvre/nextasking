@@ -374,6 +374,11 @@ function recordVersionOf(storedVersion: unknown): number | undefined {
   return typeof storedVersion === "string" ? storedIntegerOf(storedVersion) : undefined;
 }
 
+export function isRecordVersionReadable(storedVersion: unknown, supportedRecordVersion: number): boolean {
+  const recordVersion = recordVersionOf(storedVersion);
+  return recordVersion !== undefined && recordVersion <= supportedRecordVersion;
+}
+
 function storedIntegersByFieldOf<Field extends string>(
   storedValuesByField: Record<Field, string | null | undefined>,
 ): Record<Field, number> | undefined {
@@ -922,12 +927,17 @@ function tickCommandReplyOf<Reply>(
 
 const SCHEDULE_FIELDS_READ_BY_THE_TICK = ["version", "cron", "timezone", "nextFiringAt"] as const;
 
-function dueScheduleOf(task: string, storedFields: unknown, serverInstant: EpochMilliseconds): DueSchedule | undefined {
+function dueScheduleOf(
+  task: string,
+  storedFields: unknown,
+  serverInstant: EpochMilliseconds,
+  supportedRecordVersion: number,
+): DueSchedule | undefined {
   if (!isStoredValueList(storedFields) || storedFields.length !== SCHEDULE_FIELDS_READ_BY_THE_TICK.length) {
     throw unreadableScheduleError(task, storedFields);
   }
   const [storedVersion, cron, timezone, storedNextFiringAt] = storedFields;
-  if (recordVersionOf(storedVersion) !== RECORD_VERSION) {
+  if (!isRecordVersionReadable(storedVersion, supportedRecordVersion)) {
     return undefined;
   }
   const nextFiringAt = storedIntegerOf(nullIfAbsent(storedNextFiringAt));
@@ -948,6 +958,7 @@ function replyOf(commandResult: CommandResult | undefined): unknown {
 function dueSchedulesReplyOf(
   [timeResult, ...scheduleResults]: readonly CommandResult[],
   scheduledTaskNames: readonly string[],
+  supportedRecordVersion: number,
 ): TickCommandReply<DueSchedulesReply> {
   const failedResult = [timeResult, ...scheduleResults].find((result) => result?.kind === "failed");
   if (failedResult !== undefined) {
@@ -956,7 +967,12 @@ function dueSchedulesReplyOf(
   return tickCommandReplyOf({ kind: "replied", reply: replyOf(timeResult) }, (timeReply) => {
     const serverInstant = serverInstantOf(timeReply);
     const dueSchedules = scheduledTaskNames.flatMap((task, position) => {
-      const dueSchedule = dueScheduleOf(task, replyOf(scheduleResults[position]), serverInstant);
+      const dueSchedule = dueScheduleOf(
+        task,
+        replyOf(scheduleResults[position]),
+        serverInstant,
+        supportedRecordVersion,
+      );
       return dueSchedule === undefined ? [] : [dueSchedule];
     });
     return { serverInstant, dueSchedules };
@@ -967,7 +983,11 @@ function scheduledTaskNamesOf(request: TickRequest): readonly string[] {
   return request.scheduledTaskNames ?? [];
 }
 
-function tickReplyOf(results: readonly CommandResult[], request: TickRequest): TickReply {
+function tickReplyOf(
+  results: readonly CommandResult[],
+  request: TickRequest,
+  supportedRecordVersion: number,
+): TickReply {
   const remainingResults = [...results];
   const nextResultsOf = (count: number): CommandResult[] => {
     if (remainingResults.length < count) {
@@ -986,7 +1006,7 @@ function tickReplyOf(results: readonly CommandResult[], request: TickRequest): T
     dueSchedules:
       scheduledTaskNames.length === 0
         ? undefined
-        : dueSchedulesReplyOf(nextResultsOf(1 + scheduledTaskNames.length), scheduledTaskNames),
+        : dueSchedulesReplyOf(nextResultsOf(1 + scheduledTaskNames.length), scheduledTaskNames, supportedRecordVersion),
   };
 }
 
@@ -1004,9 +1024,13 @@ export function wakeUpWaitOf(
   };
 }
 
-export function createEngine(client: RedisClient, prefix: string): Engine {
+export function createEngine(
+  client: RedisClient,
+  prefix: string,
+  supportedRecordVersion: number = RECORD_VERSION,
+): Engine {
   const keys = engineKeysOf(prefix);
-  const sharedArguments: CommandArgument[] = [hashTaggedPrefixOf(prefix), RECORD_VERSION];
+  const sharedArguments: CommandArgument[] = [hashTaggedPrefixOf(prefix), supportedRecordVersion];
   const scriptRunnerWithKeysOf = (scriptName: string, lua: string, keyCount: number): BatchableScriptRunnerWithKeys => {
     const script = { name: scriptName, lua: `${LUA_LIBRARY}\n${lua}`, keyCount };
     const commandOf = (scriptKeys: readonly string[], scriptArguments: readonly CommandArgument[]) =>
@@ -1109,7 +1133,7 @@ export function createEngine(client: RedisClient, prefix: string): Engine {
           ),
         );
       }
-      return tickReplyOf(await client.sendBatch(commands), request);
+      return tickReplyOf(await client.sendBatch(commands), request, supportedRecordVersion);
     },
     settle: async ({ task, runId, lockToken, outcome, concurrencyLimit }) =>
       settleReplyOf(

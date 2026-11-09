@@ -1,6 +1,7 @@
 import { engineKeysOf, storedRunIdOf } from "../src/engine/engine-keys.js";
 import type { SettleOutcome } from "../src/engine/engine.js";
 import { fetchKeysOf } from "../src/engine/fetch-script.js";
+import { fireKeysOf } from "../src/engine/fire-script.js";
 import { settleKeysOf } from "../src/engine/settle-script.js";
 import type { RunId } from "../src/ids.js";
 
@@ -14,6 +15,11 @@ function scriptKeysOf(scriptKeys: readonly string[]): string {
 
 export function isFetchRequest(request: string, keyPrefix: string): boolean {
   return request.includes(scriptKeysOf(fetchKeysOf(engineKeysOf(keyPrefix))));
+}
+
+export function isFireRequestOf(request: string, keyPrefix: string, task: string): boolean {
+  const fireKeysAt = request.indexOf(scriptKeysOf(fireKeysOf(engineKeysOf(keyPrefix))));
+  return fireKeysAt !== -1 && request.indexOf(bulkStringOf(task), fireKeysAt) !== -1;
 }
 
 export function isSettleRequestOf(

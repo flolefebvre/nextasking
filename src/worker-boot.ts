@@ -139,7 +139,6 @@ export type BackgroundBootConfig = {
   isWorkerRunQueueOpen: () => boolean;
   startTheWorker: () => void;
   closeWorkerRunQueue: () => Promise<void>;
-  notifyWorkerBin: () => void;
   onWorkerNotStarted: StartWorkerOptions["onWorkerNotStarted"];
   logger: Logger;
 };
@@ -160,7 +159,6 @@ export async function finishBootInBackground(config: BackgroundBootConfig): Prom
       config.logger.error({ err: error }, "worker not started");
       await callOnWorkerNotStarted(config, error);
       await config.closeWorkerRunQueue();
-      config.notifyWorkerBin();
     }
     return;
   }

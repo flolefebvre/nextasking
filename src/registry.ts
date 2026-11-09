@@ -36,7 +36,6 @@ import type { RunState } from "./run-states.js";
 import type { RunQueue } from "./run-queue.js";
 import { bootWorker, finishBootInBackground } from "./worker-boot.js";
 import { rejectInvalidSchedule, timezoneOf } from "./schedules.js";
-import { notifyWorkerBin } from "./worker-bin-handshake.js";
 import {
   MISSING_MANUAL_SIGNAL_HANDLING_WARNING,
   exitOnShutdownSignals,
@@ -259,21 +258,10 @@ export function createNextasking<
       readOnRedis("listSchedules", {}, () => queueReader.listSchedules())) as Instance["listSchedules"],
     taskDefinitions: taskDefinitionSummariesOf(config.tasks) as Instance["taskDefinitions"],
     eventDefinitions: eventDefinitionSummariesOf(events, listenerNamesByEventName) as Instance["eventDefinitions"],
-    startWorker: async (options = {}) => {
-      notifyWorkerBin("startWorkerCalled");
-      try {
-        await startWorkerWithoutNotifyingTheBin(options);
-      } catch (error) {
-        if (!isWorkerStartedInThisProcess) {
-          notifyWorkerBin("startWorkerRejectedWithNoWorker");
-        }
-        throw error;
-      }
-      notifyWorkerBin("startWorkerResolved");
-    },
+    startWorker: (options) => startWorker(options),
   };
 
-  const startWorkerWithoutNotifyingTheBin = async (options: StartWorkerOptions) => {
+  const startWorker = async (options: StartWorkerOptions = {}) => {
     if (recordingRunWriter !== undefined) {
       throw fakedInstanceError("startWorker");
     }
@@ -355,7 +343,6 @@ export function createNextasking<
         isWorkerRunQueueOpen,
         startTheWorker,
         closeWorkerRunQueue,
-        notifyWorkerBin: () => notifyWorkerBin("workerNotStarted"),
         onWorkerNotStarted,
         logger,
       });

@@ -28,6 +28,20 @@ export function fixtureNextVersion(env: NodeJS.ProcessEnv = process.env): string
   return env.NEXTASKING_E2E_NEXT_VERSION?.trim() || undefined;
 }
 
+async function versionInPackageJson(packageJsonPath: string, dependencyName?: string): Promise<string | undefined> {
+  const packageJson = JSON.parse(await readFile(packageJsonPath, "utf8")) as {
+    version?: string;
+    dependencies?: Record<string, string>;
+  };
+  return dependencyName === undefined ? packageJson.version : packageJson.dependencies?.[dependencyName];
+}
+
+export async function isThePinnedNextInstalledIn(fixtureAppDir: string): Promise<boolean> {
+  const pinnedVersion = await versionInPackageJson(join(FIXTURE_APP_SOURCE_DIR, "package.json"), "next");
+  const installedVersion = await versionInPackageJson(join(fixtureAppDir, "node_modules", "next", "package.json"));
+  return installedVersion === pinnedVersion;
+}
+
 export function nextBinOf(fixtureAppDir: string): string {
   return join(fixtureAppDir, "node_modules", ".bin", "next");
 }

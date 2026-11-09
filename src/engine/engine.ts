@@ -23,6 +23,7 @@ import { FIRE_NOW_SCRIPT, fireNowKeysOf } from "./fire-now-script.js";
 import { FIRE_SCRIPT, fireKeysOf } from "./fire-script.js";
 import { LUA_LIBRARY } from "./lua-library.js";
 import { MAKE_DUE_SCRIPT, makeDueKeysOf } from "./make-due-script.js";
+import { BUSY_RUN_COUNTS_SCRIPT, busyRunCountsKeysOf } from "./busy-run-counts-script.js";
 import {
   MOST_DUE_RUNS_PROMOTED_PER_PROMOTE,
   NEWER_VERSION_RECORDS_PASSED_OVER_PER_PROMOTE,
@@ -272,6 +273,13 @@ export type MadeDueRun = { task: string; runId: RunId };
 
 export type MakeDueReply = { kind: "madeDue"; madeDueRuns: MadeDueRun[] };
 
+export type BusyRunCounts = {
+  pendingRunCount: number;
+  executingRunCount: number;
+  waitingForConcurrencySlotRunCount: number;
+  dueRunCount: number;
+};
+
 export type DueSchedule = ScheduleSummary & { nextFiringAt: EpochMilliseconds };
 
 export type DueSchedulesReply = { serverInstant: EpochMilliseconds; dueSchedules: DueSchedule[] };
@@ -309,8 +317,25 @@ export type Engine = {
   prune: (request: PruneRequest) => Promise<PruneReply>;
   replay: (request: ReplayRequest) => Promise<ReplayReply>;
   makeDue: (request?: MakeDueRequest) => Promise<MakeDueReply>;
+  busyRunCounts: () => Promise<BusyRunCounts>;
   serverInstant: () => Promise<EpochMilliseconds>;
 };
+
+function busyRunCountsOf(reply: unknown): BusyRunCounts {
+  if (Array.isArray(reply) && reply.length === 5 && reply[0] === "counted") {
+    const counts = reply.slice(1).map(Number);
+    if (counts.every((count) => Number.isSafeInteger(count))) {
+      const [pendingRunCount, executingRunCount, waitingForConcurrencySlotRunCount, dueRunCount] = counts as [
+        number,
+        number,
+        number,
+        number,
+      ];
+      return { pendingRunCount, executingRunCount, waitingForConcurrencySlotRunCount, dueRunCount };
+    }
+  }
+  throw unreadableReplyError("busyRunCounts", reply);
+}
 
 function unreadableReplyError(scriptName: string, reply: unknown): Error {
   return new Error(`The ${scriptName} script sent a reply the engine cannot read: ${JSON.stringify(reply)}`);
@@ -980,6 +1005,11 @@ export function createEngine(client: Redis, prefix: string): Engine {
   const runSaveStepScript = scriptRunnerWithKeysOf("nextaskingSaveStep", SAVE_STEP_SCRIPT, 1);
   const runReadStepScript = scriptRunnerWithKeysOf("nextaskingReadStep", READ_STEP_SCRIPT, 1);
   const runMakeDueScript = scriptRunnerOf("nextaskingMakeDue", MAKE_DUE_SCRIPT, makeDueKeysOf(keys));
+  const runBusyRunCountsScript = scriptRunnerOf(
+    "nextaskingBusyRunCounts",
+    BUSY_RUN_COUNTS_SCRIPT,
+    busyRunCountsKeysOf(keys),
+  );
   const runSyncSchedulesScript = scriptRunnerOf(
     "nextaskingSyncSchedules",
     SYNC_SCHEDULES_SCRIPT,
@@ -1011,6 +1041,7 @@ export function createEngine(client: Redis, prefix: string): Engine {
           ]),
         ]),
       ),
+    busyRunCounts: async () => busyRunCountsOf(await runBusyRunCountsScript([])),
     makeDue: async ({ task } = {}) =>
       makeDueReplyOf(
         await runMakeDueScript([

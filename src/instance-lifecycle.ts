@@ -1,13 +1,12 @@
-import type { Redis } from "ioredis";
-
 import { isUnansweredError } from "./connection.js";
-import type { RedisConnections } from "./connection.js";
+import type { OwnedRedisClient, RedisConnections } from "./connection.js";
 import type { DurationInMilliseconds } from "./durations.js";
 import type { Engine } from "./engine/engine.js";
 import type { WorkerDefinitions } from "./definitions.js";
 import { syncDeclaredSchedules } from "./worker-schedules.js";
 import { InstanceClosedError } from "./errors.js";
 import type { Logger } from "./logger.js";
+import type { RedisClient } from "./redis-client.js";
 import { answeredDespiteOutage, untilAborted } from "./redis-outage.js";
 import type { RedisOutage } from "./redis-outage.js";
 import { checkServerInfoReading, readServerInfo } from "./server-info.js";
@@ -29,8 +28,8 @@ import type { WorkerTiming } from "./worker-timing.js";
 
 export type InstanceLifecycleConfig = {
   connections: RedisConnections;
-  engineOn: (commandClient: Redis) => Engine;
-  wakeUpWaitOn: (blockingClient: Redis) => WaitForWakeUp;
+  engineOn: (commandClient: RedisClient) => Engine;
+  wakeUpWaitOn: (blockingClient: RedisClient) => WaitForWakeUp;
   senderOn: (engine: Engine) => HandlerSender;
   definitions: WorkerDefinitions;
   logger: Logger;
@@ -38,7 +37,7 @@ export type InstanceLifecycleConfig = {
   env?: NodeJS.ProcessEnv;
 };
 
-export type OpenedCommandClient = { commandClient: Redis; engine: Engine };
+export type OpenedCommandClient = { commandClient: OwnedRedisClient; engine: Engine };
 
 export type InstanceLifecycle = {
   callWhileOpen: <Result>(call: (openedCommandClient: OpenedCommandClient) => Promise<Result>) => Promise<Result>;
@@ -48,7 +47,7 @@ export type InstanceLifecycle = {
 
 type RunningWorker = {
   loop: WorkerLoop;
-  blockingClient: Redis;
+  blockingClient: OwnedRedisClient;
   timing: WorkerTiming;
   shutdownTimeoutInMilliseconds: DurationInMilliseconds;
 };

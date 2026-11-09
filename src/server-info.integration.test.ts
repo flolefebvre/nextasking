@@ -3,6 +3,7 @@ import { expect } from "vitest";
 
 import { readServerInfo, serverFloorRejectionOf } from "./server-info.js";
 import { integrationTest } from "../tests/integration-test.js";
+import { redisClientOf } from "../tests/with-redis.js";
 
 integrationTest(
   "reads the policy and a version at the floor from the test server in one INFO",
@@ -13,7 +14,7 @@ integrationTest(
     try {
       await redis.connect();
 
-      const { maxmemoryPolicyReading, serverVersionReading } = await readServerInfo(redis);
+      const { maxmemoryPolicyReading, serverVersionReading } = await readServerInfo(redisClientOf(redis));
 
       expect(maxmemoryPolicyReading).toEqual({ kind: "read", policy: "noeviction" });
       expect(serverVersionReading).toEqual({

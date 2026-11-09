@@ -6,6 +6,7 @@ import { integrationTest } from "../tests/integration-test.js";
 import { createRecordingLogger } from "../tests/recording-logger.js";
 import { startTcpProxy } from "../tests/tcp-proxy.js";
 import { createRedisConnections } from "./connection.js";
+import { builtInCommandOf } from "./redis-client.js";
 
 const GIVE_UP_AFTER_IN_MILLISECONDS = 1000;
 
@@ -23,7 +24,7 @@ integrationTest(
     try {
       await connections.waitUntilReadyWithinGiveUpAfter(client);
       const replyCut = proxy.cutBeforeReplyTo((request) => request.includes(inFlightKey));
-      const inFlightCommand = client.get(inFlightKey).catch((error: unknown) => error);
+      const inFlightCommand = client.send(builtInCommandOf("GET", inFlightKey)).catch((error: unknown) => error);
       await replyCut;
       await proxy.restore();
       await vi.waitFor(() => expect(client.status).toBe("ready"), { timeout: 10_000 });
@@ -33,7 +34,7 @@ integrationTest(
       const statusAfterTheWait = client.status;
 
       const unansweredCommand = client
-        .blpop(`${keyPrefix}unanswered`, (3 * GIVE_UP_AFTER_IN_MILLISECONDS) / 1000)
+        .send(builtInCommandOf("BLPOP", `${keyPrefix}unanswered`, (3 * GIVE_UP_AFTER_IN_MILLISECONDS) / 1000))
         .catch((error: unknown) => error);
       await vi.waitFor(() => expect(clientErrors.length).toBeGreaterThan(errorsAfterTheReconnect), { timeout: 5_000 });
       await unansweredCommand;

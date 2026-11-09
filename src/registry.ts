@@ -5,7 +5,6 @@ import type { ConnectionConfig } from "./connection.js";
 import type { AnyTaskDefinition, EventDefinition, PayloadInput, PayloadSchema } from "./definitions.js";
 import { parseDuration } from "./durations.js";
 import { createEngine, wakeUpWaitOf } from "./engine/engine.js";
-import { ioredisClientOf } from "./ioredis-client.js";
 import { createReadApi } from "./read-api.js";
 import type { ReadApi } from "./read-api.js";
 import { RESERVED_NAME_PREFIX, createEnqueueRequests } from "./enqueue-requests.js";
@@ -185,8 +184,8 @@ export function createNextasking<
   const requests = createEnqueueRequests({ tasksByName, eventsByName, listenerNamesByEventName });
   const lifecycle = createInstanceLifecycle({
     connections,
-    engineOn: (commandClient) => createEngine(ioredisClientOf(commandClient), prefix),
-    wakeUpWaitOn: (blockingClient) => wakeUpWaitOf(ioredisClientOf(blockingClient), prefix),
+    engineOn: (commandClient) => createEngine(commandClient, prefix),
+    wakeUpWaitOn: (blockingClient) => wakeUpWaitOf(blockingClient, prefix),
     senderOn: (engine) => handlerSenderOn(engine, requests, logger),
     definitions: { tasksByName, listenerNamesByEventName },
     logger,
@@ -218,7 +217,7 @@ export function createNextasking<
     recordingSendTarget === undefined
       ? callOnRedisWhileOpen(callIds, ({ commandClient }) => {
           readApi ??= createReadApi({
-            client: ioredisClientOf(commandClient),
+            client: commandClient,
             prefix,
             tasksByName,
             listenerNamesByEventName,

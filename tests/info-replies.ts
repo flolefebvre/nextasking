@@ -1,6 +1,6 @@
 import { ReplyError } from "ioredis";
 
-import type { MaxmemoryPolicySource } from "../src/server-info.js";
+import type { RedisClient } from "../src/redis-client.js";
 
 export const infoMemoryReplyWith = (policy: string) =>
   ["# Memory", "used_memory:1048576", "maxmemory:0", `maxmemory_policy:${policy}`, "mem_fragmentation_ratio:1.10"].join(
@@ -35,17 +35,22 @@ export function maxmemoryPolicySourceAnswering({
 }: {
   info: () => Promise<string>;
   config: () => Promise<unknown>;
-}): MaxmemoryPolicySource & { calledCommands: string[] } {
+}): RedisClient & { calledCommands: string[] } {
   const calledCommands: string[] = [];
+  const repliesByCommandName: Record<string, () => Promise<unknown>> = { INFO: info, CONFIG: config };
   return {
     calledCommands,
-    info: async (...args: unknown[]) => {
-      calledCommands.push(["INFO", ...args].join(" "));
-      return info();
+    send: async (command) => {
+      if (command.kind !== "builtIn") {
+        throw new Error(`this source runs no script, asked for ${command.script.name}`);
+      }
+      calledCommands.push([command.name, ...command.commandArguments].join(" "));
+      const reply = repliesByCommandName[command.name];
+      if (reply === undefined) {
+        throw new Error(`this source has no reply to ${command.name}`);
+      }
+      return reply();
     },
-    config: async (...args: unknown[]) => {
-      calledCommands.push(["CONFIG", ...args].join(" "));
-      return config();
-    },
-  } as MaxmemoryPolicySource & { calledCommands: string[] };
+    sendBatch: () => Promise.reject(new Error("this source answers no batch")),
+  };
 }

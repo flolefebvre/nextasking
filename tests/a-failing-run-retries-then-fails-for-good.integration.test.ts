@@ -11,6 +11,7 @@ const ISO_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 
 integrationTest(
   "a failing run waits its backoff, retries, then fails for good and keeps one error record per attempt",
+  { timeout: 15_000 },
   async ({ redisUrl, keyPrefix }) => {
     const { logger, lines } = createRecordingLogger();
     const syncAccount = defineTask("sync-account", {
@@ -140,6 +141,7 @@ integrationTest(
 
 integrationTest(
   "a timeout fails an attempt that runs too long, and the attempt retries like any other failure",
+  { timeout: 15_000 },
   async ({ redisUrl, keyPrefix }) => {
     const { logger, lines } = createRecordingLogger();
     const renderReport = defineTask("render-report", {

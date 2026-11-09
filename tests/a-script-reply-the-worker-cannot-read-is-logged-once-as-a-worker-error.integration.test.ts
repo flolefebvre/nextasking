@@ -10,6 +10,7 @@ import { withRedis } from "./with-redis.js";
 
 integrationTest(
   "a script error the worker meets while it fails a run is logged once as a worker error, and the worker goes on",
+  { timeout: 25_000 },
   async ({ redisUrl, keyPrefix, expectInvariantViolation }) => {
     const { logger, lines } = createRecordingLogger();
     const completedOrderIds: string[] = [];

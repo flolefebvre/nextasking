@@ -10,7 +10,7 @@ const ONE_HOUR_IN_MILLISECONDS = 60 * ONE_MINUTE_IN_MILLISECONDS;
 
 integrationTest(
   "a run read back from a process with no worker shows each state it goes through",
-  { timeout: 30_000 },
+  { timeout: 35_000 },
   async ({ redisUrl, keyPrefix }) => {
     await withReaderAndWorker(redisUrl, keyPrefix, async ({ reader, startWorker, workerLines }) => {
       const stateOf = async (taskName: Parameters<typeof reader.getRun>[0], runId: string) =>

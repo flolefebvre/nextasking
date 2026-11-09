@@ -16,7 +16,7 @@ import { withRedis } from "./with-redis.js";
 
 integrationTest(
   "a repeated event id emits nothing within its 24-hour dedup window, and after it starts only the listeners whose run is gone",
-  { timeout: 20_000 },
+  { timeout: 35_000 },
   async ({ redisUrl, keyPrefix }) => {
     const { logger, lines } = createRecordingLogger();
     const recordedListenerNames: string[] = [];

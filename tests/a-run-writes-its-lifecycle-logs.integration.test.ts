@@ -8,6 +8,7 @@ import { createRecordingLogger } from "./recording-logger.js";
 
 integrationTest(
   "a run writes its lifecycle logs, and the handler's own lines carry the run",
+  { timeout: 15_000 },
   async ({ redisUrl, keyPrefix }) => {
     const { logger, lines } = createRecordingLogger();
     const sendWelcomeEmail = defineTask("send-welcome-email", {

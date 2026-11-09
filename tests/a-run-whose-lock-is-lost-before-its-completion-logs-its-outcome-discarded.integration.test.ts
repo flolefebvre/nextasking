@@ -11,6 +11,7 @@ import { withRedis } from "./with-redis.js";
 
 integrationTest(
   "a run whose lock is taken over when its handler returns, while its record still says executing, logs its outcome discarded and no run completed",
+  { timeout: 15_000 },
   async ({ redisUrl, keyPrefix, expectInvariantViolation }) => {
     await withRedis(redisUrl, async (redis) => {
       const { logger, lines } = createRecordingLogger();

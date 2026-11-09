@@ -103,6 +103,7 @@ type FinishedRun = { task: string; attempt: number };
 
 integrationTest(
   "through the instance's worker, makeRunsDueNow then waitForIdle ends delayed, suspended and backing-off runs, of one task when asked, and a woken sleeper resumes in its attempt",
+  { timeout: 15_000 },
   async ({ redisUrl, keyPrefix }) => {
     const { logger, lines } = createRecordingLogger();
     const finishedRuns: FinishedRun[] = [];

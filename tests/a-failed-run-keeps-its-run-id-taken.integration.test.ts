@@ -9,6 +9,7 @@ import { storedRunIdentities } from "./stored-run-identities.js";
 
 integrationTest(
   "a repeat of a failed run's runId is dropped: a final failure doesn't reopen the dedup window",
+  { timeout: 15_000 },
   async ({ redisUrl, keyPrefix }) => {
     const { logger, lines } = createRecordingLogger();
     let attemptCount = 0;

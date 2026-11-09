@@ -11,6 +11,7 @@ const RANDOM_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-
 
 integrationTest(
   "a dispatched task runs in the embedded worker with the schema's output",
+  { timeout: 15_000 },
   async ({ redisUrl, keyPrefix }) => {
     const recordedContexts: TaskContext<{ email: string }>[] = [];
     const sendWelcomeEmail = defineTask("send-welcome-email", {

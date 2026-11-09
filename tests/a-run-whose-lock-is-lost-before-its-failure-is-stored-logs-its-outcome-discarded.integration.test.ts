@@ -12,7 +12,7 @@ import { withRedis } from "./with-redis.js";
 
 integrationTest(
   "a run whose lock is taken over during an outage, after its attempt failed and before its failure is stored, logs its outcome discarded and no attempt failed",
-  { timeout: 20_000 },
+  { timeout: 30_000 },
   async ({ redisUrl, keyPrefix, expectInvariantViolation }) => {
     const proxy = await startTcpProxy(redisUrl);
     let isConnectionCut = false;

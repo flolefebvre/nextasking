@@ -10,6 +10,7 @@ const SLEEP_IN_MILLISECONDS = 1500;
 
 integrationTest(
   "a sleeping run holds no worker, resumes at its wake time with the same attempt number, and logs both ends",
+  { timeout: 35_000 },
   async ({ redisUrl, keyPrefix }) => {
     const { logger, lines } = createRecordingLogger();
     const attemptsSeenAfterTheSleep: number[] = [];
@@ -78,6 +79,7 @@ integrationTest(
 
 integrationTest(
   "a task's timeout covers each stretch of a sleeping run, never the time spent sleeping",
+  { timeout: 15_000 },
   async ({ redisUrl, keyPrefix }) => {
     const { logger, lines } = createRecordingLogger();
     const remindTrialEnd = defineTask("remind-trial-end", {

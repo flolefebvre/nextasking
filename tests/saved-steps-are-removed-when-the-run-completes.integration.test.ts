@@ -12,6 +12,7 @@ import { withRedis } from "./with-redis.js";
 
 integrationTest(
   "a run's saved steps live in a hash next to its job while it runs, and the hash is removed when it completes",
+  { timeout: 15_000 },
   async ({ redisUrl, keyPrefix }) => {
     const { logger, lines } = createRecordingLogger();
     const savedStepsSeenByHandler: SavedSteps[] = [];

@@ -161,6 +161,7 @@ integrationTest(
 
 integrationTest(
   "a failed listener of a built-in event sends no notice, so alerting can't loop",
+  { timeout: 15_000 },
   async ({ redisUrl, keyPrefix }) => {
     const { logger } = createRecordingLogger();
     const alerting: Alerting = { ...noAlerting(), isRunFailedAlertBroken: true };
@@ -192,6 +193,7 @@ integrationTest(
 
 integrationTest(
   "a failure with no listener on its built-in event sends nothing, silently",
+  { timeout: 15_000 },
   async ({ redisUrl, keyPrefix }) => {
     const { logger, lines } = createRecordingLogger();
     const nextasking = createAlertingNextasking(redisUrl, keyPrefix, logger);

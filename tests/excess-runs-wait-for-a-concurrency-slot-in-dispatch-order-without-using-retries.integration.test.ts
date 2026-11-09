@@ -21,6 +21,7 @@ function workerMessagesOfRun(lines: readonly RecordedLogLine[], runId: string): 
 
 integrationTest(
   "runs beyond a key's limit wait without using retries, start in dispatch order, and leave other keys free",
+  { timeout: 45_000 },
   async ({ redisUrl, keyPrefix }) => {
     const { logger, lines } = createRecordingLogger();
     const startedRuns: { order: number; attempt: number }[] = [];

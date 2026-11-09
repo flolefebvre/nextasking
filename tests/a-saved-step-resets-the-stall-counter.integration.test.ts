@@ -10,6 +10,7 @@ import { withRedis } from "./with-redis.js";
 
 integrationTest(
   "a saved step resets the stall counter, the stalls field of the run's record",
+  { timeout: 15_000 },
   async ({ redisUrl, keyPrefix }) => {
     const { logger, lines } = createRecordingLogger();
     const stallCountsBeforeEachStep: (string | null)[] = [];

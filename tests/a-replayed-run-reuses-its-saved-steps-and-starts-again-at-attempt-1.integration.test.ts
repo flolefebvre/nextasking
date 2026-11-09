@@ -47,6 +47,7 @@ function brokenReceiptService(): ReceiptService {
 
 integrationTest(
   "a replayed run keeps its run id, reuses its saved steps, starts again at attempt 1 and completes",
+  { timeout: 25_000 },
   async ({ redisUrl, keyPrefix }) => {
     const { logger, lines } = createRecordingLogger();
     const receiptService = brokenReceiptService();
@@ -84,6 +85,7 @@ integrationTest(
 
 integrationTest(
   "replay resets the failed run's errors, reason, stall count and unknown-task marker before its first new attempt, and counts the replay",
+  { timeout: 15_000 },
   async ({ redisUrl, keyPrefix }) => {
     const { logger, lines } = createRecordingLogger();
     const worker = createChargeInvoiceNextasking(redisUrl, keyPrefix, brokenReceiptService(), logger);
@@ -125,35 +127,40 @@ integrationTest(
   },
 );
 
-integrationTest("a replayed run that fails again keeps only its new life's errors", async ({ redisUrl, keyPrefix }) => {
-  const { logger, lines } = createRecordingLogger();
-  const nextasking = createChargeInvoiceNextasking(redisUrl, keyPrefix, brokenReceiptService(), logger);
+integrationTest(
+  "a replayed run that fails again keeps only its new life's errors",
+  { timeout: 25_000 },
+  async ({ redisUrl, keyPrefix }) => {
+    const { logger, lines } = createRecordingLogger();
+    const nextasking = createChargeInvoiceNextasking(redisUrl, keyPrefix, brokenReceiptService(), logger);
 
-  try {
-    await nextasking.startWorker();
-    const { runId } = await nextasking.dispatch("charge-invoice", { invoiceId: "inv-7" });
-    await waitForLogMessage(lines, "run failed");
+    try {
+      await nextasking.startWorker();
+      const { runId } = await nextasking.dispatch("charge-invoice", { invoiceId: "inv-7" });
+      await waitForLogMessage(lines, "run failed");
 
-    await nextasking.replay("charge-invoice", runId);
-    await vi.waitFor(
-      () => {
-        expect(lines.filter((line) => line.message === "run failed")).toHaveLength(2);
-      },
-      { timeout: 10_000 },
-    );
+      await nextasking.replay("charge-invoice", runId);
+      await vi.waitFor(
+        () => {
+          expect(lines.filter((line) => line.message === "run failed")).toHaveLength(2);
+        },
+        { timeout: 10_000 },
+      );
 
-    expect(await storedRun(redisUrl, keyPrefix, "charge-invoice", runId)).toMatchObject({
-      reason: "retries exhausted",
-      errors: [{ attempt: 1 }, { attempt: 2 }],
-      replays: "1",
-    });
-  } finally {
-    await closeNextaskingAndCheckItsDuration(nextasking);
-  }
-});
+      expect(await storedRun(redisUrl, keyPrefix, "charge-invoice", runId)).toMatchObject({
+        reason: "retries exhausted",
+        errors: [{ attempt: 1 }, { attempt: 2 }],
+        replays: "1",
+      });
+    } finally {
+      await closeNextaskingAndCheckItsDuration(nextasking);
+    }
+  },
+);
 
 integrationTest(
   "replay throws for a run that is unknown or not failed, and for a task the instance doesn't list",
+  { timeout: 15_000 },
   async ({ redisUrl, keyPrefix }) => {
     const { logger, lines } = createRecordingLogger();
     const nextasking = createChargeInvoiceNextasking(

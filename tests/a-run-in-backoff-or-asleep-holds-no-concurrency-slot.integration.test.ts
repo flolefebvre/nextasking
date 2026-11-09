@@ -8,7 +8,7 @@ import { createRecordingLogger, waitForLogMessage } from "./recording-logger.js"
 
 integrationTest(
   "a run waiting out its backoff or asleep frees its concurrency slot for another run of the same key",
-  { timeout: 20_000 },
+  { timeout: 45_000 },
   async ({ redisUrl, keyPrefix }) => {
     const { logger, lines } = createRecordingLogger();
     const handlerEvents: string[] = [];

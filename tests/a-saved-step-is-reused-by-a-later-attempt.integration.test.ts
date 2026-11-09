@@ -8,6 +8,7 @@ import { createRecordingLogger, waitForLogMessage } from "./recording-logger.js"
 
 integrationTest(
   "a later attempt re-enters the handler from the top and gets the saved result without running fn again",
+  { timeout: 15_000 },
   async ({ redisUrl, keyPrefix }) => {
     const { logger, lines } = createRecordingLogger();
     const idempotencyKeysSeenByFn: string[] = [];

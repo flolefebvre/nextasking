@@ -773,28 +773,6 @@ describe("the connection outage tracker", () => {
     expect(lines).toEqual([]);
   });
 
-  test("calls each connection-restored listener once per outage, when it logs connection restored, until it unsubscribes", () => {
-    const { logger, lines } = createRecordingLogger();
-    const outageTracker = createConnectionOutageTracker(logger);
-    const instanceClient = {};
-    const workerClient = {};
-    const messagesLoggedWhenRestored: string[][] = [];
-    const stopListening = outageTracker.onConnectionRestored(() => {
-      messagesLoggedWhenRestored.push(lines.map((line) => line.message));
-    });
-
-    outageTracker.reportClientReady(instanceClient);
-    outageTracker.reportClientError(instanceClient, networkError("ECONNRESET"));
-    outageTracker.reportClientError(workerClient, networkError("ECONNRESET"));
-    outageTracker.reportClientReady(instanceClient);
-    outageTracker.reportClientReady(workerClient);
-    stopListening();
-    outageTracker.reportClientError(workerClient, networkError("ECONNRESET"));
-    outageTracker.reportClientReady(workerClient);
-
-    expect(messagesLoggedWhenRestored).toEqual([["connection error", "connection restored"]]);
-  });
-
   test("ends an outage silently when the last client still down is closed, and logs the next one", () => {
     const { logger, lines } = createRecordingLogger();
     const outageTracker = createConnectionOutageTracker(logger);
@@ -806,6 +784,339 @@ describe("the connection outage tracker", () => {
     outageTracker.reportClientError(otherClient, networkError("ECONNREFUSED"));
 
     expect(lines.map((line) => line.message)).toEqual(["connection error", "connection error"]);
+  });
+
+  describe("a client giving up while another is tracked", () => {
+    type AnswerCheck = { check: () => Promise<void>; checkCount: () => number; answer: () => void; fail: () => void };
+
+    function answerCheckOf(): AnswerCheck {
+      let checkCount = 0;
+      let answer = () => undefined as void;
+      let fail = () => undefined as void;
+      return {
+        check: () => {
+          checkCount += 1;
+          return new Promise<void>((resolve, reject) => {
+            answer = resolve;
+            fail = () => {
+              reject(new Error("unanswered"));
+            };
+          });
+        },
+        checkCount: () => checkCount,
+        answer: () => {
+          answer();
+        },
+        fail: () => {
+          fail();
+        },
+      };
+    }
+
+    function trackedClientsScenarioOf() {
+      const { logger, lines } = createRecordingLogger();
+      const outageTracker = createConnectionOutageTracker(logger);
+      const gaveUpClient = {};
+      const otherClient = {};
+      const otherClientCheck = answerCheckOf();
+      outageTracker.trackClient(gaveUpClient, () => Promise.resolve());
+      outageTracker.trackClient(otherClient, otherClientCheck.check);
+      const messages = () => lines.map((line) => line.message);
+      return { outageTracker, lines, messages, gaveUpClient, otherClient, otherClientCheck };
+    }
+
+    test("checks the other client once, and logs connection restored only once both the given-up client is ready and the other answered its check", async () => {
+      const { outageTracker, lines, messages, gaveUpClient, otherClientCheck } = trackedClientsScenarioOf();
+      const unanswered = new TimeoutError();
+
+      outageTracker.reportClientGaveUp(gaveUpClient, unanswered);
+      outageTracker.reportClientReady(gaveUpClient);
+      await vi.advanceTimersByTimeAsync(0);
+      const messagesBeforeTheAnswer = messages();
+      otherClientCheck.answer();
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(otherClientCheck.checkCount()).toBe(1);
+      expect(messagesBeforeTheAnswer).toEqual(["connection error"]);
+      expect(lines).toEqual(onePairNaming(unanswered));
+    });
+
+    test.each([
+      { otherClientCase: "its check fails", isOtherClientGivingUp: false },
+      { otherClientCase: "it gives up before its check is answered", isOtherClientGivingUp: true },
+    ])(
+      "leaves the other client's own ready to end the outage when $otherClientCase, with no second connection error",
+      async ({ isOtherClientGivingUp }) => {
+        const { outageTracker, messages, gaveUpClient, otherClient, otherClientCheck } = trackedClientsScenarioOf();
+
+        outageTracker.reportClientGaveUp(gaveUpClient, new TimeoutError());
+        if (isOtherClientGivingUp) {
+          outageTracker.reportClientGaveUp(otherClient, new TimeoutError());
+          otherClientCheck.answer();
+        } else {
+          otherClientCheck.fail();
+        }
+        outageTracker.reportClientReady(gaveUpClient);
+        await vi.advanceTimersByTimeAsync(0);
+        const messagesBeforeTheOtherIsReady = messages();
+        outageTracker.reportClientReady(otherClient);
+
+        expect(messagesBeforeTheOtherIsReady).toEqual(["connection error"]);
+        expect(messages()).toEqual(["connection error", "connection restored"]);
+      },
+    );
+
+    test("checks nobody on an error that is not a give-up, as a reset", () => {
+      const { outageTracker, messages, gaveUpClient, otherClientCheck } = trackedClientsScenarioOf();
+
+      outageTracker.reportClientError(gaveUpClient, networkError("ECONNRESET"));
+      outageTracker.reportClientReady(gaveUpClient);
+
+      expect(otherClientCheck.checkCount()).toBe(0);
+      expect(messages()).toEqual(["connection error", "connection restored"]);
+    });
+
+    test("never checks an untracked subject such as the refused-write stretch, which neither opens a check nor ends one", async () => {
+      const { outageTracker, messages, gaveUpClient, otherClientCheck } = trackedClientsScenarioOf();
+      const stretchSubject = {};
+
+      outageTracker.reportClientError(stretchSubject, new ErrorReply(OUT_OF_MEMORY_MESSAGE));
+      const checkCountAfterTheStretchOpened = otherClientCheck.checkCount();
+      outageTracker.reportClientGaveUp(gaveUpClient, new TimeoutError());
+      outageTracker.reportClientReady(stretchSubject);
+      outageTracker.reportClientReady(gaveUpClient);
+      await vi.advanceTimersByTimeAsync(0);
+      const messagesBeforeTheAnswer = messages();
+      otherClientCheck.answer();
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(checkCountAfterTheStretchOpened).toBe(0);
+      expect(otherClientCheck.checkCount()).toBe(1);
+      expect(messagesBeforeTheAnswer).toEqual(["connection error"]);
+      expect(messages()).toEqual(["connection error", "connection restored"]);
+    });
+
+    test("logs connection restored when the client still checked is closed and was the last one holding the outage", () => {
+      const { outageTracker, messages, gaveUpClient, otherClient } = trackedClientsScenarioOf();
+
+      outageTracker.reportClientGaveUp(gaveUpClient, new TimeoutError());
+      outageTracker.reportClientReady(gaveUpClient);
+      outageTracker.forgetClient(otherClient);
+
+      expect(messages()).toEqual(["connection error", "connection restored"]);
+    });
+
+    test("ends the outage silently when the client given up is closed and was the last one holding it", async () => {
+      const { outageTracker, messages, gaveUpClient, otherClientCheck } = trackedClientsScenarioOf();
+
+      outageTracker.reportClientGaveUp(gaveUpClient, new TimeoutError());
+      otherClientCheck.answer();
+      await vi.advanceTimersByTimeAsync(0);
+      outageTracker.forgetClient(gaveUpClient);
+
+      expect(messages()).toEqual(["connection error"]);
+    });
+  });
+});
+
+describe("a silence that ends after one connection gave up and before the other did", () => {
+  const BLOCK_IN_MILLISECONDS = 1000;
+
+  function commandAndBlockingScenarioOf() {
+    const { logger, lines } = createRecordingLogger();
+    const fakeRedisDrivers = createFakeRedisDrivers();
+    const connections = createRedisConnections(
+      { url: "redis://127.0.0.1:1", giveUpAfter: "1s" },
+      logger,
+      fakeRedisDrivers.createDriver,
+    );
+    const commandConnection = connections.createCommandConnection();
+    const blockingConnection = connections.createBlockingConnection(BLOCK_IN_MILLISECONDS);
+    const [commandDriver, blockingDriver] = fakeRedisDrivers.createdDrivers();
+    if (commandDriver === undefined || blockingDriver === undefined) {
+      throw new Error("the two drivers were not created");
+    }
+    const messages = () => lines.map(({ message }) => message);
+    const reconnect = (driver: FakeRedisDriver) => {
+      driver.isAnswering = true;
+      driver.becomeReady();
+    };
+    return {
+      connections,
+      commandConnection,
+      blockingConnection,
+      commandDriver,
+      blockingDriver,
+      lines,
+      messages,
+      reconnect,
+    };
+  }
+
+  function readyCommandAndBlockingScenarioOf() {
+    const scenario = commandAndBlockingScenarioOf();
+    scenario.commandDriver.becomeReady();
+    scenario.blockingDriver.becomeReady();
+    return scenario;
+  }
+
+  function silentCommandAndBlockingScenarioOf() {
+    const scenario = readyCommandAndBlockingScenarioOf();
+    scenario.commandDriver.isAnswering = false;
+    scenario.blockingDriver.isAnswering = false;
+    const sendUnanswered = (connection: RedisConnection) =>
+      connection.workerCalls.send(answered("lost")).catch((error: unknown) => error);
+    return { ...scenario, sendUnanswered };
+  }
+
+  test.each([
+    {
+      firstConnection: "blocking",
+      secondConnection: "command",
+      secondCallSentAtInMilliseconds: 1500,
+      firstGivesUpAtInMilliseconds: 2000,
+      secondGivesUpAtInMilliseconds: 2500,
+    },
+    {
+      firstConnection: "command",
+      secondConnection: "blocking",
+      secondCallSentAtInMilliseconds: 500,
+      firstGivesUpAtInMilliseconds: 1000,
+      secondGivesUpAtInMilliseconds: 2500,
+    },
+  ] as const)(
+    "the $firstConnection connection giving up first and the $secondConnection connection after write one pair, naming the first error, restored once both are connected again",
+    async ({
+      firstConnection,
+      secondCallSentAtInMilliseconds,
+      firstGivesUpAtInMilliseconds,
+      secondGivesUpAtInMilliseconds,
+    }) => {
+      const scenario = silentCommandAndBlockingScenarioOf();
+      const isBlockingFirst = firstConnection === "blocking";
+      const [first, second] = isBlockingFirst
+        ? [
+            { connection: scenario.blockingConnection, driver: scenario.blockingDriver },
+            { connection: scenario.commandConnection, driver: scenario.commandDriver },
+          ]
+        : [
+            { connection: scenario.commandConnection, driver: scenario.commandDriver },
+            { connection: scenario.blockingConnection, driver: scenario.blockingDriver },
+          ];
+      const firstOutcome = scenario.sendUnanswered(first.connection);
+      await vi.advanceTimersByTimeAsync(secondCallSentAtInMilliseconds);
+      const secondOutcome = scenario.sendUnanswered(second.connection);
+
+      await vi.advanceTimersByTimeAsync(firstGivesUpAtInMilliseconds - secondCallSentAtInMilliseconds);
+      const firstError = scenario.lines[0]?.fields.err;
+      await vi.advanceTimersByTimeAsync(100);
+      scenario.reconnect(first.driver);
+      await vi.advanceTimersByTimeAsync(0);
+      const messagesOnceTheFirstIsBack = scenario.messages();
+      await vi.advanceTimersByTimeAsync(secondGivesUpAtInMilliseconds - firstGivesUpAtInMilliseconds - 100);
+      const secondForceReconnectCount = second.driver.forceReconnectCount;
+      const messagesOnceTheSecondGaveUp = scenario.messages();
+      await vi.advanceTimersByTimeAsync(100);
+      scenario.reconnect(second.driver);
+      await Promise.all([firstOutcome, secondOutcome]);
+
+      expect(firstError).toBeInstanceOf(TimeoutError);
+      expect(messagesOnceTheFirstIsBack).toEqual(["connection error"]);
+      expect(secondForceReconnectCount).toBe(1);
+      expect(messagesOnceTheSecondGaveUp).toEqual(["connection error"]);
+      expect(scenario.lines).toEqual(onePairNaming(firstError as Error));
+    },
+  );
+
+  test.each([
+    { silentConnection: "command", answeringConnection: "blocking", silentAnswerBoundInMilliseconds: 1000 },
+    { silentConnection: "blocking", answeringConnection: "command", silentAnswerBoundInMilliseconds: 2000 },
+  ] as const)(
+    "a $answeringConnection connection that kept answering through the $silentConnection connection's silence closes the pair once the other is connected again, and its call in flight when the other gave up is answered, not rejected",
+    async ({ silentConnection, silentAnswerBoundInMilliseconds }) => {
+      const scenario = readyCommandAndBlockingScenarioOf();
+      const isCommandSilent = silentConnection === "command";
+      const silentDriver = isCommandSilent ? scenario.commandDriver : scenario.blockingDriver;
+      const silentConnectionOfTheScenario = isCommandSilent ? scenario.commandConnection : scenario.blockingConnection;
+      silentDriver.isAnswering = false;
+      let answerTheCallInFlight: (reply: string) => void = () => undefined;
+      const heldReply = new Promise<string>((resolve) => {
+        answerTheCallInFlight = resolve;
+      });
+      const silentOutcome = silentConnectionOfTheScenario.workerCalls
+        .send(answered("lost"))
+        .catch((error: unknown) => error);
+      await vi.advanceTimersByTimeAsync(silentAnswerBoundInMilliseconds - 500);
+      const answeringReply = isCommandSilent
+        ? scenario.blockingConnection.workerCalls.send(fakeReplyCommandOf("BZPOPMIN", () => heldReply))
+        : scenario.commandConnection.instanceCalls.send(fakeReplyCommandOf("GET", () => heldReply));
+
+      await vi.advanceTimersByTimeAsync(600);
+      const messagesWhileTheSilentConnectionIsDown = scenario.messages();
+      scenario.reconnect(silentDriver);
+      await vi.advanceTimersByTimeAsync(0);
+      const messagesOnceTheSilentConnectionIsBack = scenario.messages();
+      answerTheCallInFlight("answered");
+      await silentOutcome;
+
+      expect(messagesWhileTheSilentConnectionIsDown).toEqual(["connection error"]);
+      expect(messagesOnceTheSilentConnectionIsBack).toEqual(["connection error", "connection restored"]);
+      expect(await answeringReply).toBe("answered");
+      expect(scenario.messages()).toEqual(["connection error", "connection restored"]);
+    },
+  );
+
+  async function commandConnectionBackWhileTheBlockingOneIsSilentOf() {
+    const scenario = silentCommandAndBlockingScenarioOf();
+    const commandOutcome = scenario.sendUnanswered(scenario.commandConnection);
+    await vi.advanceTimersByTimeAsync(GIVE_UP_AFTER_IN_MILLISECONDS + 100);
+    scenario.reconnect(scenario.commandDriver);
+    await commandOutcome;
+    return scenario;
+  }
+
+  test("an idle connection that never answers is checked when the other gives up, and holds the pair open until its own answer bound and its own reconnect, with no second connection error", async () => {
+    const { blockingDriver, messages, reconnect } = await commandConnectionBackWhileTheBlockingOneIsSilentOf();
+
+    const blockingForceReconnectCounts = await forceReconnectCountsAround(
+      blockingDriver,
+      BLOCK_IN_MILLISECONDS + GIVE_UP_AFTER_IN_MILLISECONDS - 100,
+    );
+    const messagesOnceTheBlockingConnectionGaveUp = messages();
+    reconnect(blockingDriver);
+
+    expect(blockingDriver.sentCommands).toEqual(["PING"]);
+    expect(blockingForceReconnectCounts).toEqual([0, 1]);
+    expect(messagesOnceTheBlockingConnectionGaveUp).toEqual(["connection error"]);
+    expect(messages()).toEqual(["connection error", "connection restored"]);
+  });
+
+  test("a connection not ready when the other gives up during the boot is not sent a check, its ready ends its part, and it is never reconnected by force", async () => {
+    const { commandDriver, blockingDriver, messages } = commandAndBlockingScenarioOf();
+    commandDriver.startHandshake();
+
+    await vi.advanceTimersByTimeAsync(GIVE_UP_AFTER_IN_MILLISECONDS);
+    blockingDriver.becomeReady();
+    const messagesOnceTheBlockingConnectionIsReady = messages();
+    commandDriver.becomeReady();
+    await vi.advanceTimersByTimeAsync(10 * GIVE_UP_AFTER_IN_MILLISECONDS);
+
+    expect(commandDriver.forceReconnectCount).toBe(1);
+    expect(blockingDriver.sentCommands).toEqual([]);
+    expect(blockingDriver.forceReconnectCount).toBe(0);
+    expect(messagesOnceTheBlockingConnectionIsReady).toEqual(["connection error"]);
+    expect(messages()).toEqual(["connection error", "connection restored"]);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  test("closing the blocking connection still checked, once the command connection is back, writes connection restored", async () => {
+    const { connections, blockingConnection, messages } = await commandConnectionBackWhileTheBlockingOneIsSilentOf();
+    const messagesBeforeTheClose = messages();
+
+    await connections.closeConnection(blockingConnection);
+
+    expect(messagesBeforeTheClose).toEqual(["connection error"]);
+    expect(messages()).toEqual(["connection error", "connection restored"]);
   });
 });
 

@@ -6,7 +6,7 @@ import { backoffOf } from "./definitions.js";
 import type { AnyTaskDefinition } from "./definitions.js";
 import { parseDuration, shownDurationOf } from "./durations.js";
 import type { DurationInMilliseconds, EpochMilliseconds } from "./durations.js";
-import { UNKNOWN_TASK_FAILURE_DELAY_IN_MILLISECONDS } from "./engine/engine.js";
+import { deserializePayload, UNKNOWN_TASK_FAILURE_DELAY_IN_MILLISECONDS } from "./engine/engine.js";
 import type { Engine, FailureNotice, LockedRun, SettleOutcome, SettleRequest } from "./engine/engine.js";
 import { engineFailureNoticeOf } from "./engine-failure-notice.js";
 import type { FailingRun, ListenerLeftOut, RunFailure, WorkerDefinitions } from "./engine-failure-notice.js";
@@ -64,10 +64,6 @@ const ATTEMPT_OUTCOME_BY_HANDLER_OUTCOME_KIND: {
   suspended: ({ resumesAt }) => ({ kind: "suspend", resumesAt }),
   yielded: () => ({ kind: "yield" }),
 };
-
-function payloadOf({ payload }: LockedRun): unknown {
-  return payload === "" ? undefined : JSON.parse(payload);
-}
 
 export function failingAttemptOf(
   failingRun: FailingRun,
@@ -140,7 +136,7 @@ export async function executeLockedRunAttempt(lockedRunAttempt: LockedRunAttempt
           attempt,
           logger: loggerWithFields(logger, runFieldsOf(lockedRun)),
           abortSignal,
-          payload: payloadOf(lockedRun),
+          payload: deserializePayload(lockedRun.payload),
           scheduledAt: scheduledAt === undefined ? undefined : new Date(scheduledAt),
         }),
       );

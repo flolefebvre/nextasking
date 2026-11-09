@@ -42,6 +42,7 @@ export type ContractEngine = Pick<
   | "fire"
   | "syncSchedules"
   | "serverInstant"
+  | "makeDue"
 >;
 
 export type EngineContractHarness = {
@@ -138,6 +139,18 @@ function firingOf({ task, nextFiringAt }: ScheduleToSync): FireRequest {
     runId: deriveFiringRunId(task, nextFiringAt),
     retries: 2,
   };
+}
+
+async function suspendedOnANapOf(engine: ContractEngine, lockedRun: LockedRun): Promise<EpochMilliseconds> {
+  const saveReply = await engine.saveStep({
+    runId: lockedRun.runId,
+    lockToken: lockedRun.lockToken,
+    stepId: "nap",
+    step: { kind: "sleep", durationInMilliseconds: HOUR_IN_MILLISECONDS },
+  });
+  const resumesAt = saveReply.kind === "saved" && saveReply.resumesAt !== undefined ? saveReply.resumesAt : 0;
+  await engine.settle({ ...lockedRun, outcome: { kind: "suspend", resumesAt } });
+  return resumesAt;
 }
 
 async function backdateEndedRuns(
@@ -737,6 +750,27 @@ export function defineEngineContractTests(contractTest: EngineContractTest): voi
       expect(reply.dueSchedules).toEqual(repliedOf({ serverInstant: expect.any(Number), dueSchedules: [dueReport] }));
       const serverInstant = reply.dueSchedules?.kind === "replied" ? reply.dueSchedules.reply.serverInstant : 0;
       expect(serverInstant).toBeGreaterThan(pastInstant);
+    },
+  );
+
+  contractTest(
+    "a makeDue makes a delayed and a sleeping run pending at once, and the sleep it woke reads as woken on the fetch",
+    async (harness) => {
+      const { engine } = harness;
+      await suspendedOnANapOf(engine, await onlyLockedRunOf(engine, "sleeping-run"));
+      await engine.enqueue({ runs: sendEmailRunsOf(["delayed-run"], { delayInMilliseconds: HOUR_IN_MILLISECONDS }) });
+
+      const reply = await engine.makeDue();
+      const states = await statesOf(harness, ["sleeping-run", "delayed-run"]);
+      const wokenRun = (await lockedRunsOf(engine, 2)).find(({ runId }) => runId === "sleeping-run");
+
+      expect(reply).toEqual({ kind: "madeDue", madeDueRunCount: 2 });
+      expect(states).toEqual(["pending", "pending"]);
+      expect(wokenRun).toMatchObject({ isResume: true, sleepsWokenAt: expect.any(Number) });
+      expect(await engine.readStep({ ...wokenRun!, stepId: "nap" })).toEqual({
+        kind: "read",
+        savedValue: String(wokenRun!.sleepsWokenAt),
+      });
     },
   );
 

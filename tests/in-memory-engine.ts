@@ -21,6 +21,7 @@ import type {
   FireRequest,
   LockedRun,
   LockRenewal,
+  MakeDueReply,
   ParkedRun,
   PromoteReply,
   PruneReply,
@@ -64,7 +65,8 @@ export type InMemoryEngineMethod =
   | "tick"
   | "fire"
   | "syncSchedules"
-  | "serverInstant";
+  | "serverInstant"
+  | "makeDue";
 
 export type InMemoryEngineCall = { method: InMemoryEngineMethod; request: unknown };
 
@@ -623,17 +625,44 @@ export function createInMemoryEngine({ now = () => Date.now() }: InMemoryEngineO
         });
       }
     }
+    const promotedRunCount = promoteDueRuns(instant, () => undefined);
+    return { kind: "promoted", promotedRunCount, stalledRuns, thirdStalls };
+  };
+
+  const promoteDueRuns = (
+    dueBefore: EpochMilliseconds,
+    beforePromotingSuspendedRun: (storedRun: InMemoryStoredRun) => void,
+  ): number => {
     const dueRunEntries = [...runsById.entries()]
       .map(([runId, storedRun]) => ({ runId, storedRun, score: dueInstantOf(storedRun) }))
-      .filter((entry): entry is typeof entry & { score: number } => entry.score !== undefined && entry.score <= instant)
+      .filter(
+        (entry): entry is typeof entry & { score: number } => entry.score !== undefined && entry.score <= dueBefore,
+      )
       .sort(byScoreThenRunId)
       .slice(0, MOST_DUE_RUNS_PROMOTED_PER_PROMOTE);
     for (const { storedRun } of dueRunEntries) {
+      if (storedRun.state === "suspended") {
+        beforePromotingSuspendedRun(storedRun);
+      }
       storedRun.startsAt = undefined;
       storedRun.nextAttemptAt = undefined;
       enterPending(storedRun, undefined);
     }
-    return { kind: "promoted", promotedRunCount: dueRunEntries.length, stalledRuns, thirdStalls };
+    return dueRunEntries.length;
+  };
+
+  const makeDue = async (): Promise<MakeDueReply> => {
+    const instant = now();
+    const madeDueRunCount = promoteDueRuns(Number.POSITIVE_INFINITY, (storedRun) => {
+      for (const [stepId, savedValue] of storedRun.steps) {
+        if (savedValue === String(storedRun.resumesAt)) {
+          storedRun.steps.set(stepId, String(instant));
+        }
+      }
+      storedRun.resumesAt = instant;
+      storedRun.sleepsWokenAt = instant;
+    });
+    return { kind: "madeDue", madeDueRunCount };
   };
 
   const saveStep = async ({ runId, lockToken, stepId, step }: SaveStepRequest): Promise<SaveStepReply> => {
@@ -828,6 +857,7 @@ export function createInMemoryEngine({ now = () => Date.now() }: InMemoryEngineO
     fire: recorded("fire", fire),
     syncSchedules: recorded("syncSchedules", syncSchedules),
     serverInstant: () => recorded("serverInstant", async () => now())(undefined),
+    makeDue: () => recorded("makeDue", makeDue)(undefined),
     calls,
     holdCalls: (method) => {
       let release = () => undefined as void;

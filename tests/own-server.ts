@@ -1,4 +1,4 @@
-import { GenericContainer, Wait } from "testcontainers";
+import { GenericContainer, getContainerRuntimeClient, Wait } from "testcontainers";
 import type { StartedNetwork, StartedTestContainer } from "testcontainers";
 
 import { invariantsOfCurrentTestOrThrow } from "./invariant-violations.js";
@@ -17,15 +17,61 @@ const PORT_BINDING_TIMEOUT_MESSAGE = `Timed out after ${String(TESTCONTAINERS_PO
 export const SERVER_CONTAINER_START_BOUND_IN_MILLISECONDS =
   2 * TESTCONTAINERS_PORT_BINDING_WAIT_IN_MILLISECONDS + SERVER_CONTAINER_STARTUP_TIMEOUT_IN_MILLISECONDS;
 
-export async function startRetryingOnceAPortBindingTimeout<Started>(start: () => Promise<Started>): Promise<Started> {
+function isPortBindingTimeout(error: unknown): boolean {
+  return error instanceof Error && error.message === PORT_BINDING_TIMEOUT_MESSAGE;
+}
+
+async function removedAfterAPortBindingTimeout(
+  portBindingTimeout: unknown,
+  removeAbandonedStart: () => Promise<void>,
+): Promise<void> {
+  try {
+    await removeAbandonedStart();
+  } catch (removalFailure) {
+    throw new AggregateError(
+      [portBindingTimeout, removalFailure],
+      "a container start timed out waiting for its ports to be bound, and the container it left could not be removed",
+    );
+  }
+}
+
+export async function startRetryingOnceAPortBindingTimeout<Started>(
+  start: () => Promise<Started>,
+  removeAbandonedStart: () => Promise<void>,
+): Promise<Started> {
   try {
     return await start();
-  } catch (error) {
-    if (!(error instanceof Error) || error.message !== PORT_BINDING_TIMEOUT_MESSAGE) {
-      throw error;
+  } catch (firstFailure) {
+    if (!isPortBindingTimeout(firstFailure)) {
+      throw firstFailure;
     }
-    return start();
+    await removedAfterAPortBindingTimeout(firstFailure, removeAbandonedStart);
   }
+  try {
+    return await start();
+  } catch (secondFailure) {
+    if (isPortBindingTimeout(secondFailure)) {
+      await removedAfterAPortBindingTimeout(secondFailure, removeAbandonedStart);
+    }
+    throw secondFailure;
+  }
+}
+
+export class ContainerRecordingItsLastCreation extends GenericContainer {
+  lastCreatedContainerId: string | undefined;
+
+  protected override containerCreated(containerId: string): Promise<void> {
+    this.lastCreatedContainerId = containerId;
+    return Promise.resolve();
+  }
+}
+
+export async function removeLastCreatedContainerOf(containerToStart: ContainerRecordingItsLastCreation): Promise<void> {
+  if (containerToStart.lastCreatedContainerId === undefined) {
+    return;
+  }
+  const runtimeClient = await getContainerRuntimeClient();
+  await runtimeClient.container.getById(containerToStart.lastCreatedContainerId).remove({ force: true, v: true });
 }
 
 export type OwnServer = {
@@ -44,23 +90,31 @@ export type ServerNetworkPlace = {
   networkAlias: string;
 };
 
-export async function startServerContainer({
-  serverArguments = [],
-  networkPlace,
-}: {
+type ServerContainerPlacing = {
   serverArguments?: readonly string[];
   networkPlace?: ServerNetworkPlace;
-} = {}): Promise<ServerContainer> {
-  const containerToStart = new GenericContainer(testImage())
+};
+
+export function serverContainerToStart({
+  serverArguments = [],
+  networkPlace,
+}: ServerContainerPlacing = {}): ContainerRecordingItsLastCreation {
+  const containerToStart = new ContainerRecordingItsLastCreation(testImage())
     .withCommand([...serverArguments])
     .withExposedPorts(REDIS_CONTAINER_PORT)
     .withWaitStrategy(Wait.forLogMessage(/Ready to accept connections/))
     .withStartupTimeout(SERVER_CONTAINER_STARTUP_TIMEOUT_IN_MILLISECONDS);
-  const placedContainerToStart =
-    networkPlace === undefined
-      ? containerToStart
-      : containerToStart.withNetwork(networkPlace.network).withNetworkAliases(networkPlace.networkAlias);
-  const container = await startRetryingOnceAPortBindingTimeout(() => placedContainerToStart.start());
+  return networkPlace === undefined
+    ? containerToStart
+    : containerToStart.withNetwork(networkPlace.network).withNetworkAliases(networkPlace.networkAlias);
+}
+
+export async function startServerContainer(placing: ServerContainerPlacing = {}): Promise<ServerContainer> {
+  const containerToStart = serverContainerToStart(placing);
+  const container = await startRetryingOnceAPortBindingTimeout(
+    () => containerToStart.start(),
+    () => removeLastCreatedContainerOf(containerToStart),
+  );
   return {
     url: `redis://${container.getHost()}:${String(container.getMappedPort(REDIS_CONTAINER_PORT))}`,
     container,

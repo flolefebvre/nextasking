@@ -27,7 +27,7 @@
 
 ## Invariant checker
 
-- `invariantViolationsOf(redis, keyPrefix)` from `tests/invariant-violations.ts` lists, as sentences, every way the engine's keys under the prefix disagree. The checks: each member of an index (`runs:<task>:<state>`, `pending`, `due`, `locks`, a waiting list) has a record in that state, of that task and key, with the score the record gives. Each slot set holds only executing runs of its key, and each executing run, of a limited task or not, is in its key's slot set. Each record sits in the read index and the engine structure of its state and nowhere else, and its task is in `tasks`. `schedules` matches the schedule records and their `nextFiringAt`. Dedup entries are not checked.
+- `invariantViolationsOf(redis, keyPrefix)` from `tests/invariant-violations.ts` lists, as sentences, every way the engine's keys under the prefix disagree. The checks: each member of an index (`runs:<task>:<state>`, `pending`, `due`, `locks`, a waiting list) has a record in that state, of that task and key, with the score the record gives. Each slot set holds only executing runs of its key, and each executing run, of a limited task or not, is in its key's slot set. Each record sits in the read index and the engine structure of its state and nowhere else, and its task is in `tasks`. Each side key of a run (`payload`, `errors`, `steps`) has its record beside it. `schedules` matches the schedule records and their `nextFiringAt`. Dedup entries are not checked.
 - End every engine test with `await expectNoInvariantViolations(redis, keyPrefix)`, after the body, so a test fails with the list. A test that corrupts the keys on purpose asserts on `invariantViolationsOf` instead.
 
 ## Worker loop

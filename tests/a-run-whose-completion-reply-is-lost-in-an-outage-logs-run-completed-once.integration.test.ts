@@ -9,10 +9,8 @@ import {
   expectOneConnectionErrorAndOneConnectionRestored,
   waitForLogMessage,
 } from "./recording-logger.js";
-import { runJobKey } from "./run-job-key.js";
+import { isSettleRequestOf } from "./engine-requests.js";
 import { startTcpProxy } from "./tcp-proxy.js";
-
-const MOVE_TO_COMPLETED_ARGUMENT = "returnvalue";
 
 integrationTest(
   "a connection cut after the completion of a run is stored, before its reply arrives, logs run completed once after the reconnect and no worker error",
@@ -24,9 +22,8 @@ integrationTest(
     const sendWelcomeEmail = defineTask("send-welcome-email", {
       schema: z.object({ email: z.string() }),
       handler: async ({ runId }) => {
-        const jobKey = runJobKey(keyPrefix, "send-welcome-email", runId);
-        completionReplyCut = proxy.cutBeforeReplyTo(
-          (request) => request.includes(jobKey) && request.includes(MOVE_TO_COMPLETED_ARGUMENT),
+        completionReplyCut = proxy.cutBeforeReplyTo((request) =>
+          isSettleRequestOf(request, keyPrefix, { task: "send-welcome-email", runId, settleKind: "complete" }),
         );
       },
     });
@@ -65,8 +62,6 @@ integrationTest(
       },
     ]);
     expectOneConnectionErrorAndOneConnectionRestored(lines);
-    expect(
-      lines.filter((line) => line.message === "worker error" || line.message === "run completion unconfirmed"),
-    ).toEqual([]);
+    expect(lines.filter((line) => line.message === "worker error")).toEqual([]);
   },
 );

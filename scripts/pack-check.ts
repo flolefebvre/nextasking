@@ -15,7 +15,7 @@ const PACKAGE_DIR = fileURLToPath(new URL("../", import.meta.url));
 
 const EXPECTED_SUBPATHS = [".", "./testing", "./package.json"];
 
-const EXPECTED_BIN_NAMES = ["nextasking"];
+const EXPECTED_BIN_NAMES: string[] = [];
 
 const ALWAYS_SHIPPED_PATHS = ["README.md", "LICENSE"];
 
@@ -39,11 +39,7 @@ const targetPathsOf = (target: ExportTarget): string[] => {
   return Object.values(target).flatMap(targetPathsOf);
 };
 
-const binPathsOf = (bin: Manifest["bin"]): string[] => {
-  if (bin === undefined) return [];
-  if (typeof bin === "string") return [withoutLeadingDotSlash(bin)];
-  return Object.values(bin).map(withoutLeadingDotSlash);
-};
+const binListOf = (binNames: string[]) => (binNames.length === 0 ? "no bin" : `the bins ${binNames.join(", ")}`);
 
 const binNamesOf = ({ name = "", bin }: Manifest): string[] => {
   if (bin === undefined) return [];
@@ -68,7 +64,7 @@ if (declaredSubpaths.join() !== EXPECTED_SUBPATHS.join()) {
 const declaredBinNames = binNamesOf(manifest);
 if (declaredBinNames.join() !== EXPECTED_BIN_NAMES.join()) {
   fail(
-    `The manifest declares the bins ${declaredBinNames.join(", ") || "(none)"}, expected ${EXPECTED_BIN_NAMES.join(", ")}. ` +
+    `The manifest declares ${binListOf(declaredBinNames)}, expected ${binListOf(EXPECTED_BIN_NAMES)}. ` +
       "A bin is public surface: a new, renamed or dropped bin is declared here on purpose.",
   );
 }
@@ -99,7 +95,6 @@ const manualPagePaths = readdirSync(new URL("../docs", import.meta.url), { withF
 
 const requiredPaths = [
   ...Object.values(manifest.exports ?? {}).flatMap(targetPathsOf),
-  ...binPathsOf(manifest.bin),
   ...manualPagePaths,
   ...ALWAYS_SHIPPED_PATHS,
 ];
@@ -109,7 +104,7 @@ if (missingPaths.length > 0) {
 }
 
 console.log(
-  `Tarball OK: ${String(packedPaths.length)} files, the exports ${EXPECTED_SUBPATHS.join(", ")}, ` +
-    `the bins ${EXPECTED_BIN_NAMES.join(", ")} and ${String(manualPagePaths.length)} manual pages ship, ` +
+  `Tarball OK: ${String(packedPaths.length)} files, the exports ${EXPECTED_SUBPATHS.join(", ")} ` +
+    `and ${String(manualPagePaths.length)} manual pages ship, the manifest declares ${binListOf(EXPECTED_BIN_NAMES)}, ` +
     "nothing outside dist, the manual, README.md, LICENSE and package.json does, and no script runs on install.",
 );

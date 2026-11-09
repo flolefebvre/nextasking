@@ -62,7 +62,7 @@ await step.run("charge-invoice", async ({ idempotencyKey }) => {
 An attempt holds its run's lock for 2 minutes, renewed every minute. When its event loop blocks for about a minute or more, or its worker can't reach Redis for that long, the lock can expire, and another worker starts a second attempt of the same run. The first attempt can no longer save anything and stops at its next step, but it can finish the step it is inside: that step's side effect then runs in both attempts.
 
 - Pass `idempotencyKey` to the provider: both attempts get the same key, so the provider drops the second call.
-- Keep CPU-heavy work off the event loop: in a worker thread, another service, or a separate `nextasking worker` process where it can't starve other attempts. See [Worker](worker.md#run-the-worker-in-its-own-process).
+- Keep CPU-heavy work off the event loop: in a worker thread or another service, where it can't starve other attempts.
 - Check `abortSignal.aborted` in long loops inside a step, and pass the signal to `fetch` and other calls that take one.
 
 ## Code between steps

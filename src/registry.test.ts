@@ -3,7 +3,6 @@ import * as v from "valibot";
 import { describe, expect, expectTypeOf, test, vi } from "vitest";
 import { z } from "zod";
 
-import { listenForLibraryNotifications } from "./bin.js";
 import { fanOutFailed, runFailed } from "./built-in-events.js";
 import type { FanOutFailedPayload, RunFailedPayload } from "./built-in-events.js";
 import { defineEvent, defineListener, defineScheduledTask, defineTask } from "./definitions.js";
@@ -616,59 +615,7 @@ describe("isTaskName and isEventName", () => {
 });
 
 describe("startWorker", () => {
-  test("notifies the worker bin of the call before its first await", async () => {
-    const nextasking = createTestNextasking();
-    const notifications: unknown[] = [];
-    const stopListening = listenForLibraryNotifications((notification) => notifications.push(notification));
-
-    try {
-      const starting = nextasking.startWorker({ concurrency: 0 });
-
-      expect(notifications).toEqual(["startWorkerCalled"]);
-      await expect(starting).rejects.toThrow("Invalid startWorker concurrency");
-    } finally {
-      stopListening();
-    }
-  });
-
-  test("sets the mark a 0.1.0 worker bin reads before its first await, and still notifies the call", async () => {
-    const version010StartWorkerCalledMark = Symbol.for("@flefebvre/nextasking/start-worker-called");
-    const nextasking = createTestNextasking();
-    const notifications: unknown[] = [];
-    const stopListening = listenForLibraryNotifications((notification) => notifications.push(notification));
-    Reflect.deleteProperty(globalThis, version010StartWorkerCalledMark);
-
-    try {
-      expect(version010StartWorkerCalledMark in globalThis).toBe(false);
-
-      const starting = nextasking.startWorker({ concurrency: 0 });
-      const markBeforeTheFirstAwait = (globalThis as Record<symbol, unknown>)[version010StartWorkerCalledMark];
-      const notificationsBeforeTheFirstAwait = [...notifications];
-      await expect(starting).rejects.toThrow("Invalid startWorker concurrency");
-
-      expect(markBeforeTheFirstAwait).toBe(true);
-      expect(notificationsBeforeTheFirstAwait).toEqual(["startWorkerCalled"]);
-    } finally {
-      stopListening();
-      Reflect.deleteProperty(globalThis, version010StartWorkerCalledMark);
-    }
-  });
-
-  test("notifies the worker bin that it rejected with no worker in the process, on an invalid option", async () => {
-    const nextasking = createTestNextasking();
-    const notifications: unknown[] = [];
-    const stopListening = listenForLibraryNotifications((notification) => notifications.push(notification));
-
-    try {
-      await expect(nextasking.startWorker({ concurrency: 0 })).rejects.toThrow("Invalid startWorker concurrency");
-
-      expect(notifications).toEqual(["startWorkerCalled", "startWorkerRejectedWithNoWorker"]);
-    } finally {
-      stopListening();
-    }
-  });
-
-  test("leaves process.exitCode untouched when it rejects with no worker bin listening", async () => {
+  test("leaves process.exitCode untouched when it rejects", async () => {
     const nextasking = createTestNextasking();
     const exitCodeBefore = process.exitCode;
 
@@ -677,11 +624,9 @@ describe("startWorker", () => {
     expect(process.exitCode).toBe(exitCodeBefore);
   });
 
-  test("closes its run queue and frees the process for another worker when its boot throws, and tells the worker bin", async () => {
+  test("closes its run queue and frees the process for another worker when its boot throws", async () => {
     const nextasking = createTestNextasking();
     const networkResourcesBefore = networkResources();
-    const notifications: unknown[] = [];
-    const stopListening = listenForLibraryNotifications((notification) => notifications.push(notification));
     vi.mocked(bootWorker)
       .mockRejectedValueOnce(new Error("boot threw"))
       .mockRejectedValueOnce(new Error("boot threw again"));
@@ -690,15 +635,8 @@ describe("startWorker", () => {
       await expect(nextasking.startWorker()).rejects.toThrow("boot threw");
 
       await expect(nextasking.startWorker()).rejects.toThrow("boot threw again");
-      expect(notifications).toEqual([
-        "startWorkerCalled",
-        "startWorkerRejectedWithNoWorker",
-        "startWorkerCalled",
-        "startWorkerRejectedWithNoWorker",
-      ]);
       await expectNetworkResourcesBackTo(networkResourcesBefore);
     } finally {
-      stopListening();
       await closeNextasking(nextasking);
     }
   });

@@ -42,9 +42,6 @@
     },
     "./package.json": "./package.json"
   },
-  "bin": {
-    "nextasking": "./dist/bin.js"
-  },
   "files": [
     "dist",
     "docs/*.md",

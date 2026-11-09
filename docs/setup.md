@@ -99,7 +99,6 @@ export async function register() {
 
 - Import the instance inside `register()`, after the runtime check, so the edge runtime never loads it.
 - The variable is yours: only the processes that set it run tasks. Every other process dispatches and emits only.
-- To run tasks in a process of their own, use the `nextasking worker` bin on the same build. See [Worker](worker.md#run-the-worker-in-its-own-process).
 
 ## Set the environment
 
@@ -109,8 +108,7 @@ export async function register() {
   "scripts": {
     "dev": "NEXTASKING_WORKER=on next dev",
     "build": "next build",
-    "start": "NEXT_MANUAL_SIG_HANDLE=1 NEXTASKING_WORKER=on next start",
-    "worker": "NEXTASKING_WORKER=on nextasking worker"
+    "start": "NEXT_MANUAL_SIG_HANDLE=1 NEXTASKING_WORKER=on next start"
   }
 }
 ```
@@ -121,8 +119,7 @@ export async function register() {
 | `NEXTASKING_WORKER`      | your app | each process that runs tasks         | `instrumentation.ts` starts the worker when it is `on`                                                            |
 | `NEXT_MANUAL_SIG_HANDLE` | Next.js  | `next start` when it runs the worker | A deploy's SIGTERM lets running attempts finish; see [Worker](worker.md#let-a-deploy-finish-the-running-attempts) |
 
-- Without `NEXT_MANUAL_SIG_HANDLE`, a `next start` running the worker warns at startup that a deploy cuts the attempts in flight. The `nextasking worker` bin sets it itself.
-- The `worker` script is for a separate worker process. Leave it out to run tasks in `next start` alone; to keep tasks off the web servers, drop `NEXTASKING_WORKER=on` from `start` instead. See [Choose which processes run a worker](worker.md#choose-which-processes-run-a-worker).
+- Without `NEXT_MANUAL_SIG_HANDLE`, a `next start` running the worker warns at startup that a deploy cuts the attempts in flight.
 
 ## Webpack only: serverExternalPackages
 
@@ -139,7 +136,7 @@ const nextConfig: NextConfig = {
 export default nextConfig;
 ```
 
-See [Worker](worker.md#bundling). For `output: "standalone"`, see [Worker](worker.md#run-the-bin-with-output-standalone).
+See [Worker](worker.md#bundling), which covers `output: "standalone"` too.
 
 ## Point your agent at the manual
 

@@ -28,6 +28,16 @@ const GIVE_UP_AFTER_IN_MILLISECONDS = 1000;
 
 const BURST_CALLER_COUNT = 20;
 
+const UNBLOCKED_MESSAGE =
+  "UNBLOCKED force unblock from blocking operation, instance state changed (master -> replica?)";
+
+function onePairNaming(err: Error | undefined): RecordedLogLine[] {
+  return [
+    { level: "error", fields: { err }, message: "connection error" },
+    { level: "info", fields: {}, message: "connection restored" },
+  ];
+}
+
 function networkError(code: string): Error {
   return Object.assign(new Error(`connect ${code} 127.0.0.1:6379`), { code });
 }
@@ -366,17 +376,61 @@ describe("a write answered READONLY, as during a failover", () => {
       isReadOnly = false;
     }, readOnlyStretchInMilliseconds);
     const readOnlyReplies: ErrorReply[] = [];
-    const write = () =>
-      fakeReplyCommandOf("SET", async () => {
-        if (isReadOnly) {
-          const readOnlyReply = new ErrorReply("READONLY You can't write against a read only replica.");
-          readOnlyReplies.push(readOnlyReply);
-          throw readOnlyReply;
+    const writeReply = async () => {
+      if (isReadOnly) {
+        const readOnlyReply = new ErrorReply("READONLY You can't write against a read only replica.");
+        readOnlyReplies.push(readOnlyReply);
+        throw readOnlyReply;
+      }
+      return "OK";
+    };
+    const write = () => fakeReplyCommandOf("SET", writeReply);
+    const blockedWaitUnblockedOnce = () => {
+      let isUnblocked = false;
+      return fakeReplyCommandOf("BZPOPMIN", async () => {
+        if (!isUnblocked) {
+          isUnblocked = true;
+          throw new ErrorReply(UNBLOCKED_MESSAGE);
         }
-        return "OK";
+        return writeReply();
       });
-    return { ...scenario, write, readOnlyReplies };
+    };
+    return { ...scenario, write, blockedWaitUnblockedOnce, readOnlyReplies };
   }
+
+  test("a worker's blocked wait answered UNBLOCKED reconnects by force at once, logging nothing, and the READONLY stretch after it past giveUpAfter logs one pair naming the READONLY reply", async () => {
+    const { connection, driver, lines, blockedWaitUnblockedOnce, readOnlyReplies } = demotedPrimaryScenarioOf(
+      READ_ONLY_STRETCH_IN_MILLISECONDS,
+    );
+
+    const reply = connection.workerCalls.send(blockedWaitUnblockedOnce());
+    await vi.advanceTimersByTimeAsync(0);
+    const forceReconnectCountAtTheUnblocked = driver.forceReconnectCount;
+    const linesAtTheUnblocked = [...lines];
+    await vi.advanceTimersByTimeAsync(READ_ONLY_STRETCH_IN_MILLISECONDS + READ_ONLY_RECONNECT_PAUSE_IN_MILLISECONDS);
+
+    expect(await reply).toBe("OK");
+    expect(forceReconnectCountAtTheUnblocked).toBe(1);
+    expect(linesAtTheUnblocked).toEqual([]);
+    expect(lines).toEqual(onePairNaming(readOnlyReplies[0]));
+  });
+
+  test("two blocked waits answered UNBLOCKED together start one forced reconnect, and an UNBLOCKED reply alone opens no stretch", async () => {
+    const { connection, driver, lines, blockedWaitUnblockedOnce } = demotedPrimaryScenarioOf(0);
+
+    const replies = Promise.all([
+      connection.workerCalls.send(blockedWaitUnblockedOnce()),
+      connection.workerCalls.send(blockedWaitUnblockedOnce()),
+    ]);
+    await vi.advanceTimersByTimeAsync(0);
+    const forceReconnectCountAtTheUnblocked = driver.forceReconnectCount;
+    await vi.advanceTimersByTimeAsync(10 * GIVE_UP_AFTER_IN_MILLISECONDS);
+
+    expect(await replies).toEqual(["OK", "OK"]);
+    expect(forceReconnectCountAtTheUnblocked).toBe(1);
+    expect(driver.forceReconnectCount).toBe(1);
+    expect(lines).toEqual([]);
+  });
 
   test("worker writes on both connections answered READONLY past giveUpAfter, a drop overlapping, write one connection error with the first reply and one connection restored once a write is accepted", async () => {
     const { connections, connection, driver, lines, write, readOnlyReplies } = demotedPrimaryScenarioOf(
@@ -398,10 +452,7 @@ describe("a write answered READONLY, as during a failover", () => {
     expect(await blockingReply).toBe("OK");
     expect(messagesAtGiveUpAfter).toEqual(["connection error"]);
     expect(messagesOnceTheDropIsOver).toEqual(["connection error"]);
-    expect(lines).toEqual([
-      { level: "error", fields: { err: readOnlyReplies[0] }, message: "connection error" },
-      { level: "info", fields: {}, message: "connection restored" },
-    ]);
+    expect(lines).toEqual(onePairNaming(readOnlyReplies[0]));
   });
 
   test("a read accepted during a worker's stretch past giveUpAfter does not end it", async () => {

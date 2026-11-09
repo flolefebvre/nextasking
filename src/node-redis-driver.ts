@@ -55,6 +55,8 @@ const NO_SCRIPT_REPLY_PREFIX = "NOSCRIPT";
 
 const READ_ONLY_REPLY_PREFIX = "READONLY";
 
+const UNBLOCKED_REPLY_PREFIX = "UNBLOCKED";
+
 const OUT_OF_MEMORY_REPLY_PATTERN = /(?:^|[\s:-])OOM command not allowed\b/;
 
 export function isUnansweredCommandError(error: unknown): boolean {
@@ -78,6 +80,10 @@ export function isOutOfMemoryReply(error: unknown): boolean {
 
 export function isReadOnlyReply(error: unknown): boolean {
   return error instanceof ErrorReply && error.message.startsWith(READ_ONLY_REPLY_PREFIX);
+}
+
+export function isUnblockedReply(error: unknown): boolean {
+  return error instanceof ErrorReply && error.message.startsWith(UNBLOCKED_REPLY_PREFIX);
 }
 
 export function unansweredWithinDeadlineError(): Error {

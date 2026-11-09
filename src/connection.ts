@@ -8,6 +8,7 @@ import {
   isOutOfMemoryReply,
   isReadOnlyReply,
   isUnansweredCommandError,
+  isUnblockedReply,
   unansweredWithinDeadlineError,
 } from "./node-redis-driver.js";
 import type { CreateRedisDriver, RedisDriver } from "./node-redis-driver.js";
@@ -324,15 +325,19 @@ export function createRedisConnections(
       ? (state.errorWhileDown as Error)
       : (lastReadOnlyReply ?? unansweredWithinDeadlineError());
 
+  const reconnectByForceUnlessUnderWay = (state: ConnectionState) => {
+    if (state.driver.isReady && !state.isReconnectingByForce) {
+      state.isReconnectingByForce = true;
+      state.driver.forceReconnect();
+    }
+  };
+
   const reconnectedAfterReadOnly = (state: ConnectionState): Promise<void> => {
     if (state.readOnlyReconnect === undefined) {
       const readOnlyReconnect = (async () => {
         await unrefDelayUnlessAborted(READ_ONLY_RECONNECT_PAUSE_IN_MILLISECONDS, state.closedController.signal);
         throwIfClosed(state);
-        if (state.driver.isReady && !state.isReconnectingByForce) {
-          state.isReconnectingByForce = true;
-          state.driver.forceReconnect();
-        }
+        reconnectByForceUnlessUnderWay(state);
         await readyWaitOf(state);
       })().finally(() => {
         state.readOnlyReconnect = undefined;
@@ -408,6 +413,11 @@ export function createRedisConnections(
           return reply;
         }
       } catch (error) {
+        if (isUnblockedReply(error) && !isClosed(state)) {
+          reconnectByForceUnlessUnderWay(state);
+          await untilAborted(readyWaitOf(state), state.closedController.signal);
+          continue;
+        }
         if (!isReadOnlyReply(error) || isClosed(state)) {
           throw error;
         }

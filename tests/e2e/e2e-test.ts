@@ -21,4 +21,9 @@ export const e2eTest = test
   .extend("fixtureAppEnv", ({ fixtureAppEnvWithWorkerOff }): Record<string, string> => ({
     ...fixtureAppEnvWithWorkerOff,
     NEXTASKING_WORKER: "on",
+  }))
+  .extend("fixtureAppEnvWithScheduleOnAndGracefulStop", ({ fixtureAppEnv }): Record<string, string> => ({
+    ...fixtureAppEnv,
+    NEXTASKING_E2E_SCHEDULE: "on",
+    NEXT_MANUAL_SIG_HANDLE: "1",
   }));

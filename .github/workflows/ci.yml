@@ -59,7 +59,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        image: [valkey/valkey:8, valkey/valkey:9, redis:8]
+        image: [valkey/valkey:8, valkey/valkey:9, redis:7.4, redis:8]
 
     steps:
       - name: Checkout repository

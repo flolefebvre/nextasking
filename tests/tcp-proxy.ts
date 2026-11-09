@@ -9,6 +9,8 @@ export type TcpProxy = {
   restore: () => Promise<void>;
   cutFor: (outageDurationInMilliseconds: number) => Promise<void>;
   cutBeforeReplyTo: (isRequestToCut: (request: string) => boolean) => Promise<void>;
+  retarget: (targetUrl: string) => void;
+  targetUrl: () => string;
   stopAnswering: () => void;
   answerAgain: () => void;
   acceptedConnectionCount: () => number;
@@ -77,9 +79,13 @@ type ArmedReplyCut = {
   markCut: () => void;
 };
 
+function socketConnectingToTarget(targetUrl: string): Socket {
+  const { hostname, port } = new URL(targetUrl);
+  return connect(port === "" ? DEFAULT_REDIS_PORT : Number(port), hostname);
+}
+
 export async function startTcpProxy(targetUrl: string): Promise<TcpProxy> {
-  const target = new URL(targetUrl);
-  const targetPort = target.port === "" ? DEFAULT_REDIS_PORT : Number(target.port);
+  let currentTargetUrl = targetUrl;
   const liveSockets = new Set<Socket>();
   const liveForwardingSwitches = new Set<ForwardingSwitch>();
   const switchesAcceptedWhileNotAnswering = new Set<ForwardingSwitch>();
@@ -114,7 +120,7 @@ export async function startTcpProxy(targetUrl: string): Promise<TcpProxy> {
 
   const server = createServer((clientSocket) => {
     acceptedConnectionCount += 1;
-    const targetSocket = connect(targetPort, target.hostname);
+    const targetSocket = socketConnectingToTarget(currentTargetUrl);
     track(clientSocket);
     track(targetSocket);
     let isForwardingStopped = false;
@@ -183,11 +189,14 @@ export async function startTcpProxy(targetUrl: string): Promise<TcpProxy> {
   proxyUrl.hostname = LOOPBACK_HOST;
   proxyUrl.port = String(proxyPort);
 
-  const cut = async () => {
-    const listenerClosing = closeListener(server);
+  const resetLiveSockets = () => {
     for (const socket of liveSockets) {
       reset(socket);
     }
+  };
+  const cut = async () => {
+    const listenerClosing = closeListener(server);
+    resetLiveSockets();
     await listenerClosing;
   };
   let isStopped = false;
@@ -210,6 +219,11 @@ export async function startTcpProxy(targetUrl: string): Promise<TcpProxy> {
       new Promise<void>((markCut) => {
         armedReplyCut = { isRequestToCut, markCut };
       }),
+    retarget: (newTargetUrl) => {
+      currentTargetUrl = newTargetUrl;
+      resetLiveSockets();
+    },
+    targetUrl: () => currentTargetUrl,
     stopAnswering: () => {
       isAnswering = false;
       for (const forwardingSwitch of liveForwardingSwitches) {

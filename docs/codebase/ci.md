@@ -1,6 +1,6 @@
 # CI
 
-`.github/workflows/ci.yml` runs on every pull request, whatever its base branch, every push to `main`, and when `release.yml` calls it. A superseded run on the same ref is cancelled, except on `main`, where every push keeps its run. Its jobs run in parallel: `static`, `test` (one cell per server image: `valkey/valkey:8`, `valkey/valkey:9`, `redis:8`, passed as `NEXTASKING_TEST_IMAGE`), `build`, `e2e` (one cell per Next version: `16.0.10`, the floor of the peer range, and `latest`, passed as `NEXTASKING_E2E_NEXT_VERSION`), then `ci`, which waits for the other four.
+`.github/workflows/ci.yml` runs on every pull request, whatever its base branch, every push to `main`, and when `release.yml` calls it. A superseded run on the same ref is cancelled, except on `main`, where every push keeps its run. Its jobs run in parallel: `static`, `test` (one cell per server image: `valkey/valkey:8`, `valkey/valkey:9`, `redis:7.4`, the floor of the supported servers, and `redis:8`, passed as `NEXTASKING_TEST_IMAGE`), `build`, `e2e` (one cell per Next version: `16.0.10`, the floor of the peer range, and `latest`, passed as `NEXTASKING_E2E_NEXT_VERSION`), then `ci`, which waits for the other four.
 
 `build` runs the `pack:check+typecheck:dist` stage after `Build`, in the same job because both read the built `dist`:
 

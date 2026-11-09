@@ -4,7 +4,7 @@ import { RedisUnavailableError } from "../src/index.js";
 import { closeNextaskingAndCheckItsDuration } from "./close-nextasking-and-check-its-duration.js";
 import { createGiveUpAfterOneSecondNextasking } from "./give-up-after-one-second-nextasking.js";
 import { integrationTest } from "./integration-test.js";
-import { startOwnServer } from "./own-server.js";
+import { SERVER_CONTAINER_START_BOUND_IN_MILLISECONDS, startOwnServer } from "./own-server.js";
 import {
   createRecordingLogger,
   expectOneConnectionErrorAndOneConnectionRestored,
@@ -23,7 +23,7 @@ function isBlockedInTheWakeUpWait(clientListLine: string): boolean {
 
 integrationTest.skipIf(providedRedisUrl() !== undefined)(
   "a worker whose server answers READONLY past giveUpAfter logs one connection error naming the reply and one connection restored once it accepts writes, and a dispatch giving up meanwhile carries the reply",
-  { timeout: 60_000 },
+  { timeout: SERVER_CONTAINER_START_BOUND_IN_MILLISECONDS + 10_000 + 15_000 + 15_000 + 10_000 + 5_000 },
   async ({ keyPrefix }) => {
     const ownServer = await startOwnServer();
     const { logger, lines } = createRecordingLogger();

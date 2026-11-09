@@ -7,7 +7,7 @@ import { createNextasking, defineTask } from "../src/index.js";
 import { closeNextaskingAndCheckItsDuration } from "./close-nextasking-and-check-its-duration.js";
 import { createHandlerGate, gatedBetweenTwoSteps } from "./handler-gate.js";
 import { integrationTest } from "./integration-test.js";
-import { startOwnServer } from "./own-server.js";
+import { SERVER_CONTAINER_START_BOUND_IN_MILLISECONDS, startOwnServer } from "./own-server.js";
 import {
   createRecordingLogger,
   expectOneConnectionErrorAndOneConnectionRestored,
@@ -24,7 +24,10 @@ const OUT_OF_MEMORY_STRETCH_IN_MILLISECONDS = 5000;
 
 integrationTest.skipIf(providedRedisUrl() !== undefined)(
   "a worker whose server is out of memory while a step save is refused across several retries, its ticks answered meanwhile, logs one connection error naming the server's reply and one connection restored once memory is back, and the run completes",
-  { timeout: 60_000 },
+  {
+    timeout:
+      SERVER_CONTAINER_START_BOUND_IN_MILLISECONDS + 10_000 + OUT_OF_MEMORY_STRETCH_IN_MILLISECONDS + 15_000 + 5_000,
+  },
   async ({ keyPrefix }) => {
     const ownServer = await startOwnServer({ serverArguments: ["--maxmemory-policy", "noeviction"] });
     const { logger, lines } = createRecordingLogger();

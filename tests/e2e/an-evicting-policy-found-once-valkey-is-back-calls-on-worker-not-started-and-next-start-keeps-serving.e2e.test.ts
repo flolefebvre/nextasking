@@ -1,6 +1,7 @@
 import { expect } from "vitest";
 
 import { EVICTING_POLICY_REJECTION, startEvictingServer } from "../evicting-server.js";
+import { SERVER_CONTAINER_START_BOUND_IN_MILLISECONDS } from "../own-server.js";
 import { providedRedisUrl } from "../valkey-container.js";
 import { e2eTest } from "./e2e-test.js";
 import { startNext } from "./next-process.js";
@@ -48,5 +49,5 @@ e2eTest.skipIf(providedRedisUrl() !== undefined)(
       await evictingServer.stop();
     }
   },
-  180_000,
+  SERVER_CONTAINER_START_BOUND_IN_MILLISECONDS + 3 * 60_000,
 );

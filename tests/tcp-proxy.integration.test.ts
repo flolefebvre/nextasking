@@ -1,4 +1,4 @@
-import { connect } from "node:net";
+import { connect, createServer } from "node:net";
 import type { Socket } from "node:net";
 import { setTimeout as sleep } from "node:timers/promises";
 
@@ -108,6 +108,46 @@ async function replyToPingThrough(socket: Socket): Promise<string> {
   socket.write("*1\r\n$4\r\nPING\r\n");
   return reply;
 }
+
+async function listenErrorCodeOnPortOf(url: string): Promise<string | undefined> {
+  const listener = createServer();
+  const errorCode = await new Promise<string | undefined>((resolve) => {
+    listener.once("error", (error: NodeJS.ErrnoException) => resolve(error.code));
+    listener.listen(Number(new URL(url).port), new URL(url).hostname, () => resolve(undefined));
+  });
+  await new Promise<void>((resolve) => listener.close(() => resolve()));
+  return errorCode;
+}
+
+integrationTest(
+  "a cut proxy keeps its port: a listener asked for it during the cut is refused, a connection made during the cut is reset, and the restore lets the next one through",
+  { timeout: 15_000 },
+  async ({ redisUrl }) => {
+    const proxy = await startTcpProxy(redisUrl);
+    const sockets: Socket[] = [];
+    try {
+      await proxy.cut();
+      const listenErrorCodeDuringTheCut = await listenErrorCodeOnPortOf(proxy.url);
+      const socketDuringTheCut = connect(Number(new URL(proxy.url).port), new URL(proxy.url).hostname);
+      sockets.push(socketDuringTheCut);
+      const errorCodeOfASocketDuringTheCut = await errorCodeOnceClosedOf(socketDuringTheCut);
+      await proxy.restore();
+      const socketAfterTheRestore = await connectedSocketOf(proxy.url);
+      sockets.push(socketAfterTheRestore);
+      const replyAfterTheRestore = await replyToPingThrough(socketAfterTheRestore);
+
+      expect(listenErrorCodeDuringTheCut).toBe("EADDRINUSE");
+      expect(errorCodeOfASocketDuringTheCut).toBe("ECONNRESET");
+      expect(replyAfterTheRestore).toBe("+PONG\r\n");
+      expect(proxy.acceptedConnectionCount()).toBe(1);
+    } finally {
+      for (const socket of sockets) {
+        socket.destroy();
+      }
+      await proxy.stop();
+    }
+  },
+);
 
 integrationTest(
   "a retarget resets the connections live through the proxy and sends every later connection to the new target",

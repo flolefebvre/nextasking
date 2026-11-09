@@ -91,6 +91,7 @@ export async function startTcpProxy(targetUrl: string): Promise<TcpProxy> {
   const switchesAcceptedWhileNotAnswering = new Set<ForwardingSwitch>();
   const silencedSwitches = new Set<ForwardingSwitch>();
   let isAnswering = true;
+  let isCut = false;
   let acceptedConnectionCount = 0;
   let recordedRequestChunks: string[] | undefined;
   let armedReplyCut: ArmedReplyCut | undefined;
@@ -119,6 +120,11 @@ export async function startTcpProxy(targetUrl: string): Promise<TcpProxy> {
   };
 
   const server = createServer((clientSocket) => {
+    if (isCut) {
+      clientSocket.on("error", () => undefined);
+      reset(clientSocket);
+      return;
+    }
     acceptedConnectionCount += 1;
     const targetSocket = socketConnectingToTarget(currentTargetUrl);
     track(clientSocket);
@@ -194,16 +200,14 @@ export async function startTcpProxy(targetUrl: string): Promise<TcpProxy> {
       reset(socket);
     }
   };
-  const cut = async () => {
-    const listenerClosing = closeListener(server);
+  const cut = (): Promise<void> => {
+    isCut = true;
     resetLiveSockets();
-    await listenerClosing;
+    return Promise.resolve();
   };
-  let isStopped = false;
-  const restore = async () => {
-    if (!isStopped && !server.listening) {
-      await listen(server, proxyPort);
-    }
+  const restore = (): Promise<void> => {
+    isCut = false;
+    return Promise.resolve();
   };
 
   return {
@@ -246,8 +250,9 @@ export async function startTcpProxy(targetUrl: string): Promise<TcpProxy> {
       return () => [...requestChunks];
     },
     stop: async () => {
-      isStopped = true;
+      const listenerClosing = closeListener(server);
       await cut();
+      await listenerClosing;
     },
   };
 }

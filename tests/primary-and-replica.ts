@@ -4,7 +4,7 @@ import { vi } from "vitest";
 import { invariantsOfCurrentTestOrThrow } from "./invariant-violations.js";
 import {
   REDIS_CONTAINER_PORT,
-  SERVER_CONTAINER_STARTUP_TIMEOUT_IN_MILLISECONDS,
+  SERVER_CONTAINER_START_BOUND_IN_MILLISECONDS,
   startServerContainer,
 } from "./own-server.js";
 import { startTcpProxy } from "./tcp-proxy.js";
@@ -35,7 +35,7 @@ const REPLICATION_LINK_UP_TIMEOUT_IN_MILLISECONDS = 10_000;
 export const REPLICA_CATCH_UP_TIMEOUT_IN_MILLISECONDS = 5_000;
 
 export const PRIMARY_AND_REPLICA_STARTUP_BOUND_IN_MILLISECONDS =
-  2 * SERVER_CONTAINER_STARTUP_TIMEOUT_IN_MILLISECONDS + REPLICATION_LINK_UP_TIMEOUT_IN_MILLISECONDS;
+  2 * SERVER_CONTAINER_START_BOUND_IN_MILLISECONDS + REPLICATION_LINK_UP_TIMEOUT_IN_MILLISECONDS;
 
 async function replicationInfoOf(redis: TestClient): Promise<string> {
   return String(await redis.sendCommand(["INFO", "replication"]));

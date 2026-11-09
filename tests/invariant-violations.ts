@@ -3,7 +3,8 @@ import { inspect } from "node:util";
 import type { TestContext } from "vitest";
 
 import { runsLeftExecutingIn, storedKeysSnapshotOf, storedKeyViolationsIn } from "./stored-key-violations.js";
-import { withRedis } from "./with-redis.js";
+import type { StoredKeysSnapshot } from "./stored-key-violations.js";
+import { testClientNeverReconnectingOf, withRedis } from "./with-redis.js";
 import type { LockToken } from "../src/engine/engine-keys.js";
 
 export type Invariant =
@@ -22,6 +23,8 @@ type TestInvariants = {
 };
 
 export const CLOSE_BOUND_PAST_THE_SHUTDOWN_TIMEOUT_IN_MILLISECONDS = 2000;
+
+export const STORED_KEYS_READ_BOUND_IN_MILLISECONDS = 5_000;
 
 let invariantsOfCurrentTest: TestInvariants | undefined;
 
@@ -80,12 +83,36 @@ function invariantViolationsErrorOf(
   );
 }
 
-async function storedKeyInvariantViolationsOn(
+async function storedKeysSnapshotReadWithinTheBoundOf(
   redisUrl: string,
   keyPrefix: string,
+): Promise<StoredKeysSnapshot> {
+  const redis = testClientNeverReconnectingOf(redisUrl);
+  let boundTimer: NodeJS.Timeout | undefined;
+  const unansweredWithinTheBound = new Promise<never>((_resolve, reject) => {
+    boundTimer = setTimeout(
+      () => reject(new Error(`no answer within ${String(STORED_KEYS_READ_BOUND_IN_MILLISECONDS)} ms`)),
+      STORED_KEYS_READ_BOUND_IN_MILLISECONDS,
+    );
+  });
+  const snapshotRead = (async () => {
+    await redis.connect();
+    return storedKeysSnapshotOf(redis, keyPrefix);
+  })();
+  snapshotRead.catch(() => undefined);
+  try {
+    return await Promise.race([snapshotRead, unansweredWithinTheBound]);
+  } finally {
+    clearTimeout(boundTimer);
+    redis.destroy();
+  }
+}
+
+function storedKeyInvariantViolationsIn(
+  snapshot: StoredKeysSnapshot,
+  keyPrefix: string,
   lockTokensMadeByTheTest: ReadonlySet<LockToken>,
-): Promise<InvariantViolation[]> {
-  const snapshot = await withRedis(redisUrl, (redis) => storedKeysSnapshotOf(redis, keyPrefix));
+): InvariantViolation[] {
   const runsLeftExecuting = runsLeftExecutingIn(snapshot, keyPrefix, lockTokensMadeByTheTest);
   return [
     ...storedKeyViolationsIn(snapshot, keyPrefix).map((message) => ({ invariant: "stored keys" as const, message })),
@@ -137,9 +164,9 @@ export function checkInvariantsOfThisTest({
       settledSources.push(settled.catch(() => undefined));
     },
     checkStoredKeysOn: (otherRedisUrl) => {
-      const storedKeyCheck = storedKeyInvariantViolationsOn(otherRedisUrl, keyPrefix, lockTokensMadeByTheTest).then(
-        (violations) => {
-          observedViolations.push(...violations);
+      const storedKeyCheck = storedKeysSnapshotReadWithinTheBoundOf(otherRedisUrl, keyPrefix).then(
+        (snapshot) => {
+          observedViolations.push(...storedKeyInvariantViolationsIn(snapshot, keyPrefix, lockTokensMadeByTheTest));
         },
         (error: unknown) => {
           observedViolations.push({
@@ -170,7 +197,11 @@ export function checkInvariantsOfThisTest({
     const recordedViolations = [...observedViolations];
     const violationsSeen = [
       ...recordedViolations,
-      ...(await storedKeyInvariantViolationsOn(redisUrl, keyPrefix, lockTokensMadeByTheTest)),
+      ...storedKeyInvariantViolationsIn(
+        await withRedis(redisUrl, (redis) => storedKeysSnapshotOf(redis, keyPrefix)),
+        keyPrefix,
+        lockTokensMadeByTheTest,
+      ),
     ];
     const undeclaredViolations = violationsSeen.filter(
       (violation) => !expectedViolations.some((expected) => isSameViolation(expected, violation)),

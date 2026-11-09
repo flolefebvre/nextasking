@@ -5,6 +5,7 @@ import { createNextasking, defineTask } from "../src/index.js";
 import { closeNextaskingAndCheckItsDuration } from "./close-nextasking-and-check-its-duration.js";
 import { createHandlerGate } from "./handler-gate.js";
 import { integrationTest } from "./integration-test.js";
+import { STORED_KEYS_READ_BOUND_IN_MILLISECONDS } from "./invariant-violations.js";
 import {
   PRIMARY_AND_REPLICA_STARTUP_BOUND_IN_MILLISECONDS,
   REPLICA_CATCH_UP_TIMEOUT_IN_MILLISECONDS,
@@ -28,6 +29,7 @@ integrationTest.skipIf(providedRedisUrl() !== undefined)(
   {
     timeout:
       PRIMARY_AND_REPLICA_STARTUP_BOUND_IN_MILLISECONDS +
+      STORED_KEYS_READ_BOUND_IN_MILLISECONDS +
       REPLICA_CATCH_UP_TIMEOUT_IN_MILLISECONDS +
       2 * HANDLER_ENTRY_TIMEOUT_IN_MILLISECONDS +
       STEP_OUTCOME_TIMEOUT_IN_MILLISECONDS +

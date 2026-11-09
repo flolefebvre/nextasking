@@ -1,7 +1,7 @@
 import { describe, expect, test } from "vitest";
 
 import type { StoredDelayedRunState, StoredRun } from "./run-queue.js";
-import { attemptOf, runStateFieldsOf, runStateOf } from "./run-states.js";
+import { attemptOf, isRunState, RUN_STATES, runStateFieldsOf, runStateOf } from "./run-states.js";
 import type { RunJobSnapshot } from "./run-states.js";
 
 const DISPATCHED_AT = Date.parse("2026-11-03T10:00:00.000Z");
@@ -122,4 +122,9 @@ describe("attemptOf", () => {
 
     expect(attemptOf({ attemptsMade: 5, data: storedRun }, "failed")).toBe(2);
   });
+});
+
+test("a run state is one of the eight state names, and nothing else is", () => {
+  expect(RUN_STATES.every(isRunState)).toBe(true);
+  expect([undefined, "", "unknown", "Pending", 1].some(isRunState)).toBe(false);
 });

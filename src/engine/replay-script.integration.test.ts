@@ -1,6 +1,7 @@
 import { expect } from "vitest";
 
-import { engineTest, fetchedLockedRunsOf, storedValuesByKeyOf } from "../../tests/engine-test.js";
+import { DAY_IN_MILLISECONDS, endRuns, SEND_EMAIL_PRUNE_REQUEST } from "../../tests/ended-runs.js";
+import { backdateEndedRun, engineTest, fetchedLockedRunsOf, storedValuesByKeyOf } from "../../tests/engine-test.js";
 import type { EngineTestContext } from "../../tests/engine-test.js";
 import { RECORD_VERSION } from "./engine.js";
 import type { SettleOutcome } from "./engine.js";
@@ -95,15 +96,27 @@ engineTest("a replay of a run that has not failed replies wrongState and writes 
   expect(await storedValuesByKeyOf(redis, keyPrefix)).toEqual(storedValuesBefore);
 });
 
-engineTest("a replay of a run with no record replies notFound and writes nothing", async (context) => {
-  const { engine, redis, keyPrefix } = context;
-  const storedValuesBefore = await storedValuesByKeyOf(redis, keyPrefix);
+engineTest(
+  "a replay of a pruned failed run replies notFound and writes nothing, whether its dedup entry expired or is live",
+  async (context) => {
+    const { engine, redis, keys, keyPrefix } = context;
+    await failedRunWithAStepAtAttempt2Of(context);
+    await endRuns(engine, "send-email", ["run-over-the-cap"], "fail");
+    await backdateEndedRun(context, "run-1", 14 * DAY_IN_MILLISECONDS);
+    const pruneReply = await engine.prune({
+      ...SEND_EMAIL_PRUNE_REQUEST,
+      failedRetention: { ...SEND_EMAIL_PRUNE_REQUEST.failedRetention, maxRunCount: 0 },
+    });
+    const storedValuesBefore = await storedValuesByKeyOf(redis, keyPrefix);
 
-  const reply = await engine.replay({ runId: "pruned-run" });
+    const replies = [await engine.replay({ runId: "run-1" }), await engine.replay({ runId: "run-over-the-cap" })];
 
-  expect(reply).toEqual({ kind: "notFound" });
-  expect(await storedValuesByKeyOf(redis, keyPrefix)).toEqual(storedValuesBefore);
-});
+    expect(pruneReply).toEqual({ kind: "pruned", prunedRunCount: 2 });
+    expect(await redis.zrange(keys.runDedup("send-email"), 0, -1)).toEqual(["run-over-the-cap"]);
+    expect(replies).toEqual([{ kind: "notFound" }, { kind: "notFound" }]);
+    expect(await storedValuesByKeyOf(redis, keyPrefix)).toEqual(storedValuesBefore);
+  },
+);
 
 engineTest(
   "a replay of a failed run of a newer record version replies unknownVersion and writes nothing",

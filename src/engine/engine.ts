@@ -7,7 +7,7 @@ import type { ConcurrencyKey } from "../definitions.js";
 import type { DurationInMilliseconds, EpochMilliseconds } from "../durations.js";
 import type { RunId, StepId } from "../ids.js";
 import type { ErrorRecord, FailureReason, SourceEvent } from "../run-queue.js";
-import { RUN_STATES } from "../run-states.js";
+import { isRunState } from "../run-states.js";
 import type { RunState } from "../run-states.js";
 import { ENQUEUE_SCRIPT, enqueueKeysOf } from "./enqueue-script.js";
 import { engineKeysOf, hashTaggedPrefixOf } from "./engine-keys.js";
@@ -617,10 +617,6 @@ function syncSchedulesReplyOf(reply: unknown): SyncSchedulesReply {
     }
   }
   throw unreadableReplyError("syncSchedules", reply);
-}
-
-function isRunState(value: unknown): value is RunState {
-  return RUN_STATES.some((state) => state === value);
 }
 
 function replayReplyOf(reply: unknown): ReplayReply {

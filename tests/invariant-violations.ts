@@ -3,7 +3,7 @@ import { expect } from "vitest";
 
 import { engineKeysOf, hashTaggedPrefixOf } from "../src/engine/engine-keys.js";
 import type { EngineKeys } from "../src/engine/engine-keys.js";
-import { RUN_STATES } from "../src/run-states.js";
+import { isRunState } from "../src/run-states.js";
 import type { RunState } from "../src/run-states.js";
 
 type RunRecord = Record<string, string>;
@@ -30,10 +30,6 @@ const SCORE_FIELD_BY_STATE: Readonly<Record<RunState, string>> = {
 };
 
 const DUE_STATES: readonly RunState[] = ["delayed", "suspended", "backingOff"];
-
-function isRunState(value: string | undefined): value is RunState {
-  return RUN_STATES.some((state) => state === value);
-}
 
 async function storedKeysOf(redis: Redis, keyPrefix: string): Promise<string[]> {
   const escapedPrefix = hashTaggedPrefixOf(keyPrefix).replace(/[*?[\]\\]/g, "\\$&");

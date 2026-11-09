@@ -15,6 +15,7 @@ import {
   passOverLineOf,
   pickupLineOf,
   settleLinesOf,
+  settleRefusalLineOf,
   stallLineOf,
   workerErrorLineOf,
   writeLifecycleLines,
@@ -248,6 +249,22 @@ export function startWorkerLoop(config: WorkerLoopConfig): WorkerLoop {
       });
   };
 
+  const giveBackLateLock = async (lockedRun: LockedRun) => {
+    const settleRequest = settleRequestOf(definitions.tasksByName.get(lockedRun.task), lockedRun, { kind: "yield" });
+    try {
+      const settleReply = await answeredDespiteOutage(redisOutage, () => engine.settle(settleRequest), {
+        resendStopSignal: fetchStopController.signal,
+      });
+      if (settleReply.kind === "unknownVersion") {
+        writeLifecycleLines(logger, [settleRefusalLineOf("yield", lockedRun.runId, settleReply)]);
+      }
+    } catch (error) {
+      if (!redisOutage.isRedisAway(error)) {
+        writeWorkerErrorUnlessStopped(fetchStopController.signal)(error);
+      }
+    }
+  };
+
   const fetchOnce = async () => {
     const freeCapacity = concurrency - attemptsInFlightByLockToken.size;
     if (freeCapacity <= 0) {
@@ -269,6 +286,7 @@ export function startWorkerLoop(config: WorkerLoopConfig): WorkerLoop {
     logPassOver(reply.passedOverRecordVersions);
     writeLifecycleLines(logger, reply.parkedRuns.map(parkLineOf));
     if (fetchRepliedAt > fetchSentAt + lockDurationInMilliseconds) {
+      await Promise.all(reply.lockedRuns.map(giveBackLateLock));
       return;
     }
     for (const lockedRun of reply.lockedRuns) {

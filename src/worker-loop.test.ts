@@ -1136,6 +1136,9 @@ test("stopTicking with a third stall's settle in flight resolves once the settle
 
 async function scenarioOfAFetchAnsweredAfterAnOutageOf(
   outageInMilliseconds: number,
+  answeringEngineOf: (engine: InMemoryEngine, simulatedRedisOutage: SimulatedRedisOutage) => WorkerLoopEngine = (
+    engine,
+  ) => engine,
 ): Promise<LoopScenario & { heldTicks: HeldCalls }> {
   const engine = createInMemoryEngine();
   await engine.enqueue({ runs: runsOf("send-email", 1) });
@@ -1145,7 +1148,11 @@ async function scenarioOfAFetchAnsweredAfterAnOutageOf(
   simulatedRedisOutage.startOutage();
   const scenario = startedLoopOf([abortableTaskOf("send-email")], {
     engine,
-    loopEngine: engineAwayDuringOutage(engine, simulatedRedisOutage, "rejected"),
+    loopEngine: engineAwayDuringOutage(
+      answeringEngineOf(engine, simulatedRedisOutage),
+      simulatedRedisOutage,
+      "rejected",
+    ),
     recordingLogger,
     simulatedRedisOutage,
   });
@@ -1167,13 +1174,123 @@ test("a fetch answered after a resend within the lock duration starts its attemp
   heldTicks.release();
 });
 
-test("a fetch answered past its first send time plus the lock duration starts no attempt", async () => {
+const PAST_THE_LOCK_DURATION_IN_MILLISECONDS = 2 * MINUTE_IN_MILLISECONDS + 1_000;
+
+function engineHoldingFetchesAfterTheFirstAnswer(
+  engine: InMemoryEngine,
+  heldFetchesOfTheScenario: HeldCalls[],
+): WorkerLoopEngine {
+  return {
+    ...engine,
+    fetch: async (request) => {
+      const reply = await engine.fetch(request);
+      if (heldFetchesOfTheScenario.length === 0) {
+        heldFetchesOfTheScenario.push(engine.holdCalls("fetch"));
+      }
+      return reply;
+    },
+  };
+}
+
+test("a fetch answered past its first send time plus the lock duration starts no attempt and gives its locks back to the front of pending at once", async () => {
+  const heldFetches: HeldCalls[] = [];
+
   const { engine, lines, heldTicks } = await scenarioOfAFetchAnsweredAfterAnOutageOf(
-    2 * MINUTE_IN_MILLISECONDS + 1_000,
+    PAST_THE_LOCK_DURATION_IN_MILLISECONDS,
+    (answeringEngine) => engineHoldingFetchesAfterTheFirstAnswer(answeringEngine, heldFetches),
   );
 
   expect(messagesOf(lines)).toEqual(["connection error", "connection restored"]);
+  expect(requestsOf<SettleRequest>(engine, "settle").map(({ runId, outcome }) => [runId, outcome.kind])).toEqual([
+    ["send-email-1", "yield"],
+  ]);
+  expect(engine.storedRunOf("send-email-1")).toMatchObject({ state: "pending", order: 1, stalls: 0 });
+  expect(engine.runIdsInState("pending")).toEqual(["send-email-1"]);
+  heldFetches[0]?.release();
+  heldTicks.release();
+});
+
+test("a late fetch's lock another worker has since taken over is left alone: the give-back hears stale and writes nothing", async () => {
+  const takeOverTheLock = (engine: InMemoryEngine): WorkerLoopEngine => ({
+    ...engine,
+    fetch: async (request) => {
+      const reply = await engine.fetch(request);
+      engine.expireLock("send-email-1");
+      await engine.promote();
+      await engine.fetch({ ...request, lockTokens: ["other-worker-token"] });
+      return reply;
+    },
+  });
+
+  const { engine, lines, heldTicks } = await scenarioOfAFetchAnsweredAfterAnOutageOf(
+    PAST_THE_LOCK_DURATION_IN_MILLISECONDS,
+    takeOverTheLock,
+  );
+
+  expect(messagesOf(lines)).toEqual(["connection error", "connection restored"]);
+  expect(requestsOf<SettleRequest>(engine, "settle")).toHaveLength(1);
+  expect(engine.storedRunOf("send-email-1")).toMatchObject({ state: "executing", lockToken: "other-worker-token" });
+  heldTicks.release();
+});
+
+test("stopFetching during a give-back awaits a settle already sent", async () => {
+  const heldFetches: HeldCalls[] = [];
+  let heldSettles: HeldCalls | undefined;
+  const { engine, loop, heldTicks } = await scenarioOfAFetchAnsweredAfterAnOutageOf(
+    PAST_THE_LOCK_DURATION_IN_MILLISECONDS,
+    (answeringEngine) => {
+      const holdingEngine = engineHoldingFetchesAfterTheFirstAnswer(answeringEngine, heldFetches);
+      return {
+        ...holdingEngine,
+        fetch: async (request) => {
+          const reply = await holdingEngine.fetch(request);
+          heldSettles = answeringEngine.holdCalls("settle");
+          return reply;
+        },
+      };
+    },
+  );
+  let isStopped = false;
+
+  void loop.stopFetching().then(() => {
+    isStopped = true;
+  });
+  heldFetches[0]?.release();
+  await vi.advanceTimersByTimeAsync(0);
+  const isStoppedBeforeTheAnswer = isStopped;
+  heldSettles?.release();
+  await vi.advanceTimersByTimeAsync(0);
+
+  expect(isStoppedBeforeTheAnswer).toBe(false);
+  expect(isStopped).toBe(true);
+  expect(engine.storedRunOf("send-email-1")?.state).toBe("pending");
+  heldTicks.release();
+});
+
+test("stopFetching during a give-back waiting for Redis ends the wait, with no resend and no line", async () => {
+  const awayOnTheGiveBack = (engine: InMemoryEngine, simulatedRedisOutage: SimulatedRedisOutage): WorkerLoopEngine => ({
+    ...engine,
+    fetch: async (request) => {
+      const reply = await engine.fetch(request);
+      simulatedRedisOutage.startOutage();
+      return reply;
+    },
+  });
+  const { engine, loop, lines, heldTicks } = await scenarioOfAFetchAnsweredAfterAnOutageOf(
+    PAST_THE_LOCK_DURATION_IN_MILLISECONDS,
+    awayOnTheGiveBack,
+  );
+  let isStopped = false;
+
+  void loop.stopFetching().then(() => {
+    isStopped = true;
+  });
+  await vi.advanceTimersByTimeAsync(0);
+
+  expect(isStopped).toBe(true);
+  expect(requestsOf<SettleRequest>(engine, "settle")).toEqual([]);
   expect(engine.storedRunOf("send-email-1")?.state).toBe("executing");
+  expect(messagesOf(lines)).toEqual(["connection error", "connection restored", "connection error"]);
   heldTicks.release();
 });
 

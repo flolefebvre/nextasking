@@ -9,8 +9,10 @@ import type {
   SettleReply,
   StalledRun,
   SyncSchedulesReply,
+  UnknownVersionReply,
 } from "./engine/engine.js";
 import type { ListenerLeftOut } from "./engine-failure-notice.js";
+import type { RunId } from "./ids.js";
 import type { AttemptOutcome } from "./locked-run-attempt.js";
 import type { Logger } from "./logger.js";
 
@@ -80,6 +82,18 @@ export function workerErrorLineOf(error: Error): LifecycleLine {
 
 function shownRecordVersionOf(recordVersion: number | undefined): string {
   return recordVersion === undefined ? "a version" : `version ${String(recordVersion)}`;
+}
+
+export function settleRefusalLineOf(
+  outcomeKind: SettleOutcome["kind"],
+  runId: RunId,
+  { recordVersion }: UnknownVersionReply,
+): LifecycleLine {
+  return workerErrorLineOf(
+    new Error(
+      `The ${outcomeKind} settle of run "${runId}" was refused: a newer release rewrote its record to ${shownRecordVersionOf(recordVersion)} this release cannot read.`,
+    ),
+  );
 }
 
 export function scheduleSyncLinesOf(reply: SyncSchedulesReply): LifecycleLine[] {
@@ -202,14 +216,7 @@ export function settleLinesOf(settledAttempt: SettledAttempt): LifecycleLine[] {
     ];
   }
   if (settleReply.kind === "unknownVersion") {
-    const shownVersion = shownRecordVersionOf(settleReply.recordVersion);
-    return [
-      workerErrorLineOf(
-        new Error(
-          `The ${attemptOutcome.kind} settle of run "${settledRun.runId}" was refused: a newer release rewrote its record to ${shownVersion} this release cannot read.`,
-        ),
-      ),
-    ];
+    return [settleRefusalLineOf(attemptOutcome.kind, settledRun.runId, settleReply)];
   }
   const finishedAt = finishedAtOf(settledAttempt);
   const durationFields = {

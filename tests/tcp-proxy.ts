@@ -9,6 +9,7 @@ export type TcpProxy = {
   restore: () => Promise<void>;
   cutFor: (outageDurationInMilliseconds: number) => Promise<void>;
   cutBeforeReplyTo: (isRequestToCut: (request: string) => boolean) => Promise<void>;
+  holdRequest: (isRequestToHold: (request: string) => boolean) => Promise<HeldRequest>;
   retarget: (targetUrl: string) => void;
   targetUrl: () => string;
   stopAnswering: () => void;
@@ -17,6 +18,13 @@ export type TcpProxy = {
   silencedConnectionCount: () => number;
   recordRequestChunks: () => () => string[];
   stop: () => Promise<void>;
+};
+
+export type HeldRequest = { release: () => void };
+
+type ArmedRequestHold = {
+  isRequestToHold: (request: string) => boolean;
+  markHeld: (heldRequest: HeldRequest) => void;
 };
 
 type ForwardingSwitch = { stopForwarding: () => void; forwardAgain: () => void };
@@ -95,6 +103,7 @@ export async function startTcpProxy(targetUrl: string): Promise<TcpProxy> {
   let acceptedConnectionCount = 0;
   let recordedRequestChunks: string[] | undefined;
   let armedReplyCut: ArmedReplyCut | undefined;
+  let armedRequestHold: ArmedRequestHold | undefined;
 
   const track = (socket: Socket) => {
     liveSockets.add(socket);
@@ -136,6 +145,18 @@ export async function startTcpProxy(targetUrl: string): Promise<TcpProxy> {
       let commandByteLength = byteLengthOfFirstCompleteCommand(unforwardedRequestBytes);
       while (!isForwardingStopped && isForwardingRequests && commandByteLength !== undefined) {
         const command = unforwardedRequestBytes.subarray(0, commandByteLength);
+        const requestHold = armedRequestHold;
+        if (requestHold?.isRequestToHold(command.toString()) === true) {
+          armedRequestHold = undefined;
+          isForwardingRequests = false;
+          requestHold.markHeld({
+            release: () => {
+              isForwardingRequests = true;
+              forwardCompleteRequests();
+            },
+          });
+          return;
+        }
         unforwardedRequestBytes = unforwardedRequestBytes.subarray(commandByteLength);
         targetSocket.write(command);
         const replyCut = armedReplyCut;
@@ -222,6 +243,10 @@ export async function startTcpProxy(targetUrl: string): Promise<TcpProxy> {
     cutBeforeReplyTo: (isRequestToCut) =>
       new Promise<void>((markCut) => {
         armedReplyCut = { isRequestToCut, markCut };
+      }),
+    holdRequest: (isRequestToHold) =>
+      new Promise<HeldRequest>((markHeld) => {
+        armedRequestHold = { isRequestToHold, markHeld };
       }),
     retarget: (newTargetUrl) => {
       currentTargetUrl = newTargetUrl;

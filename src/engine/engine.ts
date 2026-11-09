@@ -62,6 +62,10 @@ export function deserializePayload(serializedPayload: SerializedPayload): unknow
   return serializedPayload === "" ? undefined : JSON.parse(serializedPayload);
 }
 
+export function serializePayload(payload: unknown): SerializedPayload {
+  return payload === undefined ? "" : JSON.stringify(payload);
+}
+
 export type SerializedStepValue = string;
 
 export type RunToCreate = {

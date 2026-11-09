@@ -18,7 +18,7 @@ import type {
   EmitByName,
   EmitOptions,
   EmittedEvent,
-} from "./enqueuer.js";
+} from "./enqueue-requests.js";
 
 export type { SerializedStepValue } from "./engine/engine.js";
 

@@ -17,7 +17,7 @@ function engineSenderOf(engine: Engine): HandlerSender {
     dispatch: async (fence, name, payload, options) => {
       const runId = options.runId!;
       const runs = [{ runId, task: name, payload: JSON.stringify(payload), retries: 0 }];
-      return { runId: await sendFenced(engine, { runs }, fence, runId) };
+      return { runId: (await sendFenced(engine, { runs }, fence, runId)).sentId };
     },
     emit: async (fence, name, payload, options) => {
       const eventId = options.eventId!;
@@ -25,7 +25,7 @@ function engineSenderOf(engine: Engine): HandlerSender {
       const runs = [
         { runId: `welcome-${eventId}`, task: "send-welcome-email", payload: "{}", retries: 0, sourceEvent },
       ];
-      return { eventId: await sendFenced(engine, { runs, eventDedup: sourceEvent }, fence, eventId) };
+      return { eventId: (await sendFenced(engine, { runs, eventDedup: sourceEvent }, fence, eventId)).sentId };
     },
   };
 }

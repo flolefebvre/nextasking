@@ -1,4 +1,11 @@
-import type { DispatchOrEmitRequest, HeldLock, Engine, StaleReply, UnknownVersionReply } from "./engine/engine.js";
+import type {
+  DispatchOrEmitRequest,
+  EnqueueReply,
+  HeldLock,
+  Engine,
+  StaleReply,
+  UnknownVersionReply,
+} from "./engine/engine.js";
 import type { EventId, RunId, StepId } from "./ids.js";
 import { LostRunLockError } from "./job-lock.js";
 import type { LockLoss, RefusedStepCall } from "./job-lock.js";
@@ -6,6 +13,8 @@ import { sentIdOf, serializeStepValue } from "./step-engine.js";
 import type { SendFence, StepStore } from "./step-engine.js";
 
 type FenceRefusal = StaleReply | UnknownVersionReply;
+
+export type FencedSend = { sentId: RunId | EventId; reply: EnqueueReply };
 
 function lostRunLockErrorOf(
   refusedSubject: string,
@@ -54,7 +63,7 @@ export async function sendFenced(
   request: DispatchOrEmitRequest,
   { parentTask, parentRunId, lockToken, stepId }: SendFence,
   sentId: RunId | EventId,
-): Promise<RunId | EventId> {
+): Promise<FencedSend> {
   const reply = await engine.enqueue({
     ...request,
     parentFence: { parentTask, parentRunId, lockToken, stepId, stepValue: serializeStepValue(sentId) },
@@ -62,9 +71,9 @@ export async function sendFenced(
   switch (reply.kind) {
     case "enqueued":
     case "duplicate":
-      return sentId;
+      return { sentId, reply };
     case "alreadySent":
-      return sentIdOf(stepId, reply.savedValue);
+      return { sentId: sentIdOf(stepId, reply.savedValue), reply };
     default:
       throw lostRunLockErrorOf(`Send "${stepId}" of run "${parentRunId}"`, "sent", reply);
   }

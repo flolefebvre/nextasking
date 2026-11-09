@@ -4,23 +4,19 @@ import { createRedisConnections } from "./connection.js";
 import type { ConnectionConfig } from "./connection.js";
 import type { AnyTaskDefinition, EventDefinition, PayloadInput, PayloadSchema } from "./definitions.js";
 import { parseDuration } from "./durations.js";
-import { RESERVED_NAME_PREFIX, createEnqueuer } from "./enqueuer.js";
-import type {
-  DispatchedRun,
-  DispatchOptions,
-  EmitOptions,
-  EmittedEvent,
-  Enqueuer,
-  ReplayedEvent,
-  ReplayedRun,
-  RunWriter,
-} from "./enqueuer.js";
+import { createEngine, wakeUpWaitOf } from "./engine/engine.js";
+import { createEngineReader } from "./engine-reader.js";
+import type { EngineReader } from "./engine-reader.js";
+import { RESERVED_NAME_PREFIX, createEnqueueRequests } from "./enqueue-requests.js";
+import type { DispatchedRun, DispatchOptions, EmitOptions, EmittedEvent, ReplayedRun } from "./enqueue-requests.js";
+import type { RedisCallIds } from "./errors.js";
 import type { EventId, RunId } from "./ids.js";
+import { createInstanceLifecycle } from "./instance-lifecycle.js";
+import type { OpenedCommandClient } from "./instance-lifecycle.js";
 import { silentLogger } from "./logger.js";
 import type { Logger } from "./logger.js";
-import { createQueueReader } from "./queue-reader.js";
-import type { EventWithFanOutOf, QueueReader } from "./queue-reader.js";
 import type {
+  EventWithRunsOf,
   ListRunsOptionsOf,
   ListedRunOfTask,
   ListedScheduleOf,
@@ -30,21 +26,11 @@ import type {
 } from "./read-api.js";
 import { eventDefinitionSummariesOf, taskDefinitionSummariesOf } from "./definition-summaries.js";
 import type { EventDefinitionSummary, TaskDefinitionSummary } from "./definition-summaries.js";
-import { createRunQueue } from "./run-queue.js";
 import type { RunState } from "./run-states.js";
-import type { RunQueue } from "./run-queue.js";
-import { bootWorker, finishBootInBackground } from "./worker-boot.js";
 import { rejectInvalidSchedule, timezoneOf } from "./schedules.js";
-import {
-  MISSING_MANUAL_SIGNAL_HANDLING_WARNING,
-  exitOnShutdownSignals,
-  isDevelopment,
-  isSignalHandlingLeftToTheApp,
-} from "./shutdown-signals.js";
-import { workerOptionsFrom } from "./worker-options.js";
+import { appSendersOn, engineSendTargetOf, handlerSenderOn } from "./send-target.js";
+import type { AppSenders, SendTarget } from "./send-target.js";
 import type { StartWorkerOptions } from "./worker-options.js";
-import { startRunWorker } from "./worker-runtime.js";
-import type { RunningWorker } from "./worker-runtime.js";
 
 // eslint-disable-next-line @typescript-eslint/no-empty-object-type
 export interface Register {}
@@ -83,7 +69,7 @@ export type RunPage = RunPageOf<ListedRun>;
 
 export type RunCounts = RunCountsOf<TaskName>;
 
-export type EventWithRuns = EventWithFanOutOf<RegisteredTask, RegisteredEvent>;
+export type EventWithRuns = EventWithRunsOf<RegisteredTask, RegisteredEvent>;
 
 export type ListedSchedule = ListedScheduleOf<ScheduledTaskNameOf<RegisteredTask>>;
 
@@ -122,7 +108,6 @@ export type Nextasking<Task extends AnyTaskDefinition, Event extends EventDefini
     options?: EmitOptions,
   ) => Promise<EmittedEvent>;
   readonly replay: <Name extends Task["name"]>(name: Name, runId: RunId) => Promise<ReplayedRun>;
-  readonly replayEvent: <Name extends Event["name"]>(name: Name, eventId: EventId) => Promise<ReplayedEvent>;
   readonly isTaskName: (name: string) => name is Task["name"];
   readonly isEventName: (name: string) => name is EmittableEventNameOf<Event>;
   readonly startWorker: (options?: StartWorkerOptions) => Promise<void>;
@@ -137,7 +122,7 @@ export type Nextasking<Task extends AnyTaskDefinition, Event extends EventDefini
   readonly getEvent: <Name extends Event["name"]>(
     name: Name,
     eventId: EventId,
-  ) => Promise<EventWithFanOutOf<Task, Extract<Event, { name: Name }>>>;
+  ) => Promise<EventWithRunsOf<Task, Extract<Event, { name: Name }>>>;
   readonly listSchedules: () => Promise<ListedScheduleOf<ScheduledTaskNameOf<Task>>[]>;
   readonly taskDefinitions: readonly TaskDefinitionSummary<Task["name"], Event["name"]>[];
   readonly eventDefinitions: readonly EventDefinitionSummary<Event["name"], Task["name"]>[];
@@ -156,14 +141,12 @@ export type NextaskingConfig<
 
 export const DEFAULT_PREFIX = "nextasking";
 
-let isWorkerStartedInThisProcess = false;
-
 export type NextaskingControls = {
   close: () => Promise<void>;
-  startRecordingWrites: (recordingRunWriter: RunWriter) => void;
-  stopRecordingWrites: () => void;
+  startRecordingSends: (recordingSendTarget: SendTarget) => void;
+  stopRecordingSends: () => void;
   tasksByName: ReadonlyMap<string, AnyTaskDefinition>;
-  createEnqueuerWritingTo: (runWriter: RunWriter) => Enqueuer;
+  appSendersTo: (sendTarget: SendTarget) => AppSenders;
 };
 
 const controlsByNextasking = new WeakMap<object, NextaskingControls>();
@@ -201,198 +184,98 @@ export function createNextasking<
       ? []
       : [{ taskName: task.name, cron: task.schedule.cron, timezone: timezoneOf(task.schedule) }],
   );
-  let runQueue: RunQueue | undefined;
-  let runningWorker: RunningWorker | undefined;
-  let runQueueOfWorker: RunQueue | undefined;
-  const openRunQueue = async (): Promise<RunQueue> => {
-    if (runQueue?.hasFailedToOpen === true) {
-      const failedRunQueue = runQueue;
-      runQueue = undefined;
-      await failedRunQueue.close();
-    }
-    runQueue ??= createRunQueue(connections, "instance", prefix, logger);
-    await connections.waitUntilReadyWithinGiveUpAfter(runQueue.client);
-    return runQueue;
-  };
-  let recordingRunWriter: RunWriter | undefined;
-  const openRunWriter = async (): Promise<RunWriter> => recordingRunWriter ?? openRunQueue();
-  const callOnRedisUnlessRecording: typeof connections.callOnRedis = (callIds, call) =>
-    recordingRunWriter === undefined ? connections.callOnRedis(callIds, call) : call();
+  const requests = createEnqueueRequests({ tasksByName, eventsByName, listenerNamesByEventName });
+  const lifecycle = createInstanceLifecycle({
+    connections,
+    engineOn: (commandClient) => createEngine(commandClient, prefix),
+    wakeUpWaitOn: (blockingClient) => wakeUpWaitOf(blockingClient, prefix),
+    senderOn: (engine) => handlerSenderOn(engine, requests, logger),
+    definitions: { tasksByName, listenerNamesByEventName },
+    logger,
+  });
+  const callOnRedisWhileOpen = <Result>(
+    callIds: RedisCallIds,
+    call: (opened: OpenedCommandClient) => Promise<Result>,
+  ): Promise<Result> => connections.callOnRedis(callIds, () => lifecycle.callWhileOpen(call));
+  const engineSendTarget = engineSendTargetOf((callIds, call) =>
+    callOnRedisWhileOpen(callIds, ({ engine }) => call(engine)),
+  );
+  let recordingSendTarget: SendTarget | undefined;
+  let isWorkerStarted = false;
+  const appSendersTo = (sendTarget: SendTarget): AppSenders =>
+    appSendersOn({ requests, tasksByName, sendTarget: () => sendTarget, logger });
+  const { dispatch, emit, replay } = appSendersOn({
+    requests,
+    tasksByName,
+    sendTarget: () => recordingSendTarget ?? engineSendTarget,
+    logger,
+  });
+
+  let readApi: EngineReader | undefined;
   const readOnRedis = <Result>(
     callName: string,
-    callIds: Parameters<typeof connections.callOnRedis>[0],
-    read: () => Promise<Result>,
+    callIds: RedisCallIds,
+    read: (reader: EngineReader) => Promise<Result>,
   ): Promise<Result> =>
-    recordingRunWriter === undefined
-      ? connections.callOnRedis(callIds, read)
+    recordingSendTarget === undefined
+      ? callOnRedisWhileOpen(callIds, ({ commandClient }) => {
+          readApi ??= createEngineReader({
+            client: commandClient,
+            prefix,
+            tasksByName,
+            listenerNamesByEventName,
+            declaredSchedules,
+          });
+          return read(readApi);
+        })
       : Promise.reject(fakedInstanceError(callName));
-
-  const queueReader = createQueueReader({ openRunQueue, tasksByName, listenerNamesByEventName, declaredSchedules });
-  const enqueuerConfig = { tasksByName, eventsByName, listenerNamesByEventName, logger };
-  const createEnqueuerWritingTo = (runWriter: RunWriter): Enqueuer =>
-    createEnqueuer({
-      ...enqueuerConfig,
-      runWriterAccess: { openRunWriter: async () => runWriter, callOnRedis: (_callIds, call) => call() },
-    });
-  const { dispatch, emit, replay, replayEvent } = createEnqueuer({
-    ...enqueuerConfig,
-    runWriterAccess: { openRunWriter, callOnRedis: callOnRedisUnlessRecording },
-  });
 
   type Instance = Nextasking<Tasks[number], Events[number] | BuiltInEvent>;
   const nextasking: Instance = {
-    dispatch,
-    emit,
+    dispatch: dispatch as Instance["dispatch"],
+    emit: emit as Instance["emit"],
     replay,
-    replayEvent,
     isTaskName: (name): name is Tasks[number]["name"] => tasksByName.has(name),
     isEventName: (name): name is EmittableEventNameOf<Events[number] | BuiltInEvent> =>
       eventsByName.has(name) && !isBuiltInEventName(name),
     getRun: ((taskName: string, runId: RunId) =>
-      readOnRedis("getRun", { runId }, () => queueReader.getRun(taskName, runId))) as Instance["getRun"],
-    listRuns: ((options: Parameters<QueueReader["listRuns"]>[0]) =>
-      readOnRedis("listRuns", {}, () => queueReader.listRuns(options))) as Instance["listRuns"],
-    countRuns: (() => readOnRedis("countRuns", {}, () => queueReader.countRuns())) as Instance["countRuns"],
+      readOnRedis("getRun", { runId }, (reader) => reader.getRun(taskName, runId))) as Instance["getRun"],
+    listRuns: ((options: Parameters<EngineReader["listRuns"]>[0]) =>
+      readOnRedis("listRuns", {}, (reader) => reader.listRuns(options))) as Instance["listRuns"],
+    countRuns: (() => readOnRedis("countRuns", {}, (reader) => reader.countRuns())) as Instance["countRuns"],
     getEvent: ((eventName: string, eventId: EventId) =>
-      readOnRedis("getEvent", { eventId }, () => queueReader.getEvent(eventName, eventId))) as Instance["getEvent"],
+      readOnRedis("getEvent", { eventId }, (reader) => reader.getEvent(eventName, eventId))) as Instance["getEvent"],
     listSchedules: (() =>
-      readOnRedis("listSchedules", {}, () => queueReader.listSchedules())) as Instance["listSchedules"],
+      readOnRedis("listSchedules", {}, (reader) => reader.listSchedules())) as Instance["listSchedules"],
     taskDefinitions: taskDefinitionSummariesOf(config.tasks) as Instance["taskDefinitions"],
     eventDefinitions: eventDefinitionSummariesOf(events, listenerNamesByEventName) as Instance["eventDefinitions"],
-    startWorker: (options) => startWorker(options),
-  };
-
-  const startWorker = async (options: StartWorkerOptions = {}) => {
-    if (recordingRunWriter !== undefined) {
-      throw fakedInstanceError("startWorker");
-    }
-    const workerOptions = workerOptionsFrom(options);
-    if (isWorkerStartedInThisProcess) {
-      throw new Error("The nextasking worker is already started in this process");
-    }
-    isWorkerStartedInThisProcess = true;
-    let workerRunQueue: RunQueue;
-    try {
-      workerRunQueue = createRunQueue(connections, "worker", prefix, logger);
-    } catch (error) {
-      isWorkerStartedInThisProcess = false;
-      throw error;
-    }
-    runQueueOfWorker = workerRunQueue;
-    const isWorkerRunQueueOpen = () => runQueueOfWorker === workerRunQueue;
-    try {
-      await bootThenStartTheWorkerOrFinishInBackground({
-        workerRunQueue,
-        workerOptions,
-        isWorkerRunQueueOpen,
-        onWorkerNotStarted: options.onWorkerNotStarted,
-      });
-    } catch (error) {
-      if (isWorkerRunQueueOpen()) {
-        await closeWorkerRunQueue();
+    startWorker: async (options) => {
+      if (recordingSendTarget !== undefined) {
+        throw fakedInstanceError("startWorker");
       }
-      throw error;
-    }
-    if (isSignalHandlingLeftToTheApp()) {
-      stopExitingOnShutdownSignals = exitOnShutdownSignals(() => closeInstance({ isDraining: true }), logger);
-    } else if (!isDevelopment()) {
-      logger.warn({}, MISSING_MANUAL_SIGNAL_HANDLING_WARNING);
-    }
-  };
-
-  const bootThenStartTheWorkerOrFinishInBackground = async ({
-    workerRunQueue,
-    workerOptions,
-    isWorkerRunQueueOpen,
-    onWorkerNotStarted,
-  }: {
-    workerRunQueue: RunQueue;
-    workerOptions: ReturnType<typeof workerOptionsFrom>;
-    isWorkerRunQueueOpen: () => boolean;
-    onWorkerNotStarted: StartWorkerOptions["onWorkerNotStarted"];
-  }) => {
-    const workerEnqueuer = createEnqueuerWritingTo(workerRunQueue);
-    const startTheWorker = () => {
-      runningWorker = startRunWorker({
-        options: workerOptions,
-        runQueue: workerRunQueue,
-        prefix,
-        logger,
-        tasksByName,
-        eventsByName,
-        dispatch: workerEnqueuer.dispatch,
-        emit: workerEnqueuer.emit,
-        sendBuiltInEvent: workerEnqueuer.sendBuiltInEvent,
-        onConnectionRestored: connections.onConnectionRestored,
-      });
-    };
-    const { isFirstRoundTripAnswered, completion } = await bootWorker({
-      runQueue: workerRunQueue,
-      declaredSchedules,
-      logger,
-      sendBuiltInEvent: workerEnqueuer.sendBuiltInEvent,
-      giveUpAfterInMilliseconds: connections.giveUpAfterInMilliseconds,
-    });
-    if (isFirstRoundTripAnswered) {
-      await completion;
-      if (isWorkerRunQueueOpen()) {
-        startTheWorker();
-      }
-    } else {
-      void finishBootInBackground({
-        completion,
-        isWorkerRunQueueOpen,
-        startTheWorker,
-        closeWorkerRunQueue,
-        onWorkerNotStarted,
-        logger,
-      });
-    }
-  };
-
-  let stopExitingOnShutdownSignals: (() => void) | undefined;
-  const closeWorkerRunQueue = async () => {
-    const closedRunQueue = runQueueOfWorker;
-    if (closedRunQueue === undefined) {
-      return;
-    }
-    runQueueOfWorker = undefined;
-    try {
-      await closedRunQueue.close();
-    } finally {
-      isWorkerStartedInThisProcess = false;
-    }
-  };
-  const closeInstance = async ({ isDraining }: { isDraining: boolean }) => {
-    if (!isDraining) {
-      stopExitingOnShutdownSignals?.();
-      stopExitingOnShutdownSignals = undefined;
-    }
-    await (isDraining ? runningWorker?.shutDown() : runningWorker?.close());
-    runningWorker = undefined;
-    await closeWorkerRunQueue();
-    await runQueue?.close();
-    runQueue = undefined;
+      isWorkerStarted = true;
+      await lifecycle.startWorker(options);
+    },
   };
 
   controlsByNextasking.set(nextasking, {
-    close: () => closeInstance({ isDraining: false }),
-    startRecordingWrites: (runWriter) => {
-      if (recordingRunWriter !== undefined) {
+    close: lifecycle.close,
+    startRecordingSends: (sendTarget) => {
+      if (recordingSendTarget !== undefined) {
         throw new Error("This nextasking instance is already faked: restore() its fake before faking it again");
       }
-      if (runQueueOfWorker !== undefined) {
+      if (isWorkerStarted) {
         throw new Error(
           "This nextasking instance has started its worker, which would keep writing to Redis: fake an instance whose worker is not started",
         );
       }
-      recordingRunWriter = runWriter;
+      recordingSendTarget = sendTarget;
     },
-    stopRecordingWrites: () => {
-      recordingRunWriter = undefined;
+    stopRecordingSends: () => {
+      recordingSendTarget = undefined;
     },
     tasksByName,
-    createEnqueuerWritingTo,
+    appSendersTo,
   });
 
   return nextasking;

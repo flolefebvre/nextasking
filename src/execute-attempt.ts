@@ -1,7 +1,7 @@
 import type { AnyTaskDefinition, EventDefinition, PayloadInput, PayloadSchema } from "./definitions.js";
-import { validatedTaskPayloadOf } from "./enqueuer.js";
+import { validatedTaskPayloadOf } from "./enqueue-requests.js";
 import { UnknownTaskError } from "./errors.js";
-import { controlsOfInstance, createRecordingRunWriter } from "./fake-nextasking.js";
+import { controlsOfInstance, createRecordingSendTarget } from "./fake-nextasking.js";
 import type { NextaskingFake } from "./fake-nextasking.js";
 import { createRandomId } from "./ids.js";
 import type { RunId, StepId } from "./ids.js";
@@ -61,8 +61,8 @@ export async function executeAttempt<
     throw new UnknownTaskError(taskName, [...controls.tasksByName.keys()]);
   }
   const validatedPayload = await validatedTaskPayloadOf(task, payload);
-  const { runWriter, dispatches, emits } = createRecordingRunWriter<Task, Event>();
-  const { dispatch, emit } = controls.createEnqueuerWritingTo(runWriter);
+  const { sendTarget, dispatches, emits } = createRecordingSendTarget<Task, Event>();
+  const { dispatch, emit } = controls.appSendersTo(sendTarget);
   const inMemoryStore = createInMemoryStepStore(
     Object.fromEntries((options.savedSteps ?? []).map(({ id, result }) => [id, serializedStepResultOf(id, result)])),
   );

@@ -21,12 +21,17 @@ export class UnknownEventError extends Error {
   }
 }
 
-export type ReplayRefusal = "not found" | "not failed";
+export type ReplayRefusal = "not found" | "not failed" | "written by a newer release";
 
 function shownReplayRefusalOf(replayRefusal: ReplayRefusal, replayedKind: "run" | "fan-out", idName: string): string {
-  return replayRefusal === "not found"
-    ? `no such ${replayedKind} is kept, its ${idName} is unknown or the ${replayedKind} was removed`
-    : "it is not failed";
+  switch (replayRefusal) {
+    case "not found":
+      return `no such ${replayedKind} is kept, its ${idName} is unknown or the ${replayedKind} was removed`;
+    case "not failed":
+      return "it is not failed";
+    case "written by a newer release":
+      return `a newer release wrote the ${replayedKind}'s record, which this release cannot read: replay it from the newer release`;
+  }
 }
 
 export class RunNotReplayableError extends Error {
@@ -54,13 +59,21 @@ export type RedisCallIds = {
   eventId?: EventId;
 };
 
+export type RedisUnavailability =
+  { kind: "unanswered"; giveUpAfterInMilliseconds: DurationInMilliseconds } | { kind: "outOfMemory" };
+
 export class RedisUnavailableError extends Error {
   override readonly name = "RedisUnavailableError";
   readonly runId?: RunId;
   readonly eventId?: EventId;
 
-  constructor(giveUpAfterInMilliseconds: DurationInMilliseconds, callIds: RedisCallIds, unansweredError: unknown) {
-    super(`Redis didn't answer within ${shownDurationOf(giveUpAfterInMilliseconds)}`, { cause: unansweredError });
+  constructor(unavailability: RedisUnavailability, callIds: RedisCallIds, redisError: unknown) {
+    super(
+      unavailability.kind === "outOfMemory"
+        ? "Redis refused the command: it is out of memory"
+        : `Redis didn't answer within ${shownDurationOf(unavailability.giveUpAfterInMilliseconds)}`,
+      { cause: redisError },
+    );
     if (callIds.runId !== undefined) {
       this.runId = callIds.runId;
     }

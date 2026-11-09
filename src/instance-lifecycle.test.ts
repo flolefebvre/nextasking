@@ -5,7 +5,7 @@ import { createRedisConnections } from "./connection.js";
 import type { RedisClientRole } from "./connection.js";
 import { defineScheduledTask, defineTask } from "./definitions.js";
 import type { AnyTaskDefinition, TaskHandler } from "./definitions.js";
-import type { DispatchedRun } from "./enqueuer.js";
+import type { DispatchedRun } from "./enqueue-requests.js";
 import type { Engine, RunToCreate, SettleRequest } from "./engine/engine.js";
 import { InstanceClosedError } from "./errors.js";
 import { createInstanceLifecycle } from "./instance-lifecycle.js";

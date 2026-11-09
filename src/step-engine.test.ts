@@ -4,7 +4,7 @@ import type { Duration } from "./durations.js";
 import { StepMisuseError } from "./errors.js";
 import { deriveHandlerSendId } from "./ids.js";
 import type { JsonValue } from "./json.js";
-import type { DispatchByName, DispatchOptions, EmitByName, EmitOptions } from "./enqueuer.js";
+import type { DispatchByName, DispatchOptions, EmitByName, EmitOptions } from "./enqueue-requests.js";
 import { createInMemoryStepStore } from "./in-memory-step-store.js";
 import { LostRunLockError } from "./job-lock.js";
 import { openStepEngine, sendThenSave } from "./step-engine.js";

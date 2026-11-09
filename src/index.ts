@@ -19,14 +19,7 @@ export type {
 } from "./definitions.js";
 export type { EventDefinitionSummary, TaskDefinitionSummary } from "./definition-summaries.js";
 export type { Duration } from "./durations.js";
-export type {
-  DispatchedRun,
-  DispatchOptions,
-  EmitOptions,
-  EmittedEvent,
-  ReplayedEvent,
-  ReplayedRun,
-} from "./enqueuer.js";
+export type { DispatchedRun, DispatchOptions, EmitOptions, EmittedEvent, ReplayedRun } from "./enqueue-requests.js";
 export {
   FanOutNotReplayableError,
   InvalidPayloadError,

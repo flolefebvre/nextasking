@@ -40,7 +40,7 @@ import { LostRunLockError, runDataDescriptionOf, saveRunDataIfLockIsHeld } from 
 import { loggerWithFields } from "./logger.js";
 import type { Logger } from "./logger.js";
 import { createRedisStepStore, isJobResumingAfterSleep, removeSavedSteps } from "./redis-step-store.js";
-import type { DispatchByName, EmitByName } from "./enqueuer.js";
+import type { DispatchByName, EmitByName } from "./enqueue-requests.js";
 import { FIRING_JOB_NAME, RUN_QUEUE_NAME, plannedInstantOfFiring, scheduledAtOf } from "./run-queue.js";
 import type { RunQueue, StoredDelayedRunState, StoredFanOut, StoredFiring, StoredRun } from "./run-queue.js";
 import { attemptOf } from "./run-states.js";

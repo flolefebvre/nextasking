@@ -318,7 +318,10 @@ export function createRedisConnections(connection: ConnectionConfig, logger: Log
         return await call();
       } catch (error) {
         if (isUnansweredError(error)) {
-          throw new RedisUnavailableError(giveUpAfterInMilliseconds, callIds, causeOf(error));
+          throw new RedisUnavailableError({ kind: "unanswered", giveUpAfterInMilliseconds }, callIds, causeOf(error));
+        }
+        if (isOutOfMemoryReply(error)) {
+          throw new RedisUnavailableError({ kind: "outOfMemory" }, callIds, error);
         }
         throw error;
       }

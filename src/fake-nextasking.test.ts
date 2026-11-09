@@ -62,7 +62,6 @@ type NextaskingCalledWithAnyName = {
   dispatch: (name: string, payload?: unknown, options?: object) => Promise<unknown>;
   emit: (name: string, payload: unknown, options?: object) => Promise<unknown>;
   replay: (name: string, runId: RunId) => Promise<unknown>;
-  replayEvent: (name: string, eventId: EventId) => Promise<unknown>;
 };
 
 describe("fakeNextasking", () => {
@@ -122,17 +121,13 @@ describe("fakeNextasking", () => {
     ]);
   });
 
-  test("records a replayed run and a replayed fan-out without checking that they failed", async () => {
+  test("records a replayed run without checking that it failed", async () => {
     const nextasking = createShopNextasking();
     using fake = fakeNextasking(nextasking);
 
     await nextasking.replay("send-invoice", "invoice-1");
-    await nextasking.replayEvent("nextasking/run.failed", "notice-1");
 
-    expect(fake.replays).toEqual([
-      { task: "send-invoice", runId: "invoice-1" },
-      { event: "nextasking/run.failed", eventId: "notice-1" },
-    ]);
+    expect(fake.replays).toEqual([{ task: "send-invoice", runId: "invoice-1" }]);
   });
 
   test("checks names, payloads, ids, delays and concurrency keys as production does, and records nothing it refuses", async () => {
@@ -160,7 +155,6 @@ describe("fakeNextasking", () => {
       'Event "nextasking/run.failed" is built in',
     );
     await expect(nextasking.replay("send-receipt", "receipt-1")).rejects.toThrow(UnknownTaskError);
-    await expect(nextasking.replayEvent("order.shipped", "shipped-1")).rejects.toThrow(UnknownEventError);
 
     expect([fake.dispatches, fake.emits, fake.replays]).toEqual([[], [], []]);
   });
@@ -262,10 +256,7 @@ describe("fakeNextasking", () => {
       orderId: string;
     }>();
     expectTypeOf<RecordedEmitOfShop["eventId"]>().toEqualTypeOf<EventId>();
-    expectTypeOf<RecordedReplayOfShop>().toEqualTypeOf<
-      | { task: ShopTaskName; runId: RunId }
-      | { event: ShopEventName | "nextasking/run.failed" | "nextasking/fan-out.failed"; eventId: EventId }
-    >();
+    expectTypeOf<RecordedReplayOfShop>().toEqualTypeOf<{ task: ShopTaskName; runId: RunId }>();
     expectTypeOf(fake.restore).toEqualTypeOf<() => void>();
     expectTypeOf(fake[Symbol.dispose]).toEqualTypeOf<() => void>();
     expectTypeOf(fake).toEqualTypeOf<NextaskingFake<ShopTask, ShopEvent>>();

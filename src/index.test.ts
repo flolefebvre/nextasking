@@ -215,7 +215,7 @@ describe("the root export", () => {
     expectTypeOf<NonNullable<SignedUpEvent["runsByListener"]["create-default-workspace"]>["payload"]>().toEqualTypeOf<{
       userId: string;
     }>();
-    expectTypeOf<SignedUpEvent["fanOut"]>().toEqualTypeOf<"pending" | "completed" | "failed" | undefined>();
+    expectTypeOf<SignedUpEvent>().not.toHaveProperty("fanOut");
     expectTypeOf<SignedUpEvent>().toEqualTypeOf<Extract<EventWithRuns, { event: "user.signed-up" }>>();
     expectTypeOf<ListedSchedule["task"]>().toEqualTypeOf<"purge-expired-sessions">();
     expectTypeOf(nextasking.listSchedules).returns.resolves.toEqualTypeOf<ListedSchedule[]>();

@@ -14,7 +14,7 @@ import type { FanOutFailedPayload, Logger, RunFailedPayload } from "../src/index
 import { deriveFailureNoticeEventId } from "../src/ids.js";
 import { closeNextasking } from "../src/registry.js";
 import { integrationTest } from "./integration-test.js";
-import { createRecordingLogger, waitForLogMessage } from "./recording-logger.js";
+import { createRecordingLogger } from "./recording-logger.js";
 import { runJobKey } from "./run-job-key.js";
 import { storedRun } from "./stored-run.js";
 import { withRedis } from "./with-redis.js";
@@ -185,8 +185,8 @@ integrationTest(
         deriveFailureNoticeEventId("alert-on-run-failed", alertRunId, 1),
       );
 
+      expect(noticeOfAlertRun.runsByListener["alert-on-run-failed"]).toBeUndefined();
       expect(alerting.runFailedNotices.map((notice) => notice.task)).toEqual(["sync-account", "sync-account"]);
-      expect(noticeOfAlertRun.fanOut).toBeUndefined();
     } finally {
       await closeNextasking(nextasking);
     }
@@ -216,7 +216,7 @@ integrationTest(
         deriveFailureNoticeEventId("sync-account", runId, 1),
       );
 
-      expect(noticeEvent.fanOut).toBeUndefined();
+      expect(noticeEvent.runsByListener).toEqual({});
       expect(lines.map((line) => line.message)).not.toContain("no listeners for event");
     } finally {
       await closeNextasking(nextasking);
@@ -262,45 +262,6 @@ integrationTest(
         finalError: { message: stallLimitReason },
       });
       expect(alerting.runFailedNotices).toEqual([]);
-    } finally {
-      await closeNextasking(nextasking);
-    }
-  },
-);
-
-integrationTest(
-  "a replayed fan-out clears its final error and keeps its failure count",
-  async ({ redisUrl, keyPrefix }) => {
-    const { logger, lines } = createRecordingLogger();
-    const nextasking = createAlertingNextasking(redisUrl, keyPrefix, logger);
-
-    try {
-      const { eventId } = await nextasking.emit("invoice.paid", { invoiceId: "inv-7" });
-      await withRedis(redisUrl, (redis) =>
-        redis.hset(runJobKey(keyPrefix, "invoice.paid", eventId), "defa", "job stalled more than allowable limit"),
-      );
-      await nextasking.startWorker();
-      await waitForLogMessage(lines, "fan-out failed");
-      await vi.waitFor(
-        async () => {
-          expect(await storedRun(redisUrl, keyPrefix, "invoice.paid", eventId)).toMatchObject({
-            notifiedFailureCount: 1,
-          });
-        },
-        { timeout: 10_000 },
-      );
-
-      await nextasking.replayEvent("invoice.paid", eventId);
-      await vi.waitFor(
-        async () => {
-          expect(await nextasking.getEvent("invoice.paid", eventId)).toMatchObject({ fanOut: "completed" });
-        },
-        { timeout: 10_000 },
-      );
-
-      const replayedFanOut = await storedRun(redisUrl, keyPrefix, "invoice.paid", eventId);
-      expect(replayedFanOut).toMatchObject({ failureCount: 1, notifiedFailureCount: 1 });
-      expect(replayedFanOut).not.toHaveProperty("finalError");
     } finally {
       await closeNextasking(nextasking);
     }

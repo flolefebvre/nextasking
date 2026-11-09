@@ -512,3 +512,46 @@ describe("closeClient", () => {
     expect([reconnectingClient.disconnectCount, readyClient.disconnectCount]).toEqual([1, 1]);
   });
 });
+
+describe("callOnRedis", () => {
+  const connections = createRedisConnections(
+    { url: "redis://127.0.0.1:1", giveUpAfter: "2s" },
+    createRecordingLogger().logger,
+  );
+
+  test("turns an unanswered command into RedisUnavailableError naming giveUpAfter, with the call's ids", async () => {
+    const unanswered = new Error("Command timed out");
+
+    const call = connections.callOnRedis({ runId: "welcome-ada" }, () => Promise.reject(unanswered));
+
+    await expect(call).rejects.toThrow(
+      expect.objectContaining({
+        name: "RedisUnavailableError",
+        message: "Redis didn't answer within 2s",
+        cause: unanswered,
+        runId: "welcome-ada",
+      }),
+    );
+  });
+
+  test("turns an out-of-memory reply into RedisUnavailableError saying so, with the reply as its cause", async () => {
+    const outOfMemoryReply = new ReplyError(OUT_OF_MEMORY_MESSAGE);
+
+    const call = connections.callOnRedis({ eventId: "invoice-42-paid" }, () => Promise.reject(outOfMemoryReply));
+
+    await expect(call).rejects.toThrow(
+      expect.objectContaining({
+        name: "RedisUnavailableError",
+        message: "Redis refused the command: it is out of memory",
+        cause: outOfMemoryReply,
+        eventId: "invoice-42-paid",
+      }),
+    );
+  });
+
+  test("lets any other error through untouched", async () => {
+    const scriptError = new ReplyError("ERR Error running script");
+
+    await expect(connections.callOnRedis({}, () => Promise.reject(scriptError))).rejects.toBe(scriptError);
+  });
+});

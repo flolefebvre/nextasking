@@ -3,7 +3,7 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 import { runFailed } from "./built-in-events.js";
 import { defineListener, defineScheduledTask, defineTask } from "./definitions.js";
-import type { AnyTaskDefinition } from "./definitions.js";
+import type { AnyTaskDefinition, TaskHandler } from "./definitions.js";
 import type { FetchRequest, FireRequest, RunToCreate, SettleRequest, TickRequest } from "./engine/engine.js";
 import { syncDeclaredSchedules } from "./engine-schedules.js";
 import { deriveFailureNoticeEventId, deriveFiringRunId, deriveListenerRunId } from "./ids.js";
@@ -14,6 +14,8 @@ import { startWorkerLoop } from "./worker-loop.js";
 import type { WaitForWakeUp, WorkerLoop, WorkerLoopEngine } from "./worker-loop.js";
 import { DEFAULT_WORKER_TIMING } from "./worker-timing.js";
 import type { WorkerTiming } from "./worker-timing.js";
+import { createHandlerGate, gatedBetweenTwoSteps, gatedWithNoStep } from "../tests/handler-gate.js";
+import type { HandlerGate } from "../tests/handler-gate.js";
 import { createInMemoryEngine } from "../tests/in-memory-engine.js";
 import type { HeldCalls, InMemoryEngine } from "../tests/in-memory-engine.js";
 import { freshLockTokensOf } from "../tests/lock-tokens.js";
@@ -26,6 +28,7 @@ import {
 } from "../tests/simulated-redis-outage.js";
 import type { AwayEngineCalls, SimulatedRedisOutage } from "../tests/simulated-redis-outage.js";
 import type { RecordedLogLine } from "../tests/recording-logger.js";
+import { unhandledRejectionsDuring } from "../tests/unhandled-rejections.js";
 import { brokenKeyRunFailedListener, workerDefinitionsOf } from "../tests/worker-definitions.js";
 
 const NO_SENDER: HandlerSender = {
@@ -34,34 +37,6 @@ const NO_SENDER: HandlerSender = {
 };
 
 const MINUTE_IN_MILLISECONDS = 60_000;
-
-type HandlerGate = {
-  enter: () => Promise<void>;
-  release: (count: number) => void;
-  inFlightCount: () => number;
-  mostInFlightCount: () => number;
-};
-
-function createHandlerGate(): HandlerGate {
-  const waitingReleases: (() => void)[] = [];
-  let inFlightCount = 0;
-  let mostInFlightCount = 0;
-  return {
-    enter: async () => {
-      inFlightCount += 1;
-      mostInFlightCount = Math.max(mostInFlightCount, inFlightCount);
-      await new Promise<void>((resolve) => waitingReleases.push(resolve));
-      inFlightCount -= 1;
-    },
-    release: (count) => {
-      for (const release of waitingReleases.splice(0, count)) {
-        release();
-      }
-    },
-    inFlightCount: () => inFlightCount,
-    mostInFlightCount: () => mostInFlightCount,
-  };
-}
 
 type LoopScenario = {
   engine: InMemoryEngine;
@@ -840,21 +815,6 @@ test("the loop survives a rejected fetch and keeps fetching", async () => {
   expect(engine.storedRunOf("send-email-1")?.state).toBe("completed");
 });
 
-async function unhandledRejectionsDuring(body: () => Promise<void>): Promise<unknown[]> {
-  const unhandledRejections: unknown[] = [];
-  const recordUnhandledRejection = (reason: unknown) => {
-    unhandledRejections.push(reason);
-  };
-  process.on("unhandledRejection", recordUnhandledRejection);
-  try {
-    await body();
-    await vi.advanceTimersByTimeAsync(0);
-  } finally {
-    process.off("unhandledRejection", recordUnhandledRejection);
-  }
-  return unhandledRejections;
-}
-
 test("the loop survives a rejected wake-up wait without spinning, and a run enqueued afterwards still completes", async () => {
   const unhandledRejections = await unhandledRejectionsDuring(async () => {
     const sendEmail = defineTask("send-email", { schema: v.object({}), handler: async () => undefined });
@@ -1606,4 +1566,160 @@ test("a stored schedule rewritten to another cron this release cannot parse writ
   await vi.advanceTimersByTimeAsync(3_000);
 
   expect(linesWithMessage(lines, "worker error")).toHaveLength(2);
+});
+
+const YIELDED_AT_SHUTDOWN_LINE = {
+  level: "debug",
+  message: "run yielded at shutdown",
+  fields: { task: "send-email", runId: "send-email-1", attempt: 1 },
+};
+
+function settleOutcomeKindsOf(engine: InMemoryEngine): string[] {
+  return requestsOf<SettleRequest>(engine, "settle").map(({ outcome }) => outcome.kind);
+}
+
+async function scenarioOfAnAttemptInItsHandler(
+  handlerOf: (handlerGate: HandlerGate) => TaskHandler<object>,
+): Promise<LoopScenario & { handlerGate: HandlerGate }> {
+  const handlerGate = createHandlerGate();
+  const sendEmail = defineTask("send-email", { schema: v.object({}), handler: handlerOf(handlerGate) });
+  const engine = createInMemoryEngine();
+  await engine.enqueue({ runs: runsOf("send-email", 1) });
+  const scenario = startedLoopOf([sendEmail] as AnyTaskDefinition[], { engine });
+  await vi.advanceTimersByTimeAsync(0);
+  void scenario.loop.stopFetching();
+  return { ...scenario, handlerGate };
+}
+
+test("a draining loop's attempt yields at its next step boundary, its saved step kept, with run yielded at shutdown", async () => {
+  const { loop, engine, lines, handlerGate } = await scenarioOfAnAttemptInItsHandler(gatedBetweenTwoSteps);
+
+  loop.startDraining();
+  handlerGate.release(1);
+  await vi.advanceTimersByTimeAsync(0);
+  await loop.waitForAttemptsInFlight();
+
+  expect(settleOutcomeKindsOf(engine)).toEqual(["yield"]);
+  expect(linesWithMessage(lines, "run yielded at shutdown")).toEqual([YIELDED_AT_SHUTDOWN_LINE]);
+  expect(engine.storedRunOf("send-email-1")?.state).toBe("pending");
+  expect(engine.storedRunOf("send-email-1")?.steps.has("look-up")).toBe(true);
+  expect(engine.storedRunOf("send-email-1")?.steps.has("charge")).toBe(false);
+});
+
+test("the shutdown deadline aborts an attempt still in its handler, which yields without a lock-lost line, and counts it", async () => {
+  const { loop, engine, lines } = await scenarioOfAnAttemptInItsHandler(
+    () =>
+      async ({ abortSignal }) =>
+        new Promise<void>((_resolve, reject) => {
+          abortSignal.addEventListener("abort", () => {
+            reject(abortSignal.reason as Error);
+          });
+        }),
+  );
+
+  const abortedAttemptCount = loop.abortAttemptsAtShutdownDeadline();
+  await vi.advanceTimersByTimeAsync(0);
+  await loop.waitForAttemptsInFlight();
+
+  expect(abortedAttemptCount).toBe(1);
+  expect(settleOutcomeKindsOf(engine)).toEqual(["yield"]);
+  expect(messagesOf(lines)).toEqual(["attempt started", "run yielded at shutdown"]);
+  expect(engine.storedRunOf("send-email-1")?.state).toBe("pending");
+});
+
+test("an attempt whose handler ignores the shutdown deadline abort and returns keeps its completion", async () => {
+  const { loop, engine, lines, handlerGate } = await scenarioOfAnAttemptInItsHandler(gatedWithNoStep);
+
+  loop.abortAttemptsAtShutdownDeadline();
+  await vi.advanceTimersByTimeAsync(200);
+  handlerGate.release(1);
+  await vi.advanceTimersByTimeAsync(0);
+  await loop.waitForAttemptsInFlight();
+
+  expect(settleOutcomeKindsOf(engine)).toEqual(["complete"]);
+  expect(messagesOf(lines)).toEqual(["attempt started", "run completed"]);
+  expect(engine.storedRunOf("send-email-1")?.state).toBe("completed");
+});
+
+test("an attempt whose handler throws after the shutdown deadline abort yields instead of retrying", async () => {
+  const { loop, engine, handlerGate } = await scenarioOfAnAttemptInItsHandler((gate) => async () => {
+    await gate.enter();
+    throw new Error("provider down");
+  });
+
+  loop.abortAttemptsAtShutdownDeadline();
+  handlerGate.release(1);
+  await vi.advanceTimersByTimeAsync(0);
+  await loop.waitForAttemptsInFlight();
+
+  expect(settleOutcomeKindsOf(engine)).toEqual(["yield"]);
+  expect(engine.storedRunOf("send-email-1")?.state).toBe("pending");
+});
+
+test("an attempt a fetch starts after the shutdown deadline is aborted at once and yields", async () => {
+  let isHandlerAbortedAtItsStart = false;
+  const sendEmail = defineTask("send-email", {
+    schema: v.object({}),
+    handler: async ({ abortSignal, step }) => {
+      isHandlerAbortedAtItsStart = abortSignal.aborted;
+      await step.run("charge", () => "paid");
+    },
+  });
+  const engine = createInMemoryEngine();
+  await engine.enqueue({ runs: runsOf("send-email", 1) });
+  const heldFetches = engine.holdCalls("fetch");
+  const { loop, lines } = startedLoopOf([sendEmail] as AnyTaskDefinition[], { engine });
+  await vi.advanceTimersByTimeAsync(0);
+
+  const fetchingStopped = loop.stopFetching();
+  const abortedAttemptCount = loop.abortAttemptsAtShutdownDeadline();
+  heldFetches.release();
+  await fetchingStopped;
+  await loop.waitForAttemptsInFlight();
+
+  expect(abortedAttemptCount).toBe(0);
+  expect(isHandlerAbortedAtItsStart).toBe(true);
+  expect(settleOutcomeKindsOf(engine)).toEqual(["yield"]);
+  expect(linesWithMessage(lines, "run yielded at shutdown")).toEqual([YIELDED_AT_SHUTDOWN_LINE]);
+  expect(engine.storedRunOf("send-email-1")?.steps.has("charge")).toBe(false);
+});
+
+test("stopSettling ends a settle waiting for Redis, with no resend and no worker error", async () => {
+  const { loop, engine, lines, simulatedRedisOutage } = await scenarioOfAnOutageWhileAStepRuns("rejected");
+  await vi.advanceTimersByTimeAsync(0);
+  void loop.stopFetching();
+  let areAttemptsDone = false;
+  void loop.waitForAttemptsInFlight().then(() => {
+    areAttemptsDone = true;
+  });
+  await vi.advanceTimersByTimeAsync(10_000);
+  const areAttemptsDoneBeforeTheStop = areAttemptsDone;
+
+  loop.stopSettling();
+  await vi.advanceTimersByTimeAsync(0);
+  simulatedRedisOutage.endOutage();
+  await vi.advanceTimersByTimeAsync(5_000);
+
+  expect(areAttemptsDoneBeforeTheStop).toBe(false);
+  expect(areAttemptsDone).toBe(true);
+  expect(requestsOf(engine, "settle")).toEqual([]);
+  expect(linesWithMessage(lines, "worker error")).toEqual([]);
+});
+
+test("an attempt that ends after stopSettling sends nothing and writes nothing", async () => {
+  const { loop, engine, lines, handlerGate } = await scenarioOfAnAttemptInItsHandler(gatedWithNoStep);
+  loop.abortAttemptsAtShutdownDeadline();
+  loop.stopSettling();
+  const linesAtTheStop = messagesOf(lines);
+  const callCountAtTheStop = engine.calls.length;
+
+  const unhandledRejections = await unhandledRejectionsDuring(async () => {
+    handlerGate.release(1);
+    await vi.advanceTimersByTimeAsync(0);
+    await loop.waitForAttemptsInFlight();
+  });
+
+  expect(engine.calls.slice(callCountAtTheStop).filter(({ method }) => method !== "tick")).toEqual([]);
+  expect(messagesOf(lines)).toEqual(linesAtTheStop);
+  expect(unhandledRejections).toEqual([]);
 });

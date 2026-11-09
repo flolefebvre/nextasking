@@ -7,6 +7,7 @@ export type WorkerTiming = {
   stallIntervalInMilliseconds: DurationInMilliseconds;
   stallCountThatFailsARun: number;
   abortedAttemptsGraceInMilliseconds: DurationInMilliseconds;
+  commandClientQuitBoundInMilliseconds: DurationInMilliseconds;
   concurrencySlotSafetyDelayInMilliseconds: DurationInMilliseconds;
   unknownNameHandBackDelayInMilliseconds: DurationInMilliseconds;
   unknownNameGiveUpDelayInMilliseconds: DurationInMilliseconds;
@@ -26,6 +27,7 @@ export const DEFAULT_WORKER_TIMING: WorkerTiming = {
   stallIntervalInMilliseconds: 30 * 1000,
   stallCountThatFailsARun: 3,
   abortedAttemptsGraceInMilliseconds: 1000,
+  commandClientQuitBoundInMilliseconds: 1000,
   concurrencySlotSafetyDelayInMilliseconds: 2 * 60 * 1000,
   unknownNameHandBackDelayInMilliseconds: 10 * 1000,
   unknownNameGiveUpDelayInMilliseconds: 30 * 60 * 1000,

@@ -114,7 +114,7 @@ export type InMemoryStoredSchedule = ScheduleSummary & {
 export type InMemoryEngine = Pick<Engine, InMemoryEngineMethod> & {
   calls: readonly InMemoryEngineCall[];
   holdCalls: (method: InMemoryEngineMethod) => HeldCalls;
-  waitForWakeUp: (timeoutInMilliseconds: DurationInMilliseconds) => Promise<void>;
+  waitForWakeUp: (timeoutInMilliseconds: DurationInMilliseconds, stopSignal?: AbortSignal) => Promise<void>;
   isWakeUpMarkerArmed: () => boolean;
   storedRunOf: (runId: RunId) => Readonly<InMemoryStoredRun> | undefined;
   storedScheduleOf: (task: string) => Readonly<InMemoryStoredSchedule> | undefined;
@@ -889,22 +889,25 @@ export function createInMemoryEngine({ now = () => Date.now() }: InMemoryEngineO
         },
       };
     },
-    waitForWakeUp: (timeoutInMilliseconds) =>
+    waitForWakeUp: (timeoutInMilliseconds, stopSignal) =>
       new Promise<void>((resolve) => {
         if (isWakeUpMarkerArmed) {
           isWakeUpMarkerArmed = false;
           resolve();
           return;
         }
-        const wakeUp = () => {
+        const endWait = () => {
           clearTimeout(timeoutTimer);
+          stopSignal?.removeEventListener("abort", stopWait);
           resolve();
         };
-        const timeoutTimer = setTimeout(() => {
-          wakeUpWaiters.splice(wakeUpWaiters.indexOf(wakeUp), 1);
-          resolve();
-        }, timeoutInMilliseconds);
-        wakeUpWaiters.push(wakeUp);
+        const stopWait = () => {
+          wakeUpWaiters.splice(wakeUpWaiters.indexOf(endWait), 1);
+          endWait();
+        };
+        const timeoutTimer = setTimeout(stopWait, timeoutInMilliseconds);
+        wakeUpWaiters.push(endWait);
+        stopSignal?.addEventListener("abort", stopWait, { once: true });
       }),
     isWakeUpMarkerArmed: () => isWakeUpMarkerArmed,
     storedRunOf: (runId) => runsById.get(runId),

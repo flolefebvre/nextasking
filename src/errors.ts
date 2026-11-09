@@ -70,6 +70,14 @@ export class RedisUnavailableError extends Error {
   }
 }
 
+export class InstanceClosedError extends Error {
+  override readonly name = "InstanceClosedError";
+
+  constructor() {
+    super("this nextasking instance was closed");
+  }
+}
+
 export class NonRetriableError extends Error {
   override readonly name = "NonRetriableError";
 }

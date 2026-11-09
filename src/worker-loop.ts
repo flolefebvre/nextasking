@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 
-import { AttemptAbortedError } from "./attempt-abort.js";
+import { abortCauseOf, AttemptAbortedError } from "./attempt-abort.js";
 import type { AttemptAbortCause } from "./attempt-abort.js";
 import { errorFromThrownValue, StalledRunError } from "./attempt-errors.js";
 import type { AnyTaskDefinition } from "./definitions.js";
@@ -46,6 +46,9 @@ export type WorkerLoopConfig = {
 export type WorkerLoop = {
   stopFetching: () => Promise<void>;
   stopTicking: () => Promise<void>;
+  startDraining: () => void;
+  abortAttemptsAtShutdownDeadline: () => number;
+  stopSettling: () => void;
   waitForAttemptsInFlight: () => Promise<void>;
 };
 
@@ -56,6 +59,8 @@ type AttemptInFlight = {
   isExecuting: boolean;
   settlement: Promise<void>;
 };
+
+const OUTCOME_KINDS_KEPT_AT_SHUTDOWN = new Set<AttemptResult["attemptOutcome"]["kind"]>(["complete", "suspend"]);
 
 function failedCommandErrorsOf({ promote, renewals, taskNames, prune, dueSchedules }: TickReply): Error[] {
   return [promote, renewals, taskNames, prune, dueSchedules].flatMap((commandReply) =>
@@ -101,8 +106,11 @@ export function startWorkerLoop(config: WorkerLoopConfig): WorkerLoop {
   let tickInProgress: Promise<void> | undefined;
   let fetchPassOverEndsAt: EpochMilliseconds = 0;
   let promotePassOverEndsAt: EpochMilliseconds = 0;
+  let isDraining = false;
+  let isShutdownDeadlinePassed = false;
   const fetchStopController = new AbortController();
   const tickStopController = new AbortController();
+  const settleStopController = new AbortController();
   const loggedPassedOverRecordVersions = new Set<number | undefined>();
   const loggedUnreadableSchedules = new Set<string>();
 
@@ -158,15 +166,16 @@ export function startWorkerLoop(config: WorkerLoopConfig): WorkerLoop {
     );
   };
 
-  const abortAttempt = (attemptInFlight: AttemptInFlight, abortCause: AttemptAbortCause) => {
+  const abortAttempt = (attemptInFlight: AttemptInFlight, abortCause: AttemptAbortCause): boolean => {
     const { abortController, lockedRun } = attemptInFlight;
     if (abortController.signal.aborted || !attemptInFlight.isExecuting) {
-      return;
+      return false;
     }
     abortController.abort(new AttemptAbortedError(abortCause, lockedRun.runId));
     if (abortCause === "lock lost") {
       writeLifecycleLines(logger, [lockLostAbortLineOf(lockedRun)]);
     }
+    return true;
   };
 
   const stopAttemptsPastTheirLock = () => {
@@ -199,8 +208,23 @@ export function startWorkerLoop(config: WorkerLoopConfig): WorkerLoop {
         abortAttempt(attemptInFlight, abortCause);
       },
       redisOutage,
-      isWorkerDraining: () => false,
+      isWorkerDraining: () => isDraining,
     });
+  };
+
+  const settledAttemptResultOf = async (
+    task: AnyTaskDefinition | undefined,
+    attemptInFlight: AttemptInFlight,
+  ): Promise<AttemptResult | undefined> => {
+    const attemptResult = await attemptResultOf(task, attemptInFlight);
+    attemptInFlight.isExecuting = false;
+    const abortCause = abortCauseOf(attemptInFlight.abortController.signal);
+    if (abortCause === "lock lost") {
+      return undefined;
+    }
+    return abortCause === "shutdown deadline" && !OUTCOME_KINDS_KEPT_AT_SHUTDOWN.has(attemptResult.attemptOutcome.kind)
+      ? { attemptOutcome: { kind: "yield" }, listenersLeftOut: [] }
+      : attemptResult;
   };
 
   const executeAttempt = async (
@@ -208,14 +232,16 @@ export function startWorkerLoop(config: WorkerLoopConfig): WorkerLoop {
     attemptInFlight: AttemptInFlight,
     fetchRepliedAt: EpochMilliseconds,
   ) => {
-    const { lockedRun, abortController } = attemptInFlight;
-    const { attemptOutcome, listenersLeftOut } = await attemptResultOf(task, attemptInFlight);
-    attemptInFlight.isExecuting = false;
-    if (abortController.signal.aborted) {
+    const { lockedRun } = attemptInFlight;
+    const attemptResult = await settledAttemptResultOf(task, attemptInFlight);
+    if (attemptResult === undefined || settleStopController.signal.aborted) {
       return;
     }
+    const { attemptOutcome, listenersLeftOut } = attemptResult;
     const settleRequest = settleRequestOf(task, lockedRun, attemptOutcome);
-    const settleReply = await answeredDespiteOutage(redisOutage, () => engine.settle(settleRequest));
+    const settleReply = await answeredDespiteOutage(redisOutage, () => engine.settle(settleRequest), {
+      resendStopSignal: settleStopController.signal,
+    });
     writeLifecycleLines(
       logger,
       settleLinesOf({
@@ -241,8 +267,11 @@ export function startWorkerLoop(config: WorkerLoopConfig): WorkerLoop {
       settlement: Promise.resolve(),
     };
     attemptsInFlightByLockToken.set(lockedRun.lockToken, attemptInFlight);
+    if (isShutdownDeadlinePassed) {
+      abortAttempt(attemptInFlight, "shutdown deadline");
+    }
     attemptInFlight.settlement = executeAttempt(task, attemptInFlight, fetchRepliedAt)
-      .catch(writeWorkerError)
+      .catch(writeWorkerErrorUnlessStopped(settleStopController.signal))
       .finally(() => {
         attemptsInFlightByLockToken.delete(lockedRun.lockToken);
         cueFetch();
@@ -455,6 +484,18 @@ export function startWorkerLoop(config: WorkerLoopConfig): WorkerLoop {
       clearInterval(tickTimer);
       tickStopController.abort();
       await tickInProgress;
+    },
+    startDraining: () => {
+      isDraining = true;
+    },
+    abortAttemptsAtShutdownDeadline: () => {
+      isShutdownDeadlinePassed = true;
+      return [...attemptsInFlightByLockToken.values()].filter((attemptInFlight) =>
+        abortAttempt(attemptInFlight, "shutdown deadline"),
+      ).length;
+    },
+    stopSettling: () => {
+      settleStopController.abort();
     },
     waitForAttemptsInFlight: async () => {
       while (attemptsInFlightByLockToken.size > 0) {

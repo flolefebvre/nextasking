@@ -22,8 +22,8 @@ import type { ConcurrencySlot } from "./concurrency-slots.js";
 import { listenerLoggingAnsweredErrors } from "./connection.js";
 import { concurrencyKeyOf, retriesOf } from "./definitions.js";
 import type { AnyTaskDefinition, EventDefinition } from "./definitions.js";
-import { parseDuration, shownDurationOf } from "./durations.js";
-import type { Duration, DurationInMilliseconds, EpochMilliseconds } from "./durations.js";
+import { shownDurationOf } from "./durations.js";
+import type { DurationInMilliseconds, EpochMilliseconds } from "./durations.js";
 import {
   NO_RETRY,
   recordFailedAttempt,
@@ -50,48 +50,14 @@ import { handBackStrandedJobs } from "./stranded-jobs.js";
 import type { ActiveJob } from "./stranded-jobs.js";
 import { createJobsInHand } from "./jobs-in-hand.js";
 import { handBackUnlessGivenUp } from "./unknown-name-hand-back.js";
+import { isSettledWithin } from "./settled-within.js";
+import type { WorkerOptions } from "./worker-options.js";
 import { bullmqMaxStalledCountOf, workerTiming } from "./worker-timing.js";
 
 export type RunningWorker = {
   close: () => Promise<void>;
   shutDown: () => Promise<void>;
 };
-
-export type StartWorkerOptions = {
-  concurrency?: number;
-  shutdownTimeout?: Duration;
-  onWorkerNotStarted?: (error: unknown) => void | Promise<void>;
-};
-
-export type WorkerOptions = {
-  concurrency: number;
-  shutdownTimeoutInMilliseconds: DurationInMilliseconds;
-};
-
-const UNLIMITED_CONCURRENCY = Number.MAX_SAFE_INTEGER;
-
-const DEFAULT_SHUTDOWN_TIMEOUT: Duration = "25s";
-
-export function workerOptionsFrom(options: StartWorkerOptions): WorkerOptions {
-  const concurrency: unknown = options.concurrency ?? UNLIMITED_CONCURRENCY;
-  if (typeof concurrency !== "number" || !Number.isInteger(concurrency) || concurrency <= 0) {
-    const shownConcurrency = typeof concurrency === "string" ? JSON.stringify(concurrency) : String(concurrency);
-    throw new Error(`Invalid startWorker concurrency: ${shownConcurrency} is not a positive integer`);
-  }
-  let shutdownTimeoutInMilliseconds: DurationInMilliseconds;
-  try {
-    shutdownTimeoutInMilliseconds = parseDuration(options.shutdownTimeout ?? DEFAULT_SHUTDOWN_TIMEOUT);
-  } catch (error) {
-    throw new Error(`Invalid startWorker shutdownTimeout: ${(error as Error).message}`, { cause: error });
-  }
-  const onWorkerNotStarted: unknown = options.onWorkerNotStarted;
-  if (onWorkerNotStarted !== undefined && typeof onWorkerNotStarted !== "function") {
-    const shownCallback =
-      typeof onWorkerNotStarted === "string" ? JSON.stringify(onWorkerNotStarted) : String(onWorkerNotStarted);
-    throw new Error(`Invalid startWorker onWorkerNotStarted: ${shownCallback} is not a function`);
-  }
-  return { concurrency, shutdownTimeoutInMilliseconds };
-}
 
 export type WorkerConfig = {
   options: WorkerOptions;
@@ -130,20 +96,6 @@ async function yieldAtShutdown(job: Job, token: string | undefined, runLogger: L
     runLogger.debug({}, "run yielded at shutdown");
   }
   throw new WaitingError();
-}
-
-export async function isSettledWithin(settlement: Promise<void>, timeoutInMilliseconds: DurationInMilliseconds) {
-  let timeoutTimer: NodeJS.Timeout | undefined;
-  const timeoutExpiry = new Promise<false>((resolve) => {
-    timeoutTimer = setTimeout(() => {
-      resolve(false);
-    }, timeoutInMilliseconds);
-  });
-  try {
-    return await Promise.race([settlement.then(() => true), timeoutExpiry]);
-  } finally {
-    clearTimeout(timeoutTimer);
-  }
 }
 
 export function startRunWorker(config: WorkerConfig): RunningWorker {

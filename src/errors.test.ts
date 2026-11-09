@@ -1,6 +1,16 @@
 import { describe, expect, test } from "vitest";
 
-import { RedisUnavailableError } from "./errors.js";
+import { InstanceClosedError, RedisUnavailableError } from "./errors.js";
+
+describe("InstanceClosedError", () => {
+  test("says the instance was closed", () => {
+    const error = new InstanceClosedError();
+
+    expect(error).toBeInstanceOf(Error);
+    expect(error.name).toBe("InstanceClosedError");
+    expect(error.message).toBe("this nextasking instance was closed");
+  });
+});
 
 describe("RedisUnavailableError", () => {
   test("names the wait it gave up after, and keeps the original error and the call's run id", () => {

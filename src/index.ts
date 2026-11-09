@@ -62,4 +62,4 @@ export type { RunState } from "./run-states.js";
 export type { CronExpression, IanaTimeZone, Schedule } from "./schedules.js";
 export type { StandardSchemaV1 } from "./standard-schema.js";
 export type { SavedStepResult, StepContext, StepTools } from "./step-engine.js";
-export type { StartWorkerOptions } from "./worker-runtime.js";
+export type { StartWorkerOptions } from "./worker-options.js";

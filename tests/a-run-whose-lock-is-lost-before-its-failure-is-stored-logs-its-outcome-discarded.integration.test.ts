@@ -1,4 +1,4 @@
-import { expect } from "vitest";
+import { expect, vi } from "vitest";
 import { z } from "zod";
 
 import { engineKeysOf } from "../src/engine/engine-keys.js";
@@ -14,6 +14,7 @@ integrationTest(
   { timeout: 20_000 },
   async ({ redisUrl, keyPrefix }) => {
     const proxy = await startTcpProxy(redisUrl);
+    let isConnectionCut = false;
     const { logger, lines } = createRecordingLogger();
     const chargeInvoice = defineTask("charge-invoice", {
       schema: z.object({ invoiceId: z.string() }),
@@ -21,6 +22,7 @@ integrationTest(
       backoff: "1s",
       handler: async () => {
         await proxy.cut();
+        isConnectionCut = true;
         throw new Error("card declined");
       },
     });
@@ -39,7 +41,7 @@ integrationTest(
 
     await workerNextasking.startWorker();
     const { runId } = await directNextasking.dispatch("charge-invoice", { invoiceId: "invoice-7" });
-    await waitForLogMessage(lines, "connection error");
+    await vi.waitUntil(() => isConnectionCut, { timeout: 10_000 });
     await withRedis(redisUrl, (redis) =>
       redis.hset(engineKeysOf(keyPrefix).runRecord("charge-invoice", runId), "lockToken", "token-of-another-attempt"),
     );

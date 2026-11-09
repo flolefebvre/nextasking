@@ -71,6 +71,7 @@
     "test:integration:contended": "tsx scripts/gate.ts test:integration+test:integration",
     "test:changed": "vitest run --project unit --project integration --changed ${CHECK_BASE:-origin/main}",
     "test:e2e": "vitest run --project e2e",
+    "test:benchmark": "vitest run --project benchmark --reporter=default",
     "test:watch": "vitest"
   },
   "devDependencies": {

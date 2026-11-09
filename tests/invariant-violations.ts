@@ -35,7 +35,7 @@ export function invariantsOfCurrentTestIfAny(): TestInvariants | undefined {
 export function invariantsOfCurrentTestOrThrow(sourceName: string): TestInvariants {
   if (invariantsOfCurrentTest === undefined) {
     throw new Error(
-      `${sourceName} reports to the invariants of the current test: start it inside an integrationTest or an e2eTest body`,
+      `${sourceName} reports to the invariants of the current test: start it inside an integrationTest, an e2eTest or a benchmarkTest body`,
     );
   }
   return invariantsOfCurrentTest;

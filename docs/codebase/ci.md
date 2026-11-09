@@ -23,7 +23,8 @@ Before pushing a change to the workflow, lint it with `docker run --rm -v "$PWD:
 `.github/workflows/release.yml` publishes to npm when a `v*` tag is pushed, and on nothing else. To release:
 
 1. Bump `version` in package.json in a PR, and merge it.
-2. Tag the merge commit `vX.Y.Z`, the same version, and push the tag: `git tag v0.1.0`, then `git push origin v0.1.0`.
+2. Run `pnpm test:benchmark` on the merge commit, and keep its output with the release: paste its `benchmark:` lines into the GitHub release's notes once `publish` has created it. It asserts the floor of the load envelope, which CI never runs (`docs/codebase/testing.md`, Benchmark); a failing floor blocks the release.
+3. Tag the merge commit `vX.Y.Z`, the same version, and push the tag: `git tag v0.1.0`, then `git push origin v0.1.0`.
 
 The run is `guard`, then `ci` (the whole `ci.yml`, called through `workflow_call`), then `publish`:
 

@@ -1,6 +1,6 @@
 # nextasking
 
-Events and background tasks for a Next.js app, on BullMQ with Redis or Valkey. Define tasks and events, list them in `createNextasking`, dispatch a task or emit an event by name from server code, and run them in a worker started from `instrumentation.ts`, in `next start` or in the `nextasking worker` bin.
+Events and background tasks for a Next.js app, on BullMQ with Redis or Valkey. Define tasks and events, list them in `createNextasking`, dispatch a task or emit an event by name from server code, and run them in a worker started from `instrumentation.ts`, in `next start`.
 
 ## Rules that hold everywhere
 
@@ -36,9 +36,7 @@ Events and background tasks for a Next.js app, on BullMQ with Redis or Valkey. D
 | Pass `startWorker` options                         | [Worker](worker.md)                             |
 | Cap the attempts in flight with `concurrency`      | [Worker](worker.md)                             |
 | Let a deploy finish running attempts               | [Worker](worker.md)                             |
-| Run the worker in its own process                  | [Worker](worker.md)                             |
 | Choose which processes run a worker                | [Worker](worker.md)                             |
-| Run the worker bin with `output: "standalone"`     | [Worker](worker.md)                             |
 | Stop a handler cleanly with `abortSignal`          | [Worker](worker.md)                             |
 | Know what a stall is and when a run fails stalled  | [Worker](worker.md)                             |
 | Know what happens to runs during a deploy overlap  | [Worker](worker.md)                             |

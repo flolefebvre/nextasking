@@ -333,7 +333,6 @@ export async function register() {
 
 - `startWorker()` runs one worker in this process, executing every task the instance lists and fanning out every event it lists.
 - A process that never calls `startWorker()` only dispatches and emits.
-- To run the worker in a process of its own, on the same build, use the `nextasking worker` bin. See [Worker](worker.md#run-the-worker-in-its-own-process).
 - Calling `startWorker()` a second time in the same process throws.
 - With Redis down, `startWorker()` resolves anyway and the worker starts once Redis is back, so pages keep rendering. See [Worker](worker.md#when-redis-is-down-at-boot).
 - Set `NEXT_MANUAL_SIG_HANDLE=1` in the environment of `next start`, so a deploy lets running attempts finish instead of cutting them. See [Worker](worker.md) for this, `concurrency` and the other options.

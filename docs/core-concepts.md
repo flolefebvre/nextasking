@@ -74,7 +74,7 @@ export async function register() {
 }
 ```
 
-- **Worker**: the part of a process that executes attempts and fan-outs, started by `startWorker()` in `next start` or in the `nextasking worker` bin. A process without one only dispatches and emits. See [Worker](worker.md).
+- **Worker**: the part of a process that executes attempts and fan-outs, started by `startWorker()` in `next start`. A process without one only dispatches and emits. See [Worker](worker.md).
 - **Lock**: the hold an attempt has on its run while it executes, renewed by its worker. An attempt that loses it can no longer save anything, and its `abortSignal` aborts. See [Worker](worker.md#stop-a-handler-cleanly-with-abortsignal).
 - **Stall**: an attempt that lost its lock because its process crashed, was killed or blocked its event loop. The run goes back to pending; the third stall with no step saved in between fails it. See [Worker](worker.md#stalls).
 - **Duplicate attempt**: an attempt that starts while an earlier attempt of the same run, which lost its lock, still executes. The earlier one stops at its next step. See [Duplicate runs](duplicate-runs.md#a-duplicate-attempt-finishing-its-step).

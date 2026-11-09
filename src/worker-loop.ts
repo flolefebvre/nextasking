@@ -103,6 +103,7 @@ export function startWorkerLoop(config: WorkerLoopConfig): WorkerLoop {
   const fetchStopController = new AbortController();
   const tickStopController = new AbortController();
   const loggedPassedOverRecordVersions = new Set<number | undefined>();
+  const loggedUnreadableSchedules = new Set<string>();
 
   const logPassOver = (recordVersions: readonly (number | undefined)[]) => {
     const recordVersionsNotLoggedYet = [...new Set(recordVersions)].filter(
@@ -393,7 +394,14 @@ export function startWorkerLoop(config: WorkerLoopConfig): WorkerLoop {
     if (reply.dueSchedules?.kind === "replied" && reply.dueSchedules.reply.dueSchedules.length > 0) {
       secondRoundTrips.push(
         fireDueSchedules(
-          { engine, definitions, logger, redisOutage, stopSignal: tickStopController.signal },
+          {
+            engine,
+            definitions,
+            logger,
+            redisOutage,
+            stopSignal: tickStopController.signal,
+            loggedUnreadableSchedules,
+          },
           reply.dueSchedules.reply,
         ),
       );

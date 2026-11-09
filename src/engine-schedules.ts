@@ -52,6 +52,7 @@ export type DueScheduleFiring = {
   logger: Logger;
   redisOutage: RedisOutage;
   stopSignal: AbortSignal;
+  loggedUnreadableSchedules: Set<string>;
 };
 
 function fireRequestOf(
@@ -69,13 +70,23 @@ function fireRequestOf(
 }
 
 export async function fireDueSchedules(
-  { engine, definitions, logger, redisOutage, stopSignal }: DueScheduleFiring,
+  { engine, definitions, logger, redisOutage, stopSignal, loggedUnreadableSchedules }: DueScheduleFiring,
   { serverInstant, dueSchedules }: DueSchedulesReply,
 ): Promise<void> {
   await Promise.all(
     dueSchedules.map(async (dueSchedule) => {
+      let fireRequest: FireRequest;
       try {
-        const fireRequest = fireRequestOf(dueSchedule, serverInstant, definitions);
+        fireRequest = fireRequestOf(dueSchedule, serverInstant, definitions);
+      } catch (error) {
+        const unreadableSchedule = JSON.stringify([dueSchedule.task, dueSchedule.cron, dueSchedule.timezone]);
+        if (!loggedUnreadableSchedules.has(unreadableSchedule)) {
+          loggedUnreadableSchedules.add(unreadableSchedule);
+          writeLifecycleLines(logger, [workerErrorLineOf(errorFromThrownValue(error))]);
+        }
+        return;
+      }
+      try {
         await answeredDespiteOutage(redisOutage, () => engine.fire(fireRequest), { resendStopSignal: stopSignal });
       } catch (error) {
         if (!stopSignal.aborted) {

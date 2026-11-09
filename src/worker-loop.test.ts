@@ -1452,23 +1452,41 @@ test("stopTicking with a fire in flight resolves once the fire answers, and the 
   expect(engine.storedRunOf(deriveFiringRunId("build-report", ONE_AM))?.scheduledAt).toBe(ONE_AM);
 });
 
-test("a stored cron this release cannot parse writes one worker error, and the other due schedules still fire", async () => {
+function unreadableBuildReportOf(cron: string) {
+  return { task: "build-report", cron, timezone: "UTC", nextFiringAt: ONE_AM };
+}
+
+test("a stored cron this release cannot parse writes one worker error over many ticks, and the other due schedules still fire", async () => {
   const tasks = [scheduledTaskOf("build-report", HOURLY), scheduledTaskOf("send-digest", HOURLY)];
   const engine = createInMemoryEngine();
   await engine.syncSchedules({
     schedulesToSync: [
-      { task: "build-report", cron: "not a cron", timezone: "UTC", nextFiringAt: ONE_AM },
+      unreadableBuildReportOf("not a cron"),
       { task: "send-digest", cron: "0 * * * *", timezone: "UTC", nextFiringAt: ONE_AM },
     ],
   });
   vi.setSystemTime(ONE_AM - 500);
   const { lines } = startedLoopOf(tasks, { engine });
 
-  await vi.advanceTimersByTimeAsync(1_000);
+  await vi.advanceTimersByTimeAsync(5_000);
 
   expect(linesWithMessage(lines, "worker error")).toEqual([
     { level: "error", message: "worker error", fields: { err: expect.any(Error) as unknown } },
   ]);
   expect(requestsOf<FireRequest>(engine, "fire").map(({ task }) => task)).toEqual(["send-digest"]);
   expect(firedScheduledAtsOf(engine)).toEqual(["2030-01-01T01:00:00.000Z"]);
+  expect(requestsOf<TickRequest>(engine, "tick").at(-1)?.scheduledTaskNames).toEqual(["build-report", "send-digest"]);
+});
+
+test("a stored schedule rewritten to another cron this release cannot parse writes its worker error once again", async () => {
+  const engine = createInMemoryEngine();
+  await engine.syncSchedules({ schedulesToSync: [unreadableBuildReportOf("not a cron")] });
+  vi.setSystemTime(ONE_AM - 500);
+  const { lines } = startedLoopOf([scheduledTaskOf("build-report", HOURLY)], { engine });
+  await vi.advanceTimersByTimeAsync(3_000);
+
+  await engine.syncSchedules({ schedulesToSync: [unreadableBuildReportOf("still not a cron")] });
+  await vi.advanceTimersByTimeAsync(3_000);
+
+  expect(linesWithMessage(lines, "worker error")).toHaveLength(2);
 });

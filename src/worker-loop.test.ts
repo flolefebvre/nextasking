@@ -4,6 +4,7 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { runFailed } from "./built-in-events.js";
 import { defineEvent, defineListener, defineScheduledTask, defineTask } from "./definitions.js";
 import type { AnyTaskDefinition, TaskHandler } from "./definitions.js";
+import { MOST_RUNS_PRUNED_PER_PRUNE } from "./engine/engine.js";
 import type { Engine, FetchRequest, FireRequest, RunToCreate, SettleRequest, TickRequest } from "./engine/engine.js";
 import { createEnqueueRequests } from "./enqueue-requests.js";
 import type { DispatchByName, EmitByName } from "./enqueue-requests.js";
@@ -17,6 +18,7 @@ import { startWorkerLoop } from "./worker-loop.js";
 import type { WaitForWakeUp, WorkerLoop, WorkerLoopEngine } from "./worker-loop.js";
 import { DEFAULT_WORKER_TIMING } from "./worker-timing.js";
 import type { WorkerTiming } from "./worker-timing.js";
+import { endRuns, runIdsOf } from "../tests/ended-runs.js";
 import { createHandlerGate, gatedBetweenTwoSteps, gatedWithNoStep } from "../tests/handler-gate.js";
 import type { HandlerGate } from "../tests/handler-gate.js";
 import { createInMemoryEngine } from "../tests/in-memory-engine.js";
@@ -530,6 +532,38 @@ test("a tick prunes one task per tick, round robin over the task names", async (
     completedRetention: DEFAULT_WORKER_TIMING.completedRunRetention,
     failedRetention: DEFAULT_WORKER_TIMING.failedRunRetention,
   });
+});
+
+const TIMING_CAPPING_AT_10_COMPLETED_RUNS: WorkerTiming = {
+  ...DEFAULT_WORKER_TIMING,
+  completedRunRetention: { ...DEFAULT_WORKER_TIMING.completedRunRetention, maxRunCount: 10 },
+};
+
+function prunedTaskNamesOf(engine: InMemoryEngine): (string | undefined)[] {
+  return requestsOf<TickRequest>(engine, "tick").map(({ prune }) => prune?.task);
+}
+
+test("a task over its cap by three batches is pruned on four ticks in a row, the fourth finding it at its cap, then the turn moves on to the next task", async () => {
+  const engine = createInMemoryEngine();
+  const taskNames = Array.from({ length: 50 }, (_, position) => `task-${String(position + 1).padStart(2, "0")}`);
+  for (const taskName of taskNames) {
+    await endRuns(engine, taskName, runIdsOf(`${taskName}-run`, 1), "complete");
+  }
+  await endRuns(engine, "task-01", runIdsOf("task-01-extra-run", 9 + 3 * MOST_RUNS_PRUNED_PER_PRUNE), "complete");
+  startedLoopOf([], { engine, timing: TIMING_CAPPING_AT_10_COMPLETED_RUNS });
+
+  await vi.advanceTimersByTimeAsync(7_000);
+
+  expect(prunedTaskNamesOf(engine)).toEqual([
+    undefined,
+    "task-01",
+    "task-01",
+    "task-01",
+    "task-01",
+    "task-02",
+    "task-03",
+  ]);
+  expect(engine.runIdsInState("completed").filter((runId) => runId.startsWith("task-01-"))).toHaveLength(10);
 });
 
 test("a tick whose prune fails still applies its renewals, writes one worker error, and the next tick prunes the next task", async () => {

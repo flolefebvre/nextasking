@@ -6,6 +6,7 @@ import { errorFromThrownValue, StalledRunError } from "./attempt-errors.js";
 import type { AnyTaskDefinition } from "./definitions.js";
 import type { DurationInMilliseconds, EpochMilliseconds } from "./durations.js";
 import type { LockToken } from "./engine/engine-keys.js";
+import { MOST_RUNS_PRUNED_PER_PRUNE } from "./engine/engine.js";
 import type { Engine, LockedRun, PruneRequest, ThirdStall, TickReply, TickRequest } from "./engine/engine.js";
 import type { WorkerDefinitions } from "./definitions.js";
 import { declaredSchedulesOf, fireDueSchedules } from "./worker-schedules.js";
@@ -84,15 +85,25 @@ function concurrencyLimitsByTaskOf(tasksByName: ReadonlyMap<string, AnyTaskDefin
   );
 }
 
-function nextTaskNameInTurnOf(
+export const MOST_FULL_PRUNES_IN_A_ROW = 9;
+
+function nextTaskNameOfTheRoundOf(
   taskNames: readonly string[],
-  lastPrunedTaskName: string | undefined,
+  taskNameLastVisitedByTheRound: string | undefined,
+  taskNameHoldingTheTurn: string | undefined,
 ): string | undefined {
-  const sortedTaskNames = [...taskNames].sort();
+  const sortedTaskNames = taskNames.filter((taskName) => taskName !== taskNameHoldingTheTurn).sort();
   return (
-    sortedTaskNames.find((taskName) => lastPrunedTaskName === undefined || taskName > lastPrunedTaskName) ??
-    sortedTaskNames[0]
+    sortedTaskNames.find(
+      (taskName) => taskNameLastVisitedByTheRound === undefined || taskName > taskNameLastVisitedByTheRound,
+    ) ??
+    sortedTaskNames[0] ??
+    taskNameHoldingTheTurn
   );
+}
+
+function isPruneFull(pruneReply: TickReply["prune"]): boolean {
+  return pruneReply?.kind === "replied" && pruneReply.reply.prunedRunCount === MOST_RUNS_PRUNED_PER_PRUNE;
 }
 
 export function startWorkerLoop(config: WorkerLoopConfig): WorkerLoop {
@@ -106,7 +117,9 @@ export function startWorkerLoop(config: WorkerLoopConfig): WorkerLoop {
   let fetchCueWaiter: (() => void) | undefined;
   let pendingWakeUp: Promise<void> | undefined;
   let knownTaskNames: readonly string[] = [];
-  let lastPrunedTaskName: string | undefined;
+  let taskNameLastVisitedByTheRound: string | undefined;
+  let taskNameHoldingTheTurn: string | undefined;
+  let fullPrunesInARowOfTheHolder = 0;
   let tickInProgress: Promise<void> | undefined;
   let fetchPassOverEndsAt: EpochMilliseconds = 0;
   let promotePassOverEndsAt: EpochMilliseconds = 0;
@@ -347,8 +360,32 @@ export function startWorkerLoop(config: WorkerLoopConfig): WorkerLoop {
     }
   })();
 
+  const isTurnKeptByTheHolder = () =>
+    taskNameHoldingTheTurn !== undefined && fullPrunesInARowOfTheHolder < MOST_FULL_PRUNES_IN_A_ROW;
+
+  const passTheTurnOn = (prunedTaskName: string, isPrunedByTheHolder: boolean, pruneReply: TickReply["prune"]) => {
+    const isFull = isPruneFull(pruneReply);
+    if (isPrunedByTheHolder) {
+      fullPrunesInARowOfTheHolder += 1;
+    } else {
+      taskNameLastVisitedByTheRound = prunedTaskName;
+      if (taskNameHoldingTheTurn !== undefined && taskNameHoldingTheTurn !== prunedTaskName) {
+        fullPrunesInARowOfTheHolder = 0;
+        return;
+      }
+      taskNameHoldingTheTurn = prunedTaskName;
+      fullPrunesInARowOfTheHolder = 1;
+    }
+    if (!isFull) {
+      taskNameHoldingTheTurn = undefined;
+      fullPrunesInARowOfTheHolder = 0;
+    }
+  };
+
   const pruneRequestOfThisTick = (): PruneRequest | undefined => {
-    const taskName = nextTaskNameInTurnOf(knownTaskNames, lastPrunedTaskName);
+    const taskName = isTurnKeptByTheHolder()
+      ? taskNameHoldingTheTurn
+      : nextTaskNameOfTheRoundOf(knownTaskNames, taskNameLastVisitedByTheRound, taskNameHoldingTheTurn);
     return taskName === undefined
       ? undefined
       : {
@@ -398,6 +435,7 @@ export function startWorkerLoop(config: WorkerLoopConfig): WorkerLoop {
       ({ lockExpiresAtByWorkerClock, abortController }) =>
         lockExpiresAtByWorkerClock < lockRenewalDeadline && !abortController.signal.aborted,
     );
+    const isPrunedByTheHolder = isTurnKeptByTheHolder();
     const prune = pruneRequestOfThisTick();
     const tickRequest: TickRequest = {
       heldLocks: renewedAttempts.map(({ lockedRun: { task, runId, lockToken } }) => ({ task, runId, lockToken })),
@@ -411,7 +449,9 @@ export function startWorkerLoop(config: WorkerLoopConfig): WorkerLoop {
     const reply = await answeredDespiteOutage(redisOutage, () => engine.tick(tickRequest), {
       resendStopSignal: tickStopController.signal,
     });
-    lastPrunedTaskName = prune?.task;
+    if (prune !== undefined) {
+      passTheTurnOn(prune.task, isPrunedByTheHolder, reply.prune);
+    }
     if (reply.renewals.kind === "replied") {
       for (const [position, renewal] of reply.renewals.reply.entries()) {
         const renewedAttempt = renewedAttempts[position];

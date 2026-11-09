@@ -8,6 +8,7 @@ import type { RedisCallIds } from "./errors.js";
 import type { Logger } from "./logger.js";
 import { delayUnlessAborted, untilAborted } from "./redis-outage.js";
 import type { RedisOutage } from "./redis-outage.js";
+import { isSettledWithin } from "./settled-within.js";
 
 export type ConnectionConfig = {
   url: string;
@@ -30,7 +31,7 @@ const UNANSWERED_ERROR_MESSAGES = new Set([
 
 const UNANSWERED_ERROR_MESSAGE_PREFIXES = ["Socket timeout"];
 
-const UNANSWERED_ERROR_NAMES = new Set(["MaxRetriesPerRequestError", "ConnectionNotReadyError"]);
+const UNANSWERED_ERROR_NAMES = new Set(["MaxRetriesPerRequestError", "ConnectionNotReadyError", "ClientClosedError"]);
 
 const NETWORK_ERROR_CODES = new Set([
   "ECONNREFUSED",
@@ -119,6 +120,14 @@ class ConnectionNotReadyError extends Error {
   override readonly name = "ConnectionNotReadyError";
 }
 
+class ClientClosedError extends Error {
+  override readonly name = "ClientClosedError";
+
+  constructor() {
+    super("The Redis client was closed by its nextasking instance");
+  }
+}
+
 export type ConnectionOutageTracker = {
   reportClientError: (client: object, error: unknown) => void;
   reportClientReady: (client: object) => void;
@@ -182,6 +191,7 @@ export type RedisConnections = {
   createClient: (role: RedisClientRole) => Redis;
   waitUntilReadyWithinGiveUpAfter: (client: Redis) => Promise<void>;
   waitUntilReadyWithoutDeadline: (client: Redis, stopSignal?: AbortSignal) => Promise<void>;
+  closeClient: (client: Redis, quitBoundInMilliseconds?: DurationInMilliseconds) => Promise<void>;
   workerRedisOutageOf: (client: Redis, outOfMemoryRetryDelayInMilliseconds: DurationInMilliseconds) => RedisOutage;
   callOnRedis: <Result>(callIds: RedisCallIds, call: () => Promise<Result>) => Promise<Result>;
   onConnectionRestored: (listener: () => void) => () => void;
@@ -212,17 +222,23 @@ export function createRedisConnections(connection: ConnectionConfig, logger: Log
   };
 
   const pendingReadyWaitByClient = new WeakMap<Redis, Promise<void>>();
+  const endPendingReadyWaitByClient = new WeakMap<Redis, () => void>();
+  const closedClients = new WeakSet<Redis>();
 
   const startReadyWait = (client: Redis): Promise<void> => {
     const readyWait = new Promise<void>((resolve, reject) => {
-      const markReady = () => {
+      const endWait = () => {
         clearTimeout(giveUpTimer);
+        client.removeListener("ready", markReady);
         pendingReadyWaitByClient.delete(client);
+        endPendingReadyWaitByClient.delete(client);
+      };
+      const markReady = () => {
+        endWait();
         resolve();
       };
       const giveUpTimer = setTimeout(() => {
-        client.removeListener("ready", markReady);
-        pendingReadyWaitByClient.delete(client);
+        endWait();
         reject(
           new ConnectionNotReadyError(`Redis isn't ready, its status is "${client.status}"`, {
             cause: lastErrorByClient.get(client),
@@ -230,12 +246,20 @@ export function createRedisConnections(connection: ConnectionConfig, logger: Log
         );
       }, giveUpAfterInMilliseconds);
       client.once("ready", markReady);
+      endPendingReadyWaitByClient.set(client, () => {
+        endWait();
+        reject(new ClientClosedError());
+      });
     });
+    readyWait.catch(() => undefined);
     pendingReadyWaitByClient.set(client, readyWait);
     return readyWait;
   };
 
   const waitUntilReadyWithinGiveUpAfter = (client: Redis): Promise<void> => {
+    if (closedClients.has(client)) {
+      return Promise.reject(new ClientClosedError());
+    }
     if (client.status === "ready") {
       return Promise.resolve();
     }
@@ -276,6 +300,18 @@ export function createRedisConnections(connection: ConnectionConfig, logger: Log
         adopt,
       ),
     waitUntilReadyWithinGiveUpAfter,
+    closeClient: async (client, quitBoundInMilliseconds) => {
+      closedClients.add(client);
+      endPendingReadyWaitByClient.get(client)?.();
+      if (quitBoundInMilliseconds !== undefined && client.status === "ready") {
+        const quitAnswered = client.quit().then(
+          () => undefined,
+          () => undefined,
+        );
+        await isSettledWithin(quitAnswered, quitBoundInMilliseconds);
+      }
+      client.disconnect();
+    },
     onConnectionRestored: outageTracker.onConnectionRestored,
     callOnRedis: async (callIds, call) => {
       try {

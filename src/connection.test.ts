@@ -13,6 +13,7 @@ import {
   reconnectDecisionOn,
 } from "./connection.js";
 import type { RedisConnections } from "./connection.js";
+import { asRedis, FakeRedisClient } from "../tests/fake-redis-clients.js";
 import { createRecordingLogger } from "../tests/recording-logger.js";
 
 const CONCURRENT_CALLER_COUNT = 20;
@@ -410,5 +411,104 @@ describe("waitUntilReadyWithoutDeadline", () => {
       expect(client.listenerCount("ready")).toBe(readyListenerCountBefore);
       expect(vi.getTimerCount()).toBe(0);
     });
+  });
+
+  test("ends when the client is closed, without arming another wait", async () => {
+    await withNeverConnectingClient(async (connections, client) => {
+      vi.useFakeTimers();
+      const readyListenerCountBefore = client.listenerCount("ready");
+
+      const wait = connections.waitUntilReadyWithoutDeadline(client);
+      await vi.advanceTimersByTimeAsync(2 * connections.giveUpAfterInMilliseconds);
+      await connections.closeClient(client);
+      const outcome = await wait.catch((error: unknown) => error);
+
+      expect(outcome).toMatchObject({ name: "ClientClosedError" });
+      expect(client.listenerCount("ready")).toBe(readyListenerCountBefore);
+      expect(vi.getTimerCount()).toBe(0);
+    });
+  });
+});
+
+describe("closeClient", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  test("ends the pending ready-wait at once for every caller, with no listener or timer left", async () => {
+    await withNeverConnectingClient(async (connections, client) => {
+      vi.useFakeTimers();
+      const readyListenerCountBefore = client.listenerCount("ready");
+      const waits = waitsOfConcurrentCallers(connections, client);
+
+      await connections.closeClient(client);
+
+      expect((await waits).map((result) => result.status === "rejected" && (result.reason as Error).name)).toEqual(
+        Array.from({ length: CONCURRENT_CALLER_COUNT }, () => "ClientClosedError"),
+      );
+      expect(client.listenerCount("ready")).toBe(readyListenerCountBefore);
+      expect(vi.getTimerCount()).toBe(0);
+    });
+  });
+
+  test("makes a later ready-wait on the client reject at once, arming nothing", async () => {
+    await withNeverConnectingClient(async (connections, client) => {
+      vi.useFakeTimers();
+      const readyListenerCountBefore = client.listenerCount("ready");
+      await connections.closeClient(client);
+
+      const outcome = await connections.waitUntilReadyWithinGiveUpAfter(client).catch((error: unknown) => error);
+
+      expect(outcome).toMatchObject({ name: "ClientClosedError" });
+      expect(isUnansweredError(outcome)).toBe(true);
+      expect(client.listenerCount("ready")).toBe(readyListenerCountBefore);
+      expect(vi.getTimerCount()).toBe(0);
+    });
+  });
+
+  test("quits a ready client within the bound, then disconnects it", async () => {
+    const connections = createRedisConnections({ url: "redis://127.0.0.1:1" }, createRecordingLogger().logger);
+    const fakeRedisClient = new FakeRedisClient();
+    fakeRedisClient.becomeReady();
+
+    await connections.closeClient(asRedis(fakeRedisClient), 1000);
+
+    expect(fakeRedisClient.sentCommands).toEqual(["QUIT"]);
+    expect(fakeRedisClient.disconnectCount).toBe(1);
+  });
+
+  test("gives up on a quit never answered at the bound, and disconnects", async () => {
+    vi.useFakeTimers();
+    const connections = createRedisConnections({ url: "redis://127.0.0.1:1" }, createRecordingLogger().logger);
+    const fakeRedisClient = new FakeRedisClient();
+    fakeRedisClient.becomeReady();
+    fakeRedisClient.quitReply = "never answered";
+    let isClosed = false;
+
+    const closing = connections.closeClient(asRedis(fakeRedisClient), 1000).then(() => {
+      isClosed = true;
+    });
+    await vi.advanceTimersByTimeAsync(999);
+    const isClosedBeforeTheBound = isClosed;
+    await vi.advanceTimersByTimeAsync(1);
+    await closing;
+
+    expect(isClosedBeforeTheBound).toBe(false);
+    expect(fakeRedisClient.disconnectCount).toBe(1);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  test("disconnects a client that is not ready, or that has no quit bound, without sending QUIT", async () => {
+    const connections = createRedisConnections({ url: "redis://127.0.0.1:1" }, createRecordingLogger().logger);
+    const reconnectingClient = new FakeRedisClient();
+    reconnectingClient.startReconnecting();
+    const readyClient = new FakeRedisClient();
+    readyClient.becomeReady();
+
+    await connections.closeClient(asRedis(reconnectingClient), 1000);
+    await connections.closeClient(asRedis(readyClient));
+
+    expect([reconnectingClient.sentCommands, readyClient.sentCommands]).toEqual([[], []]);
+    expect([reconnectingClient.disconnectCount, readyClient.disconnectCount]).toEqual([1, 1]);
   });
 });

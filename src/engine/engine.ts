@@ -246,7 +246,7 @@ export type FireReply =
 
 export type ScheduleSummary = { task: string; cron: string; timezone: string };
 
-export type ScheduleToSync = ScheduleSummary & { nextFiringAt: EpochMilliseconds };
+export type ScheduleToSync = ScheduleSummary & { nextFiringAt: EpochMilliseconds; retries: number };
 
 export type SyncSchedulesRequest = { schedulesToSync: readonly ScheduleToSync[] };
 
@@ -977,7 +977,13 @@ export function createEngine(client: Redis, prefix: string): Engine {
       syncSchedulesReplyOf(
         await runSyncSchedulesScript([
           schedulesToSync.length,
-          ...schedulesToSync.flatMap(({ task, cron, timezone, nextFiringAt }) => [task, cron, timezone, nextFiringAt]),
+          ...schedulesToSync.flatMap(({ task, cron, timezone, nextFiringAt, retries }) => [
+            task,
+            cron,
+            timezone,
+            nextFiringAt,
+            retries,
+          ]),
         ]),
       ),
     makeDue: async ({ task } = {}) =>

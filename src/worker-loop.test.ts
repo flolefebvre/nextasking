@@ -1570,7 +1570,7 @@ test("stopTicking with a fire in flight resolves once the fire answers, and the 
 });
 
 function unreadableBuildReportOf(cron: string) {
-  return { task: "build-report", cron, timezone: "UTC", nextFiringAt: ONE_AM };
+  return { task: "build-report", cron, timezone: "UTC", nextFiringAt: ONE_AM, retries: 3 };
 }
 
 test("a stored cron this release cannot parse writes one worker error over many ticks, and the other due schedules still fire", async () => {
@@ -1579,7 +1579,7 @@ test("a stored cron this release cannot parse writes one worker error over many 
   await engine.syncSchedules({
     schedulesToSync: [
       unreadableBuildReportOf("not a cron"),
-      { task: "send-digest", cron: "0 * * * *", timezone: "UTC", nextFiringAt: ONE_AM },
+      { task: "send-digest", cron: "0 * * * *", timezone: "UTC", nextFiringAt: ONE_AM, retries: 3 },
     ],
   });
   vi.setSystemTime(ONE_AM - 500);

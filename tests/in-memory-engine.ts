@@ -107,6 +107,7 @@ export type HeldCalls = { release: () => void };
 
 export type InMemoryStoredSchedule = ScheduleSummary & {
   nextFiringAt: EpochMilliseconds;
+  retries: number;
   previousFiringAt: EpochMilliseconds | undefined;
 };
 
@@ -796,9 +797,10 @@ export function createInMemoryEngine({ now = () => Date.now() }: InMemoryEngineO
       .map(({ storedSchedule }) => storedSchedule);
     const added: ScheduleSummary[] = [];
     const changed: ScheduleSummary[] = [];
-    for (const { task, cron, timezone, nextFiringAt } of schedulesToSync) {
+    for (const { task, cron, timezone, nextFiringAt, retries } of schedulesToSync) {
       const storedSchedule = schedulesByTask.get(task);
       if (storedSchedule !== undefined && storedSchedule.cron === cron && storedSchedule.timezone === timezone) {
+        storedSchedule.retries = retries;
         continue;
       }
       (storedSchedule === undefined ? added : changed).push({ task, cron, timezone });
@@ -807,6 +809,7 @@ export function createInMemoryEngine({ now = () => Date.now() }: InMemoryEngineO
         cron,
         timezone,
         nextFiringAt,
+        retries,
         previousFiringAt: storedSchedule?.previousFiringAt,
       });
     }

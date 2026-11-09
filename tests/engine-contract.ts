@@ -129,7 +129,7 @@ async function statesOf(harness: EngineContractHarness, runIds: readonly RunId[]
 const HOUR_IN_MILLISECONDS = 60 * MINUTE_IN_MILLISECONDS;
 
 function hourlyReportOf(nextFiringAt: EpochMilliseconds, task = "build-report"): ScheduleToSync {
-  return { task, cron: "0 * * * *", timezone: "UTC", nextFiringAt };
+  return { task, cron: "0 * * * *", timezone: "UTC", nextFiringAt, retries: 2 };
 }
 
 function firingOf({ task, nextFiringAt }: ScheduleToSync): FireRequest {
@@ -728,6 +728,23 @@ export function defineEngineContractTests(contractTest: EngineContractTest): voi
   );
 
   contractTest(
+    "a sync where only the retries differ reports no change and keeps the schedule's planned firing",
+    async (harness) => {
+      const { engine } = harness;
+      const schedule = hourlyReportOf(await harness.pastInstant());
+      await engine.syncSchedules({ schedulesToSync: [schedule] });
+
+      const reply = await engine.syncSchedules({
+        schedulesToSync: [{ ...schedule, retries: 7, nextFiringAt: schedule.nextFiringAt + HOUR_IN_MILLISECONDS }],
+      });
+      const fireReply = await engine.fire(firingOf(schedule));
+
+      expect(reply).toEqual({ kind: "synced", added: [], changed: [], removed: [] });
+      expect(fireReply).toMatchObject({ kind: "fired", isRunCreated: true });
+    },
+  );
+
+  contractTest(
     "a tick reads the due schedules among the task names it is given, with the server's instant",
     async (harness) => {
       const { engine } = harness;
@@ -748,7 +765,10 @@ export function defineEngineContractTests(contractTest: EngineContractTest): voi
         scheduledTaskNames: ["due-report", "later-report", "report-without-a-record"],
       });
 
-      expect(reply.dueSchedules).toEqual(repliedOf({ serverInstant: expect.any(Number), dueSchedules: [dueReport] }));
+      const { task, cron, timezone, nextFiringAt } = dueReport;
+      expect(reply.dueSchedules).toEqual(
+        repliedOf({ serverInstant: expect.any(Number), dueSchedules: [{ task, cron, timezone, nextFiringAt }] }),
+      );
       const serverInstant = reply.dueSchedules?.kind === "replied" ? reply.dueSchedules.reply.serverInstant : 0;
       expect(serverInstant).toBeGreaterThan(pastInstant);
     },

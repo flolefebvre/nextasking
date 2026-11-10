@@ -1,6 +1,7 @@
 import { expect } from "vitest";
 
-import { engineTest, fetchedLockedRunsOf, storedValuesByKeyOf } from "../../tests/engine-test.js";
+import { DAY_IN_MILLISECONDS, SEND_EMAIL_PRUNE_REQUEST } from "../../tests/ended-runs.js";
+import { backdateEndedRun, engineTest, fetchedLockedRunsOf, storedValuesByKeyOf } from "../../tests/engine-test.js";
 import type { EngineTestContext } from "../../tests/engine-test.js";
 import { serverInstantInMillisecondsOf } from "../../tests/server-instant.js";
 import { deriveFiringRunId } from "../ids.js";
@@ -48,6 +49,27 @@ engineTest(
     });
     expect(await redis.hGetAll(keys.schedule("build-report"))).toEqual(scheduleBefore);
     expect(await redis.zRangeWithScores(keys.schedules, 0, -1)).toEqual(schedulesBefore);
+  },
+);
+
+engineTest(
+  "a firing now of a scheduled task whose name a prune took out of the tasks set puts it back with the run it creates",
+  async (context) => {
+    const { engine, redis, keys } = context;
+    await storedNightlyReportOf(context);
+    await engine.fireNow(await firingNowOf(context));
+    const [firedRun] = await fetchedLockedRunsOf(context, 1);
+    await engine.settle({ ...firedRun!, outcome: { kind: "complete" } });
+    await backdateEndedRun(context, "build-report", firedRun!.runId, 2 * DAY_IN_MILLISECONDS);
+    await engine.prune({ ...SEND_EMAIL_PRUNE_REQUEST, task: "build-report" });
+    const taskNamesAfterTheNameLeft = await redis.sMembers(keys.tasks);
+    const firing = { ...(await firingNowOf(context)), runId: "build-report-again" };
+
+    const reply = await engine.fireNow(firing);
+
+    expect(taskNamesAfterTheNameLeft).toEqual([]);
+    expect(reply).toEqual({ kind: "fired", runId: firing.runId, isRunCreated: true });
+    expect(await redis.sMembers(keys.tasks)).toEqual(["build-report"]);
   },
 );
 

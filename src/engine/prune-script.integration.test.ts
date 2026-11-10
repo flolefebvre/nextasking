@@ -156,7 +156,7 @@ engineTest(
 );
 
 engineTest(
-  "a prune passes over aged runs of a newer record version, leaving them whole, and removes the rest",
+  "a prune passes over aged runs of a newer record version, leaving them whole and their task in the tasks set, and removes the rest",
   async (context) => {
     const { engine, redis, keys } = context;
     const newerVersionRunIds = runIdsOf("newer-version-run", 3);
@@ -178,6 +178,8 @@ engineTest(
         runId,
       ).toBe(2);
     }
+    expect(await redis.zCard(keys.runDedup("send-email"))).toBe(0);
+    expect(await redis.sMembers(keys.tasks)).toEqual(["send-email"]);
   },
 );
 
@@ -194,6 +196,27 @@ engineTest(
     expect(await completedRunIdsOf(context)).toEqual(
       [...newerVersionRunIds, "run-1"].map((runId) => storedRunIdOf("send-email", runId)),
     );
+  },
+);
+
+engineTest(
+  `a prune that removed its ${String(MOST_RUNS_PRUNED_PER_PRUNE)} runs with aged runs left leaves the task in the tasks set, and the prune that removes the last ones takes it out`,
+  async (context) => {
+    const { engine, redis, keys } = context;
+    const runIds = runIdsOf("run", MOST_RUNS_PRUNED_PER_PRUNE + 50);
+    await endRuns(engine, "send-email", runIds, "complete");
+    for (const runId of runIds) {
+      await backdateEndedRun(context, "send-email", runId, 2 * DAY_IN_MILLISECONDS);
+    }
+
+    const firstReply = await engine.prune(SEND_EMAIL_PRUNE_REQUEST);
+    const taskNamesAfterTheFirstPrune = await redis.sMembers(keys.tasks);
+    const secondReply = await engine.prune(SEND_EMAIL_PRUNE_REQUEST);
+
+    expect(firstReply).toEqual({ kind: "pruned", prunedRunCount: MOST_RUNS_PRUNED_PER_PRUNE });
+    expect(taskNamesAfterTheFirstPrune).toEqual(["send-email"]);
+    expect(secondReply).toEqual({ kind: "pruned", prunedRunCount: 50 });
+    expect(await redis.sMembers(keys.tasks)).toEqual([]);
   },
 );
 

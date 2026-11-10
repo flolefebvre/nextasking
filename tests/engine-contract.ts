@@ -893,7 +893,7 @@ export function defineEngineContractTests(contractTest: EngineContractTest): voi
   ];
   for (const [state, arrangeTheHeldRun] of arrangementsOfAHeldRunByState) {
     contractTest(
-      `a task whose ended run a prune removed stays in the task names while it holds a ${state} run`,
+      `a task whose ended run a prune removed stays in the task names while it holds a run in state ${state}`,
       async (harness) => {
         const { engine } = harness;
         await endRuns(engine, "send-email", ["aged-run"], "complete");

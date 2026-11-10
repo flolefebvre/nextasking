@@ -750,8 +750,9 @@ function pruneReplyOf(reply: unknown): PruneReply {
   throw unreadableReplyError("prune", reply);
 }
 
-function pruneArgumentsOf({ completedRetention, failedRetention }: PruneRequest): CommandArgument[] {
+function pruneArgumentsOf({ task, completedRetention, failedRetention }: PruneRequest): CommandArgument[] {
   return [
+    task,
     completedRetention.maxAgeInMilliseconds,
     completedRetention.maxRunCount,
     failedRetention.maxAgeInMilliseconds,
@@ -1068,7 +1069,7 @@ export function createEngine(
   const runFireScript = scriptRunnerOf("nextaskingFire", FIRE_SCRIPT, fireKeysOf(keys));
   const runFireNowScript = scriptRunnerOf("nextaskingFireNow", FIRE_NOW_SCRIPT, fireNowKeysOf(keys));
   const runReplayScript = scriptRunnerOf("nextaskingReplay", REPLAY_SCRIPT, replayKeysOf(keys));
-  const runPruneScript = scriptRunnerWithKeysOf("nextaskingPrune", PRUNE_SCRIPT, 3);
+  const runPruneScript = scriptRunnerWithKeysOf("nextaskingPrune", PRUNE_SCRIPT, 4);
   return {
     serverInstant: async () => serverInstantOf(await client.send(builtInCommandOf("TIME"))),
     replay: async ({ task, runId }) => replayReplyOf(await runReplayScript([storedRunIdOf(task, runId)])),

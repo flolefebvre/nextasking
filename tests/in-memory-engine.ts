@@ -764,6 +764,12 @@ export function createInMemoryEngine({ now = () => Date.now() }: InMemoryEngineO
       runsByStoredRunId.delete(storedRunId);
     }
     trimExpiredDedupEntries(dedupExpiryByStoredRunIdByTask.get(task), instant, EXPIRED_DEDUP_ENTRIES_TRIMMED_PER_PRUNE);
+    const isTaskHoldingNothing =
+      ![...runsByStoredRunId.values()].some((storedRun) => storedRun.task === task) &&
+      (dedupExpiryByStoredRunIdByTask.get(task)?.size ?? 0) === 0;
+    if (isTaskHoldingNothing) {
+      taskNames.delete(task);
+    }
     return { kind: "pruned", prunedRunCount: prunedStoredRunIds.size };
   };
 

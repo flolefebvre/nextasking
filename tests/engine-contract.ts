@@ -213,6 +213,18 @@ async function suspendedOnANapOf(engine: ContractEngine, lockedRun: LockedRun): 
   return resumesAt;
 }
 
+async function taskNamesOfTheNextTick(engine: ContractEngine): Promise<string[]> {
+  const { taskNames } = await engine.tick({
+    heldLocks: [],
+    lockDurationInMilliseconds: LOCK_DURATION_IN_MILLISECONDS,
+    isPromoteIncluded: false,
+  });
+  if (taskNames.kind !== "replied") {
+    throw taskNames.error;
+  }
+  return [...taskNames.reply].sort();
+}
+
 async function backdateEndedRuns(
   harness: EngineContractHarness,
   task: string,
@@ -834,6 +846,127 @@ export function defineEngineContractTests(contractTest: EngineContractTest): voi
         createdRuns: sendEmailRunIdentitiesOf(["run-ended-24h01-ago"]),
         skippedRuns: sendEmailRunIdentitiesOf(["run-ended-23h59-ago"]),
       });
+    },
+  );
+
+  contractTest(
+    "a task whose last run a prune removed, its dedup entry expired, is absent from the next tick's task names",
+    async (harness) => {
+      const { engine } = harness;
+      await endRuns(engine, "send-email", ["aged-run"], "complete");
+      await engine.enqueue({ runs: [{ runId: "other-task-run", task: "resize-image", payload: "{}", retries: 0 }] });
+      await harness.backdateEndedRun("send-email", "aged-run", 2 * DAY_IN_MILLISECONDS);
+      const taskNamesBeforeThePrune = await taskNamesOfTheNextTick(engine);
+
+      const reply = await engine.prune(SEND_EMAIL_PRUNE_REQUEST);
+
+      expect(taskNamesBeforeThePrune).toEqual(["resize-image", "send-email"]);
+      expect(reply).toEqual({ kind: "pruned", prunedRunCount: 1 });
+      expect(await taskNamesOfTheNextTick(engine)).toEqual(["resize-image"]);
+    },
+  );
+
+  const arrangementsOfAHeldRunByState: [RunState, (engine: ContractEngine) => Promise<unknown>][] = [
+    [
+      "delayed",
+      (engine) =>
+        engine.enqueue({ runs: sendEmailRunsOf(["held-run"], { delayInMilliseconds: HOUR_IN_MILLISECONDS }) }),
+    ],
+    ["pending", (engine) => engine.enqueue({ runs: sendEmailRunsOf(["held-run"]) })],
+    [
+      "waitingForConcurrencySlot",
+      async (engine) => {
+        await engine.enqueue({ runs: sendEmailRunsOf(["locked-run", "held-run"], { concurrencyKey: "account-7" }) });
+        await fetchedOf(engine, 2, { "send-email": 1 });
+      },
+    ],
+    ["executing", (engine) => onlyLockedRunOf(engine, "held-run")],
+    ["suspended", async (engine) => suspendedOnANapOf(engine, await onlyLockedRunOf(engine, "held-run"))],
+    [
+      "backingOff",
+      async (engine) =>
+        engine.settle({
+          ...(await onlyLockedRunOf(engine, "held-run")),
+          outcome: { kind: "retry", error: ATTEMPT_ERROR, backoffInMilliseconds: HOUR_IN_MILLISECONDS },
+        }),
+    ],
+  ];
+  for (const [state, arrangeTheHeldRun] of arrangementsOfAHeldRunByState) {
+    contractTest(
+      `a task whose ended run a prune removed stays in the task names while it holds a ${state} run`,
+      async (harness) => {
+        const { engine } = harness;
+        await endRuns(engine, "send-email", ["aged-run"], "complete");
+        await harness.backdateEndedRun("send-email", "aged-run", 2 * DAY_IN_MILLISECONDS);
+        await arrangeTheHeldRun(engine);
+
+        const reply = await engine.prune(SEND_EMAIL_PRUNE_REQUEST);
+
+        expect(reply).toEqual({ kind: "pruned", prunedRunCount: 1 });
+        expect(await harness.stateOf("send-email", "held-run")).toBe(state);
+        expect(await taskNamesOfTheNextTick(engine)).toEqual(["send-email"]);
+      },
+    );
+  }
+
+  contractTest(
+    "a task whose last run a prune removed stays in the task names while the run's dedup entry is live",
+    async (harness) => {
+      const { engine } = harness;
+      await endRuns(engine, "send-email", ["recent-run"], "complete");
+
+      const reply = await engine.prune({
+        ...SEND_EMAIL_PRUNE_REQUEST,
+        completedRetention: { ...SEND_EMAIL_PRUNE_REQUEST.completedRetention, maxRunCount: 0 },
+      });
+
+      expect(reply).toEqual({ kind: "pruned", prunedRunCount: 1 });
+      expect(await harness.stateOf("send-email", "recent-run")).toBeUndefined();
+      expect(await taskNamesOfTheNextTick(engine)).toEqual(["send-email"]);
+    },
+  );
+
+  contractTest(
+    "a dispatch of a task whose name left the task names puts it back, and the next prune of the task works as before",
+    async (harness) => {
+      const { engine } = harness;
+      await endRuns(engine, "send-email", ["aged-run"], "complete");
+      await harness.backdateEndedRun("send-email", "aged-run", 2 * DAY_IN_MILLISECONDS);
+      await engine.prune(SEND_EMAIL_PRUNE_REQUEST);
+      const taskNamesAfterTheNameLeft = await taskNamesOfTheNextTick(engine);
+
+      await endRuns(engine, "send-email", ["new-run"], "complete");
+      const taskNamesAfterTheDispatch = await taskNamesOfTheNextTick(engine);
+      await harness.backdateEndedRun("send-email", "new-run", 2 * DAY_IN_MILLISECONDS);
+      const reply = await engine.prune(SEND_EMAIL_PRUNE_REQUEST);
+
+      expect(taskNamesAfterTheNameLeft).toEqual([]);
+      expect(taskNamesAfterTheDispatch).toEqual(["send-email"]);
+      expect(reply).toEqual({ kind: "pruned", prunedRunCount: 1 });
+      expect(await harness.stateOf("send-email", "new-run")).toBeUndefined();
+      expect(await taskNamesOfTheNextTick(engine)).toEqual([]);
+    },
+  );
+
+  contractTest(
+    "a firing of a scheduled task whose name left the task names puts it back with the run it creates",
+    async (harness) => {
+      const { engine } = harness;
+      const firstSchedule = hourlyReportOf((await harness.pastInstant()) - 3 * HOUR_IN_MILLISECONDS);
+      await engine.syncSchedules({ schedulesToSync: [firstSchedule] });
+      await engine.fire(firingOf(firstSchedule));
+      const [firedRun] = await lockedRunsOf(engine, 1);
+      await engine.settle({ ...firedRun!, outcome: { kind: "complete" } });
+      await harness.backdateEndedRun("build-report", firedRun!.runId, 2 * DAY_IN_MILLISECONDS);
+      await engine.prune({ ...SEND_EMAIL_PRUNE_REQUEST, task: "build-report" });
+      const taskNamesAfterTheNameLeft = await taskNamesOfTheNextTick(engine);
+      const nextFiring = firingOf(hourlyReportOf(firstSchedule.nextFiringAt + HOUR_IN_MILLISECONDS));
+
+      const reply = await engine.fire(nextFiring);
+
+      expect(taskNamesAfterTheNameLeft).toEqual([]);
+      expect(reply).toEqual({ kind: "fired", runId: nextFiring.runId, isRunCreated: true });
+      expect(await taskNamesOfTheNextTick(engine)).toEqual(["build-report"]);
     },
   );
 

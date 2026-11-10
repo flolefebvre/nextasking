@@ -251,6 +251,25 @@ describe("checkServerInfoReading", () => {
     expect(lines).toEqual([{ level: "warn", message: "server version unreadable", fields: { err: versionError } }]);
   });
 
+  test("warns maxmemory-policy unreadable with the reading's error as err and goes on", () => {
+    const { logger, lines } = createRecordingLogger();
+    const policyError = new AggregateError(
+      [INFO_DENIED(), CONFIG_DISABLED()],
+      "maxmemory-policy is readable from neither INFO nor CONFIG GET",
+    );
+
+    checkServerInfoReading(
+      {
+        maxmemoryPolicyReading: { kind: "unreadable", error: policyError },
+        serverVersionReading: { kind: "read", serverName: "Valkey", version: "8.0.0" },
+      },
+      logger,
+    );
+
+    expect(lines).toEqual([{ level: "warn", message: "maxmemory-policy unreadable", fields: { err: policyError } }]);
+    expect(lines[0]?.fields["err"]).toBe(policyError);
+  });
+
   test("throws the floor rejection for a server below the floor", () => {
     const { logger } = createRecordingLogger();
 

@@ -21,7 +21,7 @@ import { createHandlerGate, gatedBetweenTwoSteps, gatedWithNoStep } from "../tes
 import type { HandlerGate } from "../tests/handler-gate.js";
 import { createInMemoryEngine } from "../tests/in-memory-engine.js";
 import type { InMemoryEngine } from "../tests/in-memory-engine.js";
-import { infoReplyWith } from "../tests/info-replies.js";
+import { CONFIG_DISABLED, infoReplyWith } from "../tests/info-replies.js";
 import type { InfoReplyFields } from "../tests/info-replies.js";
 import { createRecordingLogger } from "../tests/recording-logger.js";
 import type { RecordedLogLine } from "../tests/recording-logger.js";
@@ -238,6 +238,33 @@ describe("the boot", () => {
 
     expect(lines).toEqual([
       { level: "warn", message: "server version unreadable", fields: { err: expect.any(Error) } },
+      { level: "info", message: "worker started", fields: {} },
+    ]);
+  });
+
+  test("warns maxmemory-policy unreadable with both failures and starts when neither INFO nor CONFIG GET yields the policy", async () => {
+    const configFailure = CONFIG_DISABLED();
+    const { lifecycle, lines } = lifecycleScenarioOf({
+      prepareDriver: (fakeRedisDriver) => {
+        readyAtTheFloor(fakeRedisDriver);
+        fakeRedisDriver.infoReply = async () => infoReplyWith({ valkeyVersion: "8.0.1" });
+        fakeRedisDriver.configReply = () => Promise.reject(configFailure);
+      },
+    });
+
+    await lifecycle.startWorker();
+
+    expect(lines).toEqual([
+      {
+        level: "warn",
+        message: "maxmemory-policy unreadable",
+        fields: {
+          err: new AggregateError(
+            [new Error("INFO has no maxmemory_policy line"), configFailure],
+            "maxmemory-policy is readable from neither INFO nor CONFIG GET",
+          ),
+        },
+      },
       { level: "info", message: "worker started", fields: {} },
     ]);
   });

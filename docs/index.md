@@ -16,6 +16,7 @@ Typed background tasks and events for Next.js, on Redis or Valkey. Define tasks 
 | Add nextasking to an app, step by step                    | [Setup](setup.md)                               |
 | Lay out the definition files and name them                | [Setup](setup.md)                               |
 | Set the environment variables a worker needs              | [Setup](setup.md)                               |
+| Know which servers are supported and the version floor    | [Setup](setup.md)                               |
 | Point the app's agents at this manual                     | [Setup](setup.md)                               |
 | Define a task and its payload schema                      | [Tasks and events](tasks-and-events.md)         |
 | Define an event                                           | [Tasks and events](tasks-and-events.md)         |
@@ -28,6 +29,7 @@ Typed background tasks and events for Next.js, on Redis or Valkey. Define tasks 
 | Know how long a repeated id is dropped                    | [Tasks and events](tasks-and-events.md)         |
 | Dispatch or emit a name known only at runtime             | [Tasks and events](tasks-and-events.md)         |
 | Handle dispatch and emit errors                           | [Tasks and events](tasks-and-events.md)         |
+| Know what a call does once the instance is closed         | [Tasks and events](tasks-and-events.md)         |
 | Answer 503 when Redis is down                             | [Tasks and events](tasks-and-events.md)         |
 | Set how long a call waits with `giveUpAfter`              | [Tasks and events](tasks-and-events.md)         |
 | Write a duration                                          | [Tasks and events](tasks-and-events.md)         |
@@ -75,21 +77,21 @@ Typed background tasks and events for Next.js, on Redis or Valkey. Define tasks 
 | Know what nextasking guarantees against duplicates        | [Duplicate runs](duplicate-runs.md)             |
 | Close the duplicate windows that stay open                | [Duplicate runs](duplicate-runs.md)             |
 | Send an email or charge a card only once                  | [Duplicate runs](duplicate-runs.md)             |
+| Know what a failover or a restart loses                   | [Duplicate runs](duplicate-runs.md)             |
 | Know how long a provider keeps an idempotency key         | [Duplicate runs](duplicate-runs.md)             |
 | Set how often and how soon a failed run retries           | [Retries and failures](retries-and-failures.md) |
 | Fail a run at once with `NonRetriableError`               | [Retries and failures](retries-and-failures.md) |
 | Bound an attempt with `timeout`                           | [Retries and failures](retries-and-failures.md) |
 | Know what a failed run keeps, and for how long            | [Retries and failures](retries-and-failures.md) |
 | Replay a failed run after deploying a fix                 | [Retries and failures](retries-and-failures.md) |
-| Replay a failed fan-out without duplicates                | [Retries and failures](retries-and-failures.md) |
-| Alert on a failed run or fan-out with a listener          | [Retries and failures](retries-and-failures.md) |
+| Alert on a failed run with a listener                     | [Retries and failures](retries-and-failures.md) |
 | Pass a logger and read the lifecycle lines                | [Logging](logging.md)                           |
 | Protect a dashboard route                                 | [Dashboard](dashboard.md)                       |
 | Read one run: state, payload, errors, steps               | [Dashboard](dashboard.md)                       |
 | Know what each of the eight run states means              | [Dashboard](dashboard.md)                       |
 | Page through failed runs                                  | [Dashboard](dashboard.md)                       |
 | Count the backlog per task and state                      | [Dashboard](dashboard.md)                       |
-| Follow an event from its fan-out to each listener         | [Dashboard](dashboard.md)                       |
+| Read the listener runs of an event id                     | [Dashboard](dashboard.md)                       |
 | Check that last night's scheduled run happened            | [Dashboard](dashboard.md)                       |
 | Build a typed "run now" picker                            | [Dashboard](dashboard.md)                       |
 | Know what a read costs and what it can miss               | [Dashboard](dashboard.md)                       |
@@ -198,83 +200,83 @@ import type {
 } from "@flefebvre/nextasking/testing";
 ```
 
-| Export                     | What it is                                                                                                                           |
-| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| `defineTask`               | Defines a task: a name, a Standard Schema payload schema and a handler                                                               |
-| `defineEvent`              | Defines an event: a name and a Standard Schema payload schema                                                                        |
-| `defineListener`           | Defines a listener: a task subscribed to one event, taking that event's payload                                                      |
-| `defineScheduledTask`      | Defines a scheduled task: a name, a cron with its time zone and a handler, and no payload                                            |
-| `runFailed`                | The built-in event `nextasking/run.failed`, emitted on each final failure of a run; listen to it, never emit it                      |
-| `createNextasking`         | Builds the instance from the connection, the prefix, the logger, the events and the tasks                                            |
-| `UnknownTaskError`         | Thrown by `dispatch`, `replay`, `getRun` and `listRuns` for a task name the instance doesn't list                                    |
-| `UnknownEventError`        | Thrown by `emit` and `getEvent` for an event name the instance doesn't list                                                          |
-| `RunNotReplayableError`    | Thrown by `replay` for a run that is unknown, removed or not failed                                                                  |
-| `InstanceClosedError`      | Thrown by a call on the instance once it has closed, as at the worker's shutdown, a call still waiting for Redis included            |
-| `InvalidPayloadError`      | Thrown by `dispatch` and `emit` for a payload the schema refuses                                                                     |
-| `NonRetriableError`        | Thrown by a handler to fail its run at once, skipping the retries left                                                               |
-| `RedisUnavailableError`    | Thrown by every call on the instance when Redis doesn't answer within `giveUpAfter`; carries `runId` or `eventId`                    |
-| `StepMisuseError`          | Thrown by a step on a bug: a repeated id, a nested step, a bad result, duration or resume time                                       |
-| `ConnectionConfig`         | The type of `createNextasking`'s `connection`: `url` and `giveUpAfter` (default `"5s"`)                                              |
-| `CronExpression`           | The type of a schedule's `cron`: a string                                                                                            |
-| `DispatchedRun`            | The type `dispatch` resolves with: `runId`                                                                                           |
-| `DispatchOptions`          | The type of `dispatch`'s third argument: `runId` and `delay`                                                                         |
-| `Duration`                 | The type of a duration option: a whole number and `s`, `m`, `h` or `d`                                                               |
-| `EmitOptions`              | The type of `emit`'s third argument: `eventId`                                                                                       |
-| `EmittedEvent`             | The type `emit` resolves with: `eventId`                                                                                             |
-| `EventDefinition`          | The type `defineEvent` returns                                                                                                       |
-| `EventDefinitionSummary`   | The type of one entry of `eventDefinitions`: `name` and `listenerNames`                                                              |
-| `EventId`                  | The type of an event id: a string                                                                                                    |
-| `EventName`                | The union of the registered instance's event names, the built-in events included; `never` without `Register`                         |
-| `EventOptions`             | The type of `defineEvent`'s options: `schema`                                                                                        |
-| `EventWithRuns`            | The type `getEvent` returns: `event`, `eventId` and `runsByListener`                                                                 |
-| `FailureReason`            | The type of a failed run's `reason`: `"retries exhausted"`, `"non-retriable"`, `"stalled"` or `"unknown task"`                       |
-| `FailureNoticeError`       | The type of a failure notice's `error`: `name`, `message` and `stack`                                                                |
-| `IanaTimeZone`             | The type of a schedule's `timezone`: an IANA time zone name, a string                                                                |
-| `ListedRun`                | The type of a run in `listRuns`' page: a `Run` without `payload`, `errors` and `steps`, with `lastErrorMessage`                      |
-| `ListedSchedule`           | The type of one entry `listSchedules` returns: `task`, `cron`, `timezone`, `nextFiringAt` and `previousFiring`                       |
-| `ListenerDefinition`       | The type `defineListener` returns                                                                                                    |
-| `ListenerOptions`          | The type of `defineListener`'s options: `on`, `retries`, `backoff`, `timeout`, `concurrency` and `handler`                           |
-| `ListRunsOptions`          | The type of `listRuns`' argument: `state`, `task`, `limit` and `cursor`                                                              |
-| `Logger`                   | The type of the `logger` option and of the handler's `logger`                                                                        |
-| `Nextasking`               | The type of the instance `createNextasking` returns                                                                                  |
-| `NextaskingConfig`         | The type of `createNextasking`'s argument: `connection`, `prefix`, `logger`, `events` and `tasks`                                    |
-| `PayloadIssue`             | The type of one entry of `InvalidPayloadError`'s `issues`: `path` and `message`                                                      |
-| `PayloadSchema`            | The type a `schema` option takes: a Standard Schema whose input and output are JSON                                                  |
-| `PreviousFiring`           | The type of a listed schedule's `previousFiring`: `scheduledAt` and `runId`                                                          |
-| `Register`                 | The interface you augment with your instance's type; it types names and a handler's calls                                            |
-| `ReplayedRun`              | The type `replay` returns: `runId`                                                                                                   |
-| `Run`                      | The type `getRun` returns: a run of a registered task, narrowed by `task` and by `state`                                             |
-| `RunCounts`                | The type `countRuns` returns: a count per registered task and per state                                                              |
-| `RunError`                 | The type of one entry of a run's `errors`: `attempt`, `name`, `message`, `stack` and `failedAt`                                      |
-| `RunFailedPayload`         | The type of `runFailed`'s payload: `task`, `runId`, `reason`, `error`, `attempt`, `failedAt`, and the source event                   |
-| `RunId`                    | The type of a run id: a string                                                                                                       |
-| `RunPage`                  | The type `listRuns` returns: `runs` and `nextCursor`                                                                                 |
-| `RunState`                 | The type of a run's `state`: one of the eight run states                                                                             |
-| `SavedStepResult`          | The type of one entry of a run's `steps`: `id` and `result`                                                                          |
-| `Schedule`                 | The type of a scheduled task's `schedule` option: `cron` and `timezone`                                                              |
-| `ScheduledTaskContext`     | The type of the object a scheduled task's handler receives: no `payload`, and `scheduledAt`                                          |
-| `ScheduledTaskDefinition`  | The type `defineScheduledTask` returns                                                                                               |
-| `ScheduledTaskHandler`     | The type of a scheduled task's `handler`                                                                                             |
-| `ScheduledTaskOptions`     | The type of `defineScheduledTask`'s options: `schedule`, `retries`, `backoff`, `timeout`, `concurrency: { limit }` and `handler`     |
-| `StandardSchemaV1`         | The Standard Schema interface every schema library implements, shipped as types                                                      |
-| `StartWorkerOptions`       | The type of `startWorker`'s argument: `concurrency` and `shutdownTimeout`                                                            |
-| `StepContext`              | The type of the object a step's `fn` receives: `idempotencyKey`                                                                      |
-| `StepTools`                | The type of the handler's `step`: `step.run`, `step.sleep` and `step.sleepUntil`                                                     |
-| `TaskContext`              | The type of the object a handler receives                                                                                            |
-| `TaskDefinition`           | The type `defineTask` returns                                                                                                        |
-| `TaskDefinitionSummary`    | The type of one entry of `taskDefinitions`: `name`, `event` and `schedule`                                                           |
-| `TaskHandler`              | The type of a task's or a listener's `handler`                                                                                       |
-| `TaskName`                 | The union of the registered instance's task names, listeners and scheduled tasks included; `never` without `Register`                |
-| `TaskOptions`              | The type of `defineTask`'s options: `schema`, `retries`, `backoff`, `timeout`, `concurrency` and `handler`                           |
-| `createNextaskingControl`  | From `./testing`: opens a control on a queue for e2e tests and offline dev: `waitForIdle`, `makeRunsDueNow`, `fireSchedule`, `reset` |
-| `NextaskingControl`        | From `./testing`: the type `createNextaskingControl` returns                                                                         |
-| `NextaskingControlOptions` | From `./testing`: the type of `createNextaskingControl`'s argument: `connection` and `prefix`                                        |
-| `executeAttempt`           | From `./testing`: runs one attempt of a handler in a test, with recorded sleeps and sends                                            |
-| `ExecutedAttempt`          | From `./testing`: the type `executeAttempt` resolves with: `steps`, `sleeps`, `dispatches` and `emits`                               |
-| `ExecuteAttemptOptions`    | From `./testing`: the type of `executeAttempt`'s options: `savedSteps`, `attempt`, `runId`, `abortSignal`, `scheduledAt`, `logger`   |
-| `RecordedSleep`            | From `./testing`: the type of one entry of an attempt's `sleeps`: `id` and `resumesAt`                                               |
-| `fakeNextasking`           | From `./testing`: switches an instance to recording mode in a test and returns its `NextaskingFake`                                  |
-| `NextaskingFake`           | From `./testing`: the type `fakeNextasking` returns: `dispatches`, `emits`, `replays` and `restore`                                  |
-| `RecordedDispatch`         | From `./testing`: the type of one entry of a fake's `dispatches`: `task`, `payload`, `runId` and `delay`                             |
-| `RecordedEmit`             | From `./testing`: the type of one entry of a fake's `emits`: `event`, `payload` and `eventId`                                        |
-| `RecordedReplay`           | From `./testing`: the type of one entry of a fake's `replays`: `task` and `runId`                                                    |
+| Export                     | What it is                                                                                                                                             |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `defineTask`               | Defines a task: a name, a Standard Schema payload schema and a handler                                                                                 |
+| `defineEvent`              | Defines an event: a name and a Standard Schema payload schema                                                                                          |
+| `defineListener`           | Defines a listener: a task subscribed to one event, taking that event's payload                                                                        |
+| `defineScheduledTask`      | Defines a scheduled task: a name, a cron with its time zone and a handler, and no payload                                                              |
+| `runFailed`                | The built-in event `nextasking/run.failed`, emitted on each final failure of a run; listen to it, never emit it                                        |
+| `createNextasking`         | Builds the instance from the connection, the prefix, the logger, the events and the tasks                                                              |
+| `UnknownTaskError`         | Thrown by `dispatch`, `replay`, `getRun`, `listRuns` and `executeAttempt` for a task name the instance doesn't list                                    |
+| `UnknownEventError`        | Thrown by `emit` and `getEvent` for an event name the instance doesn't list                                                                            |
+| `RunNotReplayableError`    | Thrown by `replay` for a run that is unknown, removed or not failed, or whose record a newer release wrote                                             |
+| `InstanceClosedError`      | Thrown by a call on the instance once it has closed, as at the worker's shutdown, a call still waiting for Redis included                              |
+| `InvalidPayloadError`      | Thrown by `dispatch`, `emit` and `executeAttempt` for a payload the schema refuses                                                                     |
+| `NonRetriableError`        | Thrown by a handler to fail its run at once, skipping the retries left                                                                                 |
+| `RedisUnavailableError`    | Thrown by every call on the instance when Redis doesn't answer within `giveUpAfter`, or at once when it is out of memory; carries `runId` or `eventId` |
+| `StepMisuseError`          | Thrown by a step on a bug: a repeated id, a nested step, a bad result, duration or resume time                                                         |
+| `ConnectionConfig`         | The type of `createNextasking`'s `connection`: `url` and `giveUpAfter` (default `"5s"`)                                                                |
+| `CronExpression`           | The type of a schedule's `cron`: a string                                                                                                              |
+| `DispatchedRun`            | The type `dispatch` resolves with: `runId`                                                                                                             |
+| `DispatchOptions`          | The type of `dispatch`'s third argument: `runId` and `delay`                                                                                           |
+| `Duration`                 | The type of a duration option: a whole number and `s`, `m`, `h` or `d`                                                                                 |
+| `EmitOptions`              | The type of `emit`'s third argument: `eventId`                                                                                                         |
+| `EmittedEvent`             | The type `emit` resolves with: `eventId`                                                                                                               |
+| `EventDefinition`          | The type `defineEvent` returns                                                                                                                         |
+| `EventDefinitionSummary`   | The type of one entry of `eventDefinitions`: `name` and `listenerNames`                                                                                |
+| `EventId`                  | The type of an event id: a string                                                                                                                      |
+| `EventName`                | The union of the registered instance's event names, the built-in events included; `never` without `Register`                                           |
+| `EventOptions`             | The type of `defineEvent`'s options: `schema`                                                                                                          |
+| `EventWithRuns`            | The type `getEvent` returns: `event`, `eventId` and `runsByListener`                                                                                   |
+| `FailureReason`            | The type of a failed run's `reason`: `"retries exhausted"`, `"non-retriable"`, `"stalled"` or `"unknown task"`                                         |
+| `FailureNoticeError`       | The type of a failure notice's `error`: `name`, `message` and `stack`                                                                                  |
+| `IanaTimeZone`             | The type of a schedule's `timezone`: an IANA time zone name, a string                                                                                  |
+| `ListedRun`                | The type of a run in `listRuns`' page: a `Run` without `payload`, `errors` and `steps`, with `lastErrorMessage`                                        |
+| `ListedSchedule`           | The type of one entry `listSchedules` returns: `task`, `cron`, `timezone`, `nextFiringAt` and `previousFiring`                                         |
+| `ListenerDefinition`       | The type `defineListener` returns                                                                                                                      |
+| `ListenerOptions`          | The type of `defineListener`'s options: `on`, `retries`, `backoff`, `timeout`, `concurrency` and `handler`                                             |
+| `ListRunsOptions`          | The type of `listRuns`' argument: `state`, `task`, `limit` and `cursor`                                                                                |
+| `Logger`                   | The type of the `logger` option and of the handler's `logger`                                                                                          |
+| `Nextasking`               | The type of the instance `createNextasking` returns                                                                                                    |
+| `NextaskingConfig`         | The type of `createNextasking`'s argument: `connection`, `prefix`, `logger`, `events` and `tasks`                                                      |
+| `PayloadIssue`             | The type of one entry of `InvalidPayloadError`'s `issues`: `path` and `message`                                                                        |
+| `PayloadSchema`            | The type a `schema` option takes: a Standard Schema whose input and output are JSON                                                                    |
+| `PreviousFiring`           | The type of a listed schedule's `previousFiring`: `scheduledAt` and `runId`                                                                            |
+| `Register`                 | The interface you augment with your instance's type; it types names and a handler's calls                                                              |
+| `ReplayedRun`              | The type `replay` returns: `runId`                                                                                                                     |
+| `Run`                      | The type `getRun` returns: a run of a registered task, narrowed by `task` and by `state`                                                               |
+| `RunCounts`                | The type `countRuns` returns: a count per registered task and per state                                                                                |
+| `RunError`                 | The type of one entry of a run's `errors`: `attempt`, `name`, `message`, `stack` and `failedAt`                                                        |
+| `RunFailedPayload`         | The type of `runFailed`'s payload: `task`, `runId`, `reason`, `error`, `attempt`, `failedAt`, and the source event                                     |
+| `RunId`                    | The type of a run id: a string                                                                                                                         |
+| `RunPage`                  | The type `listRuns` returns: `runs` and `nextCursor`                                                                                                   |
+| `RunState`                 | The type of a run's `state`: one of the eight run states                                                                                               |
+| `SavedStepResult`          | The type of one entry of a run's `steps`: `id` and `result`                                                                                            |
+| `Schedule`                 | The type of a scheduled task's `schedule` option: `cron` and `timezone`                                                                                |
+| `ScheduledTaskContext`     | The type of the object a scheduled task's handler receives: no `payload`, and `scheduledAt`                                                            |
+| `ScheduledTaskDefinition`  | The type `defineScheduledTask` returns                                                                                                                 |
+| `ScheduledTaskHandler`     | The type of a scheduled task's `handler`                                                                                                               |
+| `ScheduledTaskOptions`     | The type of `defineScheduledTask`'s options: `schedule`, `retries`, `backoff`, `timeout`, `concurrency: { limit }` and `handler`                       |
+| `StandardSchemaV1`         | The Standard Schema interface every schema library implements, shipped as types                                                                        |
+| `StartWorkerOptions`       | The type of `startWorker`'s argument: `concurrency`, `shutdownTimeout` and `onWorkerNotStarted`                                                        |
+| `StepContext`              | The type of the object a step's `fn` receives: `idempotencyKey`                                                                                        |
+| `StepTools`                | The type of the handler's `step`: `step.run`, `step.sleep` and `step.sleepUntil`                                                                       |
+| `TaskContext`              | The type of the object a handler receives                                                                                                              |
+| `TaskDefinition`           | The type `defineTask` returns                                                                                                                          |
+| `TaskDefinitionSummary`    | The type of one entry of `taskDefinitions`: `name`, `event` and `schedule`                                                                             |
+| `TaskHandler`              | The type of a task's or a listener's `handler`                                                                                                         |
+| `TaskName`                 | The union of the registered instance's task names, listeners and scheduled tasks included; `never` without `Register`                                  |
+| `TaskOptions`              | The type of `defineTask`'s options: `schema`, `retries`, `backoff`, `timeout`, `concurrency` and `handler`                                             |
+| `createNextaskingControl`  | From `./testing`: opens a control on a queue for e2e tests and offline dev: `waitForIdle`, `makeRunsDueNow`, `fireSchedule`, `reset` and `close`       |
+| `NextaskingControl`        | From `./testing`: the type `createNextaskingControl` returns                                                                                           |
+| `NextaskingControlOptions` | From `./testing`: the type of `createNextaskingControl`'s argument: `connection` and `prefix`                                                          |
+| `executeAttempt`           | From `./testing`: runs one attempt of a handler in a test, with recorded sleeps and sends                                                              |
+| `ExecutedAttempt`          | From `./testing`: the type `executeAttempt` resolves with: `steps`, `sleeps`, `dispatches` and `emits`                                                 |
+| `ExecuteAttemptOptions`    | From `./testing`: the type of `executeAttempt`'s options: `savedSteps`, `attempt`, `runId`, `abortSignal`, `scheduledAt`, `logger`                     |
+| `RecordedSleep`            | From `./testing`: the type of one entry of an attempt's `sleeps`: `id` and `resumesAt`                                                                 |
+| `fakeNextasking`           | From `./testing`: switches an instance to recording mode in a test and returns its `NextaskingFake`                                                    |
+| `NextaskingFake`           | From `./testing`: the type `fakeNextasking` returns: `dispatches`, `emits`, `replays`, `restore` and `[Symbol.dispose]`                                |
+| `RecordedDispatch`         | From `./testing`: the type of one entry of a fake's `dispatches`: `task`, `payload`, `runId` and `delay`                                               |
+| `RecordedEmit`             | From `./testing`: the type of one entry of a fake's `emits`: `event`, `payload` and `eventId`                                                          |
+| `RecordedReplay`           | From `./testing`: the type of one entry of a fake's `replays`: `task` and `runId`                                                                      |

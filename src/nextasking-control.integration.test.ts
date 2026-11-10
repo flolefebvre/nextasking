@@ -75,7 +75,7 @@ controlTest("waitForIdle times out naming the four counts still busy", async (co
 
   expect(idleTimeoutError).toEqual(
     new Error(
-      "The queue is not idle after 1s: 2 runs pending, 1 executing, 2 waiting for a concurrency slot, 1 due and not yet promoted",
+      "The queue is not idle after 1s, runs left: 2 pending, 1 executing, 2 waiting for a concurrency slot, 1 due and not yet promoted",
     ),
   );
 });
@@ -87,7 +87,7 @@ controlTest(
 
     expect(idleTimeoutError).toEqual(
       new Error(
-        "The queue is not idle after 1s: 0 runs pending, 0 executing, 0 waiting for a concurrency slot, 1 due and not yet promoted",
+        "The queue is not idle after 1s, runs left: 0 pending, 0 executing, 0 waiting for a concurrency slot, 1 due and not yet promoted",
       ),
     );
   },

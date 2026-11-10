@@ -100,7 +100,7 @@ export function createNextaskingControl(options: NextaskingControlOptions): Next
       await busyRunCountsOnceTrue(
         isIdle,
         timeoutInMillisecondsOf("waitForIdle", timeout),
-        (counts) => `The queue is not idle after ${timeout}: ${shownBusyRunCountsOf(counts)}`,
+        (counts) => `The queue is not idle after ${timeout}, runs left: ${shownBusyRunCountsOf(counts)}`,
       );
     },
 
@@ -196,7 +196,7 @@ function isIdle(counts: BusyRunCounts): boolean {
 
 function shownBusyRunCountsOf(counts: BusyRunCounts): string {
   return [
-    `${String(counts.pendingRunCount)} runs pending`,
+    `${String(counts.pendingRunCount)} pending`,
     `${String(counts.executingRunCount)} executing`,
     `${String(counts.waitingForConcurrencySlotRunCount)} waiting for a concurrency slot`,
     `${String(counts.dueRunCount)} due and not yet promoted`,

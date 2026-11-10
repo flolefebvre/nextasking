@@ -1,0 +1,2135 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>listRuns Filter Prototype</title>
+    <meta name="claude:viewport-fit-sides" content="cover" />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap"
+    />
+    <style>
+      /* Layout: a workbench. Left, what a dashboard reads; right, the controls that change it. */
+      :root {
+        --bg: #f3f5f7;
+        --surface: #ffffff;
+        --sunken: #e9eef2;
+        --ink: #16202a;
+        --muted: #566473;
+        --line: #d5dce3;
+        --accent: #0d6a86;
+        --accent-ink: #ffffff;
+        --accent-soft: #dff0f5;
+        --ok: #1f7a4d;
+        --ok-soft: #e0f2e8;
+        --bad: #b3362b;
+        --bad-soft: #fae6e3;
+        --wait: #855600;
+        --wait-soft: #fbefd3;
+        --timed: #5b4b9a;
+        --timed-soft: #ebe7f8;
+        --flash: #fff1b8;
+        --sans: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+        --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root:not([data-theme="light"]) {
+          --bg: #0f151b;
+          --surface: #172029;
+          --sunken: #111920;
+          --ink: #e4ebf1;
+          --muted: #93a2b1;
+          --line: #2a3743;
+          --accent: #58bcd8;
+          --accent-ink: #06222b;
+          --accent-soft: #143542;
+          --ok: #6fcf9b;
+          --ok-soft: #163626;
+          --bad: #f08a7e;
+          --bad-soft: #3d1c18;
+          --wait: #e5b85a;
+          --wait-soft: #3a2e10;
+          --timed: #b3a6ea;
+          --timed-soft: #272048;
+          --flash: #4a3f12;
+          color-scheme: dark;
+        }
+      }
+      :root[data-theme="dark"] {
+        --bg: #0f151b;
+        --surface: #172029;
+        --sunken: #111920;
+        --ink: #e4ebf1;
+        --muted: #93a2b1;
+        --line: #2a3743;
+        --accent: #58bcd8;
+        --accent-ink: #06222b;
+        --accent-soft: #143542;
+        --ok: #6fcf9b;
+        --ok-soft: #163626;
+        --bad: #f08a7e;
+        --bad-soft: #3d1c18;
+        --wait: #e5b85a;
+        --wait-soft: #3a2e10;
+        --timed: #b3a6ea;
+        --timed-soft: #272048;
+        --flash: #4a3f12;
+        color-scheme: dark;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--ink);
+        font-family: var(--sans);
+        font-size: 15px;
+        line-height: 1.5;
+      }
+      .page {
+        max-width: 1320px;
+        margin: 0 auto;
+        padding-block: 28px 56px;
+        padding-left: max(16px, env(safe-area-inset-left, 0px));
+        padding-right: max(16px, env(safe-area-inset-right, 0px));
+        display: flex;
+        flex-direction: column;
+        gap: 20px;
+      }
+      h1,
+      h2,
+      h3 {
+        margin: 0;
+        text-wrap: balance;
+        line-height: 1.2;
+      }
+      h1 {
+        font-size: 28px;
+        font-weight: 600;
+        letter-spacing: -0.01em;
+      }
+      h2 {
+        font-size: 17px;
+        font-weight: 600;
+      }
+      h3 {
+        font-size: 12px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.07em;
+        color: var(--muted);
+      }
+      p {
+        margin: 0;
+      }
+      code,
+      .mono {
+        font-family: var(--mono);
+        font-size: 0.92em;
+      }
+
+      .masthead {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+      .eyebrow {
+        font-size: 12px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--bad);
+      }
+      .lede {
+        max-width: 72ch;
+        color: var(--muted);
+      }
+      .lede strong {
+        color: var(--ink);
+        font-weight: 600;
+      }
+
+      .switches {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+        gap: 12px;
+      }
+      .switch {
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        padding: 12px 14px;
+        margin: 0;
+        min-width: 0;
+        background: var(--surface);
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+      .switch legend {
+        padding: 0 6px;
+        font-size: 12px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.07em;
+        color: var(--muted);
+      }
+      .switch label {
+        display: flex;
+        gap: 8px;
+        align-items: baseline;
+        font-size: 14px;
+      }
+      .switch input {
+        accent-color: var(--accent);
+        flex: none;
+      }
+
+      .bench {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr);
+        gap: 20px;
+        align-items: start;
+      }
+      @media (min-width: 1040px) {
+        .bench {
+          grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
+        }
+      }
+      .column {
+        display: flex;
+        flex-direction: column;
+        gap: 20px;
+        min-width: 0;
+      }
+      .panel {
+        background: var(--surface);
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        padding: 18px;
+        display: flex;
+        flex-direction: column;
+        gap: 14px;
+        min-width: 0;
+      }
+      .panel-head {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px 16px;
+        align-items: baseline;
+        justify-content: space-between;
+      }
+      .hint {
+        color: var(--muted);
+        font-size: 13.5px;
+      }
+
+      .call {
+        margin: 0;
+        padding: 12px 14px;
+        background: var(--sunken);
+        border-radius: 4px;
+        font-family: var(--mono);
+        font-size: 13px;
+        line-height: 1.55;
+        overflow-x: auto;
+        white-space: pre;
+      }
+      .notice {
+        padding: 10px 12px;
+        border-radius: 4px;
+        font-size: 14px;
+      }
+      .notice.refused {
+        background: var(--bad-soft);
+        color: var(--bad);
+        font-family: var(--mono);
+        font-size: 13px;
+      }
+      .notice.stale {
+        background: var(--flash);
+      }
+
+      .scroll {
+        overflow-x: auto;
+      }
+      table {
+        border-collapse: collapse;
+        width: 100%;
+        font-size: 13.5px;
+        font-variant-numeric: tabular-nums;
+      }
+      th,
+      td {
+        text-align: left;
+        padding: 7px 10px;
+        border-bottom: 1px solid var(--line);
+        vertical-align: top;
+        white-space: nowrap;
+      }
+      th {
+        font-size: 12px;
+        font-weight: 600;
+        color: var(--muted);
+      }
+      td small {
+        display: block;
+        font-size: 12.5px;
+        color: var(--muted);
+      }
+      table.counts th {
+        white-space: normal;
+        vertical-align: bottom;
+      }
+      table.counts th,
+      table.counts td {
+        padding: 6px 8px;
+      }
+      .page > * {
+        min-width: 0;
+      }
+      td.wrap {
+        white-space: normal;
+        min-width: 150px;
+      }
+      td.num,
+      th.num {
+        text-align: right;
+      }
+      tr.block td {
+        background: var(--sunken);
+        font-weight: 600;
+        font-size: 12.5px;
+        border-bottom: none;
+      }
+      tr.block span {
+        font-weight: 400;
+        color: var(--muted);
+      }
+      td.changed {
+        background: var(--flash);
+      }
+      .empty {
+        padding: 18px 10px;
+        color: var(--muted);
+      }
+
+      .badge {
+        display: inline-block;
+        padding: 1px 8px;
+        border-radius: 3px;
+        font-size: 12.5px;
+        font-weight: 500;
+      }
+      .badge.executing {
+        background: var(--accent-soft);
+        color: var(--accent);
+      }
+      .badge.queued {
+        background: var(--wait-soft);
+        color: var(--wait);
+      }
+      .badge.timed {
+        background: var(--timed-soft);
+        color: var(--timed);
+      }
+      .badge.completed {
+        background: var(--ok-soft);
+        color: var(--ok);
+      }
+      .badge.failed {
+        background: var(--bad-soft);
+        color: var(--bad);
+      }
+
+      .row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        align-items: center;
+      }
+      button {
+        font: inherit;
+        font-size: 14px;
+        padding: 7px 12px;
+        border-radius: 4px;
+        border: 1px solid var(--line);
+        background: var(--surface);
+        color: var(--ink);
+        cursor: pointer;
+        text-align: left;
+      }
+      button:hover:not(:disabled) {
+        border-color: var(--accent);
+      }
+      button:disabled {
+        color: var(--muted);
+        cursor: not-allowed;
+        opacity: 0.55;
+      }
+      button.primary {
+        background: var(--accent);
+        border-color: var(--accent);
+        color: var(--accent-ink);
+        font-weight: 500;
+      }
+      button:focus-visible,
+      input:focus-visible,
+      select:focus-visible {
+        outline: 2px solid var(--accent);
+        outline-offset: 2px;
+      }
+      select {
+        font: inherit;
+        font-size: 14px;
+        padding: 6px 8px;
+        border-radius: 4px;
+        border: 1px solid var(--line);
+        background: var(--surface);
+        color: var(--ink);
+        max-width: 100%;
+      }
+
+      .facts {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr);
+        gap: 10px;
+        margin: 0;
+      }
+      .facts div {
+        display: grid;
+        grid-template-columns: 130px minmax(0, 1fr);
+        gap: 4px 12px;
+      }
+      .facts dt {
+        font-size: 12px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        color: var(--muted);
+        padding-top: 2px;
+      }
+      .facts dd {
+        margin: 0;
+        overflow-wrap: anywhere;
+      }
+      .facts .big {
+        font-size: 17px;
+        font-weight: 600;
+      }
+      @media (max-width: 520px) {
+        .facts div {
+          grid-template-columns: minmax(0, 1fr);
+        }
+      }
+
+      .field {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        min-width: 0;
+      }
+      .fields {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+        gap: 12px;
+      }
+      .chips {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+      }
+      .chip {
+        display: inline-flex;
+        gap: 6px;
+        align-items: center;
+        padding: 4px 9px;
+        border: 1px solid var(--line);
+        border-radius: 4px;
+        font-size: 13.5px;
+        cursor: pointer;
+      }
+      .chip input {
+        accent-color: var(--accent);
+        margin: 0;
+      }
+      .family {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        align-items: center;
+      }
+      .family > span {
+        font-size: 12.5px;
+        color: var(--muted);
+        min-width: 110px;
+      }
+      .stack {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+
+      .tabs {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+      }
+      .tabs button[aria-selected="true"] {
+        background: var(--accent-soft);
+        border-color: var(--accent);
+        color: var(--accent);
+        font-weight: 500;
+      }
+      .steps {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        counter-reset: step;
+      }
+      .steps li {
+        display: grid;
+        grid-template-columns: 22px minmax(0, 1fr);
+        gap: 4px 8px;
+        counter-increment: step;
+      }
+      .steps li::before {
+        content: counter(step);
+        font-size: 12.5px;
+        font-weight: 600;
+        color: var(--muted);
+        padding-top: 8px;
+        font-variant-numeric: tabular-nums;
+      }
+      .steps li.done::before {
+        content: "✓";
+        color: var(--ok);
+      }
+      .steps .watch {
+        grid-column: 2;
+        font-size: 13.5px;
+        color: var(--muted);
+      }
+      .steps li.done .watch {
+        color: var(--ink);
+      }
+      .steps button {
+        width: fit-content;
+        max-width: 100%;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="page">
+      <header class="masthead">
+        <p class="eyebrow">Prototype · throwaway · nothing here is stored</p>
+        <h1>More ways to list runs, with no new index</h1>
+        <p class="lede">
+          <strong>The question:</strong> if <code>listRuns</code> accepted several states, several tasks, a time range,
+          a failure reason, and paged in both directions, would the calls and the pages feel right while runs keep
+          moving? The queue below is simulated in this page, with the same layout as the real one: one ordered index per
+          task and per state. Three choices are still open, and the switches under this text let you try each side.
+        </p>
+      </header>
+
+      <section class="switches" id="switches" aria-label="Open design choices"></section>
+
+      <main class="bench">
+        <div class="column">
+          <section class="panel" aria-labelledby="list-title">
+            <div class="panel-head">
+              <h2 id="list-title">What the dashboard reads</h2>
+              <p class="hint">The call, then the page it returns</p>
+            </div>
+            <pre class="call" id="call"></pre>
+            <div id="notice"></div>
+            <div class="scroll" id="runs"></div>
+            <div class="row" id="pager"></div>
+            <dl class="facts" id="facts"></dl>
+          </section>
+
+          <section class="panel" aria-labelledby="queue-title">
+            <div class="panel-head">
+              <h2 id="queue-title">The queue right now</h2>
+              <p class="hint" id="clock"></p>
+            </div>
+            <p id="change"></p>
+            <div class="scroll" id="counts"></div>
+          </section>
+        </div>
+
+        <div class="column">
+          <section class="panel" aria-labelledby="walk-title">
+            <div class="panel-head">
+              <h2 id="walk-title">Guided walkthroughs</h2>
+              <p class="hint">Each one starts from the same queue</p>
+            </div>
+            <div class="tabs" id="tabs" role="tablist"></div>
+            <div class="stack" id="scenario"></div>
+          </section>
+
+          <section class="panel" aria-labelledby="play-title">
+            <div class="panel-head">
+              <h2 id="play-title">Free play</h2>
+              <p class="hint">Any order, any time</p>
+            </div>
+            <h3>Change the list</h3>
+            <div class="stack" id="filters"></div>
+            <h3>Move runs</h3>
+            <div class="row" id="moves"></div>
+          </section>
+        </div>
+      </main>
+    </div>
+
+    <script id="run-list-model">
+      /*
+       * PROTOTYPE. The part worth keeping: a model of the run indexes and a listRuns over them.
+       * No DOM in here. Each simulated read names the command the real engine would send.
+       */
+      const RunListModel = (() => {
+        "use strict";
+
+        const MINUTE = 60_000;
+
+        /* The eight states fall into four groups. Scores compare inside a group, never across. */
+        const FAMILIES = [
+          {
+            name: "executing",
+            title: "Executing",
+            states: ["executing"],
+            timeWord: "started",
+            orderWords: { descending: "most recently started first", ascending: "longest running first" },
+          },
+          {
+            name: "queued",
+            title: "Queued",
+            states: ["pending", "waitingForConcurrencySlot"],
+            timeWord: null,
+            orderWords: { descending: "most recently queued first", ascending: "next to run first" },
+          },
+          {
+            name: "timed",
+            title: "Waiting for a time",
+            states: ["delayed", "suspended", "backingOff"],
+            timeWord: "due",
+            orderWords: { descending: "latest due first", ascending: "soonest due first" },
+          },
+          {
+            name: "ended",
+            title: "Ended",
+            states: ["completed", "failed"],
+            timeWord: "finished",
+            orderWords: { descending: "most recently finished first", ascending: "oldest first" },
+          },
+        ];
+        const ALL_STATES = FAMILIES.flatMap((family) => family.states);
+        const FAILURE_REASONS = ["retries exhausted", "non-retriable", "stalled", "unknown task"];
+        const ERROR_MESSAGE_BY_REASON = {
+          "retries exhausted": "Upstream returned 503 Service Unavailable",
+          "non-retriable": "Invalid payload: customerId is missing",
+          stalled: "The worker stopped renewing its lock",
+          "unknown task": "The running release defines no task of this name",
+        };
+        const DEFAULT_DESIGN = { shape: "cursorPair", cursorCarriesFilters: true, examinedPagesPerCall: 1 };
+
+        const familyOfState = (state) => FAMILIES.find((family) => family.states.includes(state));
+        const compareMembers = (left, right) => (left < right ? -1 : left > right ? 1 : 0);
+        const compareStored = (left, right) => left.score - right.score || compareMembers(left.member, right.member);
+        const sumOf = (numbers) => numbers.reduce((sum, number) => sum + number, 0);
+
+        /* ---------- the simulated queue ---------- */
+
+        function randomOf(seed) {
+          let state = seed;
+          return () => {
+            state = (state + 0x6d2b79f5) | 0;
+            let mixed = Math.imul(state ^ (state >>> 15), 1 | state);
+            mixed = (mixed + Math.imul(mixed ^ (mixed >>> 7), 61 | mixed)) ^ mixed;
+            return ((mixed ^ (mixed >>> 14)) >>> 0) / 4294967296;
+          };
+        }
+
+        function indexOf(world, task, state) {
+          const key = `${task}|${state}`;
+          if (!world.indexes.has(key)) {
+            world.indexes.set(key, []);
+          }
+          return world.indexes.get(key);
+        }
+
+        function leaveIndex(world, member) {
+          const record = world.records.get(member);
+          const index = indexOf(world, record.task, record.state);
+          index.splice(
+            index.findIndex((entry) => entry.member === member),
+            1,
+          );
+        }
+
+        /* One run sits in exactly one index, the one of its state, with that state's score. */
+        function enter(world, member, state, score, fields = {}) {
+          const record = world.records.get(member);
+          if (record.state !== undefined) {
+            leaveIndex(world, member);
+          }
+          Object.assign(record, fields, { state });
+          const index = indexOf(world, record.task, state);
+          index.push({ score, member });
+          index.sort(compareStored);
+        }
+
+        function createRun(world, task, dispatchedAt) {
+          let runId;
+          do {
+            runId = Math.floor(world.random() * 0xffffff)
+              .toString(16)
+              .padStart(6, "0");
+          } while (world.records.has(`${task}:${runId}`));
+          const member = `${task}:${runId}`;
+          world.records.set(member, { task, runId, attempt: 1, dispatchedAt });
+          return member;
+        }
+
+        function failedFieldsOf(world, reason, finishedAt) {
+          return {
+            finishedAt,
+            reason,
+            attempt: reason === "retries exhausted" ? 3 : 1,
+            lastErrorMessage: ERROR_MESSAGE_BY_REASON[reason],
+          };
+        }
+
+        function createWorld() {
+          const world = {
+            now: Date.UTC(2026, 10, 10, 14, 0, 0),
+            order: 48200,
+            random: randomOf(11),
+            tasks: [
+              { name: "send-welcome-email" },
+              { name: "generate-invoice-pdf", concurrency: 2 },
+              { name: "sync-crm-contact" },
+              { name: "resize-image" },
+            ],
+            records: new Map(),
+            indexes: new Map(),
+            dispatchCount: 0,
+            failCount: 0,
+          };
+          const seeded = {
+            completed: [9, 6, 8, 5],
+            failed: [7, 4, 6, 3],
+            executing: [1, 2, 1, 1],
+            pending: [3, 2, 2, 1],
+            waitingForConcurrencySlot: [0, 3, 0, 0],
+            delayed: [2, 1, 0, 2],
+            suspended: [0, 1, 1, 0],
+            backingOff: [1, 1, 2, 0],
+          };
+          const between = (low, high) => low + Math.floor(world.random() * (high - low));
+          const queued = [];
+          world.tasks.forEach(({ name }, taskPosition) => {
+            for (let count = 0; count < seeded.completed[taskPosition]; count += 1) {
+              const finishedAt = world.now - between(1, 360) * MINUTE - between(0, 60) * 1000;
+              enter(world, createRun(world, name, finishedAt - between(5, 120) * 1000), "completed", finishedAt, {
+                finishedAt,
+              });
+            }
+            for (let count = 0; count < seeded.failed[taskPosition]; count += 1) {
+              const finishedAt = world.now - between(1, 360) * MINUTE - between(0, 60) * 1000;
+              const draw = world.random();
+              const reason = FAILURE_REASONS[draw < 0.55 ? 0 : draw < 0.8 ? 1 : draw < 0.95 ? 2 : 3];
+              const member = createRun(world, name, finishedAt - between(30, 600) * 1000);
+              enter(world, member, "failed", finishedAt, failedFieldsOf(world, reason, finishedAt));
+            }
+            for (let count = 0; count < seeded.executing[taskPosition]; count += 1) {
+              const startedAt = world.now - between(20, 25 * 60) * 1000;
+              enter(world, createRun(world, name, startedAt - between(1, 30) * 1000), "executing", startedAt, {
+                startedAt,
+              });
+            }
+            for (const state of ["pending", "waitingForConcurrencySlot"]) {
+              for (let count = 0; count < seeded[state][taskPosition]; count += 1) {
+                queued.push({ task: name, state, dispatchedAt: world.now - between(5, 600) * 1000 });
+              }
+            }
+            for (let count = 0; count < seeded.delayed[taskPosition]; count += 1) {
+              const startsAt = world.now + between(5, 120) * MINUTE;
+              enter(world, createRun(world, name, world.now - between(1, 60) * MINUTE), "delayed", startsAt, {
+                startsAt,
+              });
+            }
+            for (let count = 0; count < seeded.suspended[taskPosition]; count += 1) {
+              const resumesAt = world.now + between(5, 90) * MINUTE;
+              enter(world, createRun(world, name, world.now - between(5, 60) * MINUTE), "suspended", resumesAt, {
+                resumesAt,
+              });
+            }
+            for (let count = 0; count < seeded.backingOff[taskPosition]; count += 1) {
+              const nextAttemptAt = world.now + between(1, 15) * MINUTE;
+              const fields = {
+                nextAttemptAt,
+                attempt: 2,
+                lastErrorMessage: ERROR_MESSAGE_BY_REASON["retries exhausted"],
+              };
+              enter(
+                world,
+                createRun(world, name, world.now - between(2, 30) * MINUTE),
+                "backingOff",
+                nextAttemptAt,
+                fields,
+              );
+            }
+          });
+          queued
+            .sort((left, right) => left.dispatchedAt - right.dispatchedAt)
+            .forEach(({ task, state, dispatchedAt }) => {
+              world.order += 1;
+              enter(world, createRun(world, task, dispatchedAt), state, world.order, { order: world.order });
+            });
+          return world;
+        }
+
+        const taskOf = (world, name) => world.tasks.find((task) => task.name === name);
+        const shownRun = (member) => `run ${member.split(":")[1]} of ${member.split(":")[0]}`;
+
+        function enterPending(world, member, keptOrder) {
+          const order = keptOrder ?? (world.order += 1);
+          enter(world, member, "pending", order, { order });
+        }
+
+        function wakeParkedRun(world, taskName) {
+          const task = taskOf(world, taskName);
+          const parked = indexOf(world, taskName, "waitingForConcurrencySlot")[0];
+          if (task.concurrency && parked && indexOf(world, taskName, "executing").length < task.concurrency) {
+            enterPending(world, parked.member, world.records.get(parked.member).order);
+          }
+        }
+
+        function dispatch(world, taskName, delayMinutes = 0) {
+          world.now += 7000;
+          const name = taskName ?? world.tasks[(world.dispatchCount += 1) % world.tasks.length].name;
+          const member = createRun(world, name, world.now);
+          if (delayMinutes > 0) {
+            const startsAt = world.now + delayMinutes * MINUTE;
+            enter(world, member, "delayed", startsAt, { startsAt });
+            return `Dispatched ${shownRun(member)}, delayed by ${delayMinutes} minutes.`;
+          }
+          enterPending(world, member);
+          return `Dispatched ${shownRun(member)}. It is pending.`;
+        }
+
+        function startNext(world) {
+          world.now += 7000;
+          const queue = world.tasks.flatMap((task) => indexOf(world, task.name, "pending").slice()).sort(compareStored);
+          const parkedRuns = [];
+          for (const { member } of queue) {
+            const record = world.records.get(member);
+            const task = taskOf(world, record.task);
+            if (task.concurrency && indexOf(world, task.name, "executing").length >= task.concurrency) {
+              enter(world, member, "waitingForConcurrencySlot", record.order);
+              parkedRuns.push(member);
+              continue;
+            }
+            enter(world, member, "executing", world.now, { startedAt: world.now });
+            const parkedWords = parkedRuns.length
+              ? ` ${parkedRuns.length} run(s) ahead of it had no free slot and now wait for one.`
+              : "";
+            return `A worker started ${shownRun(member)}.${parkedWords}`;
+          }
+          return parkedRuns.length
+            ? `Every pending run needed a slot: ${parkedRuns.length} now wait for one.`
+            : "Nothing is pending.";
+        }
+
+        function oldestExecuting(world) {
+          return world.tasks.flatMap((task) => indexOf(world, task.name, "executing")).sort(compareStored)[0]?.member;
+        }
+
+        function executingRunOf(world) {
+          if (oldestExecuting(world) === undefined) {
+            if (startNext(world) === "Nothing is pending.") {
+              dispatch(world);
+              startNext(world);
+            }
+          }
+          world.now += 7000;
+          return oldestExecuting(world);
+        }
+
+        function complete(world) {
+          const member = executingRunOf(world);
+          const task = world.records.get(member).task;
+          enter(world, member, "completed", world.now, { finishedAt: world.now });
+          wakeParkedRun(world, task);
+          return `${shownRun(member)} completed.`;
+        }
+
+        function failForGood(world, reason) {
+          const member = executingRunOf(world);
+          const task = world.records.get(member).task;
+          const pattern = ["retries exhausted", "retries exhausted", "non-retriable", "retries exhausted", "stalled"];
+          const failureReason = reason ?? pattern[(world.failCount += 1) % pattern.length];
+          enter(world, member, "failed", world.now, failedFieldsOf(world, failureReason, world.now));
+          wakeParkedRun(world, task);
+          return `${shownRun(member)} failed for good (${failureReason}).`;
+        }
+
+        function failBurst(world, count) {
+          for (let done = 0; done < count; done += 1) {
+            failForGood(world);
+          }
+          return `${count} runs failed for good, one after the other.`;
+        }
+
+        function failAndRetry(world) {
+          const member = executingRunOf(world);
+          const record = world.records.get(member);
+          const nextAttemptAt = world.now + 5 * MINUTE * record.attempt;
+          const fields = {
+            nextAttemptAt,
+            attempt: record.attempt + 1,
+            lastErrorMessage: ERROR_MESSAGE_BY_REASON["retries exhausted"],
+          };
+          enter(world, member, "backingOff", nextAttemptAt, fields);
+          wakeParkedRun(world, record.task);
+          return `${shownRun(member)} failed and will be retried in ${5 * (record.attempt - 1)} minutes.`;
+        }
+
+        function sleep(world) {
+          const member = executingRunOf(world);
+          const task = world.records.get(member).task;
+          const resumesAt = world.now + 60 * MINUTE;
+          enter(world, member, "suspended", resumesAt, { resumesAt });
+          wakeParkedRun(world, task);
+          return `${shownRun(member)} went to sleep for an hour.`;
+        }
+
+        function passTime(world, minutes) {
+          world.now += minutes * MINUTE;
+          const due = world.tasks
+            .flatMap((task) => FAMILIES[2].states.flatMap((state) => indexOf(world, task.name, state).slice()))
+            .filter((entry) => entry.score <= world.now)
+            .sort(compareStored);
+          due.forEach(({ member }) => enterPending(world, member));
+          return `${minutes} minutes passed. ${due.length} run(s) came due and are pending again.`;
+        }
+
+        function replay(world, member) {
+          world.now += 7000;
+          const target =
+            member ??
+            world.tasks
+              .flatMap((task) => indexOf(world, task.name, "failed"))
+              .sort(compareStored)
+              .at(-1)?.member;
+          if (target === undefined || world.records.get(target)?.state !== "failed") {
+            return "No failed run to replay.";
+          }
+          const record = world.records.get(target);
+          delete record.finishedAt;
+          delete record.reason;
+          delete record.lastErrorMessage;
+          record.attempt = 1;
+          enterPending(world, target);
+          return `Replayed ${shownRun(target)}. It left the failed list and is pending.`;
+        }
+
+        function prune(world, count) {
+          world.now += 7000;
+          const oldest = world.tasks
+            .flatMap((task) => FAMILIES[3].states.flatMap((state) => indexOf(world, task.name, state).slice()))
+            .sort(compareStored)
+            .slice(0, count);
+          oldest.forEach(({ member }) => {
+            leaveIndex(world, member);
+            world.records.delete(member);
+          });
+          return `Retention removed the ${oldest.length} oldest ended runs.`;
+        }
+
+        function countRuns(world) {
+          return Object.fromEntries(
+            world.tasks.map((task) => [
+              task.name,
+              Object.fromEntries(ALL_STATES.map((state) => [state, indexOf(world, task.name, state).length])),
+            ]),
+          );
+        }
+
+        /* ---------- cursors ---------- */
+
+        const CURSOR_FORMAT_VERSION = 3;
+
+        function encodeCursor(fields) {
+          return btoa(JSON.stringify(fields)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+        }
+
+        function decodeCursor(cursor) {
+          try {
+            const fields = JSON.parse(atob(String(cursor).replace(/-/g, "+").replace(/_/g, "/")));
+            const isReadable =
+              fields !== null &&
+              fields.v === CURSOR_FORMAT_VERSION &&
+              FAMILIES.some((family) => family.name === fields.g) &&
+              typeof fields.s === "number" &&
+              typeof fields.m === "string";
+            return isReadable ? fields : undefined;
+          } catch {
+            return undefined;
+          }
+        }
+
+        const SHOWN_FILTER = {
+          states: (states) => `state${states.length > 1 ? "s" : ""} ${states.map((state) => `"${state}"`).join(" + ")}`,
+          tasks: (tasks) =>
+            tasks === null
+              ? "every task"
+              : `task${tasks.length > 1 ? "s" : ""} ${tasks.map((task) => `"${task}"`).join(" + ")}`,
+          order: (order) => `${order} order`,
+          from: (from) => (from === null ? "no start of range" : `a range from ${new Date(from).toISOString()}`),
+          until: (until) => (until === null ? "no end of range" : `a range until ${new Date(until).toISOString()}`),
+          reason: (reason) => (reason === null ? "every reason" : `reason "${reason}"`),
+        };
+
+        function filterDifferenceOf(cursorFilters, calledFilters) {
+          for (const name of Object.keys(SHOWN_FILTER)) {
+            if (JSON.stringify(cursorFilters[name]) !== JSON.stringify(calledFilters[name])) {
+              return `Invalid listRuns cursor: it pages through ${SHOWN_FILTER[name](cursorFilters[name])}, not ${SHOWN_FILTER[name](calledFilters[name])}`;
+            }
+          }
+          return undefined;
+        }
+
+        /* ---------- the call ---------- */
+
+        function queryOf(world, options, design) {
+          const requestedStates = options.states === "all" ? ALL_STATES : (options.states ?? []);
+          const unknownState = requestedStates.find((state) => !ALL_STATES.includes(state));
+          if (unknownState !== undefined) {
+            throw new Error(`Invalid listRuns states: "${unknownState}" is not a state`);
+          }
+          const states = ALL_STATES.filter((state) => requestedStates.includes(state));
+          if (states.length === 0) {
+            throw new Error('Invalid listRuns states: list at least one state, or pass "all"');
+          }
+          const taskNames = world.tasks.map((task) => task.name);
+          const unknownTask = (options.tasks ?? []).find((task) => !taskNames.includes(task));
+          if (unknownTask !== undefined) {
+            throw new Error(`Unknown task: "${unknownTask}"`);
+          }
+          const listedTasks = options.tasks?.length ? taskNames.filter((name) => options.tasks.includes(name)) : null;
+          const blocks = FAMILIES.map((family) => ({
+            family,
+            states: family.states.filter((state) => states.includes(state)),
+          })).filter((block) => block.states.length > 0);
+
+          if (options.from !== undefined || options.until !== undefined) {
+            if (blocks.length > 1) {
+              const clocks = blocks.map(
+                ({ family }) =>
+                  `${family.name} runs ${family.timeWord ? `by the time they ${family.timeWord}` : "by a queue counter"}`,
+              );
+              throw new Error(
+                `Invalid listRuns range: the listed states do not share one time (${clocks.join(", ")}). List states of one group, or drop the range`,
+              );
+            }
+            if (blocks[0].family.timeWord === null) {
+              throw new Error(
+                "Invalid listRuns range: pending and waitingForConcurrencySlot runs are ordered by a queue counter, not a time",
+              );
+            }
+          }
+          if (options.reason !== undefined) {
+            if (!FAILURE_REASONS.includes(options.reason)) {
+              throw new Error(`Invalid listRuns reason: "${options.reason}" is not a failure reason`);
+            }
+            if (states.length !== 1 || states[0] !== "failed") {
+              throw new Error('Invalid listRuns reason: only failed runs have a reason; list the state "failed" alone');
+            }
+          }
+
+          const filters = {
+            states,
+            tasks: listedTasks,
+            order: options.order ?? "descending",
+            from: options.from ?? null,
+            until: options.until ?? null,
+            reason: options.reason ?? null,
+          };
+          const query = {
+            blocks,
+            filters,
+            tasks: listedTasks ?? taskNames,
+            limit: options.limit ?? 50,
+            direction: "after",
+            position: undefined,
+          };
+
+          const givenCursors = ["cursor", "after", "before"].filter((name) => options[name] !== undefined);
+          if (options.page === "last") {
+            if (givenCursors.length > 0) {
+              throw new Error('Invalid listRuns page: "last" starts from the end of the list and takes no cursor');
+            }
+            return { ...query, direction: "before" };
+          }
+          if (givenCursors.length > 1) {
+            throw new Error(`Invalid listRuns call: pass one of ${givenCursors.join(", ")}, not several`);
+          }
+          if (givenCursors.length === 0) {
+            return query;
+          }
+          const [optionName] = givenCursors;
+          const fields = decodeCursor(options[optionName]);
+          if (fields === undefined) {
+            throw new Error("Invalid listRuns cursor: pass back a cursor that listRuns returned");
+          }
+          if (optionName === "cursor" && fields.d !== "after" && fields.d !== "before") {
+            throw new Error(
+              'Invalid listRuns cursor: this cursor is a place with no direction; pass it as "after" or "before"',
+            );
+          }
+          if (fields.f !== undefined) {
+            const difference = filterDifferenceOf(fields.f, filters);
+            if (difference !== undefined) {
+              throw new Error(difference);
+            }
+          }
+          if (!blocks.some((block) => block.family.name === fields.g)) {
+            throw new Error(
+              `Invalid listRuns cursor: it marks a place among ${fields.g} runs, and this call lists none`,
+            );
+          }
+          return {
+            ...query,
+            direction: optionName === "cursor" ? fields.d : optionName,
+            position: { family: fields.g, score: fields.s, member: fields.m },
+          };
+        }
+
+        function listRuns(world, options = {}, design = DEFAULT_DESIGN) {
+          const { blocks, filters, tasks, limit, direction, position } = queryOf(world, options, design);
+          const { order, from, until, reason } = filters;
+          const sign = order === "ascending" ? 1 : -1;
+          const compareShown = (left, right) => sign * compareStored(left, right);
+          const isInRange = (entry) =>
+            (from === null || entry.score >= from) && (until === null || entry.score <= until);
+          const cost = { roundTrips: 0, indexPages: 0, indexEntries: 0, recordsRead: 0 };
+
+          /* ZCARD of each index, or ZCOUNT when a range is given. */
+          const entriesOf = (block) =>
+            tasks.flatMap((task) =>
+              block.states.flatMap((state) =>
+                indexOf(world, task, state)
+                  .filter(isInRange)
+                  .map((entry) => ({ ...entry, state, family: block.family.name })),
+              ),
+            );
+
+          /*
+           * One page script per index, then a merge in the client.
+           * Forward, the script reads `count` entries after the place; backward, the `count` entries before it.
+           * In the engine both are two ZCOUNT, a binary search among equal scores, and one ZRANGE by rank.
+           */
+          const readBlock = (block, place, count) => {
+            const merged = [];
+            for (const task of tasks) {
+              for (const state of block.states) {
+                const candidates = indexOf(world, task, state)
+                  .filter(isInRange)
+                  .filter(
+                    (entry) =>
+                      place === undefined ||
+                      (direction === "after" ? compareShown(entry, place) > 0 : compareShown(entry, place) < 0),
+                  )
+                  .sort(compareShown);
+                const page = direction === "after" ? candidates.slice(0, count) : candidates.slice(-count);
+                cost.indexPages += 1;
+                cost.indexEntries += page.length;
+                merged.push(...page.map((entry) => ({ ...entry, state, family: block.family.name })));
+              }
+            }
+            merged.sort(compareShown);
+            return direction === "after" ? merged.slice(0, count) : merged.slice(-count);
+          };
+
+          const budget = reason === null ? limit : limit * design.examinedPagesPerCall;
+          const startBlock =
+            position === undefined
+              ? direction === "after"
+                ? 0
+                : blocks.length - 1
+              : blocks.findIndex((block) => block.family.name === position.family);
+          let examined = [];
+          for (
+            let blockPosition = startBlock;
+            blockPosition >= 0 && blockPosition < blocks.length && examined.length < budget;
+            blockPosition += direction === "after" ? 1 : -1
+          ) {
+            const place = blockPosition === startBlock ? position : undefined;
+            const page = readBlock(blocks[blockPosition], place, budget - examined.length);
+            examined = direction === "after" ? [...examined, ...page] : [...page, ...examined];
+          }
+          cost.roundTrips = 1;
+
+          /* Read and discard: the reason is in the record, not in any index. */
+          const recordOf = (entry) => world.records.get(entry.member);
+          const isKept = (entry) => {
+            const record = recordOf(entry);
+            return (
+              record !== undefined && record.state === entry.state && (reason === null || record.reason === reason)
+            );
+          };
+          if (reason !== null) {
+            const walked = direction === "after" ? examined : examined.slice().reverse();
+            let keptCount = 0;
+            const stopAt = walked.findIndex((entry) => isKept(entry) && (keptCount += 1) === limit);
+            const taken = stopAt === -1 ? walked : walked.slice(0, stopAt + 1);
+            examined = direction === "after" ? taken : taken.reverse();
+          }
+          if (examined.length > 0) {
+            cost.roundTrips = 2;
+            cost.recordsRead = examined.length;
+          }
+
+          const blockSizes = blocks.map((block) => entriesOf(block).length);
+          const total = sumOf(blockSizes);
+          const rankOf = (place) => {
+            const blockPosition = blocks.findIndex((block) => block.family.name === place.family);
+            const before = entriesOf(blocks[blockPosition]).filter((entry) => compareShown(entry, place) < 0).length;
+            return sumOf(blockSizes.slice(0, blockPosition)) + before;
+          };
+
+          const cursorOf = (place, cursorDirection) =>
+            encodeCursor({
+              v: CURSOR_FORMAT_VERSION,
+              ...(design.shape === "cursorPair" ? { d: cursorDirection } : {}),
+              ...(design.cursorCarriesFilters ? { f: filters } : {}),
+              g: place.family,
+              s: place.score,
+              m: place.member,
+            });
+
+          let first;
+          let last;
+          let previousCursor;
+          let nextCursor;
+          if (examined.length > 0) {
+            first = rankOf(examined[0]) + 1;
+            last = rankOf(examined.at(-1)) + 1;
+            previousCursor = first > 1 ? cursorOf(examined[0], "before") : undefined;
+            nextCursor = last < total ? cursorOf(examined.at(-1), "after") : undefined;
+          } else if (position !== undefined) {
+            const before = rankOf(position);
+            previousCursor = direction === "after" && before > 0 ? cursorOf(position, "before") : undefined;
+            nextCursor = direction === "before" && before < total ? cursorOf(position, "after") : undefined;
+          }
+
+          const kept = examined.filter(isKept);
+          const runs = kept.map((entry, keptPosition) => {
+            const record = recordOf(entry);
+            return {
+              task: record.task,
+              runId: record.runId,
+              state: record.state,
+              family: entry.family,
+              attempt: record.attempt,
+              dispatchedAt: record.dispatchedAt,
+              score: entry.score,
+              ...(record.reason === undefined ? {} : { reason: record.reason }),
+              ...(record.lastErrorMessage === undefined ? {} : { lastErrorMessage: record.lastErrorMessage }),
+              ...(reason === null ? { number: first + keptPosition } : {}),
+            };
+          });
+
+          return {
+            runs,
+            ...(previousCursor === undefined ? {} : { previousCursor }),
+            ...(nextCursor === undefined ? {} : { nextCursor }),
+            ...(reason === null
+              ? { position: examined.length > 0 ? { first, last, total } : { total } }
+              : { examined: { first, last, total, count: examined.length, kept: runs.length } }),
+            cost,
+          };
+        }
+
+        return {
+          FAMILIES,
+          ALL_STATES,
+          FAILURE_REASONS,
+          DEFAULT_DESIGN,
+          MINUTE,
+          familyOfState,
+          createWorld,
+          countRuns,
+          listRuns,
+          decodeCursor,
+          actions: {
+            dispatch: (world) => dispatch(world),
+            dispatchDelayed: (world) => dispatch(world, undefined, 30),
+            startNext,
+            complete,
+            failForGood: (world) => failForGood(world),
+            failBurst,
+            failAndRetry,
+            sleep,
+            passTime,
+            replay,
+            prune,
+          },
+        };
+      })();
+    </script>
+
+    <script id="page">
+      /* The page: a thin shell over RunListModel. Throwaway. */
+      (() => {
+        "use strict";
+        const Model = RunListModel;
+        const { FAMILIES, ALL_STATES, FAILURE_REASONS, MINUTE } = Model;
+        const byId = (id) => document.getElementById(id);
+        const escapeHtml = (text) =>
+          String(text).replace(
+            /[&<>"]/g,
+            (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[character],
+          );
+        const STATE_LABEL = {
+          executing: "executing",
+          pending: "pending",
+          waitingForConcurrencySlot: "waiting for a slot",
+          delayed: "delayed",
+          suspended: "suspended",
+          backingOff: "backing off",
+          completed: "completed",
+          failed: "failed",
+        };
+
+        const ui = {
+          world: null,
+          design: { ...Model.DEFAULT_DESIGN },
+          filters: null,
+          keepCursor: false,
+          paging: { kind: "first" },
+          options: null,
+          result: null,
+          refusal: null,
+          stale: false,
+          change: "",
+          changedCells: new Set(),
+          scenario: { index: 0, step: 0 },
+        };
+
+        const defaultFilters = () => ({
+          states: new Set(["failed"]),
+          tasks: new Set(),
+          order: "descending",
+          limit: 5,
+          range: { preset: "none" },
+          reason: "",
+        });
+
+        /* ---------- time and words ---------- */
+
+        const clockOf = (instant) => new Date(instant).toISOString().slice(11, 19);
+        function distanceOf(instant) {
+          const minutes = Math.round(Math.abs(instant - ui.world.now) / MINUTE);
+          const words =
+            minutes < 1 ? "under a minute" : minutes < 90 ? `${minutes} min` : `${(minutes / 60).toFixed(1)} h`;
+          return instant <= ui.world.now ? `${words} ago` : `in ${words}`;
+        }
+        function scoreWordsOf(familyName, score) {
+          const family = FAMILIES.find(({ name }) => name === familyName);
+          return family.timeWord === null
+            ? `queue no. ${score.toLocaleString("en-US")}`
+            : `${family.timeWord} ${clockOf(score)} · ${distanceOf(score)}`;
+        }
+
+        const RANGE_PRESETS = {
+          none: { label: "Any time", bounds: () => ({}) },
+          last30: { label: "In the last 30 minutes", bounds: (now) => ({ from: now - 30 * MINUTE }) },
+          last2h: { label: "In the last 2 hours", bounds: (now) => ({ from: now - 120 * MINUTE }) },
+          olderThan10: { label: "More than 10 minutes ago", bounds: (now) => ({ until: now - 10 * MINUTE }) },
+          next30: { label: "In the next 30 minutes", bounds: (now) => ({ from: now, until: now + 30 * MINUTE }) },
+        };
+
+        /* ---------- the call ---------- */
+
+        function buildOptions() {
+          const { filters, paging, design } = ui;
+          const states = ALL_STATES.filter((state) => filters.states.has(state));
+          const options = { states: states.length === ALL_STATES.length ? "all" : states };
+          if (filters.tasks.size > 0) {
+            options.tasks = ui.world.tasks.map((task) => task.name).filter((name) => filters.tasks.has(name));
+          }
+          options.limit = filters.limit;
+          if (filters.order !== "descending") {
+            options.order = filters.order;
+          }
+          if (filters.range.from !== undefined) {
+            options.from = filters.range.from;
+          }
+          if (filters.range.until !== undefined) {
+            options.until = filters.range.until;
+          }
+          if (filters.reason !== "") {
+            options.reason = filters.reason;
+          }
+          if (paging.kind === "last") {
+            options.page = "last";
+          }
+          if (paging.kind === "cursor") {
+            options[design.shape === "cursorPair" ? "cursor" : paging.direction] = paging.cursor;
+          }
+          return options;
+        }
+
+        function callTextOf(options) {
+          const shown = (name, value) => {
+            if (name === "from" || name === "until") {
+              return `new Date("${new Date(value).toISOString()}")`;
+            }
+            if (name === "cursor" || name === "after" || name === "before") {
+              return `"${value.slice(0, 14)}…"`;
+            }
+            return JSON.stringify(value).replace(/","/g, '", "');
+          };
+          const lines = Object.entries(options).map(([name, value]) => `  ${name}: ${shown(name, value)},`);
+          return `await nextasking.listRuns({\n${lines.join("\n")}\n});`;
+        }
+
+        function readPage() {
+          ui.options = buildOptions();
+          try {
+            ui.result = Model.listRuns(ui.world, ui.options, ui.design);
+            ui.refusal = null;
+          } catch (error) {
+            ui.result = null;
+            ui.refusal = error.message;
+          }
+          ui.stale = false;
+          render();
+        }
+
+        function goTo(place) {
+          if (place === "first" || place === "last") {
+            ui.paging = { kind: place };
+          } else if (place === "next" && ui.result?.nextCursor) {
+            ui.paging = { kind: "cursor", direction: "after", cursor: ui.result.nextCursor };
+          } else if (place === "previous" && ui.result?.previousCursor) {
+            ui.paging = { kind: "cursor", direction: "before", cursor: ui.result.previousCursor };
+          }
+          readPage();
+        }
+
+        function setFilters(patch, { keepCursor = ui.keepCursor } = {}) {
+          const next = { ...ui.filters, ...patch };
+          if (patch.states) {
+            next.states = new Set(patch.states);
+          }
+          if (patch.tasks) {
+            next.tasks = new Set(patch.tasks);
+          }
+          if (patch.rangePreset !== undefined) {
+            next.range = { preset: patch.rangePreset, ...RANGE_PRESETS[patch.rangePreset].bounds(ui.world.now) };
+            delete next.rangePreset;
+          }
+          ui.filters = next;
+          if (!keepCursor) {
+            ui.paging = { kind: "first" };
+          }
+          readPage();
+        }
+
+        function moveRuns(action, argument) {
+          const before = Model.countRuns(ui.world);
+          ui.change = Model.actions[action](ui.world, argument);
+          const after = Model.countRuns(ui.world);
+          ui.changedCells = new Set();
+          for (const task of Object.keys(after)) {
+            for (const state of ALL_STATES) {
+              if (before[task][state] !== after[task][state]) {
+                ui.changedCells.add(`${task}|${state}`);
+              }
+            }
+          }
+          ui.stale = true;
+          render();
+        }
+
+        function setDesign(patch) {
+          const shapeChanged = patch.shape !== undefined && patch.shape !== ui.design.shape;
+          ui.design = { ...ui.design, ...patch };
+          if (shapeChanged) {
+            ui.paging = { kind: "first" };
+          }
+          readPage();
+        }
+
+        /* ---------- walkthroughs ---------- */
+
+        const lastRowMember = () => {
+          const run = ui.result?.runs.at(-1);
+          return run ? `${run.task}:${run.runId}` : undefined;
+        };
+
+        const SCENARIOS = [
+          {
+            title: "Next and previous",
+            intro:
+              "The everyday case: a list of failed runs, five per page. Watch the line “Runs … of …” under the table, and the call above it.",
+            setup: () => setFilters({ states: ["failed"] }),
+            steps: [
+              {
+                label: "Next page",
+                run: () => goTo("next"),
+                watch: "Runs 6 to 10 of 20. The call passes back the cursor the first page returned.",
+              },
+              { label: "Next page", run: () => goTo("next"), watch: "Runs 11 to 15." },
+              {
+                label: "Previous page",
+                run: () => goTo("previous"),
+                watch: "Runs 6 to 10 again: the same five rows as before.",
+              },
+              {
+                label: "Last page",
+                run: () => goTo("last"),
+                watch: "The oldest five. The last page needs no cursor, and Next is off because nothing follows.",
+              },
+              {
+                label: "Previous page",
+                run: () => goTo("previous"),
+                watch: "Paging back from the end works the same way.",
+              },
+            ],
+          },
+          {
+            title: "Runs arrive while you read",
+            intro: "A page is a place in the order, not a snapshot. Here four runs fail while page 2 is on screen.",
+            setup: () => setFilters({ states: ["failed"] }),
+            steps: [
+              { label: "Next page", run: () => goTo("next"), watch: "Page 2: runs 6 to 10 of 20." },
+              {
+                label: "Four more runs fail for good",
+                run: () => moveRuns("failBurst", 4),
+                watch: "The queue changed; the page on screen did not. It is now out of date, as in a real dashboard.",
+              },
+              {
+                label: "Read this page again",
+                run: () => readPage(),
+                watch:
+                  "The same five runs. Only the numbers moved: runs 10 to 14 of 24. Nothing is repeated, nothing is skipped.",
+              },
+              {
+                label: "Previous page",
+                run: () => goTo("previous"),
+                watch: "The five runs you saw on the first page, now numbered 5 to 9.",
+              },
+              {
+                label: "Previous page",
+                run: () => goTo("previous"),
+                watch:
+                  "A page of four: the new arrivals. Paging back stops at the head of the list, so this page is short. Is that acceptable, or should it fill up to five?",
+              },
+              {
+                label: "First page",
+                run: () => goTo("first"),
+                watch: "A full page from the head: the four new runs, then one you already saw.",
+              },
+            ],
+          },
+          {
+            title: "The run under the cursor leaves",
+            intro:
+              "The cursor names the last run of the page. What happens when that run is replayed, and so leaves the failed list?",
+            setup: () => setFilters({ states: ["failed"] }),
+            steps: [
+              {
+                label: "Replay the last run of this page",
+                run: () => moveRuns("replay", lastRowMember()),
+                watch: "The fifth row left the failed list. It is pending now; see the queue table.",
+              },
+              {
+                label: "Next page",
+                run: () => goTo("next"),
+                watch:
+                  "The cursor still names the replayed run. It marks where the run was, so the next page starts right after: runs 5 to 9 of 19.",
+              },
+              {
+                label: "Previous page",
+                run: () => goTo("previous"),
+                watch: "Four runs: the first page without the replayed one.",
+              },
+              {
+                label: "Retention removes the 5 oldest ended runs",
+                run: () => moveRuns("prune", 5),
+                watch: "Runs disappear from the tail of the list.",
+              },
+              {
+                label: "Last page",
+                run: () => goTo("last"),
+                watch: "The last page is where retention removes runs: it drains while you look at it.",
+              },
+            ],
+          },
+          {
+            title: "Two states in one order",
+            intro:
+              "Completed and failed runs share one clock, the time they finished. So they can be listed together in one true order. An executing run has a start time, which is a different clock.",
+            setup: () => setFilters({ states: ["completed", "failed"], limit: 8 }),
+            steps: [
+              {
+                label: "Next page",
+                run: () => goTo("next"),
+                watch: "Completed and failed runs interleaved by finish time, runs 9 to 16 of 48.",
+              },
+              {
+                label: "Add executing runs to the list",
+                run: () => setFilters({ states: ["executing", "completed", "failed"] }),
+                watch:
+                  "Two blocks. Executing runs come first, in their own order; then the ended runs. A start time and a finish time are never mixed.",
+              },
+              {
+                label: "Keep two tasks only",
+                run: () => setFilters({ tasks: ["generate-invoice-pdf", "resize-image"] }),
+                watch: "Fewer indexes to read: see “Cost of this read”. The total follows.",
+              },
+            ],
+          },
+          {
+            title: "All states, in four blocks",
+            intro:
+              "“All runs” with no new index is four blocks: executing, queued, waiting for a time, ended. Each block has its own order. Is that a useful “all runs” list, or do you expect one timeline?",
+            setup: () => setFilters({ states: ALL_STATES, limit: 10 }),
+            steps: [
+              {
+                label: "Next page",
+                run: () => goTo("next"),
+                watch:
+                  "The page crosses from the queued block into the timed block. The numbering runs through all 75.",
+              },
+              {
+                label: "Next page",
+                run: () => goTo("next"),
+                watch: "The end of the timed block, then the first ended runs.",
+              },
+              { label: "Last page", run: () => goTo("last"), watch: "The oldest ended runs." },
+              {
+                label: "Switch to ascending order",
+                run: () => setFilters({ order: "ascending" }),
+                watch:
+                  "Each block flips inside: queued runs now read “next to run first”. The blocks keep their sequence.",
+              },
+            ],
+          },
+          {
+            title: "Time ranges and totals",
+            intro:
+              "A range applies to the state’s own time: when a run finished, started, or is due. It costs almost nothing, and the total stays exact.",
+            setup: () => setFilters({ states: ["failed"] }),
+            steps: [
+              {
+                label: "Only runs that finished in the last 2 hours",
+                run: () => setFilters({ rangePreset: "last2h" }),
+                watch: "The total is the count inside the range, not the whole failed list.",
+              },
+              { label: "Next page", run: () => goTo("next"), watch: "Paging stays inside the range." },
+              {
+                label: "Executing runs that started more than 10 minutes ago",
+                run: () => setFilters({ states: ["executing"], rangePreset: "olderThan10" }),
+                watch: "The “stuck runs” view: the same range, on the start time.",
+              },
+              {
+                label: "Runs due in the next 30 minutes, soonest first",
+                run: () =>
+                  setFilters({
+                    states: ["delayed", "suspended", "backingOff"],
+                    rangePreset: "next30",
+                    order: "ascending",
+                  }),
+                watch: "Three states that share the due time, in one order.",
+              },
+              {
+                label: "Ask for a time range on pending runs",
+                run: () => setFilters({ states: ["pending"], rangePreset: "last30", order: "descending" }),
+                watch:
+                  "Refused. A pending run is ordered by a counter; the queue keeps no time at which it became pending.",
+              },
+            ],
+          },
+          {
+            title: "A filter with no index",
+            intro:
+              "The failure reason is stored in each run, not in any index. The only way to filter on it is to read runs and discard those that do not match.",
+            setup: () => setFilters({ states: ["failed"] }),
+            steps: [
+              {
+                label: "Keep only runs that failed as “non-retriable”",
+                run: () => setFilters({ reason: "non-retriable" }),
+                watch:
+                  "Five failed runs were read and only the matching ones kept. No total exists. Next is offered because failed runs remain to check.",
+              },
+              {
+                label: "Next page",
+                run: () => goTo("next"),
+                watch: "The next five failed runs, checked the same way. A page can be short, or empty.",
+              },
+              {
+                label: "Next page",
+                run: () => goTo("next"),
+                watch: "A dashboard has to keep pressing Next to find the matches.",
+              },
+              {
+                label: "Read up to five pages of runs per call instead",
+                run: () => {
+                  ui.paging = { kind: "first" };
+                  setDesign({ examinedPagesPerCall: 5 });
+                },
+                watch: "Fuller pages for more reads: up to 25 runs checked in one call. See “Cost of this read”.",
+              },
+            ],
+          },
+          {
+            title: "Calls that are refused",
+            intro:
+              "Some combinations have no meaning. The question is where to draw the line, and whether the messages say enough.",
+            setup: () => setFilters({ states: ["failed"] }),
+            steps: [
+              {
+                label: "Next page",
+                run: () => goTo("next"),
+                watch: "Page 2 of the failed runs. Its cursor carries the filters it was made with.",
+              },
+              {
+                label: "Switch to completed runs, and pass the same cursor",
+                run: () => setFilters({ states: ["completed"] }, { keepCursor: true }),
+                watch: "Refused: the cursor belongs to another list.",
+              },
+              {
+                label: "Make cursors carry their place only, then open page 2 of failed runs again",
+                run: () => {
+                  ui.design = { ...ui.design, cursorCarriesFilters: false };
+                  setFilters({ states: ["failed"] });
+                  goTo("next");
+                },
+                watch: "The same page, with a shorter cursor: see its length under the table.",
+              },
+              {
+                label: "Switch to completed runs, and pass the same cursor",
+                run: () => setFilters({ states: ["completed"] }, { keepCursor: true }),
+                watch:
+                  "Accepted. A finish time is also a place among completed runs, so the list goes on from that instant. Useful, or a trap?",
+              },
+              {
+                label: "Switch to pending runs, and pass the same cursor",
+                run: () => setFilters({ states: ["pending"] }, { keepCursor: true }),
+                watch: "Refused either way: a finish time is no place in a queue.",
+              },
+              {
+                label: "Ask for a failure reason on completed and failed runs",
+                run: () => setFilters({ states: ["completed", "failed"], reason: "stalled" }),
+                watch: "Refused: a completed run has no reason.",
+              },
+              {
+                label: "Ask for a time range over executing and failed runs",
+                run: () => setFilters({ states: ["executing", "failed"], reason: "", rangePreset: "last2h" }),
+                watch: "Refused: the two states do not share one time.",
+              },
+            ],
+          },
+        ];
+
+        function startScenario(index) {
+          ui.world = Model.createWorld();
+          ui.design = { ...Model.DEFAULT_DESIGN, shape: ui.design.shape };
+          ui.filters = defaultFilters();
+          ui.keepCursor = false;
+          ui.paging = { kind: "first" };
+          ui.change = "A fresh queue: 75 runs of four tasks, at 14:00:00.";
+          ui.changedCells = new Set();
+          ui.scenario = { index, step: 0 };
+          SCENARIOS[index].setup();
+        }
+
+        function runStep() {
+          const scenario = SCENARIOS[ui.scenario.index];
+          const step = scenario.steps[ui.scenario.step];
+          ui.scenario.step += 1;
+          step.run();
+        }
+
+        /* ---------- rendering ---------- */
+
+        function renderSwitches() {
+          const groups = [
+            {
+              name: "shape",
+              legend: "How a page is asked for",
+              choices: [
+                ["cursorPair", "One <code>cursor</code> option. Each cursor knows whether it goes forward or back."],
+                ["afterBefore", "Two options, <code>after</code> and <code>before</code>. A cursor is only a place."],
+              ],
+            },
+            {
+              name: "cursorCarriesFilters",
+              legend: "What a cursor carries",
+              choices: [
+                [true, "Its place and its filters. Used with other filters, it is refused."],
+                [false, "Its place only. Filters may change between two pages."],
+              ],
+            },
+            {
+              name: "examinedPagesPerCall",
+              legend: "A filter with no index (failure reason)",
+              choices: [
+                [1, "Check one page of runs per call. Pages are often short."],
+                [5, "Check up to five pages of runs per call. Fuller pages, more reads."],
+              ],
+            },
+          ];
+          byId("switches").innerHTML = groups
+            .map(
+              ({ name, legend, choices }) => `
+          <fieldset class="switch">
+            <legend>${legend}</legend>
+            ${choices
+              .map(
+                ([value, words], position) => `
+                <label for="switch-${name}-${position}">
+                  <input type="radio" id="switch-${name}-${position}" name="switch-${name}" data-set="design" data-name="${name}" data-value='${JSON.stringify(value)}' ${ui.design[name] === value ? "checked" : ""}>
+                  <span>${words}</span>
+                </label>`,
+              )
+              .join("")}
+          </fieldset>`,
+            )
+            .join("");
+        }
+
+        function renderRuns() {
+          if (ui.refusal !== null) {
+            byId("runs").innerHTML = `<p class="empty">No page: the call was refused.</p>`;
+            return;
+          }
+          const { runs } = ui.result;
+          if (runs.length === 0) {
+            byId("runs").innerHTML = `<p class="empty">This page holds no run.</p>`;
+            return;
+          }
+          const order = ui.filters.order;
+          let familyName;
+          const rows = runs.map((run) => {
+            const family = FAMILIES.find(({ name }) => name === run.family);
+            const header =
+              family.name === familyName
+                ? ""
+                : `<tr class="block"><td colspan="7">${family.title} <span>· ${family.orderWords[order]}</span></td></tr>`;
+            familyName = family.name;
+            const badge = run.family === "ended" ? run.state : run.family;
+            const detail = [run.reason, run.lastErrorMessage].filter(Boolean).join(" · ");
+            return `${header}
+          <tr>
+            <td class="num">${run.number ?? ""}</td>
+            <td class="mono">${run.runId}</td>
+            <td>${run.task}</td>
+            <td><span class="badge ${badge}">${STATE_LABEL[run.state]}</span></td>
+            <td>${scoreWordsOf(run.family, run.score).replace(" · ", "<small>") + (familyName === "queued" ? "" : "</small>")}</td>
+            <td class="num">${run.attempt}</td>
+            <td class="wrap">${escapeHtml(detail)}</td>
+          </tr>`;
+          });
+          byId("runs").innerHTML = `
+        <table>
+          <thead><tr><th class="num">No.</th><th>Run</th><th>Task</th><th>State</th><th>Its place in the order</th><th class="num">Attempt</th><th>Failure</th></tr></thead>
+          <tbody>${rows.join("")}</tbody>
+        </table>`;
+        }
+
+        function cursorWordsOf(cursor, absentWords) {
+          if (cursor === undefined) {
+            return `<span class="hint">${absentWords}</span>`;
+          }
+          const fields = Model.decodeCursor(cursor);
+          const [task, runId] = fields.m.split(":");
+          const lead = fields.d === "after" ? "Goes on after" : fields.d === "before" ? "Goes back before" : "Marks";
+          const filters = fields.f
+            ? `Carries the filters: ${fields.f.states.map((state) => STATE_LABEL[state]).join(" + ")}; ${fields.f.tasks === null ? "every task" : fields.f.tasks.join(" + ")}; ${fields.f.order}${fields.f.from !== null || fields.f.until !== null ? "; a time range" : ""}${fields.f.reason ? `; reason ${fields.f.reason}` : ""}.`
+            : "Carries no filter.";
+          return `${lead} run <span class="mono">${runId}</span> of ${task} (${scoreWordsOf(fields.g, fields.s)}). ${filters}
+        <span class="hint">${cursor.length} characters: <span class="mono">${cursor.slice(0, 18)}…</span></span>`;
+        }
+
+        function positionWords() {
+          const { result } = ui;
+          if (result.examined) {
+            const { first, last, total, count, kept } = result.examined;
+            const checked =
+              count === 0
+                ? "No failed run was left to check."
+                : `Checked failed runs ${first} to ${last} of ${total}, kept ${kept}.`;
+            return `<span class="big">${kept} run${kept === 1 ? "" : "s"} on this page</span><br>${checked} No total exists for this filter.`;
+          }
+          const { first, last, total } = result.position;
+          if (first === undefined) {
+            return `<span class="big">No run at this place</span><br>${total} in the list.`;
+          }
+          return `<span class="big">Runs ${first} to ${last} of ${total}</span>`;
+        }
+
+        function renderFacts() {
+          if (ui.refusal !== null) {
+            byId("facts").innerHTML = "";
+            return;
+          }
+          const { cost, previousCursor, nextCursor } = ui.result;
+          byId("facts").innerHTML = `
+        <div><dt>Where you are</dt><dd>${positionWords()}</dd></div>
+        <div><dt>Previous cursor</dt><dd>${cursorWordsOf(previousCursor, "None: nothing comes before this page.")}</dd></div>
+        <div><dt>Next cursor</dt><dd>${cursorWordsOf(nextCursor, "None: nothing comes after this page.")}</dd></div>
+        <div><dt>Cost of this read</dt><dd>${cost.roundTrips} round trip${cost.roundTrips === 1 ? "" : "s"} to the server · ${cost.indexPages} index page${cost.indexPages === 1 ? "" : "s"} read, one per task and state · ${cost.indexEntries} index entries sent back · ${cost.recordsRead} run record${cost.recordsRead === 1 ? "" : "s"} read</dd></div>`;
+        }
+
+        function renderPager() {
+          const canGo = (cursor) => (ui.refusal === null && cursor !== undefined ? "" : "disabled");
+          byId("pager").innerHTML = `
+        <button type="button" data-do="goTo" data-arg="first">First page</button>
+        <button type="button" data-do="goTo" data-arg="previous" ${canGo(ui.result?.previousCursor)}>Previous page</button>
+        <button type="button" data-do="goTo" data-arg="next" ${canGo(ui.result?.nextCursor)}>Next page</button>
+        <button type="button" data-do="goTo" data-arg="last">Last page</button>
+        <button type="button" data-do="readAgain">Read this page again</button>`;
+        }
+
+        function renderNotice() {
+          const parts = [];
+          if (ui.refusal !== null) {
+            parts.push(`<p class="notice refused">${escapeHtml(ui.refusal)}</p>`);
+          }
+          if (ui.stale) {
+            parts.push(
+              `<p class="notice stale">The queue changed after this page was read. Read it again, or page on.</p>`,
+            );
+          }
+          byId("notice").innerHTML = parts.join("");
+        }
+
+        function renderQueue() {
+          byId("clock").textContent = `Clock: ${clockOf(ui.world.now)} UTC`;
+          byId("change").textContent = ui.change;
+          const counts = Model.countRuns(ui.world);
+          const totals = ALL_STATES.map((state) =>
+            Object.values(counts).reduce((sum, byState) => sum + byState[state], 0),
+          );
+          byId("counts").innerHTML = `
+        <table class="counts">
+          <thead><tr><th>Task</th>${ALL_STATES.map((state) => `<th class="num">${STATE_LABEL[state]}</th>`).join("")}</tr></thead>
+          <tbody>
+            ${Object.entries(counts)
+              .map(
+                ([task, byState]) =>
+                  `<tr><td>${task}</td>${ALL_STATES.map((state) => `<td class="num ${ui.changedCells.has(`${task}|${state}`) ? "changed" : ""}">${byState[state]}</td>`).join("")}</tr>`,
+              )
+              .join("")}
+            <tr class="block"><td>Every task</td>${totals.map((total) => `<td class="num">${total}</td>`).join("")}</tr>
+          </tbody>
+        </table>`;
+        }
+
+        function renderFilters() {
+          const { filters } = ui;
+          const stateChips = FAMILIES.map(
+            (family) => `
+        <div class="family"><span>${family.title}</span>
+          ${family.states
+            .map(
+              (state) => `
+              <label class="chip" for="state-${state}">
+                <input type="checkbox" id="state-${state}" data-set="state" data-name="${state}" ${filters.states.has(state) ? "checked" : ""}>${STATE_LABEL[state]}
+              </label>`,
+            )
+            .join("")}
+        </div>`,
+          ).join("");
+          const taskChips = ui.world.tasks
+            .map(
+              ({ name }) => `
+          <label class="chip" for="task-${name}">
+            <input type="checkbox" id="task-${name}" data-set="task" data-name="${name}" ${filters.tasks.has(name) ? "checked" : ""}>${name}
+          </label>`,
+            )
+            .join("");
+          const optionsOf = (choices, chosen) =>
+            choices
+              .map(
+                ([value, words]) =>
+                  `<option value="${value}" ${String(chosen) === String(value) ? "selected" : ""}>${words}</option>`,
+              )
+              .join("");
+          byId("filters").innerHTML = `
+        <div class="field"><span class="hint">States</span>${stateChips}
+          <div class="row">
+            <button type="button" data-do="preset" data-arg="failed">Failed only</button>
+            <button type="button" data-do="preset" data-arg="ended">Completed + failed</button>
+            <button type="button" data-do="preset" data-arg="waiting">Everything not started</button>
+            <button type="button" data-do="preset" data-arg="all">All states</button>
+          </div>
+        </div>
+        <div class="field"><span class="hint">Tasks (none ticked means every task)</span><div class="chips">${taskChips}</div></div>
+        <div class="fields">
+          <label class="field" for="filter-order"><span class="hint">Order</span>
+            <select id="filter-order" data-set="order">${optionsOf(
+              [
+                ["descending", "Descending (as today)"],
+                ["ascending", "Ascending"],
+              ],
+              filters.order,
+            )}</select></label>
+          <label class="field" for="filter-limit"><span class="hint">Runs per page</span>
+            <select id="filter-limit" data-set="limit">${optionsOf(
+              [
+                [5, "5"],
+                [8, "8"],
+                [10, "10"],
+                [20, "20"],
+              ],
+              filters.limit,
+            )}</select></label>
+          <label class="field" for="filter-range"><span class="hint">Finished, started or due</span>
+            <select id="filter-range" data-set="range">${optionsOf(
+              Object.entries(RANGE_PRESETS).map(([value, { label }]) => [value, label]),
+              filters.range.preset,
+            )}</select></label>
+          <label class="field" for="filter-reason"><span class="hint">Failure reason</span>
+            <select id="filter-reason" data-set="reason">${optionsOf([["", "Every reason"], ...FAILURE_REASONS.map((reason) => [reason, reason])], filters.reason)}</select></label>
+        </div>
+        <label class="chip" for="keep-cursor" style="width: fit-content">
+          <input type="checkbox" id="keep-cursor" data-set="keepCursor" ${ui.keepCursor ? "checked" : ""}>Keep passing the current cursor when I change the list
+        </label>`;
+        }
+
+        function renderMoves() {
+          const moves = [
+            ["dispatch", "", "Dispatch a run"],
+            ["dispatchDelayed", "", "Dispatch a run, delayed 30 minutes"],
+            ["startNext", "", "A worker starts the next queued run"],
+            ["complete", "", "An executing run completes"],
+            ["failAndRetry", "", "An executing run fails and will retry"],
+            ["failForGood", "", "An executing run fails for good"],
+            ["failBurst", "4", "Four runs fail for good"],
+            ["sleep", "", "An executing run goes to sleep for an hour"],
+            ["replay", "", "Replay the most recent failed run"],
+            ["prune", "5", "Retention removes the 5 oldest ended runs"],
+            ["passTime", "20", "20 minutes pass"],
+          ];
+          byId("moves").innerHTML =
+            moves
+              .map(
+                ([action, argument, words]) =>
+                  `<button type="button" data-do="move" data-arg="${action}:${argument}">${words}</button>`,
+              )
+              .join("") + `<button type="button" data-do="reset">Start over with a fresh queue</button>`;
+        }
+
+        function renderScenario() {
+          byId("tabs").innerHTML = SCENARIOS.map(
+            (scenario, index) =>
+              `<button type="button" role="tab" aria-selected="${index === ui.scenario.index}" data-do="scenario" data-arg="${index}">${scenario.title}</button>`,
+          ).join("");
+          const scenario = SCENARIOS[ui.scenario.index];
+          const steps = scenario.steps
+            .map((step, index) => {
+              const isDone = index < ui.scenario.step;
+              const isNext = index === ui.scenario.step;
+              return `<li class="${isDone ? "done" : ""}">
+            <button type="button" class="${isNext ? "primary" : ""}" data-do="step" ${isNext ? "" : "disabled"}>${step.label}</button>
+            ${isDone ? `<p class="watch">${step.watch}</p>` : ""}
+          </li>`;
+            })
+            .join("");
+          const isOver = ui.scenario.step >= scenario.steps.length;
+          byId("scenario").innerHTML = `
+        <p>${scenario.intro}</p>
+        <ol class="steps">${steps}</ol>
+        <div class="row">
+          <button type="button" data-do="scenario" data-arg="${ui.scenario.index}">Restart this walkthrough</button>
+          ${isOver ? `<span class="hint">Done. Keep going in free play, or pick another walkthrough.</span>` : ""}
+        </div>`;
+        }
+
+        function render() {
+          renderSwitches();
+          byId("call").textContent = callTextOf(ui.options);
+          renderNotice();
+          renderRuns();
+          renderPager();
+          renderFacts();
+          renderQueue();
+          renderFilters();
+          renderMoves();
+          renderScenario();
+        }
+
+        /* ---------- wiring ---------- */
+
+        const STATE_PRESETS = {
+          failed: ["failed"],
+          ended: ["completed", "failed"],
+          waiting: ["pending", "waitingForConcurrencySlot", "delayed", "suspended", "backingOff"],
+          all: ALL_STATES,
+        };
+
+        const clickHandlers = {
+          goTo: (place) => goTo(place),
+          readAgain: () => readPage(),
+          preset: (name) => setFilters({ states: STATE_PRESETS[name] }),
+          move: (argument) => {
+            const [action, value] = argument.split(":");
+            moveRuns(action, value === "" ? undefined : Number(value));
+          },
+          reset: () => startScenario(ui.scenario.index),
+          scenario: (index) => startScenario(Number(index)),
+          step: () => runStep(),
+        };
+
+        const changeHandlers = {
+          design: (input) => setDesign({ [input.dataset.name]: JSON.parse(input.dataset.value) }),
+          state: (input) => {
+            const states = new Set(ui.filters.states);
+            states[input.checked ? "add" : "delete"](input.dataset.name);
+            setFilters({ states });
+          },
+          task: (input) => {
+            const tasks = new Set(ui.filters.tasks);
+            tasks[input.checked ? "add" : "delete"](input.dataset.name);
+            setFilters({ tasks });
+          },
+          order: (input) => setFilters({ order: input.value }),
+          limit: (input) => setFilters({ limit: Number(input.value) }),
+          range: (input) => setFilters({ rangePreset: input.value }),
+          reason: (input) => setFilters({ reason: input.value }),
+          keepCursor: (input) => {
+            ui.keepCursor = input.checked;
+          },
+        };
+
+        document.addEventListener("click", (event) => {
+          const button = event.target.closest("button[data-do]");
+          if (button && !button.disabled) {
+            clickHandlers[button.dataset.do](button.dataset.arg);
+          }
+        });
+        document.addEventListener("change", (event) => {
+          const input = event.target.closest("[data-set]");
+          if (input) {
+            changeHandlers[input.dataset.set](input);
+          }
+        });
+
+        startScenario(0);
+      })();
+    </script>
+  </body>
+</html>

@@ -156,8 +156,9 @@ for (const schedule of await nextasking.listSchedules()) {
 `listSchedules()` returns one entry per scheduled task the code defines, in the order of `tasks`: `{ task, cron, timezone, nextFiringAt?, previousFiring? }`.
 
 - `cron` and `timezone` come from the code; `timezone` is `"UTC"` when the task sets none.
-- `nextFiringAt` is the next planned firing. It is absent until a worker has booted with the schedule, and while the stored schedule was written by a newer release; see [Scheduled tasks](scheduled-tasks.md).
+- `nextFiringAt` is the next planned firing. It is absent until a worker has booted with the schedule; see [Scheduled tasks](scheduled-tasks.md).
 - `previousFiring` is `{ scheduledAt, runId }`: the planned instant of the last firing a worker fired, and the id of the run it started. It is absent until the schedule has fired once.
+- Both are absent while the stored schedule was written by a newer release: during a deploy overlap, the old release's dashboard shows a schedule that fired for months with neither.
 - Call `getRun(task, previousFiring.runId)` to see how that run went: `undefined` means retention removed it.
 - After a change of `cron`, `previousFiring` stays the last real firing, under the old cron; only `nextFiringAt` follows the new one.
 - A run started with `dispatch`, or with `fireSchedule` from `./testing`, is not a firing and leaves `previousFiring` as it was.
@@ -193,7 +194,7 @@ export async function runNow(taskName: TaskName) {
 ## What reads see, and what they cost
 
 - A read sees only the runs of tasks the instance lists. Runs of a task the running release doesn't define, removed from the code or known only to a newer release, never appear in `listRuns` or `countRuns`. A run left behind by a removed task fails `unknown task` 30 minutes after a worker first found it, then leaves through retention; see [Deploys](deploys.md#remove-a-task-a-listener-or-an-event).
-- Retention is per task: completed runs as [Tasks and events](tasks-and-events.md#start-the-worker) says, failed runs as [Retries and failures](retries-and-failures.md#what-a-failed-run-keeps) says. A busy task never pushes out another task's runs.
+- Retention is per task: each task keeps its completed runs for a time and up to a count, and its failed runs for a longer time and up to a larger count. A run older than that time is removed, and so is the oldest run past that count; `getRun` then reads it as `undefined`. The figures are on [Tasks and events](tasks-and-events.md#start-the-worker) for completed runs and [Retries and failures](retries-and-failures.md#what-a-failed-run-keeps) for failed runs; the counts are the caps below. A busy task never pushes out another task's runs.
 - A worker removes up to 200 ended runs per second in all, and up to 180 per second of one task that never stops overflowing. The caps hold while runs end below that rate per worker; a burst above it is caught up afterwards, at that rate. With several workers, the rates add up.
 - A worker visits one task per second, in turn, so a cap is reached again at each visit rather than held at every instant: between two visits a task sits over its cap by the runs it ended meanwhile, about a minute's worth with 50 tasks.
 - No read is a snapshot: runs keep moving while a read runs, so two reads, or two counts of one `countRuns`, can disagree by the runs that moved in between.

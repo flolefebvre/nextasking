@@ -20,7 +20,7 @@ Turn the worker on in the dev script with the variable `instrumentation.ts` chec
 
 ## Restart the dev server after editing a task
 
-`register()` runs once per dev server, when it starts. Editing a task never re-runs it, so the worker goes on running the handlers it booted with.
+The worker starts once per dev server, from `register()`. Editing a task doesn't reach it: it goes on running the handlers it booted with.
 
 ```sh
 # after editing anything under src/nextasking/
@@ -29,15 +29,12 @@ pnpm dev
 ```
 
 - Restart after any edit to a task, a listener, an event or the instance: a handler, a schema, an option, a name.
-- Until you restart, a route or server action may already validate with the new schema while the worker still runs the old handler.
 
 ## What Ctrl-C does to the attempt in flight
 
-On Ctrl-C, `next dev` forwards the signal to its server process and kills it 100 ms later. An attempt in flight is cut where it stands: no drain, no step boundary, even with `NEXT_MANUAL_SIG_HANDLE` set. That is why the worker doesn't warn about the variable under `next dev`.
+On Ctrl-C or SIGTERM, `next dev` passes the signal to its server process and kills it a moment later, without waiting for the worker. An attempt in flight is cut where it stands: no drain, no step boundary, even with `NEXT_MANUAL_SIG_HANDLE` set. That is why the worker doesn't warn about the variable under `next dev`.
 
-- The cut attempt comes back as stalled once its lock expires (2 minutes) and a stall check finds it (one runs every 30 seconds): within about three minutes, in the next dev server that starts on the same prefix.
-- It counts as one stall. The third stall with no step saved in between fails the run for good with `reason: "stalled"`, whatever retries it has left. See [Worker](worker.md#stalls).
-- Next's own restarts cut it the same way: an edit to `next.config`, or the dev overlay's restart button.
+- The cut attempt comes back as stalled once its lock expires, in the next dev server that starts on the same prefix. It counts as one stall: the third stall with no step saved in between fails the run for good with `reason: "stalled"`, whatever retries it has left. The timing is on [Worker](worker.md#stalls).
 - To keep a long run safe across restarts, put its side effects in steps: the next attempt reuses what they saved. See [Steps](steps.md).
 
 ## Change a task's steps

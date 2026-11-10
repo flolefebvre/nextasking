@@ -300,6 +300,66 @@ engineTest(
   },
 );
 
+for (const eventDedupState of ["no entry", "a live entry an older release left"] as const) {
+  engineTest(
+    `a handler emit of no run with the parent's current token saves the event id as the step, resetting stalls, and stores nothing else, with ${eventDedupState}`,
+    async (context) => {
+      const { engine, redis, keys, keyPrefix } = context;
+      const parentFence = await parentFenceOf(context, '"event-1"');
+      if (eventDedupState !== "no entry") {
+        await engine.enqueue({ runs: listenerRunsOf(USER_SIGNED_UP), eventDedup: USER_SIGNED_UP });
+      }
+      const storedValuesBefore = await storedValuesByKeyOf(redis, keyPrefix);
+
+      const reply = await engine.enqueue({ runs: [], eventDedup: USER_SIGNED_UP, parentFence });
+
+      expect(reply).toEqual({ kind: "enqueued", createdRuns: [], skippedRuns: [] });
+      expect(await redis.hGetAll(keys.runSteps("sign-up", "parent-run"))).toEqual({ "send-1": '"event-1"' });
+      expect(await redis.hGet(keys.runRecord("sign-up", "parent-run"), "stalls")).toBe("0");
+      const storedValuesAfter = await storedValuesByKeyOf(redis, keyPrefix);
+      for (const parentKey of [keys.runSteps("sign-up", "parent-run"), keys.runRecord("sign-up", "parent-run")]) {
+        storedValuesBefore.delete(parentKey);
+        storedValuesAfter.delete(parentKey);
+      }
+      expect(storedValuesAfter).toEqual(storedValuesBefore);
+    },
+  );
+}
+
+engineTest(
+  "a handler emit whose event id is live creates nothing, replies duplicate and saves the parent's step, resetting stalls",
+  async (context) => {
+    const { engine, redis, keys } = context;
+    const parentFence = await parentFenceOf(context, '"event-1"');
+    await engine.enqueue({ runs: listenerRunsOf(USER_SIGNED_UP), eventDedup: USER_SIGNED_UP });
+    const eventDedupBefore = await redis.zRangeWithScores(keys.eventDedup("user.signed-up"), 0, -1);
+
+    const reply = await engine.enqueue({
+      runs: listenerRunsOf(USER_SIGNED_UP, "-repeat"),
+      eventDedup: USER_SIGNED_UP,
+      parentFence,
+    });
+
+    expect(reply).toEqual({ kind: "duplicate" });
+    expect(await redis.exists(keys.runRecord("send-welcome-email", "welcome-repeat"))).toBe(0);
+    expect(await redis.zRangeWithScores(keys.eventDedup("user.signed-up"), 0, -1)).toEqual(eventDedupBefore);
+    expect(await redis.hGetAll(keys.runSteps("sign-up", "parent-run"))).toEqual({ "send-1": '"event-1"' });
+    expect(await redis.hGet(keys.runRecord("sign-up", "parent-run"), "stalls")).toBe("0");
+  },
+);
+
+engineTest("a re-entered handler emit whose event id is live replies alreadySent", async (context) => {
+  const { engine } = context;
+  const parentFence = await parentFenceOf(context, '"event-1"');
+  await engine.enqueue({ runs: listenerRunsOf(USER_SIGNED_UP), eventDedup: USER_SIGNED_UP });
+  const handlerEmit = { runs: listenerRunsOf(USER_SIGNED_UP, "-repeat"), eventDedup: USER_SIGNED_UP, parentFence };
+  await engine.enqueue(handlerEmit);
+
+  const reply = await engine.enqueue(handlerEmit);
+
+  expect(reply).toEqual({ kind: "alreadySent", savedValue: '"event-1"' });
+});
+
 engineTest("a handler send whose child already exists still saves the parent's step", async (context) => {
   const { engine, redis, keys } = context;
   const parentFence = await parentFenceOf(context, '"run-1"');
@@ -362,6 +422,33 @@ for (const staleness of ["another token", "an ended lock", "a missing parent"] a
     expect(reply).toEqual({ kind: "stale" });
     expect(await storedValuesByKeyOf(redis, keyPrefix)).toEqual(storedValuesBefore);
   });
+}
+
+for (const eventDedupState of ["no entry", "a live entry"] as const) {
+  engineTest(
+    `a handler emit of no run or of a live event id with another token replies stale and writes nothing, with ${eventDedupState}`,
+    async (context) => {
+      const { engine, redis, keyPrefix } = context;
+      const parentFence = await parentFenceOf(context, '"event-1"');
+      if (eventDedupState === "a live entry") {
+        await engine.enqueue({ runs: listenerRunsOf(USER_SIGNED_UP), eventDedup: USER_SIGNED_UP });
+      }
+      const staleFence: ParentFence = { ...parentFence, lockToken: freshLockTokensOf(1)[0]! };
+      const storedValuesBefore = await storedValuesByKeyOf(redis, keyPrefix);
+
+      const replies = [
+        await engine.enqueue({ runs: [], eventDedup: USER_SIGNED_UP, parentFence: staleFence }),
+        await engine.enqueue({
+          runs: listenerRunsOf(USER_SIGNED_UP, "-repeat"),
+          eventDedup: USER_SIGNED_UP,
+          parentFence: staleFence,
+        }),
+      ];
+
+      expect(replies).toEqual([{ kind: "stale" }, { kind: "stale" }]);
+      expect(await storedValuesByKeyOf(redis, keyPrefix)).toEqual(storedValuesBefore);
+    },
+  );
 }
 
 engineTest(

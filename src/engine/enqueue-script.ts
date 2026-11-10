@@ -22,7 +22,7 @@ if parentRunId ~= "" and (parentLockToken == "" or parentStepId == "") then
   error("invalid argument: a parent fence carries the parent's lock token and step id")
 end
 
-if runCount == 0 then
+if runCount == 0 and parentRunId == "" then
   error("invalid argument: an enqueue creates at least one run")
 end
 if #ARGV ~= firstRunArgument - 1 + runCount * argumentsPerRunToCreate then
@@ -46,9 +46,22 @@ if parentRunId ~= "" then
   end
 end
 
+local function saveParentStep()
+  if parentRunId ~= "" then
+    redis.call("HSET", runStepsKey(parentRunId), parentStepId, parentStepValue)
+    redis.call("HSET", runRecordKey(parentRunId), "stalls", 0)
+  end
+end
+
+if runCount == 0 then
+  saveParentStep()
+  return { "enqueued", {}, {} }
+end
+
 local now = currentInstantInMilliseconds()
 
 if dedupEventName ~= "" and isLiveDedupEntry(eventDedupKey(dedupEventName), dedupEventId, now) then
+  saveParentStep()
   return { "duplicate" }
 end
 
@@ -60,10 +73,7 @@ for task in pairs(isTaskTouchedByName) do
 end
 
 local createdRunIds, skippedRunIds = enqueueRuns(runsToCreate, dedupEventName, dedupEventId, now, dedupWindowInMilliseconds)
-if parentRunId ~= "" then
-  redis.call("HSET", runStepsKey(parentRunId), parentStepId, parentStepValue)
-  redis.call("HSET", runRecordKey(parentRunId), "stalls", 0)
-end
+saveParentStep()
 
 return { "enqueued", createdRunIds, skippedRunIds }
 `;

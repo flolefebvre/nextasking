@@ -118,7 +118,7 @@ engineTest(
   },
 );
 
-engineTest("an emit whose event id is already live resolves with that id and saves no step", async (context) => {
+engineTest("an emit whose event id is already live resolves with that id and saves it as a step", async (context) => {
   const { engine, redis, keys } = context;
   const lockedRun = await lockedParentRunOf(context);
   const sourceEvent = { eventName: "user.onboarded", eventId: "onboarded-user-1" };
@@ -134,7 +134,9 @@ engineTest("an emit whose event id is already live resolves with that id and sav
   );
 
   expect(emittedEvent).toEqual({ eventId: "onboarded-user-1" });
-  expect(await redis.hGetAll(keys.runSteps(PARENT_TASK, "parent-run"))).toEqual({});
+  expect(await redis.hGetAll(keys.runSteps(PARENT_TASK, "parent-run"))).toEqual({
+    [topLevelSendId(0)]: JSON.stringify(["onboarded-user-1"]),
+  });
 });
 
 async function staleAttemptOf(context: EngineTestContext, markLockLost: () => void): Promise<StepEngine> {

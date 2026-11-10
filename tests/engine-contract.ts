@@ -5,13 +5,18 @@ import type { DurationInMilliseconds, EpochMilliseconds } from "../src/durations
 import type { RunIdentity } from "../src/engine/engine-keys.js";
 import { MOST_RUNS_PRUNED_PER_PRUNE } from "../src/engine/engine.js";
 import type {
+  DispatchOrEmitRequest,
   Engine,
+  EnqueueReply,
   FailureNotice,
   FetchedReply,
   FireRequest,
   LockedRun,
+  PromoteReply,
+  ReadStepReply,
   RunToCreate,
   ScheduleToSync,
+  SerializedStepValue,
   SettleOutcome,
   SettleReply,
 } from "../src/engine/engine.js";
@@ -110,6 +115,46 @@ async function onlyLockedRunOf(engine: ContractEngine, runId: RunId): Promise<Lo
   await engine.enqueue({ runs: sendEmailRunsOf([runId]) });
   const [lockedRun] = await lockedRunsOf(engine, 1);
   return lockedRun!;
+}
+
+type FencedSendOutcome = {
+  reply: EnqueueReply;
+  resentReply: EnqueueReply;
+  readReply: ReadStepReply;
+  stallsAfterTheSend: PromoteReply;
+};
+
+async function fencedSendOutcomeOf(
+  harness: EngineContractHarness,
+  request: DispatchOrEmitRequest,
+  stepValue: SerializedStepValue,
+  arrangeAfterTheParentIsLocked: () => Promise<unknown> = async () => undefined,
+): Promise<FencedSendOutcome> {
+  const { engine } = harness;
+  await onlyLockedRunOf(engine, "parent-run");
+  await harness.expireLock("send-email", "parent-run");
+  await engine.promote();
+  const [parentRun] = await lockedRunsOf(engine, 1);
+  const { task, runId, lockToken } = parentRun!;
+  const parentFence = { parentTask: task, parentRunId: runId, lockToken, stepId: "send-1", stepValue };
+  await arrangeAfterTheParentIsLocked();
+
+  const reply = await engine.enqueue({ ...request, parentFence });
+  const resentReply = await engine.enqueue({ ...request, parentFence });
+  const readReply = await engine.readStep({ task, runId, lockToken, stepId: "send-1" });
+  await harness.expireLock(task, runId);
+  const stallsAfterTheSend = await engine.promote();
+
+  return { reply, resentReply, readReply, stallsAfterTheSend };
+}
+
+function stalledParentRunOf(stalls: number): PromoteReply {
+  return {
+    kind: "promoted",
+    promotedRunCount: 0,
+    stalledRuns: [{ runId: "parent-run", task: "send-email", attempt: 1, stalls }],
+    thirdStalls: [],
+  };
 }
 
 function failureNoticeOf(runId: RunId, listenerRunIds: readonly RunId[]): FailureNotice {
@@ -612,6 +657,52 @@ export function defineEngineContractTests(contractTest: EngineContractTest): voi
         skippedRuns: [],
       });
       expect(repeatedEmitReply).toEqual({ kind: "duplicate" });
+    },
+  );
+
+  contractTest(
+    "a handler emit of no run saves its step, resets stalls and leaves its event id free for an emit with listeners",
+    async (harness) => {
+      const { engine } = harness;
+      const eventDedup = { eventName: "user.signed-up", eventId: "event-1" };
+
+      const outcome = await fencedSendOutcomeOf(harness, { runs: [], eventDedup }, '"event-1"');
+      const laterEmitReply = await engine.enqueue({ runs: sendEmailRunsOf(["listener-run"]), eventDedup });
+
+      expect(outcome).toEqual({
+        reply: { kind: "enqueued", createdRuns: [], skippedRuns: [] },
+        resentReply: { kind: "alreadySent", savedValue: '"event-1"' },
+        readReply: { kind: "read", savedValue: '"event-1"' },
+        stallsAfterTheSend: stalledParentRunOf(1),
+      });
+      expect(laterEmitReply).toEqual({
+        kind: "enqueued",
+        createdRuns: sendEmailRunIdentitiesOf(["listener-run"]),
+        skippedRuns: [],
+      });
+    },
+  );
+
+  contractTest(
+    "a handler emit whose event id is live creates nothing, replies duplicate, saves its step and resets stalls",
+    async (harness) => {
+      const { engine } = harness;
+      const eventDedup = { eventName: "user.signed-up", eventId: "event-1" };
+
+      const outcome = await fencedSendOutcomeOf(
+        harness,
+        { runs: sendEmailRunsOf(["repeated-listener-run"]), eventDedup },
+        '"event-1"',
+        () => engine.enqueue({ runs: sendEmailRunsOf(["listener-run"]), eventDedup }),
+      );
+
+      expect(outcome).toEqual({
+        reply: { kind: "duplicate" },
+        resentReply: { kind: "alreadySent", savedValue: '"event-1"' },
+        readReply: { kind: "read", savedValue: '"event-1"' },
+        stallsAfterTheSend: stalledParentRunOf(1),
+      });
+      expect(await harness.stateOf("send-email", "repeated-listener-run")).toBeUndefined();
     },
   );
 

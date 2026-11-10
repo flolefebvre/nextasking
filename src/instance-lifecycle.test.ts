@@ -166,6 +166,14 @@ function gatedTaskOf(handlerOf: (handlerGate: HandlerGate) => TaskHandler<object
   };
 }
 
+function scenarioOfABackgroundBootBelowTheFloor(): LifecycleScenario {
+  return lifecycleScenarioOf({
+    prepareDriver: (fakeRedisDriver) => {
+      fakeRedisDriver.infoReply = async () => infoReplyWith({ redisVersion: "7.2.4", maxmemoryPolicy: "noeviction" });
+    },
+  });
+}
+
 async function scenarioOfARunningWorker(
   handlerOf: (handlerGate: HandlerGate) => TaskHandler<object>,
   options: LifecycleScenarioOptions = {},
@@ -347,11 +355,7 @@ describe("the boot", () => {
   });
 
   test("a background boot that fails writes worker not started and calls onWorkerNotStarted with the error", async () => {
-    const { lifecycle, lines, commandDriver, blockingDrivers } = lifecycleScenarioOf({
-      prepareDriver: (fakeRedisDriver) => {
-        fakeRedisDriver.infoReply = async () => infoReplyWith({ redisVersion: "7.2.4", maxmemoryPolicy: "noeviction" });
-      },
-    });
+    const { lifecycle, lines, commandDriver, blockingDrivers } = scenarioOfABackgroundBootBelowTheFloor();
     const onWorkerNotStarted = vi.fn();
 
     await Promise.all([
@@ -366,6 +370,47 @@ describe("the boot", () => {
     expect(onWorkerNotStarted).toHaveBeenCalledWith(floorError);
     expect(blockingDrivers()).toEqual([]);
   });
+
+  test.each([
+    {
+      failure: "throws",
+      onWorkerNotStartedFailingWith: (callbackError: Error) => () => {
+        throw callbackError;
+      },
+    },
+    {
+      failure: "rejects",
+      onWorkerNotStartedFailingWith: (callbackError: Error) => () => Promise.reject(callbackError),
+    },
+  ])(
+    "a background boot that fails, with an onWorkerNotStarted that $failure, writes worker not started then onWorkerNotStarted failed with what it threw, and rethrows nothing",
+    async ({ onWorkerNotStartedFailingWith }) => {
+      const callbackError = new Error("the app's logger could not flush");
+      const { lifecycle, lines, commandDriver } = scenarioOfABackgroundBootBelowTheFloor();
+      let startOutcome: unknown;
+
+      const unhandledRejections = await unhandledRejectionsDuring(async () => {
+        startOutcome = await Promise.all([
+          lifecycle.startWorker({ onWorkerNotStarted: onWorkerNotStartedFailingWith(callbackError) }),
+          vi.advanceTimersByTimeAsync(GIVE_UP_AFTER_IN_MILLISECONDS),
+        ]).then(([started]) => started);
+        commandDriver().becomeReady();
+        await vi.advanceTimersByTimeAsync(0);
+      });
+
+      expect(lines).toEqual([
+        {
+          level: "error",
+          message: "worker not started",
+          fields: { err: new Error("Redis 7.2.4 is below the floor: Valkey 8 or Redis 7.4") },
+        },
+        { level: "error", message: "onWorkerNotStarted failed", fields: { err: callbackError } },
+      ]);
+      expect(lines[1]?.fields["err"]).toBe(callbackError);
+      expect(startOutcome).toBeUndefined();
+      expect(unhandledRejections).toEqual([]);
+    },
+  );
 
   test("a close during a boot waiting for Redis resolves, and no worker starts", async () => {
     const { lifecycle, lines, engine, commandDriver, blockingDrivers } = lifecycleScenarioOf({

@@ -37,6 +37,26 @@ export async function retryTheWelcomeEmail(logger: Logger): Promise<WelcomeEmail
   );
 }
 
+export async function entriesShapedAsTheTestingPageShowsThem(): Promise<WelcomeEmailAttempt["steps"]> {
+  const attempt = await executeAttempt(nextasking, "create-default-workspace", { userId: "user-1" });
+  const savedStep: WelcomeEmailAttempt["steps"][number] = { id: "create-account", result: { accountId: "account-1" } };
+  const sentStep: WelcomeEmailAttempt["steps"][number] = { id: "send-id", result: attempt.dispatches[0]?.runId };
+  const sleeps: WelcomeEmailAttempt["sleeps"] = [{ id: "wait-a-day", resumesAt: new Date() }];
+  const retry = await executeAttempt(
+    nextasking,
+    "create-default-workspace",
+    { userId: "user-1" },
+    { runId: "run-1", attempt: 2, savedSteps: attempt.steps },
+  );
+  await executeAttempt(
+    nextasking,
+    "create-default-workspace",
+    { userId: "user-1" },
+    { runId: "run-1", attempt: 2, savedSteps: [{ id: "create-pdf", result: { pdfId: "pdf-1" } }] },
+  );
+  return [savedStep, sentStep, ...sleeps.map(({ id }) => ({ id, result: id })), ...retry.steps];
+}
+
 export type AttemptIsAnExecutedAttempt = Expect<
   IsEqual<WelcomeEmailAttempt, ExecutedAttempt<InstanceTaskDefinition, InstanceEventDefinition>>
 >;

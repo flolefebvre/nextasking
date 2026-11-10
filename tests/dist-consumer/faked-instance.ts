@@ -27,6 +27,13 @@ export async function dispatchWhileFaked(): Promise<readonly InstanceDispatch[]>
   return fake.dispatches;
 }
 
+export async function replayWhileFaked(): Promise<readonly InstanceReplay[]> {
+  using fake = fakeTheInstance();
+  await nextasking.replay("send-welcome-email", "welcome-ada");
+  const expectedReplays: readonly InstanceReplay[] = [{ task: "send-welcome-email", runId: "welcome-ada" }];
+  return fake.replays.length === expectedReplays.length ? fake.replays : expectedReplays;
+}
+
 export type FakeIsANextaskingFake = Expect<
   IsEqual<InstanceFake, NextaskingFake<InstanceTaskDefinition, InstanceEventDefinition>>
 >;

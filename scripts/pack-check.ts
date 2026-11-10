@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 
 import { disallowedImportsOf, requiredPeerNamesOf } from "./declaration-imports.js";
 import type { PeerManifest } from "./declaration-imports.js";
+import { manualExportProblemsOf, publicExportsOf } from "./manual-exports.js";
 
 type ExportTarget = string | null | ExportTarget[] | { [condition: string]: ExportTarget };
 
@@ -120,10 +121,30 @@ if (disallowedDeclarationImports.length > 0) {
   );
 }
 
+const publicExports = publicExportsOf(
+  [
+    { entry: ".", declarationPath: `${PACKAGE_DIR}dist/index.d.ts` },
+    { entry: "./testing", declarationPath: `${PACKAGE_DIR}dist/testing.d.ts` },
+  ],
+  (path) => (existsSync(path) ? readFileSync(path, "utf-8") : undefined),
+);
+const manualExportProblems = manualExportProblemsOf(
+  publicExports,
+  readFileSync(new URL("../docs/index.md", import.meta.url), "utf-8"),
+);
+if (manualExportProblems.length > 0) {
+  fail(
+    "The manual's import map and export table disagree with the built types; a change to the public interface " +
+      `updates them in the same PR:\n${manualExportProblems.map((problem) => `- ${problem}`).join("\n")}`,
+  );
+}
+
 console.log(
   `Tarball OK: ${String(packedPaths.length)} files, the exports ${EXPECTED_SUBPATHS.join(", ")} ` +
     `and ${String(manualPagePaths.length)} manual pages ship, the manifest declares ${binListOf(EXPECTED_BIN_NAMES)}, ` +
     "nothing outside dist, the manual, README.md, LICENSE and package.json does, and no script runs on install; " +
     `the ${String(declarationPaths.length)} declarations import nothing but the required peers ` +
-    `(${requiredPeerNames.join(", ")}) and Node's built-ins and types.`,
+    `(${requiredPeerNames.join(", ")}) and Node's built-ins and types; ` +
+    `the ${String(publicExports.length)} exports of the two entries each have one row in the export table ` +
+    "of docs/index.md, and its import map lists exactly them, values as values and types as types.",
 );

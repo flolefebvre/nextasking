@@ -150,6 +150,8 @@ export const signUpUser = defineTask("sign-up-user", {
 - Each call that succeeds is saved like a step, with the `runId` or `eventId` it sent. A retry, a resume or a replay that reaches it again sends nothing, and resolves with the same `{ runId }` or `{ eventId }`.
 - A call is recognised by its position: the run, the enclosing step (or the top level), and how many `emit` and `dispatch` calls came before it in that scope during the attempt. Keep their order stable, and put a call that depends on data in its own step.
 - Without your own id, the run or event gets an id derived from that position, the same on every attempt. A `runId` or `eventId` you pass wins over it.
+- An `emit` of an event no listener subscribes to starts nothing, logs `no listeners for event` once per run, and is saved like any call.
+- A call dropped as a repeat (an `eventId` still in its 24-hour window, a `runId` already taken) is saved too: a later attempt sends nothing, even after the window ends.
 - A call that throws is not saved: the next attempt sends it again.
 - Inside a step's `fn`, a call is counted within that step. Once the step is saved, its `fn`, and the calls in it, don't run again.
 - An attempt that lost its lock sends nothing: its next `emit` or `dispatch` throws without sending, and its `abortSignal` aborts. See [Worker](worker.md#stop-a-handler-cleanly-with-abortsignal).

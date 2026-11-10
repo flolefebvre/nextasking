@@ -199,6 +199,8 @@ export async function POST(request: Request) {
 
 Emitting an event no listener subscribes to, from server code, validates the payload, logs `no listeners for event` at warn with `eventName` and `eventId`, and does nothing else: nothing is stored and no connection opens. Emit the event before writing its first listener, then add listeners later.
 
+A handler's `emit` of such an event logs the same line once per run and stores nothing of the event, but it does reach Redis: it saves the call as a step of its run, so a retry or a resume doesn't emit it again. See [Emit and dispatch from a handler](steps.md#emit-and-dispatch-from-a-handler).
+
 ## Run once per business fact
 
 A webhook retried by its sender, or a form submitted twice, must not start the work twice. Pass your own `runId` to `dispatch`, or `eventId` to `emit`, built from the business fact itself.
@@ -284,7 +286,7 @@ try {
 - `InvalidPayloadError`: the schema refused the payload. `issues` lists each issue as `{ path, message }`, with `path` dotted (`address.zipCode`) or `(root)`. Messages are redacted of payload values (`[redacted]`), so the error is safe to log. Its message names the task or the event.
 - All three are thrown before anything is stored.
 - `RedisUnavailableError`: Redis didn't answer in time, or refused the command because it is out of memory. See [When Redis is down](#when-redis-is-down).
-- `InstanceClosedError`: the instance has closed, as it does when its worker shuts down; a call made then, or still waiting for Redis, throws it at once. An `emit` of an event with no listeners touches no connection, so it doesn't throw it.
+- `InstanceClosedError`: the instance has closed, as it does when its worker shuts down; a call made then, or still waiting for Redis, throws it at once. The instance's `emit` of an event with no listeners touches no connection, so it doesn't throw it.
 
 ## When Redis is down
 

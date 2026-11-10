@@ -17,7 +17,7 @@ pnpm add @flefebvre/nextasking zod
 The queues live in a Valkey or Redis that the app and every worker reach. Give the queues a server of their own, not your cache's, and set its eviction policy:
 
 ```sh
-docker run -d --name nextasking-valkey -p 6379:6379 valkey/valkey:9 --maxmemory-policy noeviction
+docker run -d --name nextasking-valkey -p 6379:6379 valkey/valkey:9 --maxmemory-policy noeviction --appendonly yes
 ```
 
 - `maxmemory-policy` must be `noeviction`: a worker refuses to start on another policy it can read. See [Worker](worker.md#give-queues-their-own-valkey-or-redis).

@@ -6,6 +6,7 @@ import { runsLeftExecutingIn, storedKeysSnapshotOf, storedKeyViolationsIn } from
 import type { StoredKeysSnapshot } from "./stored-key-violations.js";
 import { testClientNeverReconnectingOf, withRedis } from "./with-redis.js";
 import type { LockToken } from "../src/engine/engine-keys.js";
+import { workerOptionsFrom } from "../src/worker-options.js";
 
 export type Invariant =
   "stored keys" | "worker error" | "process warning" | "unhandled rejection" | "slow close" | "run left executing";
@@ -25,6 +26,23 @@ type TestInvariants = {
 export const CLOSE_BOUND_PAST_THE_SHUTDOWN_TIMEOUT_IN_MILLISECONDS = 2000;
 
 export const STORED_KEYS_READ_BOUND_IN_MILLISECONDS = 5_000;
+
+const DEFAULT_CLOSE_BOUND_IN_MILLISECONDS =
+  workerOptionsFrom({}).shutdownTimeoutInMilliseconds + CLOSE_BOUND_PAST_THE_SHUTDOWN_TIMEOUT_IN_MILLISECONDS;
+
+async function areSettledWithin(settled: Promise<unknown>, boundInMilliseconds: number): Promise<boolean> {
+  let boundTimer: NodeJS.Timeout | undefined;
+  const boundReached = new Promise<boolean>((resolve) => {
+    boundTimer = setTimeout(() => {
+      resolve(false);
+    }, boundInMilliseconds);
+  });
+  try {
+    return await Promise.race([settled.then(() => true), boundReached]);
+  } finally {
+    clearTimeout(boundTimer);
+  }
+}
 
 let invariantsOfCurrentTest: TestInvariants | undefined;
 
@@ -184,10 +202,13 @@ export function checkInvariantsOfThisTest({
   process.on("unhandledRejection", recordUnhandledRejection);
   process.on("warning", recordProcessWarning);
   invariantsOfCurrentTest = invariants;
+  let areSourcesSettled = true;
 
   onTestFinished(async () => {
     try {
-      await Promise.all(settledSources);
+      if (areSourcesSettled) {
+        await Promise.all(settledSources);
+      }
       await Promise.all(storedKeyChecks);
       await macrotaskYield();
     } finally {
@@ -213,6 +234,16 @@ export function checkInvariantsOfThisTest({
       throw invariantViolationsErrorOf(undeclaredViolations, unseenExpectations);
     }
   });
+
+  onTestFinished(async ({ task }) => {
+    const settleBoundInMilliseconds = task.timeout + DEFAULT_CLOSE_BOUND_IN_MILLISECONDS;
+    areSourcesSettled = await areSettledWithin(Promise.all(settledSources), settleBoundInMilliseconds);
+    if (!areSourcesSettled) {
+      throw new Error(
+        `A worker this test started, or a worker process it spawned, had not stopped ${String(settleBoundInMilliseconds)} ms after the test ended (its timeout plus the close bound of the default shutdown timeout): close every instance whose worker the test starts, in a finally or with closeWhenTestFinishes, and stop every worker process in a finally`,
+      );
+    }
+  }, Number.POSITIVE_INFINITY);
 
   return (invariant, message) => {
     expectedViolations.push({ invariant, message });

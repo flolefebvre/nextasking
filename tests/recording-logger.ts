@@ -29,6 +29,7 @@ export function reportedWorkerErrorOf(line: RecordedLogLine): InvariantViolation
 export function createRecordingLogger(): { logger: Logger; lines: RecordedLogLine[] } {
   const lines: RecordedLogLine[] = [];
   const invariants = invariantsOfCurrentTestIfAny();
+  const resolversOfWorkersNotStopped: (() => void)[] = [];
   const lineRecorderAt =
     (level: LogLevel): Logger[LogLevel] =>
     (fields, message) => {
@@ -37,6 +38,16 @@ export function createRecordingLogger(): { logger: Logger; lines: RecordedLogLin
       const workerError = reportedWorkerErrorOf(line);
       if (workerError !== undefined) {
         invariants?.report(workerError);
+      }
+      if (message === "worker started") {
+        invariants?.waitBeforeJudging(
+          new Promise<void>((resolve) => {
+            resolversOfWorkersNotStopped.push(resolve);
+          }),
+        );
+      }
+      if (message === "worker stopped") {
+        resolversOfWorkersNotStopped.shift()?.();
       }
     };
   return {

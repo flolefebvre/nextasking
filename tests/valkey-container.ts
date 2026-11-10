@@ -20,7 +20,10 @@ export function providedRedisUrl(env: NodeJS.ProcessEnv = process.env): string |
   return env.NEXTASKING_TEST_REDIS_URL?.trim() || undefined;
 }
 
-export async function provideRedisUrl(project: TestProject): Promise<(() => Promise<void>) | undefined> {
+export async function provideRedisUrl(
+  project: TestProject,
+  serverArguments: readonly string[] = [],
+): Promise<(() => Promise<void>) | undefined> {
   const reusedRedisUrl = providedRedisUrl();
   if (reusedRedisUrl !== undefined) {
     project.provide("redisUrl", reusedRedisUrl);
@@ -28,6 +31,7 @@ export async function provideRedisUrl(project: TestProject): Promise<(() => Prom
   }
 
   const container = await new GenericContainer(testImage())
+    .withCommand([...serverArguments])
     .withExposedPorts(REDIS_CONTAINER_PORT)
     .withWaitStrategy(Wait.forLogMessage(/Ready to accept connections/))
     .start();

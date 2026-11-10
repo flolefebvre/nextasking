@@ -23,7 +23,7 @@ import type {
 import { MOST_DUE_RUNS_PROMOTED_PER_PROMOTE } from "../src/engine/promote-script.js";
 import { deriveFiringRunId } from "../src/ids.js";
 import type { RunId } from "../src/ids.js";
-import type { ErrorRecord } from "../src/engine/engine.js";
+import type { AttemptErrorReport } from "../src/engine/engine.js";
 import type { RunState } from "../src/run-states.js";
 import {
   DAY_IN_MILLISECONDS,
@@ -63,6 +63,7 @@ export type EngineContractHarness = {
   ) => Promise<void>;
   pastInstant: () => Promise<EpochMilliseconds>;
   stateOf: (task: string, runId: RunId) => Promise<RunState | undefined>;
+  storedErrorsOf: (task: string, runId: RunId) => Promise<unknown[]>;
   isWakeUpMarkerArmed: () => Promise<boolean>;
   disarmWakeUpMarker: () => Promise<void>;
 };
@@ -71,7 +72,7 @@ export type EngineContractTest = (name: string, body: (harness: EngineContractHa
 
 const LOCK_DURATION_IN_MILLISECONDS = 120_000;
 
-const ATTEMPT_ERROR: ErrorRecord = { attempt: 1, name: "Error", message: "boom", stack: "Error: boom", failedAt: "" };
+const ATTEMPT_ERROR: AttemptErrorReport = { attempt: 1, name: "Error", message: "boom", stack: "Error: boom" };
 
 function sendEmailRunsOf(runIds: readonly RunId[], extraFields: Partial<RunToCreate> = {}): RunToCreate[] {
   return runIds.map((runId) => ({
@@ -115,6 +116,15 @@ async function onlyLockedRunOf(engine: ContractEngine, runId: RunId): Promise<Lo
   await engine.enqueue({ runs: sendEmailRunsOf([runId]) });
   const [lockedRun] = await lockedRunsOf(engine, 1);
   return lockedRun!;
+}
+
+async function retryOfTheOnlyRunOf(
+  engine: ContractEngine,
+  runId: RunId,
+  backoffInMilliseconds: DurationInMilliseconds,
+): Promise<SettleReply> {
+  const lockedRun = await onlyLockedRunOf(engine, runId);
+  return engine.settle({ ...lockedRun, outcome: { kind: "retry", error: ATTEMPT_ERROR, backoffInMilliseconds } });
 }
 
 type FencedSendOutcome = {
@@ -345,12 +355,8 @@ export function defineEngineContractTests(contractTest: EngineContractTest): voi
 
   contractTest("a retry backs off, then comes back pending at the next attempt once due", async (harness) => {
     const { engine } = harness;
-    const lockedRun = await onlyLockedRunOf(engine, "run-1");
 
-    const reply = await engine.settle({
-      ...lockedRun,
-      outcome: { kind: "retry", error: ATTEMPT_ERROR, backoffInMilliseconds: 0 },
-    });
+    const reply = await retryOfTheOnlyRunOf(engine, "run-1", 0);
     const stateAfterSettle = await harness.stateOf("send-email", "run-1");
     const promoteReply = await engine.promote();
     const [retriedRun] = await lockedRunsOf(engine, 1);
@@ -359,6 +365,42 @@ export function defineEngineContractTests(contractTest: EngineContractTest): voi
     expect(stateAfterSettle).toBe("backingOff");
     expect(promoteReply).toEqual({ kind: "promoted", promotedRunCount: 1, stalledRuns: [], thirdStalls: [] });
     expect(retriedRun).toMatchObject({ runId: "run-1", attempt: 2, isResume: false });
+  });
+
+  contractTest(
+    "a retry stores its attempt's error with the server's instant of the retry, its backoff before the next attempt",
+    async (harness) => {
+      const reply = await retryOfTheOnlyRunOf(harness.engine, "run-1", HOUR_IN_MILLISECONDS);
+
+      const nextAttemptAt = reply.kind === "backingOff" ? reply.nextAttemptAt : 0;
+      expect(await harness.storedErrorsOf("send-email", "run-1")).toEqual([
+        { ...ATTEMPT_ERROR, failedAt: new Date(nextAttemptAt - HOUR_IN_MILLISECONDS).toISOString() },
+      ]);
+    },
+  );
+
+  contractTest("a run failed for good stores its last error with its finishedAt as failedAt", async (harness) => {
+    const { engine } = harness;
+    await retryOfTheOnlyRunOf(engine, "run-1", 0);
+    await engine.promote();
+    const [retriedRun] = await lockedRunsOf(engine, 1);
+
+    const reply = await engine.settle({
+      ...retriedRun!,
+      outcome: {
+        kind: "fail",
+        reason: "retries exhausted",
+        error: { ...ATTEMPT_ERROR, attempt: 2 },
+        failureNotice: undefined,
+      },
+    });
+
+    const finishedAt = reply.kind === "failed" ? reply.finishedAt : 0;
+    expect((await harness.storedErrorsOf("send-email", "run-1")).at(-1)).toEqual({
+      ...ATTEMPT_ERROR,
+      attempt: 2,
+      failedAt: new Date(finishedAt).toISOString(),
+    });
   });
 
   contractTest("a suspend comes back as a resume of the same attempt once due", async (harness) => {

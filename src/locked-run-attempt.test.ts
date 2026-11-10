@@ -227,7 +227,7 @@ test("a failing attempt built for a third stall carries the notice and the liste
   expect(listenersLeftOut.map(({ listenerName }) => listenerName)).toEqual(["broken-key-listener"]);
 });
 
-test("a settle request carries the run's task and fence, the outcome with its error recorded for the attempt, and the task's limit", async () => {
+test("a settle request carries the run's task and fence, the outcome with its attempt's error and no failedAt, which the server stamps, and the task's limit", async () => {
   const engine = createInMemoryEngine();
   const sendEmail = defineTask("send-email", {
     schema: v.object({}),
@@ -252,7 +252,7 @@ test("a settle request carries the run's task and fence, the outcome with its er
     outcome: {
       kind: "retry",
       backoffInMilliseconds: 1000,
-      error: { attempt: 1, name: "Error", message: "provider down", stack: error.stack, failedAt: expect.any(String) },
+      error: { attempt: 1, name: "Error", message: "provider down", stack: error.stack },
     },
   });
 });

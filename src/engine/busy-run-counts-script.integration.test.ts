@@ -30,7 +30,7 @@ engineTest(
       ...retriedRun!,
       outcome: {
         kind: "retry",
-        error: { attempt: 1, name: "Error", message: "boom", stack: "", failedAt: "" },
+        error: { attempt: 1, name: "Error", message: "boom", stack: "" },
         backoffInMilliseconds: 0,
       },
     });

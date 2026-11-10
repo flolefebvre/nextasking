@@ -7,7 +7,7 @@ import { storedKeyViolationsOf } from "../../tests/stored-key-violations.js";
 import { freshLockTokensOf } from "../../tests/lock-tokens.js";
 import { measuredDurationOf } from "../../tests/measured-duration.js";
 import { readTrafficOf } from "../../tests/read-traffic.js";
-import { errorRecordFor } from "../attempt-errors.js";
+import { attemptErrorReportOf } from "../attempt-errors.js";
 import { serverInstantInMillisecondsOf } from "../../tests/server-instant.js";
 import { withRedis, withRedisClient } from "../../tests/with-redis.js";
 import { REPLIED_EMPTY_PROMOTE, REPLIED_ONE_RENEWAL, repliedOf } from "../../tests/tick-replies.js";
@@ -198,7 +198,7 @@ engineTest(
       const [lockedRun] = await fetchedLockedRunsOf(context, 1);
       return lockedRun!;
     };
-    const failedAttemptError = errorRecordFor(new Error("provider down"), 1, new Date());
+    const failedAttemptError = attemptErrorReportOf(new Error("provider down"), 1);
     const scheduleToSync = { task: "build-report", cron: "0 3 * * *", timezone: "UTC", retries: 0 };
     let lockedRun = await (async () => {
       await engine.enqueue({ runs: [{ runId: "warm-up", task: "warm-up", payload: "{}", retries: 0 }] });

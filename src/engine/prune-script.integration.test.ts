@@ -81,7 +81,7 @@ engineTest(
       outcome: {
         kind: "fail",
         reason: "non-retriable",
-        error: { attempt: 1, name: "Error", message: "boom", stack: "", failedAt: "" },
+        error: { attempt: 1, name: "Error", message: "boom", stack: "" },
         failureNotice: undefined,
       },
     });
@@ -238,7 +238,7 @@ async function fetchAndEndSomeRuns(context: EngineTestContext, { random, pick }:
           {
             kind: "fail",
             reason: "non-retriable",
-            error: { attempt: 1, name: "Error", message: "boom", stack: "", failedAt: "" },
+            error: { attempt: 1, name: "Error", message: "boom", stack: "" },
             failureNotice: undefined,
           },
         ]),

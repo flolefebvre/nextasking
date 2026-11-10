@@ -53,7 +53,7 @@ import type {
 import { MOST_LOCK_TOKENS_PER_FETCH, MOST_RUNS_PARKED_PER_FETCH } from "../src/engine/fetch-script.js";
 import { MOST_DUE_RUNS_PROMOTED_PER_PROMOTE } from "../src/engine/promote-script.js";
 import type { RunId, StepId } from "../src/ids.js";
-import type { ErrorRecord, SourceEvent } from "../src/engine/engine.js";
+import type { AttemptErrorReport, SourceEvent } from "../src/engine/engine.js";
 import type { FailureReason } from "../src/run-states.js";
 import type { RunState } from "../src/run-states.js";
 
@@ -155,7 +155,7 @@ function byScoreThenMember<Entry extends { score: number; member: string }>(left
   return left.score - right.score || compareInSortedSetMemberOrder(left.member, right.member);
 }
 
-function errorWithTextsCutOf(error: ErrorRecord): ErrorRecord {
+function errorWithTextsCutOf(error: AttemptErrorReport): AttemptErrorReport {
   return { ...error, message: errorTextCutOf(error.message), stack: errorTextCutOf(error.stack) };
 }
 
@@ -522,7 +522,7 @@ export function createInMemoryEngine({ now = () => Date.now() }: InMemoryEngineO
   const failRun = (
     storedRun: InMemoryStoredRun,
     reason: FailureReason,
-    error: ErrorRecord,
+    error: AttemptErrorReport,
     failureNotice: FailureNotice | undefined,
     instant: EpochMilliseconds,
   ): SettleReply => {
@@ -580,7 +580,7 @@ export function createInMemoryEngine({ now = () => Date.now() }: InMemoryEngineO
     if (outcome.kind !== "handBack") {
       storedRun.firstFoundUnknownAt = undefined;
     }
-    const appendError = (error: ErrorRecord) => {
+    const appendError = (error: AttemptErrorReport) => {
       storedRun.errors.push(
         JSON.stringify({ ...errorWithTextsCutOf(error), failedAt: new Date(instant).toISOString() }),
       );

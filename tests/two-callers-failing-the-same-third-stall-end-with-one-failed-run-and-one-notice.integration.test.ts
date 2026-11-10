@@ -6,7 +6,7 @@ import { engineTest, expireLock, fetchedLockedRunsOf } from "./engine-test.js";
 
 const NOTICE_EVENT = { eventName: "nextasking/run.failed", eventId: "notice-event-1" };
 
-const STALL_ERROR = { attempt: 1, name: "StalledRunError", message: "stalled three times", stack: "", failedAt: "" };
+const STALL_ERROR = { attempt: 1, name: "StalledRunError", message: "stalled three times", stack: "" };
 
 const FAILURE_NOTICE: FailureNotice = {
   payload: {

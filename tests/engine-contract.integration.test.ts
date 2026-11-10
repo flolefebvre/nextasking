@@ -16,6 +16,8 @@ defineEngineContractTests((name, body) => {
       pastInstant: async () => (await serverInstantInMillisecondsOf(redis)) - 1000,
       stateOf: async (task, runId) =>
         ((await redis.hGet(keys.runRecord(task, runId), "state")) ?? undefined) as RunState | undefined,
+      storedErrorsOf: async (task, runId) =>
+        (await redis.lRange(keys.runErrors(task, runId), 0, -1)).map((storedError): unknown => JSON.parse(storedError)),
       isWakeUpMarkerArmed: async () => (await redis.zCard(keys.wakeUpMarker)) > 0,
       disarmWakeUpMarker: async () => {
         await redis.del(keys.wakeUpMarker);

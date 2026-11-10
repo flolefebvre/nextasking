@@ -1,7 +1,10 @@
 import { expect, vi } from "vitest";
 
 import { integrationTest } from "../tests/integration-test.js";
+import { STORED_KEYS_READ_BOUND_IN_MILLISECONDS } from "../tests/invariant-violations.js";
+import { SERVER_CONTAINER_START_BOUND_IN_MILLISECONDS, startOwnServer } from "../tests/own-server.js";
 import { startTcpProxy } from "../tests/tcp-proxy.js";
+import { providedRedisUrl } from "../tests/valkey-container.js";
 import { withRedisClient } from "../tests/with-redis.js";
 import { createNodeRedisDriver } from "./node-redis-driver.js";
 import type { RedisDriver } from "./node-redis-driver.js";
@@ -170,39 +173,34 @@ async function echoRunOnceThenFlushed(client: RedisClient, echoKey: string): Pro
   await client.send(builtInCommandOf("SCRIPT", "FLUSH"));
 }
 
-integrationTest(
-  "a script still answers alone after the server's script cache is flushed",
-  async ({ redisUrl, keyPrefix }) => {
-    await withRedisClient(redisUrl, async (client) => {
-      const echoKey = `${keyPrefix}echo`;
-      await echoRunOnceThenFlushed(client, echoKey);
+integrationTest.skipIf(providedRedisUrl() !== undefined)(
+  "a script still answers alone, then in a batch, after the script cache of a server of its own is flushed each time",
+  { timeout: SERVER_CONTAINER_START_BOUND_IN_MILLISECONDS + STORED_KEYS_READ_BOUND_IN_MILLISECONDS + 5_000 },
+  async ({ keyPrefix }) => {
+    const ownServer = await startOwnServer();
+    try {
+      await withRedisClient(ownServer.url, async (client) => {
+        const echoKey = `${keyPrefix}echo`;
+        await echoRunOnceThenFlushed(client, echoKey);
 
-      const reply = await client.send(scriptCommandOf(ECHO_SCRIPT, [echoKey], ["after the flush"]));
+        const replyAlone = await client.send(scriptCommandOf(ECHO_SCRIPT, [echoKey], ["after the flush"]));
+        await echoRunOnceThenFlushed(client, echoKey);
+        const resultsInABatch = await client.sendBatch([
+          scriptCommandOf(ECHO_SCRIPT, [echoKey], ["one"]),
+          builtInCommandOf("GET", echoKey),
+          scriptCommandOf(ECHO_SCRIPT, [echoKey], ["two"]),
+        ]);
 
-      expect(reply).toEqual([echoKey, "after the flush"]);
-    });
-  },
-);
-
-integrationTest(
-  "a script still answers in a batch after the server's script cache is flushed",
-  async ({ redisUrl, keyPrefix }) => {
-    await withRedisClient(redisUrl, async (client) => {
-      const echoKey = `${keyPrefix}echo`;
-      await echoRunOnceThenFlushed(client, echoKey);
-
-      const results = await client.sendBatch([
-        scriptCommandOf(ECHO_SCRIPT, [echoKey], ["one"]),
-        builtInCommandOf("GET", echoKey),
-        scriptCommandOf(ECHO_SCRIPT, [echoKey], ["two"]),
-      ]);
-
-      expect(results).toEqual([
-        { kind: "replied", reply: [echoKey, "one"] },
-        { kind: "replied", reply: null },
-        { kind: "replied", reply: [echoKey, "two"] },
-      ]);
-    });
+        expect(replyAlone).toEqual([echoKey, "after the flush"]);
+        expect(resultsInABatch).toEqual([
+          { kind: "replied", reply: [echoKey, "one"] },
+          { kind: "replied", reply: null },
+          { kind: "replied", reply: [echoKey, "two"] },
+        ]);
+      });
+    } finally {
+      await ownServer.stop();
+    }
   },
 );
 

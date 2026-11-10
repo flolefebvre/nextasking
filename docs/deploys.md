@@ -4,20 +4,20 @@ During a deploy, the old and the new release run side by side on one queue: a ru
 
 ## Which release decides what
 
-| What                                                 | Decided by                                                                                                                                                                                                                                         | Details                                                                       |
-| ---------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
-| Payload validation, and the payload the handler gets | The release that dispatched or emitted. The schema's output is stored, and no worker validates it again                                                                                                                                            | [Change a payload schema](#change-a-payload-schema)                           |
-| The listeners an emit reaches                        | The release that emitted                                                                                                                                                                                                                           | [Tasks and events](tasks-and-events.md#emit-an-event)                         |
-| `delay`                                              | The `dispatch` call                                                                                                                                                                                                                                | [Tasks and events](tasks-and-events.md#start-a-run-later)                     |
-| `retries`                                            | Fixed when the run is stored: by the release that dispatched; for a listener run, by the worker that ran the fan-out, 5 if its release doesn't define the listener; for a firing's run, by the worker that processed the firing. A replay keeps it | [Retries and failures](retries-and-failures.md#set-retries-and-backoff)       |
-| `backoff`                                            | The worker that ran the failed attempt                                                                                                                                                                                                             | [Retries and failures](retries-and-failures.md#set-retries-and-backoff)       |
-| `timeout`                                            | The worker running the attempt                                                                                                                                                                                                                     | [Retries and failures](retries-and-failures.md#bound-an-attempt-with-timeout) |
-| `concurrency.limit`, and whether there is a limit    | The worker running the attempt                                                                                                                                                                                                                     | [Concurrency](concurrency.md)                                                 |
-| `concurrency.key`                                    | Computed when the run is stored: by the release that dispatched; for a listener run, by the worker that ran the fan-out. The worker running the attempt computes it only for a run stored without one                                              | [Concurrency](concurrency.md#limit-per-key)                                   |
-| The handler and its steps                            | The worker running the attempt. Steps an earlier attempt saved, on any release, are reused by id                                                                                                                                                   | [Rename or rework a step](#rename-or-rework-a-step)                           |
-| A schedule's `cron` and `timezone`                   | The last worker to boot                                                                                                                                                                                                                            | [Scheduled tasks](scheduled-tasks.md#what-a-deploy-does-to-schedules)         |
-| Whether a firing starts a run                        | The worker that processes the firing: none when its release doesn't schedule the task                                                                                                                                                              | [Scheduled tasks](scheduled-tasks.md#what-a-deploy-does-to-schedules)         |
-| Whether a run or a fan-out executes at all           | The worker that picks it up: one whose release doesn't define the name hands it back, and it fails 30 minutes after a worker first did                                                                                                             | [Worker](worker.md#overlapping-releases)                                      |
+| What                                                 | Decided by                                                                                                                                                                                                                                                  | Details                                                                       |
+| ---------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| Payload validation, and the payload the handler gets | The release that dispatched or emitted. The schema's output is stored, and no worker validates it again                                                                                                                                                     | [Change a payload schema](#change-a-payload-schema)                           |
+| The listeners an emit reaches                        | The release that emitted                                                                                                                                                                                                                                    | [Tasks and events](tasks-and-events.md#emit-an-event)                         |
+| `delay`                                              | The `dispatch` call                                                                                                                                                                                                                                         | [Tasks and events](tasks-and-events.md#start-a-run-later)                     |
+| `retries`                                            | Fixed when the run is stored: by the release that dispatched; for a listener run, by the release that emitted; for a firing's run, by the worker that fired it; for the run of a `runFailed` listener, by the worker that failed the run. A replay keeps it | [Retries and failures](retries-and-failures.md#set-retries-and-backoff)       |
+| `backoff`                                            | The worker that ran the failed attempt                                                                                                                                                                                                                      | [Retries and failures](retries-and-failures.md#set-retries-and-backoff)       |
+| `timeout`                                            | The worker running the attempt                                                                                                                                                                                                                              | [Retries and failures](retries-and-failures.md#bound-an-attempt-with-timeout) |
+| `concurrency.limit`, and whether there is a limit    | The worker running the attempt                                                                                                                                                                                                                              | [Concurrency](concurrency.md)                                                 |
+| `concurrency.key`                                    | Computed when the run is stored: by the release that dispatched; for a listener run, by the release that emitted; for the run of a `runFailed` listener, by the worker that failed the run. A run stored without one keeps none                             | [Concurrency](concurrency.md#limit-per-key)                                   |
+| The handler and its steps                            | The worker running the attempt. Steps an earlier attempt saved, on any release, are reused by id                                                                                                                                                            | [Rename or rework a step](#rename-or-rework-a-step)                           |
+| A schedule's `cron` and `timezone`                   | The last worker to boot                                                                                                                                                                                                                                     | [Scheduled tasks](scheduled-tasks.md#what-a-deploy-does-to-schedules)         |
+| Whether a firing starts a run                        | The worker that fires it: only a worker whose release schedules the task fires, from the stored `cron` and `timezone`                                                                                                                                       | [Scheduled tasks](scheduled-tasks.md#what-a-deploy-does-to-schedules)         |
+| Whether a run executes at all                        | The worker that picks it up: one whose release doesn't define the task hands it back, and the run fails 30 minutes after a worker first did; one whose release is older than the run passes it over                                                         | [Worker](worker.md#overlapping-releases)                                      |
 
 - An option the worker running the attempt decides applies to the next attempt of every run, old runs included.
 - An option fixed when the run is stored keeps its old value for the runs stored before the change.
@@ -63,7 +63,7 @@ await step.run("send-welcome-email", async ({ idempotencyKey }) => sendWelcome(p
 
 ## Remove a task, a listener or an event
 
-Remove a definition in two deploys: the first stops new work and keeps the code that runs the work already stored; the second deletes the code once that work is done. A run or a fan-out whose name no worker defines is handed back, then fails after 30 minutes with `reason: "unknown task"`.
+Remove a definition in two deploys: the first stops new work and keeps the code that runs the work already stored; the second deletes the code once that work is done. A run whose task no worker defines is handed back, then fails after 30 minutes with `reason: "unknown task"`.
 
 ### A task
 
@@ -82,7 +82,7 @@ const unfinishedRunCount = Object.values(unfinishedCounts).reduce((total, count)
 
 ### A listener
 
-1. Deploy 1: turn the listener into a plain task of the same name, with the event's schema. New emits no longer reach it, and the runs and fan-outs already carrying its name still run.
+1. Deploy 1: turn the listener into a plain task of the same name, with the event's schema. New emits no longer reach it, and the runs already stored under its name still run.
 2. Wait as for a task.
 3. Deploy 2: delete it.
 
@@ -106,7 +106,7 @@ export const recordInvoicePayment = defineTask("record-invoice-payment", {
 
 - Keep the event's schema: the stored payloads were validated by it, and the handler reads them as they are.
 - Keep the task in `tasks`.
-- An emit by the old release during the overlap still fans out to it; the plain task runs those runs.
+- An emit by the old release during the overlap still stores a run for it; the plain task runs those runs.
 
 ### An event
 
@@ -114,8 +114,7 @@ export const recordInvoicePayment = defineTask("record-invoice-payment", {
 2. Wait until its listeners have no unfinished run, and the overlap has ended.
 3. Deploy 2: delete the event and its listeners.
 
-- After deploy 2, `getEvent` and `replayEvent` throw `UnknownEventError` for the name: replay its failed fan-outs before.
-- A fan-out still stored after deploy 2 is handed back, then fails after 30 minutes.
+- After deploy 2, `getEvent` throws `UnknownEventError` for the name, and `replay`, `getRun` and `listRuns` throw `UnknownTaskError` for its listeners: replay their failed runs before.
 
 ## Rename a task or an event
 

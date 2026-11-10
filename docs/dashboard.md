@@ -198,6 +198,7 @@ export async function runNow(taskName: TaskName) {
 - A worker removes up to 200 ended runs per second in all, and up to 180 per second of one task that never stops overflowing. The caps hold while runs end below that rate per worker; a burst above it is caught up afterwards, at that rate. With several workers, the rates add up.
 - A worker visits one task per second, in turn, so a cap is reached again at each visit rather than held at every instant: between two visits a task sits over its cap by the runs it ended meanwhile, about a minute's worth with 50 tasks.
 - No read is a snapshot: runs keep moving while a read runs, so two reads, or two counts of one `countRuns`, can disagree by the runs that moved in between.
+- One run is read at one instant: the record, payload, errors and steps `getRun` returns are of the same moment, and so are each listed run's state and `lastErrorMessage`. A run replayed during the read is read whole, as it was before the `replay` or after it, never `failed` without the errors it failed with. Two runs of one `getEvent` or one `listRuns` page can still be of different instants.
 
 | Read            | Cost                                                                                                                                                                    |
 | --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

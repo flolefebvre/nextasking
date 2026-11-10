@@ -24,23 +24,10 @@ jobs:
   guard:
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    env:
-      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
-
-      # Delete this step when moving to trusted publishing: there is no secret to check then.
-      - name: npm credentials are configured
-        run: |
-          if [ -z "$NPM_TOKEN" ]; then
-            echo "No NPM_TOKEN secret is set, so the publish job would fail after the full gate." >&2
-            echo "Add an npm automation token as the NPM_TOKEN repository secret, or configure" >&2
-            echo "trusted publishing on npmjs.com and delete this step and the publish job's env." >&2
-            exit 1
-          fi
-          echo "NPM_TOKEN is set."
 
       # No template literals: this is a double-quoted shell string, so the shell would expand `${...}`.
       - name: Tag matches the package.json version
@@ -70,12 +57,9 @@ jobs:
     permissions:
       # Write, to cut the GitHub release for the tag.
       contents: write
-      # The OIDC token npm exchanges for a provenance attestation; `--provenance` fails without it.
+      # The OIDC token npm exchanges for the publish credential and the provenance attestation; the
+      # publish fails without it.
       id-token: write
-    # Job-scoped: the `.npmrc` that `registry-url` writes holds a literal `${NODE_AUTH_TOKEN}`, which
-    # `pnpm install` expands too, before the publish step.
-    env:
-      NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
     steps:
       - name: Checkout repository
@@ -85,16 +69,15 @@ jobs:
       - name: Setup
         uses: ./.github/actions/setup
         with:
-          registry-url: https://registry.npmjs.org
           store-cache: "false"
 
       # npm, because `pnpm publish` has no `--provenance`. `prepublishOnly` rebuilds dist from this
       # commit. `--access public` is required for the first publish of a scoped package.
       #
-      # NODE_AUTH_TOKEN covers the first publish, before the package exists on npm to configure a
-      # trusted publisher. Once 0.1.0 is live, add this repository and release.yml as its trusted
-      # publisher on npmjs.com, then delete this job's `env:`, the guard's credential step and the
-      # NPM_TOKEN secret. Provenance comes from the OIDC token either way.
+      # No token and no `.npmrc`: this repository and release.yml are the package's trusted
+      # publisher on npmjs.com, so npm exchanges the job's OIDC token for a publish credential. That
+      # needs npm 11.5.1 or later, which the pinned Node ships. An E404 on the PUT means npm refused
+      # that identity: check the trusted publisher on npmjs.com, then re-run this job.
       - name: Publish to npm
         run: npm publish --provenance --access public
 

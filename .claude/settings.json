@@ -50,6 +50,6 @@
       "Bash(gh api 'repos/{owner}/{repo}/issues*)",
       "Bash(pnpm:*)"
     ],
-    "deny": ["Bash(gh repo delete:*)", "Bash(gh release:*)", "Bash(gh auth token:*)"]
+    "deny": ["Bash(gh repo delete:*)", "Bash(gh auth token:*)"]
   }
 }

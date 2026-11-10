@@ -14,14 +14,17 @@ pnpm add @flefebvre/nextasking zod
 
 ## Run Valkey or Redis
 
-The queues live in a Valkey or Redis that the app and every worker reach. Give the queues a server of their own, not your cache's, and set its eviction policy:
+The queues live in a Valkey or Redis that the app and every worker reach. Give the queues a server of their own, not your cache's, set its eviction policy and turn on its append-only file:
 
 ```sh
 docker run -d --name nextasking-valkey -p 6379:6379 valkey/valkey:9 --maxmemory-policy noeviction --appendonly yes
 ```
 
 - `maxmemory-policy` must be `noeviction`: a worker refuses to start on another policy it can read. See [Worker](worker.md#give-queues-their-own-valkey-or-redis).
-- nextasking is tested on Valkey 8 and 9 and on Redis 8.
+- `--appendonly yes` writes every change to disk, flushed about once a second. Without it, a restart after a crash or a kill loses every write since the last snapshot, up to an hour on the defaults, and a server that persists nothing loses the whole queue on any restart.
+- The server must be Valkey 8 or Redis 7.4, or later: a worker refuses an older one. See [Worker](worker.md#give-queues-their-own-valkey-or-redis).
+- nextasking is tested on `valkey/valkey:8`, `valkey/valkey:9`, `redis:7.4` and `redis:8`. Dragonfly, Garnet, KeyDB, Upstash and the like are untested and not supported.
+- Size its memory for about 2 KB per kept run: 100,000 kept runs take about 220 MB. That is the size at the [retention caps](dashboard.md#what-reads-see-and-what-they-cost), which hold while runs end below about 200 per second per worker; a burst above that rate is stored, at the same 2 KB per run, until the workers catch up.
 - A failover or a restart loses its last writes. See [Duplicate runs](duplicate-runs.md#a-failover-or-a-restart).
 - Give dev its own server or its own `prefix`. See [Dev](dev.md#run-the-worker-under-next-dev).
 
@@ -150,7 +153,7 @@ manual for the exact installed version.
 ## Done when
 
 - [ ] `@flefebvre/nextasking` and a Standard Schema library are in `dependencies`.
-- [ ] The Valkey or Redis for the queues answers at `REDIS_URL` and has `maxmemory-policy noeviction`.
+- [ ] The Valkey or Redis for the queues answers at `REDIS_URL`, has `maxmemory-policy noeviction` and `appendonly yes`.
 - [ ] Every definition lives in its own file under `src/nextasking/tasks/` or `src/nextasking/events/`, named by the conventions above.
 - [ ] `src/nextasking/index.ts` lists every event and task and augments `Register`: `nextasking.dispatch("no-such-task")` doesn't compile.
 - [ ] `src/instrumentation.ts` starts the worker behind `NEXTASKING_WORKER`, after the `NEXT_RUNTIME` check.

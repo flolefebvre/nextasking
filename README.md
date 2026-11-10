@@ -3,9 +3,9 @@
 [![npm](https://img.shields.io/npm/v/%40flefebvre%2Fnextasking)](https://www.npmjs.com/package/@flefebvre/nextasking)
 [![license](https://img.shields.io/npm/l/%40flefebvre%2Fnextasking)](./LICENSE)
 
-Typed background tasks and events for Next.js, on BullMQ with Redis or Valkey. Define tasks and events in a few files, list them in one `createNextasking` call, dispatch a task or emit an event by name from server code, and run them in a worker embedded in `next start` or in a process of its own.
+Typed background tasks and events for Next.js, on Redis or Valkey. Define tasks and events in a few files, list them in one `createNextasking` call, dispatch a task or emit an event by name from server code, and run them in a worker embedded in `next start`.
 
-**Requires** Next.js 16.0.10 or later, Node `^22.22`, `^24.5` or 26 and later, long-running Node hosting for the worker, and a Valkey or Redis. TypeScript is optional; with it, use 5.9 or later.
+**Requires** Next.js 16.0.10 or later, Node `^22.22`, `^24.5` or 26 and later, long-running Node hosting for the worker, and a Valkey 8 or Redis 7.4 or later. TypeScript is optional; with it, use 5.9 or later.
 
 ## Install
 

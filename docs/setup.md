@@ -22,7 +22,7 @@ docker run -d --name nextasking-valkey -p 6379:6379 valkey/valkey:9 --maxmemory-
 
 - `maxmemory-policy` must be `noeviction`: a worker refuses to start on another policy it can read. See [Worker](worker.md#give-queues-their-own-valkey-or-redis).
 - nextasking is tested on Valkey 8 and 9 and on Redis 8.
-- Use a server without failover, or accept the gap a failover leaves. See [Duplicate runs](duplicate-runs.md#a-redis-failover).
+- A failover or a restart loses its last writes. See [Duplicate runs](duplicate-runs.md#a-failover-or-a-restart).
 - Give dev its own server or its own `prefix`. See [Dev](dev.md#run-the-worker-under-next-dev).
 
 ## Lay out the definitions

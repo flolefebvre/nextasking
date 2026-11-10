@@ -21,10 +21,11 @@ await nextasking.dispatch("send-receipt", { invoiceId, email }, { runId: `send-r
 
 - A saved step never runs again in the same run: a retry, a resume or a replay gets its saved result. See [Steps](steps.md).
 - A repeated `dispatch` with the same `runId`, or `emit` with the same `eventId`, within the [dedup window](tasks-and-events.md#the-dedup-window) starts nothing and returns the first id.
-- Each listener gets one run per emit, even when the fan-out retries part-way or is replayed.
+- Each listener gets one run per emit.
 - A handler's `emit` and `dispatch` happen once per run, across retries and resumes. See [Steps](steps.md#emit-and-dispatch-from-a-handler).
 - One firing of a schedule starts one run, however many workers run.
-- An attempt that lost its lock saves nothing more: its `abortSignal` aborts, and its next step, `emit` or `dispatch` throws without running.
+- A command whose reply was lost in an outage applies once: a resent fetch gets the same lock, a resent save or settle changes nothing.
+- An attempt that lost its lock saves nothing more, nor reads: its `abortSignal` aborts, and its next step, `emit` or `dispatch` throws without running.
 - `step.run` hands `fn` an `idempotencyKey`, the same on every attempt, resume and replay of the run, so a provider can drop a repeat.
 
 ## What stays open
@@ -36,11 +37,11 @@ await nextasking.dispatch("send-receipt", { invoiceId, email }, { runId: `send-r
 | [Code between steps](#code-between-steps)                                                 | Put every side effect in a step                                                                 |
 | [A dispatch without a runId](#a-dispatch-without-a-runid)                                 | Pass a `runId` or `eventId` built from the business fact                                        |
 | [The same runId after the dedup window](#the-same-runid-after-the-dedup-window)           | Check the business fact in the handler                                                          |
-| [A Redis failover](#a-redis-failover)                                                     | Use a Valkey or Redis without failover, or accept the gap                                       |
+| [A failover or a restart](#a-failover-or-a-restart)                                       | Keep AOF on; close it with the idempotency key, as for the other windows                        |
 
 ## A crash between a side effect and its save
 
-A step's result is saved after `fn` returns. If the process crashes or is killed after the side effect but before the save, the next attempt runs `fn` again. A step still running at `shutdownTimeout` is in this window too: the process exits before it saves.
+A step's result is saved after `fn` returns. If the process crashes or is killed after the side effect but before the save, the next attempt runs `fn` again. A step still running at `shutdownTimeout` is in this window too: its `abortSignal` aborts, and a side effect it made without returning is not saved.
 
 ```ts
 await step.run("charge-invoice", async ({ idempotencyKey }) => {
@@ -64,6 +65,7 @@ An attempt holds its run's lock for 2 minutes, renewed every minute. When its ev
 - Pass `idempotencyKey` to the provider: both attempts get the same key, so the provider drops the second call.
 - Keep CPU-heavy work off the event loop: in a worker thread or another service, where it can't starve other attempts.
 - Check `abortSignal.aborted` in long loops inside a step, and pass the signal to `fetch` and other calls that take one.
+- After a stall, one log line can misreport an outcome. See [Worker](worker.md#stalls).
 
 ## Code between steps
 
@@ -96,7 +98,7 @@ await nextasking.dispatch("ship-order", { orderId: order.id }, { runId: `ship-or
 
 ## The same runId after the dedup window
 
-A `runId` or `eventId` is dropped only while the first run or fan-out is kept: at least 24 hours after the dispatch, longer while it runs or once it failed. Under load, the queue's caps can remove a completed run sooner. A repeat after that starts a new run. See [The dedup window](tasks-and-events.md#the-dedup-window).
+A completed run's `runId` is dropped for 24 hours after the run ends, however soon retention removes the run, and until retention removes it, shortly after. A failed run's is dropped for as long as the run is kept, 14 days, and never less than 24 hours. A repeat after that starts a new run. See [The dedup window](tasks-and-events.md#the-dedup-window).
 
 ```ts
 handler: async ({ payload, step }) => {
@@ -113,12 +115,31 @@ handler: async ({ payload, step }) => {
 
 - When a repeat can come days later, check the business fact in a step first, and return when it is already done.
 
-## A Redis failover
+## A failover or a restart
 
-A failover to a replica that hadn't received the latest writes loses them: a saved step, a dedup record or a lock. A lost saved step runs again; a lost dedup record lets a repeat through; a lost lock lets a second attempt start.
+A failover promotes a replica that hadn't received the primary's last writes; a single server that restarts comes back with what it had written to disk. Both lose the last writes the server acknowledged, with nobody told. Both lose whole transitions: a save, a completion or a dispatch is kept whole or lost whole, never half-written.
 
-- Use a Valkey or Redis without failover, with persistence, for the queues, or accept the gap.
-- The fixes for the other windows narrow this one too: an idempotency key, a database record, a check of the business fact.
+The one guarantee: two attempts never both save. Each lock carries a random token, so an attempt whose lock the server forgot can't save over the attempt that holds the run now.
+
+What a lost write does, in the order a run meets it:
+
+- **A saved step**: the attempt goes on without it. If this attempt completes, the step never runs again; if the run comes back to an attempt, after a retry, a resume or a stall, the step runs again.
+- **A completion**: the run is executing again, under a lock nobody renews. Once that lock expires, a stall is counted within about a second (see [Worker](worker.md#stalls)) and a new attempt runs again whatever came after the last saved step. A repeat of the run's id is still dropped meanwhile.
+- **A lock**: a second attempt can start while the first one runs, as in [A duplicate attempt finishing its step](#a-duplicate-attempt-finishing-its-step), and nothing more: the first attempt's next save is refused, and it stops.
+- **A dispatch or an emit**: the call returned an id, and the run never starts. Build the id from the business fact, and send it again with that id when `getRun` finds nothing, or `getEvent` no listener run: if the run does exist, the repeat is dropped.
+
+How much is lost:
+
+| Setup                            | Loses                   | How much                      |
+| -------------------------------- | ----------------------- | ----------------------------- |
+| Primary with a standby, failover | the replication lag     | milliseconds to a second      |
+| Single node, AOF `everysec`      | the last fsync interval | about one second              |
+| Single node, RDB snapshots only  | since the last snapshot | up to an hour on the defaults |
+| Single node, no persistence      | everything              | the whole queue               |
+
+- A single node loses its tail when it crashes, is killed or loses its host. A clean shutdown first writes what the persistence configured asks for: AOF flushed, a snapshot saved when save points are set. A node with no persistence loses everything on any restart, clean or not.
+- Pick the server for availability, and keep AOF on: `--appendonly yes` brings the tail down to about a second. `appendfsync always` loses nothing acknowledged, at the disk's fsync rate. See [Setup](setup.md#run-valkey-or-redis).
+- nextasking sends no `WAIT` and recommends no topology: no setting closes the window, so close it in the task, with the `idempotencyKey`, a database record or a check of the business fact, as for the other windows.
 
 ## Provider idempotency windows
 

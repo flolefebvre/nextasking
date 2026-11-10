@@ -73,7 +73,7 @@ The fake throws where production throws, before recording anything:
 
 Duplicates are dropped as in production: a second `dispatch` with the same task and `runId`, or a second `emit` with the same event and `eventId`, is recorded once and logs `duplicate dispatch dropped`. The fake keeps them for its own lifetime: a new fake starts empty.
 
-An `emit` of an event no task listens to writes nothing in production, so the fake records nothing; the `no listeners for event` warning still reaches your logger.
+An `emit` of an event no task listens to starts no run and stores nothing of the event in production, so the fake records nothing in `emits`; the `no listeners for event` warning still reaches your logger.
 
 `replay` and `replayEvent` check the name only: whether the run or fan-out failed is a Redis read, so the fake records the call as replayed.
 

@@ -6,20 +6,32 @@ import { z } from "zod";
 import { createNextasking, defineTask } from "../src/index.js";
 import { closeNextaskingAndCheckItsDuration } from "./close-nextasking-and-check-its-duration.js";
 import { integrationTest } from "./integration-test.js";
+import { STORED_KEYS_READ_BOUND_IN_MILLISECONDS } from "./invariant-violations.js";
+import { SERVER_CONTAINER_START_BOUND_IN_MILLISECONDS, startOwnServer } from "./own-server.js";
 import { createRecordingLogger } from "./recording-logger.js";
+import { providedRedisUrl } from "./valkey-container.js";
 import { withRedis } from "./with-redis.js";
 
 const RUN_COUNT = 60;
 
 const FLUSH_INTERVAL_IN_MILLISECONDS = 5;
 
-integrationTest(
+const RUNS_COMPLETED_TIMEOUT_IN_MILLISECONDS = 20_000;
+
+integrationTest.skipIf(providedRedisUrl() !== undefined)(
   "scripts flushed from the server while a worker runs fail no attempt and log no worker error",
-  { timeout: 30_000 },
-  async ({ redisUrl, keyPrefix }) => {
+  {
+    timeout:
+      SERVER_CONTAINER_START_BOUND_IN_MILLISECONDS +
+      RUNS_COMPLETED_TIMEOUT_IN_MILLISECONDS +
+      STORED_KEYS_READ_BOUND_IN_MILLISECONDS +
+      10_000,
+  },
+  async ({ keyPrefix }) => {
+    const ownServer = await startOwnServer();
     const { logger, lines } = createRecordingLogger();
     const nextasking = createNextasking({
-      connection: { url: redisUrl },
+      connection: { url: ownServer.url },
       prefix: keyPrefix,
       logger,
       tasks: [
@@ -36,7 +48,7 @@ integrationTest(
       ],
     });
     try {
-      await withRedis(redisUrl, async (admin) => {
+      await withRedis(ownServer.url, async (admin) => {
         await nextasking.startWorker();
         let isFlushing = true;
         const flushes = (async () => {
@@ -57,7 +69,7 @@ integrationTest(
             async () => {
               expect((await nextasking.countRuns())["resize-image"]).toMatchObject({ completed: RUN_COUNT });
             },
-            { timeout: 20_000, interval: 100 },
+            { timeout: RUNS_COMPLETED_TIMEOUT_IN_MILLISECONDS, interval: 100 },
           );
         } finally {
           isFlushing = false;
@@ -70,6 +82,7 @@ integrationTest(
       });
     } finally {
       await closeNextaskingAndCheckItsDuration(nextasking);
+      await ownServer.stop();
     }
   },
 );

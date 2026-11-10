@@ -26,10 +26,13 @@ const ATTEMPT_STARTED_BOUND_IN_MILLISECONDS = 10_000;
 
 const RUNS_COMPLETED_BOUND_IN_MILLISECONDS = 20_000;
 
+const RUN_COMPLETED_LINE_BOUND_IN_MILLISECONDS = 5_000;
+
 const TEST_TIMEOUT_IN_MILLISECONDS =
   WORKERS_READY_BOUND_IN_MILLISECONDS +
   2 * ATTEMPT_STARTED_BOUND_IN_MILLISECONDS +
   RUNS_COMPLETED_BOUND_IN_MILLISECONDS +
+  RUN_COMPLETED_LINE_BOUND_IN_MILLISECONDS +
   5_000;
 
 type TwoWorkers = {
@@ -61,6 +64,13 @@ async function withTwoWorkers(
 
 function startedAttemptsOf(workerProcess: WorkerProcess, runId: RunId) {
   return workerProcess.logLines.filter((line) => line.message === "attempt started" && line.fields.runId === runId);
+}
+
+async function waitForTheRunCompletedLine(workerProcess: WorkerProcess, runId: RunId): Promise<void> {
+  await vi.waitUntil(
+    () => workerProcess.logLines.some((line) => line.message === "run completed" && line.fields.runId === runId),
+    { timeout: RUN_COMPLETED_LINE_BOUND_IN_MILLISECONDS },
+  );
 }
 
 async function killedHolderOf(
@@ -114,6 +124,7 @@ integrationTest(
         workerProcesses,
       );
       const [pickedUpRun] = await completedRunsOf({ redisUrl, keyPrefix, task }, [runId]);
+      await waitForTheRunCompletedLine(survivingProcess, runId);
 
       expectPickedUpWithinTheBoundAfter(killedHoldersLockedUntil, pickedUpRun!);
       expectOneStallAndOneCompletedPickupOfTheRun(survivingProcess.logLines, {

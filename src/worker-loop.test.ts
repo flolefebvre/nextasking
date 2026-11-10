@@ -1065,6 +1065,26 @@ test("a fetched reply that passed over records writes the pass-over line once pe
   expect(linesWithMessage(lines, "runs passed over: newer record version")).toEqual([PASS_OVER_LINE]);
 });
 
+test("fetches answered unknownVersion with a record version the worker could not read write one pass-over line, with no recordVersion value", async () => {
+  const engine = createInMemoryEngine();
+  let fetchCount = 0;
+  const fetchAnsweredAnUnreadableVersion: WorkerLoopEngine["fetch"] = async () => {
+    fetchCount += 1;
+    return { kind: "unknownVersion", recordVersion: undefined };
+  };
+  const { lines } = startedLoopOf([], {
+    engine,
+    loopEngine: { ...engine, fetch: fetchAnsweredAnUnreadableVersion },
+  });
+
+  await vi.advanceTimersByTimeAsync(25_000);
+
+  expect(fetchCount).toBe(3);
+  expect(linesWithMessage(lines, "runs passed over: newer record version")).toEqual([
+    { ...PASS_OVER_LINE, fields: { recordVersion: undefined, supportedVersion: 1 } },
+  ]);
+});
+
 test("the pass-over line names the record version the worker's timing supports", async () => {
   const engine = createInMemoryEngine();
   const { lines } = startedLoopOf([], {

@@ -46,7 +46,7 @@ integrationTest(
         profile: { nickname: PAYLOAD_SENTINEL },
       });
       await nextasking.emit("user.signed-up", { userId: PAYLOAD_SENTINEL });
-      await nextasking.emit("user.deleted", { userId: PAYLOAD_SENTINEL });
+      const { eventId: eventIdWithNoListener } = await nextasking.emit("user.deleted", { userId: PAYLOAD_SENTINEL });
       await vi.waitFor(
         () => {
           expect(lines.filter((line) => line.message === "run completed")).toHaveLength(2);
@@ -55,7 +55,13 @@ integrationTest(
       );
       await closeNextaskingAndCheckItsDuration(nextasking);
 
-      expect(lines.map((line) => line.message)).toContain("no listeners for event");
+      expect(lines.filter((line) => line.message === "no listeners for event")).toEqual([
+        {
+          level: "warn",
+          fields: { eventName: "user.deleted", eventId: eventIdWithNoListener },
+          message: "no listeners for event",
+        },
+      ]);
       for (const line of lines) {
         expect(JSON.stringify(line.fields)).not.toContain(PAYLOAD_SENTINEL);
         expect(line.message).not.toContain(PAYLOAD_SENTINEL);

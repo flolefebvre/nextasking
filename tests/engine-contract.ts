@@ -227,6 +227,49 @@ export function defineEngineContractTests(contractTest: EngineContractTest): voi
     },
   );
 
+  contractTest(
+    "a raised limit lets a fetch lock a new run of the key and leaves the parked ones waiting, until a settle wakes as many as the new limit frees",
+    async (harness) => {
+      const { engine } = harness;
+      await engine.enqueue({
+        runs: sendEmailRunsOf(["run-1", "run-2", "run-3", "run-4"], { concurrencyKey: "account-7" }),
+      });
+      const [lockedRun] = (await fetchedOf(engine, 4, { "send-email": 1 })).lockedRuns;
+      await engine.enqueue({ runs: sendEmailRunsOf(["run-5"], { concurrencyKey: "account-7" }) });
+
+      const fetchedAtTheRaisedLimit = await fetchedOf(engine, 3, { "send-email": 3 });
+      const parkedStatesAfterTheFetch = await statesOf(harness, "send-email", ["run-2", "run-3", "run-4"]);
+      await engine.settle({ ...lockedRun!, outcome: { kind: "complete" }, concurrencyLimit: 3 });
+
+      expect(fetchedAtTheRaisedLimit.lockedRuns.map(({ runId }) => runId)).toEqual(["run-5"]);
+      expect(fetchedAtTheRaisedLimit.parkedRuns).toEqual([]);
+      expect(parkedStatesAfterTheFetch).toEqual([
+        "waitingForConcurrencySlot",
+        "waitingForConcurrencySlot",
+        "waitingForConcurrencySlot",
+      ]);
+      expect(await statesOf(harness, "send-email", ["run-2", "run-3", "run-4"])).toEqual([
+        "pending",
+        "pending",
+        "waitingForConcurrencySlot",
+      ]);
+    },
+  );
+
+  contractTest(
+    "runs stored without a concurrency key share the task's limit among themselves, not with the runs of a key",
+    async (harness) => {
+      const { engine } = harness;
+      await engine.enqueue({ runs: sendEmailRunsOf(["run-1", "run-2"]) });
+      await engine.enqueue({ runs: sendEmailRunsOf(["run-3"], { concurrencyKey: "account-7" }) });
+
+      const fetched = await fetchedOf(engine, 3, { "send-email": 1 });
+
+      expect(fetched.lockedRuns.map(({ runId }) => runId)).toEqual(["run-1", "run-3"]);
+      expect(fetched.parkedRuns).toEqual([{ runId: "run-2", task: "send-email", attempt: 1 }]);
+    },
+  );
+
   contractTest("a complete settles once: a resend hears already and another token hears stale", async (harness) => {
     const { engine } = harness;
     const lockedRun = await onlyLockedRunOf(engine, "run-1");

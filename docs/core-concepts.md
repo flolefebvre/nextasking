@@ -36,7 +36,7 @@ const { eventId } = await nextasking.emit("invoice.paid", { invoiceId: "inv-1" }
 
 - **Dispatch**: start exactly one run of a task, by its name. See [Tasks and events](tasks-and-events.md#dispatch-a-task).
 - **Emit**: announce an event, by its name. Each of its listeners gets one run. See [Tasks and events](tasks-and-events.md#emit-an-event).
-- **Fan-out**: the turning of one emitted event into one run per listener, done by a worker after `emit` resolves. A fan-out that fails can be replayed. See [Retries and failures](retries-and-failures.md#replay-a-failed-fan-out).
+- **Fan-out**: the turning of one emitted event into one run per listener, done by a worker after `emit` resolves. A fan-out that fails can be replayed. See [Retries and failures](retries-and-failures.md#replay-a-failed-run).
 - **Run**: one execution of a task, from its dispatch to its final outcome, across all its attempts. It has a `runId` and one of eight states. See [Dashboard](dashboard.md#the-eight-states).
 - **Attempt**: one try at completing a run. A retry is a new attempt of the same run; the handler re-enters from the top. See [Retries and failures](retries-and-failures.md).
 - **Backoff**: the wait between a failed attempt and the next one, doubling each time. See [Retries and failures](retries-and-failures.md#set-retries-and-backoff).

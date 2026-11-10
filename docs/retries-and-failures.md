@@ -23,7 +23,7 @@ export const syncAccount = defineTask("sync-account", {
 - `backoff` (default `"30s"`) is the wait before the first retry. Each later wait doubles.
 - Each wait is jittered to between 80% and 100% of its value, so runs that failed together don't retry together.
 - The default schedule waits up to 30 s, 1 min, 2 min, 4 min, then 8 min: about 12 to 16 minutes in all, enough to outlast a dependency's deploy.
-- The retry count is fixed when the run is stored: by the release that dispatched, for a listener run by the worker that ran the fan-out, for a firing's run by the worker that processed the firing. Each wait uses the `backoff` of the worker that ran the failed attempt. See [Deploys](deploys.md#which-release-decides-what).
+- The retry count is fixed when the run is stored: by the release that dispatched; for a listener run, by the release that emitted; for a firing's run, by the worker that processed the firing; for the run of a `runFailed` listener, by the worker that failed the run. Each wait uses the `backoff` of the worker that ran the failed attempt. See [Deploys](deploys.md#which-release-decides-what).
 - A listener takes the same options, for its own runs.
 - Make the handler safe to run again: a retry starts it from the top. Wrap each side effect in `step.run` so a retry reuses its result instead of repeating it; see [Steps](steps.md).
 
@@ -72,9 +72,10 @@ export const renderReport = defineTask("render-report", {
 
 A run fails for good when its last attempt fails, when it throws `NonRetriableError` or misuses a step, when it stalls a third time with no step saved in between (see [Worker](worker.md#stalls)), or when no worker defines its task for 30 minutes (see [Worker](worker.md#overlapping-releases)). It is then kept:
 
-- for 14 days, and at most 10,000 failed runs and fan-outs per queue: the oldest are removed first;
+- for 14 days, and at most 10,000 failed runs per task: the oldest are removed first;
 - with its payload and its saved steps;
-- with one error record per failed attempt: `{ attempt, name, message, stack, failedAt }`, `failedAt` an ISO string;
+- with one error record per failed attempt: `{ attempt, name, message, stack, failedAt }`, `failedAt` a `Date` when read with `getRun`;
+- with each error's `message` and `stack` cut at 4,000 characters, followed by `… [cut at 4000 characters]`;
 - with its `reason`: `"retries exhausted"`, `"non-retriable"`, `"stalled"` or `"unknown task"`; a stalled run's last error record is named `StalledRunError`, an unknown task's `UnknownTaskRunError`.
 
 A thrown value that isn't an `Error`, such as `throw "boom"`, is recorded and logged as an `Error` whose message is that value as a string.
@@ -104,25 +105,13 @@ export async function replayRun(runId: string) {
 }
 ```
 
-- `replay(taskName, runId)` resolves with `{ runId }`. The run keeps its `runId` and its payload, and goes back to pending.
+- `replay(taskName, runId)` resolves with `{ runId }`. The run keeps its `runId` and its payload, and goes to the back of pending.
 - It reuses the steps the run saved: a step that succeeded before the failure returns its saved result and doesn't run again.
 - The retry budget starts over: the next attempt is `attempt` 1, and the run gets the retry count it was stored with.
 - The failed life's `errors` and `reason` are cleared. Read them with `getRun` before you replay if you need them.
-- It throws `RunNotReplayableError` when no run with that id is kept (unknown, or removed after 14 days) or when the run isn't failed: it is still pending or retrying, it completed, or it was already replayed. It throws `UnknownTaskError` for a task name the instance doesn't list.
-- A replayed run that fails again is a new failure: it keeps its new errors and `reason`, and can be replayed again.
-
-## Replay a failed fan-out
-
-A fan-out fails when the worker can't turn an event into its listener runs: Redis kept failing, the worker stalled, or no worker defined the event for 30 minutes. Replay it with the event's name and id:
-
-```ts
-await nextasking.replayEvent("invoice.paid", eventId);
-```
-
-- `replayEvent(eventName, eventId)` resolves with `{ eventId }`. The fan-out runs again from the listener names it saved when it was emitted.
-- A listener that already has a run is skipped, whatever that run's state: replaying a fan-out never runs a listener twice.
-- It throws `FanOutNotReplayableError` when no fan-out with that id is kept or when it isn't failed, and `UnknownEventError` for an event name the instance doesn't list.
-- A failed listener run is a failed run: replay it on its own with `replay(listenerName, runId)`. The other listeners don't run again. `getEvent` lists each listener's `runId`; see [Dashboard](dashboard.md).
+- It throws `RunNotReplayableError` when no run with that id is kept (unknown, an empty id, or removed by retention), when the run isn't failed (it is still pending or retrying, it completed, or it was already replayed), or when a newer release wrote the run's record, which this release can't read: its message then ends "replay it from the newer release". It throws `UnknownTaskError` for a task name the instance doesn't list.
+- A replayed run that fails again is a new failure: it keeps its new errors and `reason`, sends a new notice, and can be replayed again.
+- A failed listener run is a failed run: replay it with `replay(listenerName, runId)`. The other listeners don't run again. `getEvent` lists each listener's `runId`; see [Dashboard](dashboard.md).
 
 ## React to a failure
 
@@ -151,15 +140,15 @@ export const nextasking = createNextasking({
 });
 ```
 
-- List the listener in `tasks`. Don't list `runFailed` or `fanOutFailed` in `events`: they are added automatically, and `createNextasking` throws if you list them.
-- `runFailed` (`nextasking/run.failed`) carries `{ task, runId, reason, error: { name, message, stack }, attempt, failedAt }`, plus `eventName` and `eventId` when the failed run is a listener's. `failedAt` is an ISO string.
-- `fanOutFailed` (`nextasking/fan-out.failed`) carries `{ eventName, eventId, error: { name, message, stack }, failedAt }`. Replay the fan-out with `replayEvent(eventName, eventId)`.
-- Neither carries the failed run's payload. Read it with `getRun(task, runId)` if the alert needs it.
-- One notice per final failure: a run that is replayed and fails again sends a second one. A failed run sends its notice right after the failure is saved. If a crash loses it, the next `startWorker()` re-sends the unsent notices among the failures of the last 24 hours. A re-sent notice keeps its event id, derived from the failure, so it falls within the [dedup window](tasks-and-events.md#the-dedup-window) and still starts one run per listener.
-- A failed run of a listener of a built-in event sends no notice, and neither does a failed fan-out of a built-in event, so an alert that fails can't loop. Its failure is still logged and replayable.
+- List the listener in `tasks`. Don't list `runFailed` in `events`: it is added automatically, and `createNextasking` throws if you list it.
+- `runFailed` (`nextasking/run.failed`) carries `{ task, runId, reason, error: { name, message, stack }, attempt, failedAt }`, plus `eventName` and `eventId` when the failed run is a listener's. `failedAt` is an ISO string, equal to the failed run's `finishedAt`. `error.message` and `error.stack` are cut at 4,000 characters, as in the error record.
+- It doesn't carry the failed run's payload. Read it with `getRun(task, runId)` if the alert needs it.
+- One notice per final failure: a run that is replayed and fails again sends a second one. The notice is stored with the failure, in the same write: once the run is failed, each listener has its run, and nothing is ever re-sent. Each notice has its own event id, derived from the failure.
+- A listener whose `concurrency.key` throws, or returns something other than a non-empty string, on the notice is left out of that notice: the run still fails, the other listeners still get their run, and the worker writes `worker error` with the error naming the listener. The `failedAt` that key function receives is read from the worker's clock; the handler's payload carries the server's instant.
+- A failed run of a listener of a built-in event sends no notice, so an alert that fails can't loop. Its failure is still logged and replayable.
 - With no listener on a built-in event, its notices are dropped silently: no `no listeners for event` line. A listener added later doesn't receive past failures.
-- `emit` doesn't take the built-in events, in its types or at runtime, and `isEventName` is false for them. `EventName`, `getEvent`, `replayEvent` and `eventDefinitions` include them.
-- The types are exported as `RunFailedPayload`, `FanOutFailedPayload` and `FailureNoticeError`.
+- `emit` doesn't take the built-in events, in its types or at runtime, and `isEventName` is false for them. `EventName`, `getEvent` and `eventDefinitions` include them.
+- The types are exported as `RunFailedPayload` and `FailureNoticeError`.
 
 ## Log lines
 
@@ -168,11 +157,9 @@ export const nextasking = createNextasking({
 | `info`  | `run replayed`   | `task`, `runId`                                                                                             |
 | `warn`  | `attempt failed` | `task`, `runId`, `attempt`, `err`, `retriesLeft`, `backoffInMilliseconds`                                   |
 | `error` | `run failed`     | `task`, `runId`, `attempt`, `err`, `reason`, `runDurationInMilliseconds`, `executionDurationInMilliseconds` |
-| `error` | `fan-out failed` | `eventName`, `eventId`, `err`                                                                               |
 
 - `run replayed` is written by the process that calls `replay`, through its own instance's logger.
 - `attempt failed` is written only when a retry follows; a final failure writes `run failed` alone.
-- `fan-out failed` is written when a fan-out fails for good, stalls included.
 - `err` is the `Error` the attempt failed with, under pino's `err` key so pino serializes it.
 - `backoffInMilliseconds` is the wait actually applied before the next attempt.
 - See [Logging](logging.md) for the other lines.

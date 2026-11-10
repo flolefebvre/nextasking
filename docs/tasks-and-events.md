@@ -124,7 +124,7 @@ declare module "@flefebvre/nextasking" {
 
 - two definitions with the same name: tasks and events share one namespace
 - a listener whose `on` event isn't listed in `events` and isn't a built-in event
-- a task or event name starting with `nextasking/`, which is reserved for the library and its built-in events, `runFailed` (`nextasking/run.failed`) and `fanOutFailed` (`nextasking/fan-out.failed`); see [Retries and failures](retries-and-failures.md#react-to-a-failure)
+- a task or event name starting with `nextasking/`, which is reserved for the library and its built-in event, `runFailed` (`nextasking/run.failed`); see [Retries and failures](retries-and-failures.md#react-to-a-failure)
 - a built-in event listed in `events`: it is added automatically
 - a `concurrency.limit` that isn't a positive integer
 - `retries` that isn't a whole number, 0 or more
@@ -188,16 +188,16 @@ export async function POST(request: Request) {
 }
 ```
 
-- `emit(name, payload)` resolves with `{ eventId }`, a random UUID, once the event is stored.
-- Each listener of the event then gets exactly one run, started by a worker, not by `emit`. Its handler receives the event's schema output.
+- `emit(name, payload)` resolves with `{ eventId }`, a random UUID, once one run per listener of the event is stored. Each handler receives the event's schema output.
+- `emit` creates every listener run itself, all or nothing: either every run is stored, or none is and `emit` throws. On `RedisUnavailableError`, retry with the `eventId` on the error; see [When Redis is down](#when-redis-is-down).
 - The name and the payload are checked at compile time, like `dispatch`'s; at runtime, `emit` validates the payload and stores the schema's output.
-- The listeners are those of the release that emitted: a worker running another release still starts exactly those. See [Deploys](deploys.md#which-release-decides-what).
+- The listeners are those of the release that emitted: their runs are stored by the `emit`, whatever release the workers run. See [Deploys](deploys.md#which-release-decides-what).
 - A listener's lines carry `eventName` and `eventId` on top of `task`, `runId` and `attempt`. See [Logging](logging.md).
 - `emit(name, payload, { eventId })` takes your own event id: see [Run once per business fact](#run-once-per-business-fact).
 
 ### An event with no listeners
 
-Emitting an event no listener subscribes to validates the payload, logs `no listeners for event` at warn with `eventName` and `eventId`, and does nothing else: nothing is stored and no connection opens. Emit the event before writing its first listener, then add listeners later.
+Emitting an event no listener subscribes to, from server code, validates the payload, logs `no listeners for event` at warn with `eventName` and `eventId`, and does nothing else: nothing is stored and no connection opens. Emit the event before writing its first listener, then add listeners later.
 
 ## Run once per business fact
 
@@ -220,7 +220,7 @@ await nextasking.dispatch("ship-order", { orderId: order.id }, { runId: `ship-or
 ```
 
 - Build the id from what makes the fact unique (the provider's event id, the order id, the user id and the day), never from the time of the call or a random value.
-- A repeat with the same id returns that same id, throws nothing, starts nothing, and logs `duplicate dispatch dropped` at debug. Its payload and its `delay` are ignored: the first call's payload is the one that runs.
+- A repeat with the same id within its [dedup window](#the-dedup-window) returns that same id, throws nothing, starts nothing, and logs `duplicate dispatch dropped` at debug. Its payload and its `delay` are ignored: the first call's payload is the one that runs.
 - A `runId` is scoped to its task: the same `runId` on two tasks starts two runs. An `eventId` is scoped to its event.
 - Each listener run of an emit with your `eventId` has a run id derived from that `eventId` and the listener name, so it is the same on every repeat.
 - The id must be a non-empty string; anything else makes the call throw an `Error` naming the task or event, before anything is stored.
@@ -228,16 +228,15 @@ await nextasking.dispatch("ship-order", { orderId: order.id }, { runId: `ship-or
 
 ### The dedup window
 
-A repeat is dropped as long as the first call's stored run or fan-out exists:
+A repeat of a `runId` is dropped while its run exists, and for 24 hours after the run ends, even when retention removed the run sooner:
 
-- while it waits, is delayed or executes;
-- once it has completed, for 24 hours;
-- once it has failed, for as long as the failure is kept: 14 days. See [Retries and failures](retries-and-failures.md#what-a-failed-run-keeps).
+- A completed run is removed shortly after those 24 hours, so its id stays dropped a little longer.
+- A failed run is kept up to 14 days, and its id stays dropped for as long: a failure doesn't let the same `runId` run again. Run it again with `replay`. See [Retries and failures](retries-and-failures.md#what-a-failed-run-keeps).
 
-So the window lasts at least 24 hours after the dispatch, and longer when the run takes longer. Two limits to plan around:
+A repeat of an `eventId` is dropped whole for 24 hours after the emit: no listener gets a run. After that, each listener's run follows its own `runId` window: a listener whose run still blocks its id is skipped, and the others get a new run. That repeat starts a new 24-hour window for the `eventId`.
 
-- The queue keeps at most 1,000 completed runs and fan-outs together, and 10,000 failed ones. Under load, the oldest are removed early, and a repeat of their id starts again.
 - An emit of an event with no listeners stores nothing, so it has no window: a repeat warns again.
+- Each skipped repeat logs `duplicate dispatch dropped`. See [Logging](logging.md#dispatch-and-emit).
 
 ## Narrow a name known only at runtime
 
@@ -284,8 +283,8 @@ try {
 - `UnknownEventError`: `emit` got a name that isn't in `events`. Its message lists the valid event names. Reached only through a cast or plain JavaScript.
 - `InvalidPayloadError`: the schema refused the payload. `issues` lists each issue as `{ path, message }`, with `path` dotted (`address.zipCode`) or `(root)`. Messages are redacted of payload values (`[redacted]`), so the error is safe to log. Its message names the task or the event.
 - All three are thrown before anything is stored.
-- `RedisUnavailableError`: Redis didn't answer in time. See [When Redis is down](#when-redis-is-down).
-- `InstanceClosedError`: the instance has closed, as it does when its worker shuts down; a call made then, or still waiting for Redis, throws it at once.
+- `RedisUnavailableError`: Redis didn't answer in time, or refused the command because it is out of memory. See [When Redis is down](#when-redis-is-down).
+- `InstanceClosedError`: the instance has closed, as it does when its worker shuts down; a call made then, or still waiting for Redis, throws it at once. An `emit` of an event with no listeners touches no connection, so it doesn't throw it.
 
 ## When Redis is down
 
@@ -310,11 +309,12 @@ export async function POST(request: Request) {
 }
 ```
 
-- Every call on the instance throws `RedisUnavailableError` when Redis doesn't answer, or keeps answering `READONLY`, within `giveUpAfter`: `dispatch`, `emit`, `replay`, `replayEvent`, `getRun`, `listRuns`, `countRuns`, `getEvent` and `listSchedules`. It never hangs.
+- Every call on the instance throws `RedisUnavailableError` when Redis doesn't answer, or keeps answering `READONLY`, within `giveUpAfter`: `dispatch`, `emit`, `replay`, `getRun`, `listRuns`, `countRuns`, `getEvent` and `listSchedules`. It never hangs.
 - `giveUpAfter` bounds each round trip, not the whole call, the wait for the connection included. Set it on `connection`: `connection: { url, giveUpAfter: "2s" }`. The default is `"5s"`.
 - `error.cause` is the original error, such as `connect ECONNREFUSED` while Redis is unreachable, or a `TimeoutError` when it holds the connection open but doesn't answer, or the server's last `READONLY` reply, an `Error` whose message starts with `READONLY`, when it still refuses the write at `giveUpAfter`, as a replica does. `error.runId` or `error.eventId` is the id the call used, yours or the random one; reads carry the id they were given.
 - A `dispatch` or `emit` that threw may still be stored once Redis is back. Retry it with the id on the error, so the retry is deduplicated: `dispatch(name, payload, { runId: error.runId })`, `emit(name, payload, { eventId: error.eventId })`. See [Run once per business fact](#run-once-per-business-fact).
 - A failover shorter than `giveUpAfter` is a slow call, not an error: on a `READONLY` reply the library reconnects to the new primary and resends the command. A longer one throws `RedisUnavailableError` at `giveUpAfter`.
+- A server out of memory (`maxmemory` reached under `noeviction`) refuses writes: a call it refuses throws `RedisUnavailableError` at once, with the message `Redis refused the command: it is out of memory` and the server's reply as `error.cause`. Retry it with the id on the error, as above.
 - Validation errors come first: an unknown name or an invalid payload throws its own error, Redis down or not.
 - In a handler, `emit` and `dispatch` never throw `RedisUnavailableError`: like every command of the worker, they wait for Redis to come back, and the attempt goes on without spending a retry.
 - An outage writes one `connection error` line, then one `connection restored` line, per process. See [Logging](logging.md).
@@ -332,10 +332,9 @@ export async function register() {
 }
 ```
 
-- `startWorker()` runs one worker in this process, executing every task the instance lists and fanning out every event it lists.
+- `startWorker()` runs one worker in this process, executing the runs of every task the instance lists, listeners included.
 - A process that never calls `startWorker()` only dispatches and emits.
 - Calling `startWorker()` a second time in the same process throws.
 - With Redis down, `startWorker()` resolves anyway and the worker starts once Redis is back, so pages keep rendering. See [Worker](worker.md#when-redis-is-down).
 - Set `NEXT_MANUAL_SIG_HANDLE=1` in the environment of `next start`, so a deploy lets running attempts finish instead of cutting them. See [Worker](worker.md) for this, `concurrency` and the other options.
-- Completed runs and completed fan-outs are kept 24 hours, and at most 1,000.
-- A fan-out that fails is retried 5 times, waiting 30 seconds and doubling, and kept 14 days once it has failed, like a failed run. A retry skips the listeners that already have a run.
+- Completed runs are kept 24 hours, and at most 1,000 per task: the oldest are removed first. Failed runs are kept longer; see [Retries and failures](retries-and-failures.md#what-a-failed-run-keeps).

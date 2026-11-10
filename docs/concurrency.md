@@ -37,8 +37,9 @@ export const syncAccount = defineTask("sync-account", {
 
 - `key` receives the schema's output and returns a non-empty string.
 - A key is scoped to its task: two tasks returning the same key don't share a limit.
-- The key is computed once, when the run is stored: at `dispatch`, or at the fan-out of an emit for a listener. A run stored without one, by a release whose task had no `key` yet, gets it when a worker picks it up.
-- A `key` that throws or returns an empty string makes `dispatch` throw an `Error` naming the task. For a listener, it fails the fan-out of the emit, which retries.
+- The key is computed once, when the run is stored: at `dispatch`, or at `emit` for each listener. It is never computed again.
+- A run stored before its task had a `key` has none: it shares the limit with the other runs stored without one, not with the runs of a key. During the deploy that adds a `key`, a run stored before it and a run of the same key stored after can execute together.
+- A `key` that throws, or returns something other than a non-empty string, makes `dispatch` throw an `Error` naming the task, and `emit` an `Error` naming the listener: `Task "<listener>" has an invalid concurrency.key: it threw "<message>"`. Nothing is stored, for any listener of the event. For a `runFailed` listener, see [Retries and failures](retries-and-failures.md#react-to-a-failure).
 - A listener takes `concurrency` too, with the event's payload.
 
 ## Keep a scheduled task's firings from overlapping
@@ -61,20 +62,19 @@ export const purgeExpiredSessions = defineScheduledTask("purge-expired-sessions"
 - A slot is held only while an attempt executes. A run in backoff between retries, or asleep in `step.sleep`, holds none.
 - Waiting uses no retry and no stall: `attempt` is the same when the run finally executes.
 - Runs of one key start roughly in dispatch order. A retried or resumed run joins the back of the line. There is no fairness across keys.
-- A slot frees as soon as its attempt ends, and wakes the oldest waiting run at once.
-- A waiting run is also picked up again every 2 minutes, as a safety net, and goes back to waiting if no slot is free. A key with 1,000 waiting runs costs about 8 pickups per second.
-- A worker killed while executing holds its slot until the slot expires, 2 minutes after its last renewal: a key at its limit stays blocked for 2 to 3 minutes, until the killed run comes back as a stall or a waiting run's safety-net pickup finds the slot free.
-- An attempt that can no longer renew its slot is aborted as having lost its lock, like an attempt that loses its run's lock. See [Worker](worker.md#stop-a-handler-cleanly-with-abortsignal).
-- The limit is read from the release running the attempt; a change applies to the attempts it starts. The key is the one stored with the run, computed by the release that stored it; the release running the attempt computes it only for a run stored without one. See [Deploys](deploys.md#which-release-decides-what).
+- A slot frees as soon as its attempt ends, and wakes the oldest waiting runs at once, as many as there are free slots.
+- A slot is held under its attempt's lock. A worker killed while executing holds its slot until its lock expires: a key at its limit stays blocked until the killed worker's lock expires and the stall is found. See [Worker](worker.md#stalls).
+- An attempt that loses its lock is aborted. See [Worker](worker.md#stop-a-handler-cleanly-with-abortsignal).
+- The limit is read from the release running the attempt; a change applies to the attempts it starts. The key is the one stored with the run, computed by the release that stored it. See [Deploys](deploys.md#which-release-decides-what).
+- A raised limit's new slots go to the runs fetched from then on. A run already waiting starts when a slot of its key frees; that freed slot then wakes as many waiting runs as the new limit leaves free.
 
 ## Log lines
 
 | Level   | Message                              | Fields                     |
 | ------- | ------------------------------------ | -------------------------- |
 | `debug` | `run waiting for a concurrency slot` | `task`, `runId`, `attempt` |
-| `debug` | `run got a concurrency slot`         | `task`, `runId`, `attempt` |
 
-- `run waiting for a concurrency slot` is written each time the run finds no free slot, its safety-net pickups included.
-- `run got a concurrency slot` is written when a run that waited takes a slot, before its `attempt started` or `run resumed`. A run that finds a free slot at once writes neither line.
+- `run waiting for a concurrency slot` is written once each time the run finds its slots all taken and waits; a run may wait more than once. A run that finds a free slot at once doesn't write it.
+- A waiting run woken for a free slot writes no line of its own: its next line is `attempt started` or `run resumed`.
 
 See [Logging](logging.md) for the other lines.

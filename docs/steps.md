@@ -72,7 +72,7 @@ const [plan, orderCount] = await Promise.all([
 
 ## Sleep for minutes or days
 
-`step.sleep(id, duration)` and `step.sleepUntil(id, time)` suspend the run. It holds no worker while it waits, and resumes at its resume time.
+`step.sleep(id, duration)` and `step.sleepUntil(id, time)` suspend the run. It holds no worker while it waits, and resumes when its time comes.
 
 ```ts
 // src/nextasking/tasks/onboard-user.ts
@@ -152,6 +152,7 @@ export const signUpUser = defineTask("sign-up-user", {
 - Without your own id, the run or event gets an id derived from that position, the same on every attempt. A `runId` or `eventId` you pass wins over it.
 - A call that throws is not saved: the next attempt sends it again.
 - Inside a step's `fn`, a call is counted within that step. Once the step is saved, its `fn`, and the calls in it, don't run again.
+- An attempt that lost its lock sends nothing: its next `emit` or `dispatch` throws without sending, and its `abortSignal` aborts. See [Worker](worker.md#stop-a-handler-cleanly-with-abortsignal).
 
 ## Pass the idempotency key to the provider
 
@@ -202,6 +203,6 @@ import { StepMisuseError } from "@flefebvre/nextasking";
 
 - Saved steps, resume times and sent calls live in Redis next to the run, under the instance's `prefix`.
 - They are removed when the run completes.
-- A run that fails for good keeps its saved steps for as long as the run is kept: 14 days. See [Retries and failures](retries-and-failures.md#what-a-failed-run-keeps).
+- A run that fails for good keeps its saved steps for as long as the run is kept: up to 14 days. A replay reuses them. See [Retries and failures](retries-and-failures.md#what-a-failed-run-keeps).
 - Only the attempt that currently owns the run can save a step. If another attempt has taken the run over, the next `step.run` of the old attempt throws and saves nothing, and its `abortSignal` aborts. See [Worker](worker.md#stop-a-handler-cleanly-with-abortsignal).
 - Each saved step resets the run's stall count. See [Worker](worker.md#stalls).

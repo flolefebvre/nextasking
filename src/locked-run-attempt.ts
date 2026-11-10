@@ -1,5 +1,5 @@
 import type { AttemptAbortCause } from "./attempt-abort.js";
-import { errorFromThrownValue, errorRecordFor, failureReasonFor, UnknownTaskRunError } from "./attempt-errors.js";
+import { attemptErrorReportOf, errorFromThrownValue, failureReasonFor, UnknownTaskRunError } from "./attempt-errors.js";
 import { settleWithinTimeout } from "./attempt-timeout.js";
 import { backoffInMillisecondsFor } from "./backoff.js";
 import { backoffOf } from "./definitions.js";
@@ -154,22 +154,22 @@ export async function executeLockedRunAttempt(lockedRunAttempt: LockedRunAttempt
 }
 
 function settleOutcomeOf(attemptOutcome: AttemptOutcome, attempt: number): SettleOutcome {
-  const errorRecordOf = (error: Error) => errorRecordFor(error, attempt, new Date());
+  const attemptErrorReportOfThisAttempt = (error: Error) => attemptErrorReportOf(error, attempt);
   switch (attemptOutcome.kind) {
     case "complete":
     case "suspend":
     case "yield":
       return attemptOutcome;
     case "fail":
-      return { ...attemptOutcome, error: errorRecordOf(attemptOutcome.error) };
+      return { ...attemptOutcome, error: attemptErrorReportOfThisAttempt(attemptOutcome.error) };
     case "retry":
       return {
         kind: "retry",
-        error: errorRecordOf(attemptOutcome.error),
+        error: attemptErrorReportOfThisAttempt(attemptOutcome.error),
         backoffInMilliseconds: attemptOutcome.backoffInMilliseconds,
       };
     case "handBack":
-      return { ...attemptOutcome, error: errorRecordOf(attemptOutcome.error) };
+      return { ...attemptOutcome, error: attemptErrorReportOfThisAttempt(attemptOutcome.error) };
   }
 }
 

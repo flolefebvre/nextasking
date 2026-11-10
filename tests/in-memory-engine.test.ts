@@ -19,6 +19,8 @@ defineEngineContractTests((name, body) => {
       },
       pastInstant: async () => Date.now() - 1000,
       stateOf: async (task, runId) => engine.storedRunOf(task, runId)?.state,
+      storedErrorsOf: async (task, runId) =>
+        (engine.storedRunOf(task, runId)?.errors ?? []).map((storedError): unknown => JSON.parse(storedError)),
       isWakeUpMarkerArmed: async () => engine.isWakeUpMarkerArmed(),
       disarmWakeUpMarker: () => engine.waitForWakeUp(0),
     });

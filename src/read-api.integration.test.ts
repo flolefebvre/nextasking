@@ -38,7 +38,7 @@ const DECLARED_SCHEDULES: readonly ScheduleSummary[] = [
 
 const READ_COMMAND_NAMES = new Set(["hmget", "get", "lrange", "lindex", "hgetall", "zcard", "eval", "evalsha"]);
 
-const ATTEMPT_ERROR = { attempt: 1, name: "Error", message: "boom", stack: "Error: boom", failedAt: "" };
+const ATTEMPT_ERROR = { attempt: 1, name: "Error", message: "boom", stack: "Error: boom" };
 
 function taskDefinitionOf(taskName: string): AnyTaskDefinition {
   return defineScheduledTask(taskName, { schedule: { cron: "0 * * * *" }, handler: async () => undefined });

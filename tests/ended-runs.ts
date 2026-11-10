@@ -18,7 +18,7 @@ export const SEND_EMAIL_PRUNE_REQUEST: PruneRequest = {
 
 const MOST_RUNS_ENDED_PER_FETCH = 50;
 
-const ENDING_ERROR = { attempt: 1, name: "Error", message: "boom", stack: "Error: boom", failedAt: "" };
+const ENDING_ERROR = { attempt: 1, name: "Error", message: "boom", stack: "Error: boom" };
 
 export function runIdsOf(prefix: string, count: number): RunId[] {
   return Array.from({ length: count }, (_, position) => `${prefix}-${String(position + 1).padStart(5, "0")}`);

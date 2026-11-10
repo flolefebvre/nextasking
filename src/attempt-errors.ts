@@ -1,6 +1,6 @@
 import { NonRetriableError, StepMisuseError } from "./errors.js";
 import type { RunId } from "./ids.js";
-import type { ErrorRecord } from "./engine/engine.js";
+import type { AttemptErrorReport } from "./engine/engine.js";
 import type { FailureReason } from "./run-states.js";
 
 export class StalledRunError extends Error {
@@ -48,12 +48,11 @@ function stringFormOf(value: unknown): string {
   }
 }
 
-export function errorRecordFor(error: Error, attempt: number, failedAt: Date): ErrorRecord {
+export function attemptErrorReportOf(error: Error, attempt: number): AttemptErrorReport {
   return {
     attempt,
     name: error.name,
     message: error.message,
     stack: error.stack ?? "",
-    failedAt: failedAt.toISOString(),
   };
 }

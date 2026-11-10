@@ -16,7 +16,7 @@ const DUE_INSTANT_FIELD_BY_STATE: Readonly<Partial<Record<RunState, string>>> = 
   backingOff: "nextAttemptAt",
 };
 
-const RETRY_ERROR = { attempt: 1, name: "Error", message: "boom", stack: "", failedAt: "" };
+const RETRY_ERROR = { attempt: 1, name: "Error", message: "boom", stack: "" };
 
 function sendEmailRunOf(runId: string, extraFields: Partial<RunToCreate> = {}): RunToCreate {
   return { runId, task: "send-email", payload: "{}", retries: 3, ...extraFields };

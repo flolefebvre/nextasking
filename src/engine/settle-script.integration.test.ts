@@ -16,13 +16,13 @@ const BACKOFF_IN_MILLISECONDS = 30_000;
 
 const RESUMES_AT = Date.UTC(2030, 0, 1);
 
-const ATTEMPT_ERROR = { attempt: 1, name: "TypeError", message: "boom", stack: "TypeError: boom", failedAt: "" };
+const ATTEMPT_ERROR = { attempt: 1, name: "TypeError", message: "boom", stack: "TypeError: boom" };
 
 const COMPLETE: SettleOutcome = { kind: "complete" };
 
 const YIELD: SettleOutcome = { kind: "yield" };
 
-const UNKNOWN_TASK_ERROR = { attempt: 1, name: "UnknownTaskError", message: "unknown task", stack: "", failedAt: "" };
+const UNKNOWN_TASK_ERROR = { attempt: 1, name: "UnknownTaskError", message: "unknown task", stack: "" };
 
 const HAND_BACK: SettleOutcome = { kind: "handBack", error: UNKNOWN_TASK_ERROR, failureNotice: undefined };
 

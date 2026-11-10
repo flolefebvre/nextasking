@@ -38,7 +38,7 @@ async function timedRunsOf(context: EngineTestContext): Promise<void> {
     ...backingOffRun!,
     outcome: {
       kind: "retry",
-      error: { attempt: 1, name: "Error", message: "boom", stack: "", failedAt: "" },
+      error: { attempt: 1, name: "Error", message: "boom", stack: "" },
       backoffInMilliseconds: ONE_HOUR_IN_MILLISECONDS,
     },
   });

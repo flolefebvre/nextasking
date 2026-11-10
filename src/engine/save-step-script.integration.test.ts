@@ -203,7 +203,7 @@ engineTest("a completed run has no steps and a failed run keeps them", async (co
     outcome: {
       kind: "fail",
       reason: "non-retriable",
-      error: { attempt: 1, name: "Error", message: "boom", stack: "", failedAt: "" },
+      error: { attempt: 1, name: "Error", message: "boom", stack: "" },
       failureNotice: undefined,
     },
   });

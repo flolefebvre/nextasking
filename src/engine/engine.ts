@@ -59,13 +59,14 @@ export type SourceEvent = {
   eventId: EventId;
 };
 
-export type ErrorRecord = {
+export type AttemptErrorReport = {
   attempt: number;
   name: string;
   message: string;
   stack: string;
-  failedAt: string;
 };
+
+export type ErrorRecord = AttemptErrorReport & { failedAt: string };
 
 export type SerializedPayload = string;
 
@@ -179,11 +180,11 @@ export type FailureNotice = {
 
 export type SettleOutcome =
   | { kind: "complete" }
-  | { kind: "fail"; reason: FailureReason; error: ErrorRecord; failureNotice: FailureNotice | undefined }
-  | { kind: "retry"; error: ErrorRecord; backoffInMilliseconds: DurationInMilliseconds }
+  | { kind: "fail"; reason: FailureReason; error: AttemptErrorReport; failureNotice: FailureNotice | undefined }
+  | { kind: "retry"; error: AttemptErrorReport; backoffInMilliseconds: DurationInMilliseconds }
   | { kind: "suspend"; resumesAt: EpochMilliseconds }
   | { kind: "yield" }
-  | { kind: "handBack"; error: ErrorRecord; failureNotice: FailureNotice | undefined };
+  | { kind: "handBack"; error: AttemptErrorReport; failureNotice: FailureNotice | undefined };
 
 export type SettleRequest = HeldLock & {
   outcome: SettleOutcome;
@@ -750,8 +751,9 @@ function pruneReplyOf(reply: unknown): PruneReply {
   throw unreadableReplyError("prune", reply);
 }
 
-function pruneArgumentsOf({ completedRetention, failedRetention }: PruneRequest): CommandArgument[] {
+function pruneArgumentsOf({ task, completedRetention, failedRetention }: PruneRequest): CommandArgument[] {
   return [
+    task,
     completedRetention.maxAgeInMilliseconds,
     completedRetention.maxRunCount,
     failedRetention.maxAgeInMilliseconds,
@@ -1068,7 +1070,7 @@ export function createEngine(
   const runFireScript = scriptRunnerOf("nextaskingFire", FIRE_SCRIPT, fireKeysOf(keys));
   const runFireNowScript = scriptRunnerOf("nextaskingFireNow", FIRE_NOW_SCRIPT, fireNowKeysOf(keys));
   const runReplayScript = scriptRunnerOf("nextaskingReplay", REPLAY_SCRIPT, replayKeysOf(keys));
-  const runPruneScript = scriptRunnerWithKeysOf("nextaskingPrune", PRUNE_SCRIPT, 3);
+  const runPruneScript = scriptRunnerWithKeysOf("nextaskingPrune", PRUNE_SCRIPT, 4);
   return {
     serverInstant: async () => serverInstantOf(await client.send(builtInCommandOf("TIME"))),
     replay: async ({ task, runId }) => replayReplyOf(await runReplayScript([storedRunIdOf(task, runId)])),

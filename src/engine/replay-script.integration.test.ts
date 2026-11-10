@@ -7,7 +7,7 @@ import { storedRunIdOf } from "./engine-keys.js";
 import { RECORD_VERSION } from "./engine.js";
 import type { SettleOutcome } from "./engine.js";
 
-const ATTEMPT_ERROR = { attempt: 1, name: "Error", message: "boom", stack: "Error: boom", failedAt: "" };
+const ATTEMPT_ERROR = { attempt: 1, name: "Error", message: "boom", stack: "Error: boom" };
 
 const RETRY: SettleOutcome = { kind: "retry", error: ATTEMPT_ERROR, backoffInMilliseconds: 0 };
 

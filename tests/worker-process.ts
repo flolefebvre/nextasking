@@ -34,7 +34,7 @@ const REPO_ROOT_DIR = fileURLToPath(new URL("../", import.meta.url));
 
 const ENTRY_PATH = fileURLToPath(new URL("./worker-process-entry.ts", import.meta.url));
 
-const READY_TIMEOUT_IN_MILLISECONDS = 20_000;
+export const WORKER_PROCESS_READY_TIMEOUT_IN_MILLISECONDS = 20_000;
 
 const CLOSE_SIGNALS: readonly NodeJS.Signals[] = ["SIGTERM", "SIGINT"];
 
@@ -133,7 +133,7 @@ export async function startWorkerProcess({ env = {}, ...config }: WorkerProcessO
   const isReady = await new Promise<boolean>((resolve) => {
     const giveUp = setTimeout(() => {
       resolve(false);
-    }, READY_TIMEOUT_IN_MILLISECONDS);
+    }, WORKER_PROCESS_READY_TIMEOUT_IN_MILLISECONDS);
     child.on("message", (message) => {
       if (message === WORKER_PROCESS_READY) {
         clearTimeout(giveUp);

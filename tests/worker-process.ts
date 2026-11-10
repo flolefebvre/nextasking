@@ -93,29 +93,26 @@ export async function startWorkerProcess({ env = {}, ...config }: WorkerProcessO
     }
   });
   const output = () => outputLines.join("\n");
-  const closed = new Promise<void>((resolve) => {
-    child.once("close", () => {
-      resolve();
-    });
-  });
   let closeSignalSentAt: { signal: NodeJS.Signals; sentAt: EpochMilliseconds } | undefined;
-  const exited = new Promise<WorkerProcessExit>((resolve) => {
+  const exitedWithItsOutputRead = new Promise<WorkerProcessExit>((resolve) => {
     child.once("exit", (code, signal) => {
-      invariants.waitBeforeJudging(closed);
       if (closeSignalSentAt !== undefined && Date.now() - closeSignalSentAt.sentAt > closeBoundInMilliseconds) {
         invariants.report({
           invariant: "slow close",
           message: `a worker process took longer than ${String(closeBoundInMilliseconds)} ms to exit after ${closeSignalSentAt.signal}`,
         });
       }
-      resolve({ code, signal });
+      child.once("close", () => {
+        resolve({ code, signal });
+      });
     });
   });
+  invariants.waitBeforeJudging(exitedWithItsOutputRead);
   const stop = async () => {
     if (child.exitCode === null && child.signalCode === null) {
       child.kill("SIGKILL");
     }
-    return exited;
+    return exitedWithItsOutputRead;
   };
   const workerProcess: WorkerProcess = {
     pid: child.pid,
@@ -127,7 +124,7 @@ export async function startWorkerProcess({ env = {}, ...config }: WorkerProcessO
       }
       child.kill(signal);
     },
-    exited,
+    exited: exitedWithItsOutputRead,
     stop,
   };
   const isReady = await new Promise<boolean>((resolve) => {
@@ -140,7 +137,7 @@ export async function startWorkerProcess({ env = {}, ...config }: WorkerProcessO
         resolve(true);
       }
     });
-    void exited.then(() => {
+    void exitedWithItsOutputRead.then(() => {
       clearTimeout(giveUp);
       resolve(false);
     });

@@ -6,6 +6,7 @@ import { deserializePayload, isFailureReason, isRecordVersionReadable, storedInt
 import type { ErrorRecord, ScheduleSummary } from "./engine/engine.js";
 import { indexPageCommandOf, indexPageOf } from "./engine/index-page-script.js";
 import type { IndexPosition } from "./engine/index-page-script.js";
+import { listedRunReadCommandOf, readPartsOf, runReadCommandOf } from "./engine/run-read-scripts.js";
 import { UnknownEventError, UnknownTaskError } from "./errors.js";
 import { deriveFiringRunId, deriveListenerRunId } from "./ids.js";
 import type { EventId, RunId } from "./ids.js";
@@ -163,10 +164,6 @@ const RUN_RECORD_FIELDS = [
 ] as const;
 
 const SCHEDULE_RECORD_FIELDS = ["version", "nextFiringAt", "previousFiringAt"] as const;
-
-const COMMANDS_PER_RUN_READ = 4;
-
-const COMMANDS_PER_LISTED_RUN_READ = 2;
 
 type StoredValue = string | null;
 
@@ -373,30 +370,18 @@ function repliesOf(commandResults: readonly CommandResult[]): unknown[] {
   });
 }
 
-function repliesInGroupsOf(replies: readonly unknown[], groupSize: number): unknown[][] {
-  return Array.from({ length: replies.length / groupSize }, (_, position) =>
-    replies.slice(position * groupSize, (position + 1) * groupSize),
-  );
-}
-
 export function createReadApi(config: ReadApiConfig): ReadApi {
   const { client, tasksByName, listenerNamesByEventName, declaredSchedules, supportedRecordVersion } = config;
   const keys = engineKeysOf(config.prefix);
   const repliesToBatchOf = async (commands: readonly RedisCommand[]): Promise<unknown[]> =>
     repliesOf(await client.sendBatch(commands));
 
-  const runReadCommandsOf = ({ task, runId }: RunIdentity): RedisCommand[] => [
-    builtInCommandOf("HMGET", keys.runRecord(task, runId), ...RUN_RECORD_FIELDS),
-    builtInCommandOf("GET", keys.runPayload(task, runId)),
-    builtInCommandOf("LRANGE", keys.runErrors(task, runId), 0, -1),
-    builtInCommandOf("HGETALL", keys.runSteps(task, runId)),
-  ];
-
   const readRuns = async (runReads: readonly RunIdentity[]): Promise<(AnyRun | undefined)[]> => {
-    const replies = await repliesToBatchOf(runReads.flatMap(runReadCommandsOf));
-    const repliesByRun = repliesInGroupsOf(replies, COMMANDS_PER_RUN_READ);
+    const replies = await repliesToBatchOf(
+      runReads.map((runIdentity) => runReadCommandOf(keys, runIdentity, RUN_RECORD_FIELDS)),
+    );
     return runReads.map(({ task, runId }, position) =>
-      runOf(task, runId, repliesByRun[position] ?? [], supportedRecordVersion),
+      runOf(task, runId, readPartsOf(replies[position]), supportedRecordVersion),
     );
   };
 
@@ -423,14 +408,10 @@ export function createReadApi(config: ReadApiConfig): ReadApi {
       return [];
     }
     const replies = await repliesToBatchOf(
-      indexEntries.flatMap(({ runIdentity: { task, runId } }) => [
-        builtInCommandOf("HMGET", keys.runRecord(task, runId), ...RUN_RECORD_FIELDS),
-        builtInCommandOf("LINDEX", keys.runErrors(task, runId), -1),
-      ]),
+      indexEntries.map(({ runIdentity }) => listedRunReadCommandOf(keys, runIdentity, RUN_RECORD_FIELDS)),
     );
-    const repliesByRun = repliesInGroupsOf(replies, COMMANDS_PER_LISTED_RUN_READ);
     return indexEntries.flatMap((entry, position) => {
-      const listedRun = listedRunOf(entry, state, repliesByRun[position] ?? [], supportedRecordVersion);
+      const listedRun = listedRunOf(entry, state, readPartsOf(replies[position]), supportedRecordVersion);
       return listedRun === undefined ? [] : [listedRun];
     });
   };

@@ -74,6 +74,52 @@ integrationTest(
   },
 );
 
+const BLOCKING_POP_TIMEOUT_IN_MILLISECONDS = 1_000;
+
+const TIMER_SLACK_IN_MILLISECONDS = 50;
+
+function commandOf(...commandArguments: string[]): string {
+  return `*${String(commandArguments.length)}\r\n${commandArguments
+    .map((commandArgument) => `$${String(Buffer.byteLength(commandArgument))}\r\n${commandArgument}\r\n`)
+    .join("")}`;
+}
+
+integrationTest(
+  "a held request's wait for the earlier requests of its connection ends once the server has answered each of them",
+  { timeout: 15_000 },
+  async ({ redisUrl, keyPrefix }) => {
+    await withSocketsThroughAProxy(redisUrl, async ({ proxy, redis, connectedSocket }) => {
+      await redis.rPush(`${keyPrefix}list`, ["a", "b"]);
+      const heldSocket = await connectedSocket();
+      let repliesReceived = "";
+      heldSocket.on("data", (replyChunk: Buffer) => {
+        repliesReceived += replyChunk.toString();
+      });
+      const heldRequest = proxy.holdRequest((request) => request.includes(`${keyPrefix}held`));
+
+      const writtenAt = performance.now();
+      heldSocket.write(commandOf("LRANGE", `${keyPrefix}list`, "0", "-1"));
+      heldSocket.write(
+        commandOf("BLPOP", `${keyPrefix}unanswered`, String(BLOCKING_POP_TIMEOUT_IN_MILLISECONDS / 1_000)),
+      );
+      heldSocket.write(setCommandOf(`${keyPrefix}held`));
+      const { release, waitForEarlierRequestsAnswered } = await heldRequest;
+      await waitForEarlierRequestsAnswered();
+      const waitedInMilliseconds = performance.now() - writtenAt;
+      const valueWhileHeld = await redis.get(`${keyPrefix}held`);
+      release();
+
+      expect(waitedInMilliseconds).toBeGreaterThanOrEqual(
+        BLOCKING_POP_TIMEOUT_IN_MILLISECONDS - TIMER_SLACK_IN_MILLISECONDS,
+      );
+      expect(valueWhileHeld).toBeNull();
+      await vi.waitFor(() => expect(repliesReceived).toBe("*2\r\n$1\r\na\r\n$1\r\nb\r\n*-1\r\n+OK\r\n"), {
+        timeout: 5_000,
+      });
+    });
+  },
+);
+
 integrationTest(
   "a held request and the ones after it on its connection reach the server only once released, while other connections go through",
   { timeout: 15_000 },

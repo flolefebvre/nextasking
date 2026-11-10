@@ -22,7 +22,7 @@ export type TcpProxy = {
   stop: () => Promise<void>;
 };
 
-export type HeldRequest = { release: () => void };
+export type HeldRequest = { release: () => void; waitForEarlierRequestsAnswered: () => Promise<void> };
 
 type ArmedRequestHold = {
   isRequestToHold: (request: string) => boolean;
@@ -83,6 +83,31 @@ function byteLengthOfFirstCompleteCommand(requestBytes: Buffer): number | undefi
   }
   return commandEnd;
 }
+
+const RESP_BULK_STRING_PREFIX = "$".charCodeAt(0);
+
+function endOfReplyAt(replyBytes: Buffer, replyStart: number): number | undefined {
+  const headerEnd = replyBytes.indexOf(CRLF, replyStart);
+  if (headerEnd < 0) {
+    return undefined;
+  }
+  const headerValue = Number(replyBytes.toString("latin1", replyStart + 1, headerEnd));
+  const afterHeader = headerEnd + CRLF.length;
+  if (replyBytes[replyStart] === RESP_BULK_STRING_PREFIX && headerValue >= 0) {
+    const bulkStringEnd = afterHeader + headerValue + CRLF.length;
+    return bulkStringEnd <= replyBytes.length ? bulkStringEnd : undefined;
+  }
+  if (replyBytes[replyStart] !== RESP_ARRAY_PREFIX) {
+    return afterHeader;
+  }
+  let elementEnd: number | undefined = afterHeader;
+  for (let elementIndex = 0; elementIndex < headerValue && elementEnd !== undefined; elementIndex += 1) {
+    elementEnd = endOfReplyAt(replyBytes, elementEnd);
+  }
+  return elementEnd;
+}
+
+type AnsweredCountWait = { answeredCount: number; markAnswered: () => void };
 
 type ArmedReplyCut = {
   isRequestToCut: (request: string) => boolean;
@@ -145,6 +170,32 @@ export async function startTcpProxy(targetUrl: string): Promise<TcpProxy> {
     let isForwardingStopped = false;
     let unforwardedRequestBytes = Buffer.alloc(0);
     let isForwardingRequests = true;
+    let forwardedRequestCount = 0;
+    let answeredRequestCount = 0;
+    let unparsedReplyBytes = Buffer.alloc(0);
+    let answeredCountWaits: AnsweredCountWait[] = [];
+    const countCompleteReplies = () => {
+      let replyEnd = endOfReplyAt(unparsedReplyBytes, 0);
+      while (replyEnd !== undefined) {
+        unparsedReplyBytes = unparsedReplyBytes.subarray(replyEnd);
+        answeredRequestCount += 1;
+        replyEnd = endOfReplyAt(unparsedReplyBytes, 0);
+      }
+      const reachedWaits = answeredCountWaits.filter(({ answeredCount }) => answeredRequestCount >= answeredCount);
+      answeredCountWaits = answeredCountWaits.filter(({ answeredCount }) => answeredRequestCount < answeredCount);
+      for (const { markAnswered } of reachedWaits) {
+        markAnswered();
+      }
+    };
+    const answeredCountReached = (answeredCount: number) =>
+      new Promise<void>((markAnswered) => {
+        answeredCountWaits.push({ answeredCount, markAnswered });
+        countCompleteReplies();
+      });
+    targetSocket.on("data", (replyChunk: Buffer) => {
+      unparsedReplyBytes = Buffer.concat([unparsedReplyBytes, replyChunk]);
+      countCompleteReplies();
+    });
     const forwardCompleteRequests = () => {
       let commandByteLength = byteLengthOfFirstCompleteCommand(unforwardedRequestBytes);
       while (!isForwardingStopped && isForwardingRequests && commandByteLength !== undefined) {
@@ -153,16 +204,19 @@ export async function startTcpProxy(targetUrl: string): Promise<TcpProxy> {
         if (requestHold?.isRequestToHold(command.toString()) === true) {
           armedRequestHold = undefined;
           isForwardingRequests = false;
+          const earlierRequestCount = forwardedRequestCount;
           requestHold.markHeld({
             release: () => {
               isForwardingRequests = true;
               forwardCompleteRequests();
             },
+            waitForEarlierRequestsAnswered: () => answeredCountReached(earlierRequestCount),
           });
           return;
         }
         unforwardedRequestBytes = unforwardedRequestBytes.subarray(commandByteLength);
         targetSocket.write(command);
+        forwardedRequestCount += 1;
         const replyCut = armedReplyCut;
         if (replyCut?.isRequestToCut(command.toString()) === true) {
           armedReplyCut = undefined;

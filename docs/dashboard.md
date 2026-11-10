@@ -1,6 +1,6 @@
 # Dashboard
 
-The instance reads its runs back, so you can build your own dashboard: one run with its state, payload, errors and saved steps; a page of runs in one state; the backlog per task; one event from its fan-out to each listener's run; each schedule's firings; a "run now" picker. Every read works from any process with a connection, with or without a worker.
+The instance reads its runs back, so you can build your own dashboard: one run with its state, payload, errors and saved steps; a page of runs in one state; the backlog per task; the run of each listener of one event; each schedule's firings; a "run now" picker. Every read works from any process with a connection, with or without a worker.
 
 ## Protect the dashboard
 
@@ -33,19 +33,19 @@ export default async function RunPage({ params }: { params: Promise<{ task: stri
 const run = await nextasking.getRun("send-welcome-email", runId);
 ```
 
-`getRun(task, runId)` returns the `Run`, or `undefined` when the queue no longer holds it (it was never dispatched, or retention removed it). An unknown task name throws `UnknownTaskError`.
+`getRun(task, runId)` returns the `Run`, or `undefined` when the queue doesn't hold it: it was never dispatched, retention removed it, or a newer release wrote it. An unknown task name throws `UnknownTaskError`.
 
-| Field          | What it holds                                                                                                   |
-| -------------- | --------------------------------------------------------------------------------------------------------------- |
-| `task`         | The task's name; checking it narrows `payload` to that task's payload                                           |
-| `runId`        | The run id                                                                                                      |
-| `state`        | One of the eight states below; checking it narrows the state's own field                                        |
-| `payload`      | The validated payload, `undefined` for a scheduled task                                                         |
-| `attempt`      | The attempt the run is on: the same `attempt` as the run's latest log line                                      |
-| `dispatchedAt` | When it was dispatched                                                                                          |
-| `finishedAt`   | When it completed or failed for good; absent before                                                             |
-| `errors`       | One `RunError` per failed attempt: `{ attempt, name, message, stack, failedAt }`                                |
-| `steps`        | The saved `step.run` results, `{ id, result }`, in no set order; empty once the run completes, which drops them |
+| Field          | What it holds                                                                                                                                                                                                                                                                  |
+| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `task`         | The task's name; checking it narrows `payload` to that task's payload                                                                                                                                                                                                          |
+| `runId`        | The run id                                                                                                                                                                                                                                                                     |
+| `state`        | One of the eight states below; checking it narrows the state's own field                                                                                                                                                                                                       |
+| `payload`      | The validated payload, `undefined` for a scheduled task                                                                                                                                                                                                                        |
+| `attempt`      | The attempt the run is on: the same `attempt` as the run's latest log line                                                                                                                                                                                                     |
+| `dispatchedAt` | When it was dispatched                                                                                                                                                                                                                                                         |
+| `finishedAt`   | When it completed or failed for good; absent before                                                                                                                                                                                                                            |
+| `errors`       | One `RunError` per failed attempt: `{ attempt, name, message, stack, failedAt }`                                                                                                                                                                                               |
+| `steps`        | The saved `step.run` results and the handler's sends, `{ id, result }`, in no set order; empty once the run completes, which drops them. A `dispatch` or `emit` of the handler shows as `{ id: <send id>, result: <runId or eventId> }`, the same shape as a `step.run` result |
 
 Every time is a `Date`, so a `Run` passes unchanged from a server component to a client component.
 
@@ -77,7 +77,7 @@ switch (run.state) {
 | `completed`                 | Completed                                                                                    | none            |
 | `failed`                    | Failed for good; see [Retries and failures](retries-and-failures.md#what-a-failed-run-keeps) | `reason`        |
 
-- A run handed back during a deploy overlap, because the worker that picked it up doesn't define its task, shows `pending`: it is due and waits for a worker that defines it. See [Worker](worker.md#overlapping-releases).
+- A run fetched by a worker that doesn't define its task, during a deploy overlap, shows `executing` for the 10 seconds that worker holds it, then `pending` again, with `attempt` unchanged. Until a worker that defines the task takes it, a dashboard can show it flip between the two. See [Worker](worker.md#overlapping-releases).
 - A run yielded at shutdown or come back from a stall shows `pending` too.
 - `RunState` is the type of `state`; `FailureReason` the type of `reason`.
 
@@ -91,11 +91,21 @@ const { runs, nextCursor } = await nextasking.listRuns({ state: "failed", limit:
 
 - `limit` defaults to 50; it must be a whole number, 1 or more.
 - `task` keeps the runs of one task; the runs come typed by that task and by the state.
-- Pass `nextCursor` back as `cursor` for the next page. It is an opaque string; a cursor from another state, or one `listRuns` didn't return, throws.
-- No `nextCursor` means the walk is done. The last page may come back empty.
+- Pass `nextCursor` back as `cursor` for the next page, with the same `state` and `task`. It is an opaque string; any other cursor throws:
+
+```text
+Invalid listRuns cursor: it pages through state "completed", not "failed"
+Invalid listRuns cursor: it pages through task "send-welcome-email", not task "create-default-workspace"
+Invalid listRuns cursor: it pages through every task, not task "send-welcome-email"
+Invalid listRuns cursor: it pages through task "send-welcome-email", not every task
+Invalid listRuns cursor: pass back a nextCursor that listRuns returned
+```
+
+- A page may come back shorter than `limit`, even empty; only a missing `nextCursor` ends the walk.
 - Each listed run has the fields of a `Run` but `payload`, `errors` and `steps`, and adds `lastErrorMessage`, the message of its last error, when it has one. Call `getRun` for the rest.
-- Order: `completed` and `failed` most recently finished first; `executing` most recently started first; the delayed kinds latest due first; `pending` newest dispatched first, then the handed-back runs.
-- A page is a position in the queue, not a snapshot: a run that changes state between two pages can be skipped or listed twice.
+- Order: `completed` and `failed` most recently finished first; `executing` most recently started first; `delayed`, `suspended` and `backingOff` latest due first; `pending` and `waitingForConcurrencySlot` most recently queued first. A run queues anew when it is dispatched, comes due after a delay, a sleep or a backoff, or is replayed; a handed-back, yielded or stalled run keeps its place.
+- A page is a position in that order, not a snapshot: a run that leaves the state between two pages is skipped, and one that leaves and comes back further down the order can be listed again.
+- A run written by a newer release is left out.
 
 ```ts
 // src/app/admin/failed/page.tsx
@@ -118,18 +128,21 @@ runCounts["send-welcome-email"].pending;
 
 `countRuns()` returns `{ [task]: { [state]: number } }`: every task the instance lists, with all eight states, zero included.
 
-## Follow an event
+- It counts the runs a newer release wrote too, which `getRun` and `listRuns` leave out: during a deploy overlap, the counts of an old release can exceed what it lists.
+
+## Read the listener runs of an event
 
 ```ts
-const { fanOut, runsByListener } = await nextasking.getEvent("invoice.paid", eventId);
+const { runsByListener } = await nextasking.getEvent("invoice.paid", eventId);
 runsByListener["record-invoice-payment"]?.state;
 ```
 
-`getEvent(event, eventId)` returns `{ event, eventId, fanOut, runsByListener }`. An unknown event name throws `UnknownEventError`.
+`getEvent(event, eventId)` returns `{ event, eventId, runsByListener }`. An unknown event name throws `UnknownEventError`.
 
-- `fanOut` is `"pending"` until a worker has turned the event into listener runs, then `"completed"`, or `"failed"` when the fan-out failed for good; replay a failed one with `replayEvent(event, eventId)`, see [Retries and failures](retries-and-failures.md#replay-a-failed-run). It is `undefined` when the queue holds no fan-out for that id: never emitted, emitted with no listener, or removed by retention.
-- `runsByListener` has one key per listener the code defines for the event, each holding that listener's `Run`, typed by its listener, or `undefined` while it has none.
-- A listener the code no longer defines is left out, even when the emitting release fanned out to it. A listener added after the emit shows `undefined`.
+- `runsByListener` has one key per listener the code defines for the event, each holding that listener's `Run`, typed by its listener, or `undefined` when there is none.
+- Every listener reads `undefined` for an event never emitted, or whose runs retention removed.
+- A listener the code no longer defines is left out, even when the emitting release stored a run for it. A listener added after the emit shows `undefined`.
+- A failed listener run is replayed like any run, with `replay(listenerName, runId)`. See [Retries and failures](retries-and-failures.md#replay-a-failed-run).
 
 ## Check that a schedule fired
 
@@ -143,10 +156,11 @@ for (const schedule of await nextasking.listSchedules()) {
 `listSchedules()` returns one entry per scheduled task the code defines, in the order of `tasks`: `{ task, cron, timezone, nextFiringAt?, previousFiring? }`.
 
 - `cron` and `timezone` come from the code; `timezone` is `"UTC"` when the task sets none.
-- `nextFiringAt` is the next planned firing. It is absent until a worker has booted with the schedule; see [Scheduled tasks](scheduled-tasks.md).
-- `previousFiring` is `{ scheduledAt, runId }`: the cron's last planned instant before `nextFiringAt`, and the run id derived from it. It is absent until the schedule has fired once.
-- `previousFiring` says when the schedule was due, not that it ran. Call `getRun(task, previousFiring.runId)`: `undefined` means no run was started for that firing, or retention removed it.
-- After a change of `cron`, `previousFiring` follows the new cron.
+- `nextFiringAt` is the next planned firing. It is absent until a worker has booted with the schedule, and while the stored schedule was written by a newer release; see [Scheduled tasks](scheduled-tasks.md).
+- `previousFiring` is `{ scheduledAt, runId }`: the planned instant of the last firing a worker fired, and the id of the run it started. It is absent until the schedule has fired once.
+- Call `getRun(task, previousFiring.runId)` to see how that run went: `undefined` means retention removed it.
+- After a change of `cron`, `previousFiring` stays the last real firing, under the old cron; only `nextFiringAt` follows the new one.
+- A run started with `dispatch`, or with `fireSchedule` from `./testing`, is not a firing and leaves `previousFiring` as it was.
 
 ## Build a "run now" picker
 
@@ -172,24 +186,22 @@ export async function runNow(taskName: TaskName) {
 ```
 
 - `taskDefinitions` lists every task as `{ name, event?, schedule? }`: `event` is a listener's event name, `schedule` a scheduled task's `{ cron, timezone }`.
-- `eventDefinitions` lists every event as `{ name, listenerNames }`.
+- `eventDefinitions` lists every event as `{ name, listenerNames }`, the built-in `nextasking/run.failed` included.
 - Both are plain, frozen arrays, read with no connection, typed with `TaskName` and `EventName`. They carry no schema and no handler, so they pass to a client component.
 - A scheduled task takes no payload; pass a task with a schema its payload, checked by `dispatch`, which throws `InvalidPayloadError` on a payload the schema refuses.
 
 ## What reads see, and what they cost
 
-- A read sees only the runs of tasks the instance lists. Runs of a task the running release doesn't define, removed from the code or known only to a newer release, never appear in `listRuns` or `countRuns`.
-- Fan-outs and firings never appear as runs.
-- Retention is shared: completed runs are kept 24 hours and at most 1,000, failed runs 14 days and at most 10,000, per queue, across every task, fan-out and firing. A busy task can push another task's completed runs out within minutes.
-- No read is a snapshot. `countRuns` and `listRuns` walk the queue in batches while runs keep moving, so totals can be off by the runs that moved during the walk.
+- A read sees only the runs of tasks the instance lists. Runs of a task the running release doesn't define, removed from the code or known only to a newer release, never appear in `listRuns` or `countRuns`. A run left behind by a removed task fails `unknown task` 30 minutes after a worker first found it, then leaves through retention; see [Deploys](deploys.md#remove-a-task-a-listener-or-an-event).
+- Retention is per task: completed runs as [Tasks and events](tasks-and-events.md#start-the-worker) says, failed runs as [Retries and failures](retries-and-failures.md#what-a-failed-run-keeps) says. A busy task never pushes out another task's runs.
+- A worker removes up to 200 ended runs per second in all, and up to 180 per second of one task that never stops overflowing. The caps hold while runs end below that rate per worker; a burst above it is caught up afterwards, at that rate. With several workers, the rates add up.
+- A worker visits one task per second, in turn, so a cap is reached again at each visit rather than held at every instant: between two visits a task sits over its cap by the runs it ended meanwhile, about a minute's worth with 50 tasks.
+- No read is a snapshot: runs keep moving while a read runs, so two reads, or two counts of one `countRuns`, can disagree by the runs that moved in between.
 
-| Read                                  | Cost                                                                                                            |
-| ------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
-| `getRun`                              | Three round trips, whatever the queue's size                                                                    |
-| `listRuns`                            | Reads 200 runs per round trip, payloads included, until the page is full; a `task` or a delayed kind reads more |
-| `countRuns`                           | Reads every run's task name, and the stored data of every delayed run, in batches of 200: one walk of the queue |
-| `getEvent`                            | Two round trips per listener, run in parallel                                                                   |
-| `listSchedules`                       | One read of every stored schedule                                                                               |
-| `taskDefinitions`, `eventDefinitions` | Nothing: no connection                                                                                          |
-
-Call `countRuns` on page load, not in a tight poll: with 10,000 failed runs kept, one call reads more than 50 batches.
+| Read            | Cost                                                                                                                                                                    |
+| --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `getRun`        | One round trip: record, payload, errors and steps together                                                                                                              |
+| `listRuns`      | Two round trips: one page from each task the instance lists (one task with `task`), then the page's runs with their last error; one when no task has a run left to list |
+| `countRuns`     | One round trip: one count per task and state, whatever the queue holds                                                                                                  |
+| `getEvent`      | One round trip: every listener's run together                                                                                                                           |
+| `listSchedules` | One round trip: one read per scheduled task the instance lists                                                                                                          |

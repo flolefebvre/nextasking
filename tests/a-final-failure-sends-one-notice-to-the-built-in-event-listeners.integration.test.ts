@@ -12,11 +12,13 @@ import {
 import type { Logger, RunFailedPayload } from "../src/index.js";
 import { deriveFailureNoticeEventId } from "../src/ids.js";
 import { closeNextaskingAndCheckItsDuration } from "./close-nextasking-and-check-its-duration.js";
-import { integrationTest } from "./integration-test.js";
+import { TEST_TIMEOUT_PAST_ITS_WAITS_IN_MILLISECONDS, integrationTest } from "./integration-test.js";
 import { createRecordingLogger, waitForLogMessage } from "./recording-logger.js";
 import { storedRun } from "./stored-run.js";
 
 const ISO_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+
+const NOTICES_TIMEOUT_IN_MILLISECONDS = 10_000;
 
 type Alerting = {
   runFailedNotices: RunFailedPayload[];
@@ -75,7 +77,7 @@ async function waitForNotices(notices: readonly unknown[], count: number): Promi
     () => {
       expect(notices).toHaveLength(count);
     },
-    { timeout: 10_000 },
+    { timeout: NOTICES_TIMEOUT_IN_MILLISECONDS },
   );
 }
 
@@ -124,6 +126,7 @@ integrationTest(
 
 integrationTest(
   "a failed listener run's notice names its event, and a replayed run that fails again sends a second notice",
+  { timeout: 2 * NOTICES_TIMEOUT_IN_MILLISECONDS + TEST_TIMEOUT_PAST_ITS_WAITS_IN_MILLISECONDS },
   async ({ redisUrl, keyPrefix }) => {
     const { logger } = createRecordingLogger();
     const alerting = noAlerting();

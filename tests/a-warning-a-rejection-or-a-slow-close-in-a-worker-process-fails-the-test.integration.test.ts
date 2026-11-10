@@ -4,7 +4,7 @@ import { parseDuration } from "../src/durations.js";
 import type { Duration } from "../src/durations.js";
 import type { DispatchedRun } from "../src/index.js";
 import { fixtureRecordsOf } from "./fixture-records.js";
-import { integrationTest } from "./integration-test.js";
+import { TEST_TIMEOUT_PAST_ITS_WAITS_IN_MILLISECONDS, integrationTest } from "./integration-test.js";
 import { CLOSE_BOUND_PAST_THE_SHUTDOWN_TIMEOUT_IN_MILLISECONDS } from "./invariant-violations.js";
 import type { FailingTestContext } from "./test-failing-with.js";
 import { testFailingWith } from "./test-failing-with.js";
@@ -20,8 +20,6 @@ const WORKER_PROCESS_WARNING = "Warning: warned in the worker process";
 const WORKER_PROCESS_REJECTION = "rejected in the worker process";
 
 const SLOW_CLOSE = "a worker process took longer than 3000 ms to exit after SIGTERM";
-
-const TEST_TIMEOUT_PAST_ITS_WAITS_IN_MILLISECONDS = 5_000;
 
 const DISPATCHED_RUN_OUTCOME_TIMEOUT_IN_MILLISECONDS = 10_000;
 

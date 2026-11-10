@@ -6,8 +6,13 @@ import {
   MINUTE_IN_MILLISECONDS,
   runIdsOf,
   SEND_EMAIL_PRUNE_REQUEST,
+  sequentialRoundTripCountOfEndRuns,
 } from "../../tests/ended-runs.js";
 import { backdateEndedRun, engineTest, fetchedLockedRunsOf } from "../../tests/engine-test.js";
+import {
+  SEQUENTIAL_ROUND_TRIP_BOUND_IN_MILLISECONDS,
+  TEST_TIMEOUT_PAST_ITS_WAITS_IN_MILLISECONDS,
+} from "../../tests/integration-test.js";
 import type { EngineTestContext } from "../../tests/engine-test.js";
 import { storedKeyViolationsOf } from "../../tests/stored-key-violations.js";
 import { seededRandomnessOfThisRun } from "../../tests/seeded-random.js";
@@ -23,6 +28,22 @@ const PRUNE_REQUEST_WITH_NO_COMPLETED_RUN_KEPT: PruneRequest = {
   ...SEND_EMAIL_PRUNE_REQUEST,
   completedRetention: { ...SEND_EMAIL_PRUNE_REQUEST.completedRetention, maxRunCount: 0 },
 };
+
+const OVER_CAP_ENDED_RUN_COUNT = 1200;
+
+const OVER_CAP_PRUNE_CALL_COUNT = 2;
+
+const COMPLETED_INDEX_READ_COUNT = 1;
+
+const OVER_CAP_PRUNE_TEST_SEQUENTIAL_ROUND_TRIP_COUNT =
+  sequentialRoundTripCountOfEndRuns(OVER_CAP_ENDED_RUN_COUNT) +
+  OVER_CAP_PRUNE_CALL_COUNT +
+  COMPLETED_INDEX_READ_COUNT +
+  MOST_RUNS_PRUNED_PER_PRUNE;
+
+const OVER_CAP_PRUNE_TEST_TIMEOUT_IN_MILLISECONDS =
+  OVER_CAP_PRUNE_TEST_SEQUENTIAL_ROUND_TRIP_COUNT * SEQUENTIAL_ROUND_TRIP_BOUND_IN_MILLISECONDS +
+  TEST_TIMEOUT_PAST_ITS_WAITS_IN_MILLISECONDS;
 
 async function endRunsOfANewerRecordVersionBefore(
   context: EngineTestContext,
@@ -53,7 +74,7 @@ engineTest(
   "1,200 completed runs of a task end at 1,000 after prunes, the oldest removed first with every key they had",
   async (context) => {
     const { engine } = context;
-    const runIds = runIdsOf("run", 1200);
+    const runIds = runIdsOf("run", OVER_CAP_ENDED_RUN_COUNT);
     await endRuns(engine, "send-email", runIds, "complete");
 
     const prunedRunCounts = [(await engine.prune(SEND_EMAIL_PRUNE_REQUEST)).prunedRunCount];
@@ -61,12 +82,13 @@ engineTest(
 
     expect(prunedRunCounts).toEqual([MOST_RUNS_PRUNED_PER_PRUNE, 0]);
     expect(await completedRunIdsOf(context)).toEqual(
-      runIds.slice(200).map((runId) => storedRunIdOf("send-email", runId)),
+      runIds.slice(MOST_RUNS_PRUNED_PER_PRUNE).map((runId) => storedRunIdOf("send-email", runId)),
     );
-    for (const runId of runIds.slice(0, 200)) {
+    for (const runId of runIds.slice(0, MOST_RUNS_PRUNED_PER_PRUNE)) {
       expect(await storedKeyCountOf(context, runId), `the keys of ${runId}`).toBe(0);
     }
   },
+  { timeout: OVER_CAP_PRUNE_TEST_TIMEOUT_IN_MILLISECONDS },
 );
 
 engineTest(

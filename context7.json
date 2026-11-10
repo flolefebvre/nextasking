@@ -3,13 +3,13 @@
   "url": "https://context7.com/flolefebvre/nextasking",
   "public_key": "pk_4Czm4B19o3pEf9xBjNGnP",
   "projectTitle": "nextasking",
-  "description": "Events and background tasks for a Next.js app, on BullMQ with Redis or Valkey: define tasks and events, dispatch or emit them by name from server code, and run them in a worker started from instrumentation.ts.",
+  "description": "Typed background tasks and events for Next.js, on Redis or Valkey.",
   "folders": ["docs"],
-  "excludeFolders": ["docs/agents", "docs/codebase"],
+  "excludeFolders": ["docs/adr", "docs/agents", "docs/codebase"],
   "excludeFiles": ["AGENTS.md", "CLAUDE.md", "GLOSSARY.md"],
   "rules": [
     "If a snippet in this manual disagrees with the installed .d.ts, trust the .d.ts.",
-    "Import everything from the package root, @flefebvre/nextasking.",
+    "Import everything from the package root, @flefebvre/nextasking, except the test helpers: those come from @flefebvre/nextasking/testing, in test files and dev scripts only.",
     "Call the instance from server code only: route handlers, server actions, instrumentation.ts."
   ]
 }

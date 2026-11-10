@@ -1,7 +1,7 @@
 {
   "name": "@flefebvre/nextasking",
   "version": "0.1.0",
-  "description": "Typed background tasks and events for Next.js, on BullMQ with Redis or Valkey: dispatch by name from server code, run in a worker embedded in next start or standalone.",
+  "description": "Typed background tasks and events for Next.js, on Redis or Valkey.",
   "keywords": [
     "nextjs",
     "next",

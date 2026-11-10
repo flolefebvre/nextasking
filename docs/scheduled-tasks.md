@@ -1,6 +1,6 @@
 # Scheduled tasks
 
-A scheduled task is a task with a cron and no payload. Each firing of its schedule starts one run, however many instances run a worker. Define it next to your other tasks, list it in `tasks`, and the worker keeps its schedule.
+A scheduled task is a task with a cron and no payload. Each firing of its schedule starts one run, however many instances run a worker, within about a second of the planned instant. Define it next to your other tasks, list it in `tasks`, and the worker keeps its schedule.
 
 ## Define a scheduled task
 
@@ -83,7 +83,7 @@ Each `startWorker()` reconciles the schedules stored in Redis with the scheduled
 Each line is logged at `info` with `task`, `cron` and `timezone`. See [Logging](logging.md).
 
 - Nothing coordinates the boots: when two releases boot side by side during a rolling deploy, the last one to boot sets the schedules.
-- A firing that reaches a worker whose release no longer schedules its task starts no run, and logs `firing dropped: task not scheduled` at `debug`.
+- A worker fires only the schedules its own release declares. A worker of a release that no longer schedules the task leaves its firings to the others.
 - A process that never calls `startWorker()` never touches the schedules.
 - Renaming a scheduled task removes the old name's schedule and adds the new one.
 

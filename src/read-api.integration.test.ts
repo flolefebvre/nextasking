@@ -409,7 +409,8 @@ async function nextFiringAtOfAScheduleStoredAtVersion(
 }
 
 engineTest("listSchedules reads a schedule record of a newer version as no record", async (context) => {
-  await nextFiringAtOfAScheduleStoredAtVersion(context, RECORD_VERSION + 1);
+  const nextFiringAt = await nextFiringAtOfAScheduleStoredAtVersion(context, RECORD_VERSION + 1);
+  await context.redis.hSet(context.keys.schedule("build-report"), "previousFiringAt", nextFiringAt - 3_600_000);
 
   const [buildReport] = await readerOf(context).listSchedules();
 

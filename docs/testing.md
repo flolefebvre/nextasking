@@ -48,14 +48,14 @@ afterEach(() => {
 
 ## What it records
 
-| Array        | One entry per                                         | Entry                                                           |
-| ------------ | ----------------------------------------------------- | --------------------------------------------------------------- |
-| `dispatches` | Run that `dispatch` would have written                | `{ task, payload, runId, delay? }`                              |
-| `emits`      | Fan-out that `emit` would have written                | `{ event, payload, eventId }`                                   |
-| `replays`    | `replay` or `replayEvent` call that passed its checks | `{ task, runId }` for a run, `{ event, eventId }` for a fan-out |
+| Array        | One entry per                                    | Entry                              |
+| ------------ | ------------------------------------------------ | ---------------------------------- |
+| `dispatches` | Run that `dispatch` would have written           | `{ task, payload, runId, delay? }` |
+| `emits`      | Emit that would have written its listeners' runs | `{ event, payload, eventId }`      |
+| `replays`    | `replay` call that passed its checks             | `{ task, runId }`                  |
 
 - Entries are in call order, and the arrays keep them after `restore()`.
-- `payload` is what the schema returned, defaults and transforms applied, not what you passed. A scheduled task's `payload` is `undefined`.
+- `payload` is what the schema returned, defaults and transforms applied, after its JSON round trip: what the handler would receive, not what you passed. A scheduled task's `payload` is `undefined`.
 - `delay` is the `Duration` you passed, present only when you passed one.
 - `runId` and `eventId` are yours when you passed one, a random id otherwise: match them with `expect.any(String)`.
 - Every type comes from the instance you pass, not from `Register`: checking `task` narrows `payload` to that task's payload, and `emits` lists only your own events.
@@ -75,14 +75,19 @@ Duplicates are dropped as in production: a second `dispatch` with the same task 
 
 An `emit` of an event no task listens to starts no run and stores nothing of the event in production, so the fake records nothing in `emits`; the `no listeners for event` warning still reaches your logger.
 
-`replay` and `replayEvent` check the name only: whether the run or fan-out failed is a Redis read, so the fake records the call as replayed.
+`replay` checks the task name and refuses an empty `runId`, as in production; whether the run failed is a Redis read, so the fake records the call as replayed:
+
+```ts
+await nextasking.replay("send-welcome-email", "welcome-ada");
+expect(fake.replays).toEqual([{ task: "send-welcome-email", runId: "welcome-ada" }]);
+```
 
 ## What throws on a faked instance
 
 - `getRun`, `listRuns`, `countRuns`, `getEvent` and `listSchedules` reject, naming the call: they read Redis.
 - `startWorker()` rejects: a faked instance runs no worker.
 - `fakeNextasking` throws on an instance that is already faked: `restore()` the first fake before faking it again.
-- `fakeNextasking` throws on an instance whose worker is started, since that worker would keep writing to Redis. Don't call `startWorker` in a test process that fakes the instance.
+- `fakeNextasking` throws on an instance whose worker is started, since that worker would keep writing to Redis. Don't call `startWorker` in a test process that fakes the instance. An instance whose `startWorker()` rejected runs no worker, and can be faked.
 
 `isTaskName`, `isEventName`, `taskDefinitions` and `eventDefinitions` keep working.
 
@@ -105,6 +110,7 @@ test("onboarding creates the account, waits a day, then sends the tips email", a
   expect(attempt.dispatches).toEqual([
     { task: "send-tips-email", payload: { userId: "user-1" }, runId: expect.any(String) },
   ]);
+  expect(attempt.steps).toContainEqual({ id: expect.any(String), result: attempt.dispatches[0]?.runId });
   expect(attempt.emits).toEqual([
     { event: "user.onboarded", payload: { userId: "user-1" }, eventId: expect.any(String) },
   ]);
@@ -113,16 +119,16 @@ test("onboarding creates the account, waits a day, then sends the tips email", a
 
 It resolves with:
 
-| Field        | What it holds                                                                                                                                                                |
-| ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `steps`      | `{ id, result }` per saved step: the `savedSteps` you passed, then the ones this attempt saved, each `dispatch` or `emit` as `{ id: <send id>, result: <runId or eventId> }` |
-| `sleeps`     | `{ id, resumesAt }` per `step.sleep` or `step.sleepUntil` the handler reached, in call order; `resumesAt` a Date                                                             |
-| `dispatches` | The handler's `dispatch` calls, as a fake's `dispatches` records them                                                                                                        |
-| `emits`      | The handler's `emit` calls, as a fake's `emits` records them                                                                                                                 |
+| Field        | What it holds                                                                                                                                                        |
+| ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `steps`      | `{ id, result }` per saved step, the `savedSteps` you passed included, in no set order; each `dispatch` or `emit` as `{ id: <send id>, result: <runId or eventId> }` |
+| `sleeps`     | `{ id, resumesAt }` per `step.sleep` or `step.sleepUntil` the handler reached, in call order; `resumesAt` a Date                                                     |
+| `dispatches` | The handler's `dispatch` calls, as a fake's `dispatches` records them                                                                                                |
+| `emits`      | The handler's `emit` calls, as a fake's `emits` records them                                                                                                         |
 
 - The payload goes through the task's schema first, as `dispatch` does: a refused payload rejects with `InvalidPayloadError` before the handler runs, and the handler gets what the schema returned.
 - The step rules are the production ones: the 1 MiB and 10 MiB ceilings, unique step ids, the JSON round trip of each result, and the idempotency key derived from the task, the `runId` and the step id. A misuse rejects with `StepMisuseError`, even when the handler catches it.
-- The handler's `dispatch` and `emit` run every check for real (an unknown name or a refused payload throws inside the handler) and are recorded, never written. They never go through the instance's own `dispatch` and `emit`, so an active fake records none of them. Their `runId` and `eventId` are derived from the run as in production: two attempts with the same `runId` record the same ids. A send passed back among `savedSteps` is skipped: it is not recorded again, and resolves with the saved id.
+- The handler's `dispatch` and `emit` run every check for real (an unknown name or a refused payload throws inside the handler) and are recorded, never written. They never go through the instance's own `dispatch` and `emit`, so an active fake records none of them. Their `runId` and `eventId` are derived from the run as in production: two attempts with the same `runId` record the same ids. Each send is saved as a step, as in production, even an `emit` that starts no run (no listener, or a repeated `eventId`).
 - Every type comes from the instance you pass, not from `Register`: `taskName` is one of its task names, `payload` that task's schema input, and a scheduled task takes no payload.
 - The task's `timeout` and `retries` are not enforced: they belong to the worker, not to the attempt.
 
@@ -162,7 +168,7 @@ const retry = await executeAttempt(
 );
 ```
 
-When the first attempt rejects, build `savedSteps` yourself from the steps you expect it saved: `[{ id: "create-pdf", result: { pdfId: "pdf-1" } }]`. Results and sends are carried; sleeps are not, so the next attempt records them again. A send you leave out is sent again under the same id.
+When the first attempt rejects, build `savedSteps` yourself from the steps you expect it saved: `[{ id: "create-pdf", result: { pdfId: "pdf-1" } }]`. Results and sends are carried; sleeps are not, so the next attempt records them again. A send carried as a saved step is skipped and its id reused: it is not recorded in `dispatches` or `emits` again. A send you leave out is sent again under the same id.
 
 ### Simulate a shutdown
 
@@ -218,19 +224,22 @@ test("a new user gets the tips email the day after signing up", async ({ page })
 | --------------------------- | ---------------------------------------------------------------------------------------------------------------- |
 | `waitForIdle({ timeout? })` | Resolves once the queue is idle; rejects at `timeout` (a `Duration`, default `"30s"`) with the counts still busy |
 | `makeRunsDueNow({ task? })` | Starts every `delayed`, `suspended` and `backingOff` run now, of one task when given; resolves with them         |
-| `fireSchedule(taskName)`    | Starts one run of a scheduled task now; resolves with its `runId`                                                |
+| `fireSchedule(taskName)`    | Starts one run of a scheduled task now; resolves with `{ runId }`                                                |
 | `reset({ timeout? })`       | Waits until no attempt executes, removes every key under the prefix, and keeps the schedules                     |
 | `close()`                   | Closes the control's connection; `await using` calls it for you                                                  |
 
 ### When the queue is idle
 
-`waitForIdle` waits while any of these is left:
+`waitForIdle` polls the queue, reading it in one snapshot each time, and resolves on the first snapshot where none of these is left:
 
 - a run `pending`, `executing` or `waitingForConcurrencySlot`;
-- a fan-out waiting, executing, or delayed for a retry;
-- a schedule firing waiting or executing, which is about to start its run.
+- a run `delayed`, `suspended` or `backingOff` whose time has come, which a worker has not yet made `pending`.
 
-It doesn't wait for a run `delayed`, `suspended` or `backingOff`, nor for a firing still to come: those can wait for hours. Call `makeRunsDueNow()` then `waitForIdle()` again to get past them.
+It doesn't wait for a run whose time is still to come, nor for a schedule's firing: those can wait for hours. Call `makeRunsDueNow()` then `waitForIdle()` again to get past them. At `timeout` it rejects naming the four counts:
+
+```text
+The queue is not idle after 30s: 1 runs pending, 0 executing, 0 waiting for a concurrency slot, 2 due and not yet promoted
+```
 
 ### Get past a delay, a sleep or a backoff
 
@@ -242,11 +251,15 @@ It doesn't wait for a run `delayed`, `suspended` or `backingOff`, nor for a firi
 
 ### Fire a schedule
 
-`fireSchedule(taskName)` starts one run of a scheduled task now, through the same path as a firing of its cron: the handler gets `scheduledAt` set to now, and the retries of the task. It throws when no schedule is stored for that task: start the worker once first, since the worker stores the schedules at boot.
+`fireSchedule(taskName)` starts one run of a scheduled task now, through the same path as a firing of its cron: the run id is derived from the instant, the handler gets `scheduledAt` set to now, and the run takes the `retries` stored with the schedule by the last worker to boot. It leaves the schedule as it is: the next firing comes at its usual time, and `previousFiring` doesn't move. It throws when no schedule is stored for that task: start the worker once first, since the worker stores the schedules at boot.
+
+```text
+No schedule is stored for task "purge-expired-sessions": fire a scheduled task whose worker has started once
+```
 
 ### Start each test clean
 
-`reset()` removes every key under the prefix with `SCAN` and `UNLINK`, never `FLUSHDB`: every run, fan-out and saved step is gone, and keys under another prefix stay. The schedules are kept, each with its next firing. A running worker keeps working.
+`reset()` removes every key under the prefix with `SCAN` and `UNLINK`, never `FLUSHDB`: every run and saved step is gone, a repeated `runId` or `eventId` is no longer dropped, and keys under another prefix stay. The schedules are kept, each with its next firing. A running worker keeps working.
 
 - It first waits until no attempt executes, up to `timeout` (default `"30s"`), then rejects naming how many still execute.
 - It throws before touching anything when the calling process has `NODE_ENV=production`.
@@ -298,7 +311,7 @@ The `.mts` extension makes it an ES module, for the top-level `await`, whatever 
 | `NextaskingFake`           | The type `fakeNextasking` returns: `dispatches`, `emits`, `replays`, `restore` and `[Symbol.dispose]`            |
 | `RecordedDispatch`         | The type of one entry of `dispatches`                                                                            |
 | `RecordedEmit`             | The type of one entry of `emits`                                                                                 |
-| `RecordedReplay`           | The type of one entry of `replays`                                                                               |
+| `RecordedReplay`           | The type of one entry of `replays`: `task` and `runId`                                                           |
 | `createNextaskingControl`  | Opens a control on a queue: `waitForIdle`, `makeRunsDueNow`, `fireSchedule`, `reset` and `close`                 |
 | `NextaskingControl`        | The type `createNextaskingControl` returns                                                                       |
 | `NextaskingControlOptions` | The type of `createNextaskingControl`'s argument: `connection` and `prefix`                                      |

@@ -65,6 +65,39 @@ const signUpThenRemind: SignUpHandler = async ({ payload, step, dispatch, emit }
   await step.run("mark-reminded", () => undefined);
 };
 
+async function announcedThenResumed({
+  emitCount,
+  listeners,
+}: {
+  emitCount: number;
+  listeners: readonly (typeof createDefaultWorkspace)[];
+}) {
+  const { logger, lines } = createRecordingLogger();
+  const announceUser = defineTask("announce-user", {
+    schema: z.object({ userId: z.string() }),
+    handler: async ({ payload, emit }) => {
+      for (let emitted = 0; emitted < emitCount; emitted += 1) {
+        await emit("user.signed-up", { userId: payload.userId }, { eventId: "signed-up-user-1" });
+      }
+    },
+  });
+  const nextasking = createNextasking({
+    connection: { url: "redis://nextasking.invalid:6379", giveUpAfter: "1s" },
+    logger,
+    events: [userSignedUp],
+    tasks: [announceUser, ...listeners],
+  });
+  const firstAttempt = await executeAttempt(nextasking, "announce-user", { userId: "user-1" }, { runId: "announce-1" });
+  const linesOfTheFirstAttempt = [...lines];
+  const resumedAttempt = await executeAttempt(
+    nextasking,
+    "announce-user",
+    { userId: "user-1" },
+    { runId: "announce-1", savedSteps: firstAttempt.steps },
+  );
+  return { firstAttempt, resumedAttempt, linesOfTheFirstAttempt, lines };
+}
+
 describe("executeAttempt", () => {
   test("runs the whole handler in one call, recording its steps, sleeps, dispatches and emits without waiting", async () => {
     const nextasking = createSignUpNextasking(signUpThenRemind);
@@ -277,6 +310,39 @@ describe("executeAttempt", () => {
     expect(resumedAttempt.emits).toEqual([]);
     expect(resumedAttempt.dispatches).toEqual([]);
     expect(sentIds.slice(2)).toEqual(sentIds.slice(0, 2));
+    expect(resumedAttempt.steps).toEqual(firstAttempt.steps);
+  });
+
+  test("saves an emit of an event with no listener among its steps, so passing them back as savedSteps skips it", async () => {
+    const { firstAttempt, resumedAttempt, linesOfTheFirstAttempt, lines } = await announcedThenResumed({
+      emitCount: 1,
+      listeners: [],
+    });
+    const isNoListenerWarning = ({ message }: { message: string }) => message === "no listeners for event";
+
+    expect(firstAttempt.steps).toEqual([{ id: expect.any(String), result: "signed-up-user-1" }]);
+    expect(firstAttempt.emits).toEqual([]);
+    expect(linesOfTheFirstAttempt.filter(isNoListenerWarning)).toHaveLength(1);
+    expect(lines.filter(isNoListenerWarning)).toHaveLength(1);
+    expect(resumedAttempt.steps).toEqual(firstAttempt.steps);
+  });
+
+  test("saves an emit of an event id already emitted among its steps, so passing them back as savedSteps skips it", async () => {
+    const { firstAttempt, resumedAttempt, linesOfTheFirstAttempt, lines } = await announcedThenResumed({
+      emitCount: 2,
+      listeners: [createDefaultWorkspace],
+    });
+    const isDroppedRepeat = ({ message }: { message: string }) => message === "duplicate dispatch dropped";
+
+    expect(firstAttempt.steps).toEqual([
+      { id: expect.any(String), result: "signed-up-user-1" },
+      { id: expect.any(String), result: "signed-up-user-1" },
+    ]);
+    expect(new Set(firstAttempt.steps.map(({ id }) => id)).size).toBe(2);
+    expect(firstAttempt.emits).toHaveLength(1);
+    expect(linesOfTheFirstAttempt.filter(isDroppedRepeat)).toHaveLength(1);
+    expect(lines.filter(isDroppedRepeat)).toHaveLength(1);
+    expect(resumedAttempt.emits).toEqual([]);
     expect(resumedAttempt.steps).toEqual(firstAttempt.steps);
   });
 

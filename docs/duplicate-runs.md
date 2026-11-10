@@ -41,7 +41,7 @@ await nextasking.dispatch("send-receipt", { invoiceId, email }, { runId: `send-r
 
 ## A crash between a side effect and its save
 
-A step's result is saved after `fn` returns. If the process crashes or is killed after the side effect but before the save, the next attempt runs `fn` again. A step still running at `shutdownTimeout` is in this window too: its `abortSignal` aborts, and a side effect it made without returning is not saved.
+A step's result is saved after `fn` returns. If the process crashes or is killed after the side effect but before the save, the next attempt runs `fn` again. A step still running at `shutdownTimeout` is in this window too: its `abortSignal` aborts, and a step that throws on the abort, or is still running when the process exits about a second later, saves nothing. See [Worker](worker.md#let-a-deploy-finish-the-running-attempts).
 
 ```ts
 await step.run("charge-invoice", async ({ idempotencyKey }) => {
@@ -98,7 +98,7 @@ await nextasking.dispatch("ship-order", { orderId: order.id }, { runId: `ship-or
 
 ## The same runId after the dedup window
 
-A completed run's `runId` is dropped for 24 hours after the run ends, however soon retention removes the run, and until retention removes it, shortly after. A failed run's is dropped for as long as the run is kept, 14 days, and never less than 24 hours. A repeat after that starts a new run. See [The dedup window](tasks-and-events.md#the-dedup-window).
+A `runId` is dropped while its run exists, and for 24 hours after the run ends, even when retention removed the run sooner. A completed run is removed shortly after those 24 hours; a failed run is kept up to 14 days, and its id stays dropped for as long. A repeat after that starts a new run. See [The dedup window](tasks-and-events.md#the-dedup-window).
 
 ```ts
 handler: async ({ payload, step }) => {
@@ -126,7 +126,7 @@ What a lost write does, in the order a run meets it:
 - **A saved step**: the attempt goes on without it. If this attempt completes, the step never runs again; if the run comes back to an attempt, after a retry, a resume or a stall, the step runs again.
 - **A completion**: the run is executing again, under a lock nobody renews. Once that lock expires, a stall is counted within about a second (see [Worker](worker.md#stalls)) and a new attempt runs again whatever came after the last saved step. A repeat of the run's id is still dropped meanwhile.
 - **A lock**: a second attempt can start while the first one runs, as in [A duplicate attempt finishing its step](#a-duplicate-attempt-finishing-its-step), and nothing more: the first attempt's next save is refused, and it stops.
-- **A dispatch or an emit**: the call returned an id, and the run never starts. Build the id from the business fact, and send it again with that id when `getRun` finds nothing, or `getEvent` no listener run: if the run does exist, the repeat is dropped.
+- **A dispatch or an emit**: the call returned an id, and the run never starts. Build the id from the business fact, and send it again with that id when `getRun` finds nothing, or `getEvent` finds no listener run: if the run does exist, the repeat is dropped.
 
 How much is lost:
 

@@ -94,6 +94,25 @@ describe("fakeNextasking", () => {
     });
   });
 
+  test("records a payload in dispatches and in emits after its JSON round trip, as the handler would receive it", async () => {
+    const reminderSchema = z.object({ dueAt: z.string(), note: z.string().optional() });
+    const sendReminder = defineTask("send-reminder", { schema: reminderSchema, handler: async () => undefined });
+    const reminderDue = defineEvent("reminder.due", { schema: reminderSchema });
+    const logReminder = defineListener("log-reminder", { on: reminderDue, handler: async () => undefined });
+    const nextasking = createNextasking({
+      connection: { url: "redis://nextasking.invalid:6379", giveUpAfter: "1s" },
+      events: [reminderDue],
+      tasks: [sendReminder, logReminder],
+    });
+    using fake = fakeNextasking(nextasking);
+
+    await nextasking.dispatch("send-reminder", { dueAt: "2026-11-10T09:00:00.000Z", note: undefined });
+    await nextasking.emit("reminder.due", { dueAt: "2026-11-10T09:00:00.000Z", note: undefined });
+
+    expect(fake.dispatches.map(({ payload }) => payload)).toStrictEqual([{ dueAt: "2026-11-10T09:00:00.000Z" }]);
+    expect(fake.emits.map(({ payload }) => payload)).toStrictEqual([{ dueAt: "2026-11-10T09:00:00.000Z" }]);
+  });
+
   test("records a repeated run id or event id once and logs the dropped duplicate as production does", async () => {
     const { logger, lines } = createRecordingLogger();
     const nextasking = createShopNextasking({ logger });

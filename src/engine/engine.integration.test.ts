@@ -6,6 +6,8 @@ import { integrationTest } from "../../tests/integration-test.js";
 import { storedKeyViolationsOf } from "../../tests/stored-key-violations.js";
 import { freshLockTokensOf } from "../../tests/lock-tokens.js";
 import { measuredDurationOf } from "../../tests/measured-duration.js";
+import { readTrafficOf } from "../../tests/read-traffic.js";
+import { errorRecordFor } from "../attempt-errors.js";
 import { serverInstantInMillisecondsOf } from "../../tests/server-instant.js";
 import { withRedis, withRedisClient } from "../../tests/with-redis.js";
 import { REPLIED_EMPTY_PROMOTE, REPLIED_ONE_RENEWAL, repliedOf } from "../../tests/tick-replies.js";
@@ -185,6 +187,101 @@ engineTest("the server instant is the server's TIME", async ({ engine, redis }) 
   expect(serverInstant).toBeGreaterThanOrEqual(instantBefore);
   expect(serverInstant).toBeLessThanOrEqual(await serverInstantInMillisecondsOf(redis));
 });
+
+const COMMANDS_READING_ONLY = new Set(["time", "hmget", "smembers"]);
+
+engineTest(
+  "each transition of a run's life is one script call, and every other command the engine sends only reads",
+  async (context) => {
+    const { engine, client } = context;
+    const lockedRunOf = async () => {
+      const [lockedRun] = await fetchedLockedRunsOf(context, 1);
+      return lockedRun!;
+    };
+    const failedAttemptError = errorRecordFor(new Error("provider down"), 1, new Date());
+    const scheduleToSync = { task: "build-report", cron: "0 3 * * *", timezone: "UTC", retries: 0 };
+    let lockedRun = await (async () => {
+      await engine.enqueue({ runs: [{ runId: "warm-up", task: "warm-up", payload: "{}", retries: 0 }] });
+      return lockedRunOf();
+    })();
+    const transitions: [string, () => Promise<unknown>][] = [
+      ["settle complete", () => engine.settle({ ...lockedRun, outcome: { kind: "complete" } })],
+      [
+        "enqueue",
+        () => engine.enqueue({ runs: [{ runId: "sync-1", task: "sync-account", payload: "{}", retries: 1 }] }),
+      ],
+      ["fetch", async () => (lockedRun = await lockedRunOf())],
+      [
+        "renew",
+        () => engine.renew({ heldLocks: [lockedRun], lockDurationInMilliseconds: LOCK_DURATION_IN_MILLISECONDS }),
+      ],
+      ["save step", () => engine.saveStep({ ...lockedRun, stepId: "charge", step: { kind: "value", value: "[1]" } })],
+      ["read step", () => engine.readStep({ ...lockedRun, stepId: "charge" })],
+      [
+        "settle retry",
+        () =>
+          engine.settle({
+            ...lockedRun,
+            outcome: { kind: "retry", error: failedAttemptError, backoffInMilliseconds: 0 },
+          }),
+      ],
+      ["promote", () => engine.promote()],
+      ["fetch again", async () => (lockedRun = await lockedRunOf())],
+      [
+        "save sleep",
+        () => engine.saveStep({ ...lockedRun, stepId: "wait", step: { kind: "sleep", durationInMilliseconds: 0 } }),
+      ],
+      ["settle suspend", () => engine.settle({ ...lockedRun, outcome: { kind: "suspend", resumesAt: 0 } })],
+      ["make due", () => engine.makeDue()],
+      ["fetch a third time", async () => (lockedRun = await lockedRunOf())],
+      [
+        "settle fail",
+        () =>
+          engine.settle({
+            ...lockedRun,
+            outcome: { kind: "fail", reason: "retries exhausted", error: failedAttemptError, failureNotice: undefined },
+          }),
+      ],
+      ["replay", () => engine.replay({ task: "sync-account", runId: "sync-1" })],
+      ["sync schedules", () => engine.syncSchedules({ schedulesToSync: [{ ...scheduleToSync, nextFiringAt: 0 }] })],
+      [
+        "fire",
+        () => engine.fire({ task: "build-report", instant: 0, instantAfter: 1, runId: "build-report-0", retries: 0 }),
+      ],
+      [
+        "fire now",
+        () => engine.fireNow({ task: "build-report", instant: 2, runId: "build-report-2", defaultRetries: 0 }),
+      ],
+      ["prune", () => engine.prune(SEND_EMAIL_PRUNE_REQUEST)],
+      ["busy run counts", () => engine.busyRunCounts()],
+    ];
+
+    const commandsByTransition: Record<string, { scriptCallCount: number; commandsNotReading: string[] }> = {};
+    for (const [transition, applyTransition] of transitions) {
+      const { sentCommands } = await readTrafficOf(client, applyTransition);
+      const commandNames = sentCommands.map(({ name }) => name);
+      commandsByTransition[transition] = {
+        scriptCallCount: commandNames.filter((name) => name === "evalsha").length,
+        commandsNotReading: commandNames.filter((name) => name !== "evalsha" && !COMMANDS_READING_ONLY.has(name)),
+      };
+    }
+
+    expect(commandsByTransition).toEqual(
+      Object.fromEntries(
+        transitions.map(([transition]) => [transition, { scriptCallCount: 1, commandsNotReading: [] }]),
+      ),
+    );
+    const { sentCommands: tickCommands } = await readTrafficOf(client, () =>
+      engine.tick({
+        heldLocks: [],
+        lockDurationInMilliseconds: LOCK_DURATION_IN_MILLISECONDS,
+        prune: SEND_EMAIL_PRUNE_REQUEST,
+        scheduledTaskNames: ["build-report"],
+      }),
+    );
+    expect(tickCommands.filter(({ name }) => name !== "evalsha" && !COMMANDS_READING_ONLY.has(name))).toEqual([]);
+  },
+);
 
 engineTest("a tick leaving the promote out sends three commands", async (context) => {
   const { engine, client } = context;

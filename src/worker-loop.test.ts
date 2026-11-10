@@ -244,6 +244,35 @@ test("a completed, retried, failed and suspended attempt each settle with their 
   expect(engine.storedRunOf("suspends", "suspends-1")?.state).toBe("suspended");
 });
 
+test("a failed attempt retries or fails by the retries stored with its run, not by the worker's definition of the task", async () => {
+  const tasks = [
+    defineTask("sync-account", {
+      schema: v.object({}),
+      retries: 3,
+      handler: async () => {
+        throw new Error("provider down");
+      },
+    }),
+    defineTask("sync-invoices", {
+      schema: v.object({}),
+      retries: 0,
+      handler: async () => {
+        throw new Error("provider down");
+      },
+    }),
+  ] as AnyTaskDefinition[];
+  const engine = createInMemoryEngine();
+  await engine.enqueue({
+    runs: [...runsOf("sync-account", 1, { retries: 0 }), ...runsOf("sync-invoices", 1, { retries: 2 })],
+  });
+
+  startedLoopOf(tasks, { engine });
+  await vi.advanceTimersByTimeAsync(0);
+
+  expect(engine.storedRunOf("sync-account", "sync-account-1")?.state).toBe("failed");
+  expect(engine.storedRunOf("sync-invoices", "sync-invoices-1")?.state).toBe("backingOff");
+});
+
 test("two runs sharing a run id on two tasks each hand their handler, their lines and their failure notice the consumer's run id", async () => {
   const handledRunIdsByTask: Record<string, string[]> = { "send-receipt": [], "update-stock": [] };
   const noticedRuns: { task: string; runId: string }[] = [];

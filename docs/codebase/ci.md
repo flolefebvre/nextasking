@@ -16,7 +16,7 @@
 - Give each stage of the `gate` line in package.json its own job, and each script in it its own step, in the gate's order, so a failing check names itself in the run summary. The stages after `build` are the exception: they run as steps of the `build` job, which holds the `dist` they read, except a stage with a matrix of its own, such as `test:e2e`, which gets its own job that builds first.
 - Keep the summary job named `ci`: it is the status check the `main` ruleset (`.github/rulesets/main.json`) requires, so a renamed job blocks every merge. Add every new job to its `needs`, and keep its `if: ${{ !cancelled() }}` and its check that every needed job succeeded — a required check that is skipped counts as passing, so without them a failed job would leave a mergeable PR.
 - Restore caches only for tools that reuse them across runs — `node_modules/.cache` (Prettier, ESLint) in `static` — keyed on the lockfile and the commit, restored from the latest key with the same lockfile, and placed after the install.
-- Put a step every job needs in `.github/actions/setup`, the composite action each job calls right after checkout, never copied into the jobs. A job that needs it set up differently passes an input (`registry-url`, `store-cache`) whose default leaves every other job as it was.
+- Put a step every job needs in `.github/actions/setup`, the composite action each job calls right after checkout, never copied into the jobs. A job that needs it set up differently passes an input (`store-cache`) whose default leaves every other job as it was.
 - Pin `node-version` to the major the repo is developed on. `engines` admits several majors (`^22.22 || ^24.5 || >=26`), so a spec taken from it would let CI drift onto a major nobody has run.
 - Keep `pnpm/action-setup` ahead of `actions/setup-node`, which needs pnpm on the PATH for `cache: pnpm`. It takes no `version` input: pnpm resolves from the `packageManager` pin in package.json.
 
@@ -32,10 +32,14 @@ Before pushing a change to the workflow, lint it with `docker run --rm -v "$PWD:
 
 The run is `guard`, then `ci` (the whole `ci.yml`, called through `workflow_call`), then `publish`:
 
-- `guard` fails when the `NPM_TOKEN` secret is missing, or when the tag is not `v` plus the package.json `version`.
+- `guard` fails when the tag is not `v` plus the package.json `version`.
 - `publish` runs `npm publish --provenance --access public` on a cold install (`prepublishOnly` rebuilds `dist`), then `gh release create --generate-notes --verify-tag`.
 - Keep `release.yml`'s concurrency group a constant: inside the call, `ci.yml`'s group is `release-<ref>` and cancels in progress, so a group of that shape in `release.yml` would cancel the release itself.
 
-The first publish authenticates with `NPM_TOKEN`, an npm automation token, because a package that does not exist yet has no settings page for a trusted publisher. Once it is live, add this repository and `release.yml` as its trusted publisher on npmjs.com, then delete `publish`'s `env:`, `guard`'s credential step and the secret. Provenance comes from the OIDC token either way.
+`publish` holds no npm token and writes no `.npmrc`: this repository and `release.yml` are the package's trusted publisher on npmjs.com, so npm exchanges the job's OIDC token (`id-token: write`) for a publish credential. The provenance attestation comes from the same token.
+
+- Keep the trusted publisher on npmjs.com in step with the workflow: rename `release.yml` or move the repository, and the publisher is updated there first.
+- Keep the pinned Node on a major whose npm is 11.5.1 or later, the first that makes the exchange.
+- When `publish` fails with `E404` on the `PUT`, npm refused the workflow's identity, and nothing was published: fix the trusted publisher on npmjs.com, then re-run the failed job (`gh run rerun <run-id> --failed`). The tag stays where it is.
 
 `.github/rulesets/release-tags.json` lets only repository admins create, move or delete a `v*` tag.

@@ -238,7 +238,7 @@ test("a new user gets the tips email the day after signing up", async ({ page })
 It doesn't wait for a run whose time is still to come, nor for a schedule's firing: those can wait for hours. Call `makeRunsDueNow()` then `waitForIdle()` again to get past them. At `timeout` it rejects naming the four counts:
 
 ```text
-The queue is not idle after 30s: 1 runs pending, 0 executing, 0 waiting for a concurrency slot, 2 due and not yet promoted
+The queue is not idle after 30s, runs left: 1 pending, 0 executing, 0 waiting for a concurrency slot, 2 due and not yet promoted
 ```
 
 ### Get past a delay, a sleep or a backoff

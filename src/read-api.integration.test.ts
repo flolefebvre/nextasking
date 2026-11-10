@@ -467,6 +467,45 @@ engineTest(
   },
 );
 
+engineTest(
+  "getRun and getEvent read each run, and listRuns each listed run, in one script call holding every key it reads",
+  async (context) => {
+    const { client, keys } = context;
+    const listenerRunIds = LISTENER_NAMES.map((listenerName) => deriveListenerRunId("event-1", listenerName));
+    await endRuns(context.engine, "build-report", ["run-2"], "fail");
+    await enqueueRuns(context, [
+      runOf("run-1", "send-email"),
+      ...LISTENER_NAMES.map((listenerName, position) => runOf(listenerRunIds[position]!, listenerName)),
+    ]);
+    const reader = readerOf(context);
+    const runKeysOf = (task: string, runId: RunId) => [
+      keys.runRecord(task, runId),
+      keys.runPayload(task, runId),
+      keys.runErrors(task, runId),
+      keys.runSteps(task, runId),
+    ];
+    const runKeysOfEachCommandOf = ({ sentCommands }: ReadTraffic) => sentCommands.map(({ args }) => args.slice(0, 4));
+
+    const trafficByRead = {
+      getRun: await readTrafficOf(client, () => reader.getRun("send-email", "run-1")),
+      getEvent: await readTrafficOf(client, () => reader.getEvent("invoice.paid", "event-1")),
+      listRuns: await readTrafficOf(client, () => reader.listRuns({ state: "failed", task: "build-report" })),
+    };
+
+    expect(trafficByRead.getRun.sentCommands.map(({ name }) => name)).toEqual(["evalsha"]);
+    expect(runKeysOfEachCommandOf(trafficByRead.getRun)).toEqual([runKeysOf("send-email", "run-1")]);
+    expect(trafficByRead.getEvent.sentCommands.map(({ name }) => name)).toEqual(["evalsha", "evalsha"]);
+    expect(runKeysOfEachCommandOf(trafficByRead.getEvent)).toEqual(
+      LISTENER_NAMES.map((listenerName, position) => runKeysOf(listenerName, listenerRunIds[position]!)),
+    );
+    expect(trafficByRead.listRuns.sentCommands.map(({ name }) => name)).toEqual(["evalsha", "evalsha"]);
+    expect(trafficByRead.listRuns.sentCommands[1]?.args.slice(0, 2)).toEqual([
+      keys.runRecord("build-report", "run-2"),
+      keys.runErrors("build-report", "run-2"),
+    ]);
+  },
+);
+
 type ListedIndexesOptions = Omit<ListRunsOptionsOf<string>, "limit" | "cursor">;
 
 const MOST_PAGES_WALKED = 1000;

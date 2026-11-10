@@ -1,6 +1,6 @@
 {
   "name": "@flefebvre/nextasking",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Typed background tasks and events for Next.js, on Redis or Valkey.",
   "keywords": [
     "nextjs",

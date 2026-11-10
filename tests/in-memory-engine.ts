@@ -390,7 +390,7 @@ export function createInMemoryEngine({ now = () => Date.now() }: InMemoryEngineO
   });
 
   const enqueue = async ({ runs, eventDedup, parentFence }: EnqueueRequest): Promise<EnqueueReply> => {
-    if (runs.length === 0) {
+    if (runs.length === 0 && parentFence === undefined) {
       throw invalidArgumentError("an enqueue creates at least one run");
     }
     const parentRun =
@@ -406,11 +406,22 @@ export function createInMemoryEngine({ now = () => Date.now() }: InMemoryEngineO
         return { kind: "alreadySent", savedValue };
       }
     }
+    const saveParentStep = () => {
+      if (parentFence !== undefined && parentRun !== undefined) {
+        parentRun.steps.set(parentFence.stepId, parentFence.stepValue);
+        parentRun.stalls = 0;
+      }
+    };
+    if (runs.length === 0) {
+      saveParentStep();
+      return { kind: "enqueued", createdRuns: [], skippedRuns: [] };
+    }
     const instant = now();
     if (
       eventDedup !== undefined &&
       isLiveDedupEntry(dedupExpiryByEventIdByEventName.get(eventDedup.eventName), eventDedup.eventId, instant)
     ) {
+      saveParentStep();
       return { kind: "duplicate" };
     }
     if (eventDedup !== undefined) {
@@ -424,10 +435,7 @@ export function createInMemoryEngine({ now = () => Date.now() }: InMemoryEngineO
       trimExpiredDedupEntries(dedupExpiryByStoredRunIdByTask.get(task), instant, EXPIRED_DEDUP_ENTRIES_TRIMMED_PER_SET);
     }
     const { createdRuns, skippedRuns } = enqueueRuns(runs, eventDedup, instant);
-    if (parentFence !== undefined && parentRun !== undefined) {
-      parentRun.steps.set(parentFence.stepId, parentFence.stepValue);
-      parentRun.stalls = 0;
-    }
+    saveParentStep();
     return { kind: "enqueued", createdRuns, skippedRuns };
   };
 

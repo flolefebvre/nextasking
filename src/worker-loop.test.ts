@@ -26,7 +26,7 @@ import { MOST_FULL_PRUNES_IN_A_ROW, startWorkerLoop } from "./worker-loop.js";
 import type { WaitForWakeUp, WorkerLoop, WorkerLoopEngine } from "./worker-loop.js";
 import { DEFAULT_WORKER_TIMING } from "./worker-timing.js";
 import type { WorkerTiming } from "./worker-timing.js";
-import { endRuns, runIdsOf } from "../tests/ended-runs.js";
+import { DAY_IN_MILLISECONDS, endRuns, runIdsOf } from "../tests/ended-runs.js";
 import { createHandlerGate, gatedBetweenTwoSteps, gatedWithNoStep } from "../tests/handler-gate.js";
 import type { HandlerGate } from "../tests/handler-gate.js";
 import { createInMemoryEngine } from "../tests/in-memory-engine.js";
@@ -603,6 +603,54 @@ test("a task over its cap by three batches is pruned on four ticks in a row, the
     "task-03",
   ]);
   expect(engine.runIdsInState("completed").filter((runId) => runId.startsWith("task-01-"))).toHaveLength(10);
+});
+
+async function endRunsAgedTwoDays(engine: InMemoryEngine, task: string, runIds: readonly string[]): Promise<void> {
+  await endRuns(engine, task, runIds, "complete");
+  for (const runId of runIds) {
+    engine.backdateEndedRun(task, runId, 2 * DAY_IN_MILLISECONDS);
+  }
+}
+
+async function endRecentRunsOfEachTask(engine: InMemoryEngine, taskNames: readonly string[]): Promise<void> {
+  for (const taskName of taskNames) {
+    await endRuns(engine, taskName, runIdsOf(`${taskName}-run`, 1), "complete");
+  }
+}
+
+async function taskNamesOfATickOf(engine: InMemoryEngine): Promise<TickReply["taskNames"]> {
+  const reply = await engine.tick({
+    heldLocks: [],
+    lockDurationInMilliseconds: DEFAULT_WORKER_TIMING.lockDurationInMilliseconds,
+    isPromoteIncluded: false,
+  });
+  return reply.taskNames;
+}
+
+test("the round goes on in order when the name of the task it last visited left the task names", async () => {
+  const engine = createInMemoryEngine();
+  await endRunsAgedTwoDays(engine, "resize-image", ["aged-run"]);
+  await endRecentRunsOfEachTask(engine, ["send-email", "sync-crm"]);
+  startedLoopOf([], { engine });
+
+  await vi.advanceTimersByTimeAsync(5_000);
+
+  expect(engine.storedRunOf("resize-image", "aged-run")).toBeUndefined();
+  expect(prunedTaskNamesOf(engine)).toEqual([undefined, "resize-image", "send-email", "sync-crm", "send-email"]);
+  expect(await taskNamesOfATickOf(engine)).toEqual(repliedOf(["send-email", "sync-crm"]));
+});
+
+test("a task whose full prune emptied it keeps the turn for one prune that finds nothing, then the round goes on from it", async () => {
+  const engine = createInMemoryEngine();
+  await endRunsAgedTwoDays(engine, "resize-image", runIdsOf("aged-run", MOST_RUNS_PRUNED_PER_PRUNE));
+  await endRecentRunsOfEachTask(engine, ["send-email", "sync-crm"]);
+  startedLoopOf([], { engine });
+
+  await vi.advanceTimersByTimeAsync(5_000);
+
+  expect(engine.runIdsInState("completed").filter((runId) => runId.startsWith("aged-run"))).toEqual([]);
+  expect(prunedTaskNamesOf(engine)).toEqual([undefined, "resize-image", "resize-image", "send-email", "sync-crm"]);
+  expect(await taskNamesOfATickOf(engine)).toEqual(repliedOf(["send-email", "sync-crm"]));
 });
 
 const FULL_PRUNE_REPLY = repliedOf({ kind: "pruned", prunedRunCount: MOST_RUNS_PRUNED_PER_PRUNE } as const);

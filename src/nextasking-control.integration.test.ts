@@ -2,7 +2,7 @@ import { expect, vi } from "vitest";
 
 import { engineTestContextOf, fetchedLockedRunsOf } from "../tests/engine-test.js";
 import type { EngineTestContext } from "../tests/engine-test.js";
-import { integrationTest } from "../tests/integration-test.js";
+import { TEST_TIMEOUT_PAST_ITS_WAITS_IN_MILLISECONDS, integrationTest } from "../tests/integration-test.js";
 import { serverInstantInMillisecondsOf } from "../tests/server-instant.js";
 import { withRedis } from "../tests/with-redis.js";
 import type { TestClient } from "../tests/with-redis.js";
@@ -10,6 +10,8 @@ import { engineKeysOf, hashTaggedPrefixOf } from "./engine/engine-keys.js";
 import { RECORD_VERSION } from "./engine/engine.js";
 import type { RunToCreate } from "./engine/engine.js";
 import { createNextaskingControl } from "./nextasking-control.js";
+import { parseDuration } from "./durations.js";
+import type { Duration } from "./durations.js";
 import { deriveFiringRunId } from "./ids.js";
 import type { NextaskingControl } from "./nextasking-control.js";
 
@@ -17,8 +19,17 @@ type ControlTestContext = EngineTestContext & { control: NextaskingControl };
 
 const ONE_HOUR_IN_MILLISECONDS = 3_600_000;
 
+const CONTROL_CALL_TIMEOUT: Duration = "1s";
+
+const DUE_RUN_COUNT_TIMEOUT_IN_MILLISECONDS = 1000;
+
+const CONTROL_TEST_TIMEOUT_IN_MILLISECONDS =
+  DUE_RUN_COUNT_TIMEOUT_IN_MILLISECONDS +
+  parseDuration(CONTROL_CALL_TIMEOUT) +
+  TEST_TIMEOUT_PAST_ITS_WAITS_IN_MILLISECONDS;
+
 function controlTest(name: string, body: (context: ControlTestContext) => Promise<void>): void {
-  integrationTest(name, async ({ redisUrl, keyPrefix }) => {
+  integrationTest(name, { timeout: CONTROL_TEST_TIMEOUT_IN_MILLISECONDS }, async ({ redisUrl, keyPrefix }) => {
     await withRedis(redisUrl, async (redis, client) => {
       await using control = createNextaskingControl({ connection: { url: redisUrl }, prefix: keyPrefix });
       await body({ ...engineTestContextOf(redis, client, keyPrefix), control });
@@ -53,13 +64,15 @@ controlTest("waitForIdle resolves on a queue whose only run waits for a set time
   const { engine, control } = context;
   await engine.enqueue({ runs: delayedRunsOf("send-email", 1) });
 
-  await control.waitForIdle({ timeout: "1s" });
+  await control.waitForIdle({ timeout: CONTROL_CALL_TIMEOUT });
 });
 
 async function idleTimeoutErrorWhenOneRunIsDueOf({ engine, control }: ControlTestContext): Promise<unknown> {
   await engine.enqueue({ runs: [runOf("due-run", "send-email", { delayInMilliseconds: 1 })] });
-  await vi.waitUntil(async () => (await engine.busyRunCounts()).dueRunCount === 1, { timeout: 1000 });
-  return control.waitForIdle({ timeout: "1s" }).then(
+  await vi.waitUntil(async () => (await engine.busyRunCounts()).dueRunCount === 1, {
+    timeout: DUE_RUN_COUNT_TIMEOUT_IN_MILLISECONDS,
+  });
+  return control.waitForIdle({ timeout: CONTROL_CALL_TIMEOUT }).then(
     () => undefined,
     (error: unknown) => error,
   );
@@ -200,7 +213,7 @@ controlTest("reset waits for the attempts still executing and times out naming h
   await engine.enqueue({ runs: [runOf("executing-run", "send-email")] });
   await fetchedLockedRunsOf(context, 1);
 
-  const reset = control.reset({ timeout: "1s" });
+  const reset = control.reset({ timeout: CONTROL_CALL_TIMEOUT });
 
   await expect(reset).rejects.toThrow("reset() found attempts still executing after 1s: 1 executing");
   expect(await redis.exists(keys.runRecord("send-email", "executing-run"))).toBe(1);

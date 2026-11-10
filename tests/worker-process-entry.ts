@@ -1,3 +1,5 @@
+import { spawn } from "node:child_process";
+
 import { createNextasking, defineListener, runFailed } from "../src/index.js";
 import { envelopeDefinitionsOf } from "./benchmark/envelope-definitions.js";
 import type { Logger } from "../src/index.js";
@@ -7,7 +9,12 @@ import { UNHANDLED_REJECTION_MARKER } from "./process-output-violations.js";
 import type { LogLevel } from "./recording-logger.js";
 import { connectedTestClientOf } from "./with-redis.js";
 import {
+  DELAY_OF_THE_LINES_WRITTEN_AFTER_EXIT_IN_MILLISECONDS,
+  EXIT_WITH_LINES_STILL_COMING_SIGNAL,
   FAILURE_NOTICE_RECORDING_LISTENER_NAME,
+  LINE_COUNT_WRITTEN_AFTER_EXIT,
+  LINE_COUNT_WRITTEN_BEFORE_EXIT,
+  LINE_WRITTEN_AROUND_EXIT,
   WORKER_PROCESS_CONFIG_VARIABLE,
   WORKER_PROCESS_READY,
 } from "./worker-process-config.js";
@@ -77,6 +84,26 @@ const nextasking =
         ...commonConfig,
         tasks: [...workerProcessTasks(writeRecord), ...failureNoticeRecordingListeners],
       });
+
+function lineWrittenAroundExitAt(position: number): string {
+  return `${JSON.stringify({ level: "info", fields: { position }, message: LINE_WRITTEN_AROUND_EXIT })}\n`;
+}
+
+const linesWrittenAfterExitSource = `setTimeout(() => {
+  for (let position = ${String(LINE_COUNT_WRITTEN_BEFORE_EXIT)}; position < ${String(LINE_COUNT_WRITTEN_BEFORE_EXIT + LINE_COUNT_WRITTEN_AFTER_EXIT)}; position++) {
+    process.stdout.write(JSON.stringify({ level: "info", fields: { position }, message: ${JSON.stringify(LINE_WRITTEN_AROUND_EXIT)} }) + "\\n");
+  }
+}, ${String(DELAY_OF_THE_LINES_WRITTEN_AFTER_EXIT_IN_MILLISECONDS)});`;
+
+process.on(EXIT_WITH_LINES_STILL_COMING_SIGNAL, () => {
+  for (let position = 0; position < LINE_COUNT_WRITTEN_BEFORE_EXIT - 1; position++) {
+    process.stdout.write(lineWrittenAroundExitAt(position));
+  }
+  process.stdout.write(lineWrittenAroundExitAt(LINE_COUNT_WRITTEN_BEFORE_EXIT - 1), () => {
+    spawn(process.execPath, ["-e", linesWrittenAfterExitSource], { stdio: ["ignore", "inherit", "inherit"] });
+    process.exit(0);
+  });
+});
 
 await nextasking.startWorker(config.startWorkerOptions);
 process.send?.(WORKER_PROCESS_READY);

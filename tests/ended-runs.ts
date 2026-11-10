@@ -20,6 +20,12 @@ const MOST_RUNS_ENDED_PER_FETCH = 50;
 
 const ENDING_ERROR = { attempt: 1, name: "Error", message: "boom", stack: "Error: boom" };
 
+const SEQUENTIAL_ROUND_TRIPS_PER_FETCH_OF_ENDED_RUNS = 3;
+
+export function sequentialRoundTripCountOfEndRuns(runCount: number): number {
+  return Math.ceil(runCount / MOST_RUNS_ENDED_PER_FETCH) * SEQUENTIAL_ROUND_TRIPS_PER_FETCH_OF_ENDED_RUNS;
+}
+
 export function runIdsOf(prefix: string, count: number): RunId[] {
   return Array.from({ length: count }, (_, position) => `${prefix}-${String(position + 1).padStart(5, "0")}`);
 }

@@ -32,7 +32,7 @@ async function exitOfAProcessClosingAWorkerWhileItBoots(url: string): Promise<{ 
   child.stdout.on("data", (chunk: Buffer) => outputChunks.push(chunk));
   child.stderr.on("data", (chunk: Buffer) => outputChunks.push(chunk));
   const killIfStillRunning = setTimeout(() => child.kill("SIGKILL"), NATURAL_EXIT_TIMEOUT_IN_MILLISECONDS);
-  const [code] = (await once(child, "exit")) as [number | null];
+  const [code] = (await once(child, "close")) as [number | null];
   clearTimeout(killIfStillRunning);
   return { code, output: Buffer.concat(outputChunks).toString() };
 }

@@ -11,7 +11,7 @@ import { DAY_IN_MILLISECONDS } from "./ended-runs.js";
 import { backdateEndedRun, engineTestContextOf } from "./engine-test.js";
 import { createHandlerGate } from "./handler-gate.js";
 import type { HandlerGate } from "./handler-gate.js";
-import { integrationTest } from "./integration-test.js";
+import { TEST_TIMEOUT_PAST_ITS_WAITS_IN_MILLISECONDS, integrationTest } from "./integration-test.js";
 import { createRecordingLogger } from "./recording-logger.js";
 import type { RecordedLogLine } from "./recording-logger.js";
 import { savedSteps } from "./saved-steps.js";
@@ -52,12 +52,14 @@ function createSignUpNextasking(
   });
 }
 
+const COMPLETED_RUNS_TIMEOUT_IN_MILLISECONDS = 10_000;
+
 async function waitForCompletedRuns(lines: readonly RecordedLogLine[], runCount: number): Promise<void> {
   await vi.waitFor(
     () => {
       expect(lines.filter((line) => line.message === "run completed")).toHaveLength(runCount);
     },
-    { timeout: 10_000 },
+    { timeout: COMPLETED_RUNS_TIMEOUT_IN_MILLISECONDS },
   );
 }
 
@@ -97,6 +99,7 @@ function expectOneEmitAcrossTwoStretches(
 
 integrationTest(
   "a handler that emits then throws on its first attempt emits once, so the listener runs once (names from the Register augmentation of src/index.test.ts)",
+  { timeout: COMPLETED_RUNS_TIMEOUT_IN_MILLISECONDS + TEST_TIMEOUT_PAST_ITS_WAITS_IN_MILLISECONDS },
   async ({ redisUrl, keyPrefix }) => {
     const { logger, lines } = createRecordingLogger();
     const emittedEventIdsByAttempt: EventId[] = [];

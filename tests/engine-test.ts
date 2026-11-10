@@ -31,8 +31,9 @@ export function engineTest(
   body: (
     context: EngineTestContext & { redisUrl: string; expectInvariantViolation: ExpectInvariantViolation },
   ) => Promise<void>,
+  { timeout }: { timeout?: number } = {},
 ): void {
-  integrationTest(name, async ({ redisUrl, keyPrefix, expectInvariantViolation }) => {
+  integrationTest(name, { timeout }, async ({ redisUrl, keyPrefix, expectInvariantViolation }) => {
     await withRedis(redisUrl, async (redis, client) => {
       await body({ ...engineTestContextOf(redis, client, keyPrefix), redisUrl, expectInvariantViolation });
     });

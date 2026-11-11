@@ -147,7 +147,7 @@ export const createNodeRedisDriver: CreateRedisDriver = (url, { onConnect, onRea
       return sentCommand([command.name, ...command.commandArguments], abortSignal);
     }
     const { script, keys, scriptArguments } = command;
-    const keysAndArguments = [script.keyCount, ...keys, ...scriptArguments];
+    const keysAndArguments = [keys.length, ...keys, ...scriptArguments];
     try {
       return await sentCommand(["EVALSHA", shaOf(script), ...keysAndArguments], abortSignal);
     } catch (error) {

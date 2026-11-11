@@ -3,12 +3,18 @@ import type { RedisCommand, RedisScript } from "../redis-client.js";
 
 export type IndexScore = number;
 
-export type IndexPosition = { score: IndexScore; storedRunId: string };
+export type IndexPlace = { score: IndexScore; storedRunId: string };
 
-export type IndexPageRequest = { indexKey: string; limit: number; after: IndexPosition | undefined };
+export type IndexPagesRequest = { indexKeys: readonly string[]; limit: number; after: IndexPlace | undefined };
+
+export type IndexPage = {
+  entryCount: number;
+  entryCountBeforeBoundary: number;
+  firstEntryRank: number;
+  places: IndexPlace[];
+};
 
 export const INDEX_PAGE_SCRIPT = `
-local indexKey = KEYS[1]
 if #ARGV ~= 1 and #ARGV ~= 3 then
   error("invalid argument: an index page takes a limit, then optionally a score and a run id, got " .. tostring(#ARGV) .. " arguments")
 end
@@ -28,8 +34,10 @@ local function isBytewiseBefore(left, right)
   return #left < #right
 end
 
-local firstRank = 0
-if #ARGV == 3 then
+local function entryCountBeforeBoundaryOf(indexKey)
+  if #ARGV == 1 then
+    return 0
+  end
   local score, runId = ARGV[2], ARGV[3]
   local higherScoredCount = redis.call("ZCOUNT", indexKey, "(" .. score, "+inf")
   local sameScoredCount = redis.call("ZCOUNT", indexKey, score, score)
@@ -43,35 +51,65 @@ if #ARGV == 3 then
       lowRank = middleRank + 1
     end
   end
-  firstRank = lowRank
+  return lowRank
 end
 
-return redis.call("ZRANGE", indexKey, firstRank, firstRank + limit - 1, "REV", "WITHSCORES")
+local indexPages = {}
+for keyNumber, indexKey in ipairs(KEYS) do
+  local entryCountBeforeBoundary = entryCountBeforeBoundaryOf(indexKey)
+  local firstEntryRank = entryCountBeforeBoundary
+  local indexPage = { redis.call("ZCARD", indexKey), entryCountBeforeBoundary, firstEntryRank }
+  local entries = redis.call("ZRANGE", indexKey, firstEntryRank, firstEntryRank + limit - 1, "REV", "WITHSCORES")
+  for _, element in ipairs(entries) do
+    indexPage[#indexPage + 1] = element
+  end
+  indexPages[keyNumber] = indexPage
+end
+return indexPages
 `;
 
-const INDEX_PAGE_REDIS_SCRIPT: RedisScript = { name: "nextaskingIndexPage", lua: INDEX_PAGE_SCRIPT, keyCount: 1 };
+const INDEX_PAGE_REDIS_SCRIPT: RedisScript = {
+  name: "nextaskingIndexPage",
+  lua: INDEX_PAGE_SCRIPT,
+  keyCount: "one or more",
+};
 
-export function indexPageCommandOf({ indexKey, limit, after }: IndexPageRequest): RedisCommand {
+export function indexPagesCommandOf({ indexKeys, limit, after }: IndexPagesRequest): RedisCommand {
   return scriptCommandOf(
     INDEX_PAGE_REDIS_SCRIPT,
-    [indexKey],
+    indexKeys,
     after === undefined ? [limit] : [limit, String(after.score), after.storedRunId],
   );
 }
 
-export function indexPageOf(reply: unknown): IndexPosition[] {
-  const isReadable =
-    Array.isArray(reply) && reply.length % 2 === 0 && reply.every((element) => typeof element === "string");
-  const indexPage: IndexPosition[] = [];
-  for (let position = 0; isReadable && position < reply.length; position += 2) {
-    const score = Number(reply[position + 1]);
-    if (!Number.isFinite(score)) {
-      break;
-    }
-    indexPage.push({ storedRunId: reply[position] as string, score });
+function isRankCount(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0;
+}
+
+function indexPageOf(reply: unknown): IndexPage | undefined {
+  if (!Array.isArray(reply) || reply.length < 3 || reply.length % 2 === 0) {
+    return undefined;
   }
-  if (!isReadable || indexPage.length * 2 !== reply.length) {
+  const [entryCount, entryCountBeforeBoundary, firstEntryRank, ...entryElements] = reply as unknown[];
+  if (!isRankCount(entryCount) || !isRankCount(entryCountBeforeBoundary) || !isRankCount(firstEntryRank)) {
+    return undefined;
+  }
+  const places: IndexPlace[] = [];
+  for (let elementNumber = 0; elementNumber < entryElements.length; elementNumber += 2) {
+    const [storedRunId, storedScore] = [entryElements[elementNumber], entryElements[elementNumber + 1]];
+    const score = Number(storedScore);
+    if (typeof storedRunId !== "string" || typeof storedScore !== "string" || !Number.isFinite(score)) {
+      return undefined;
+    }
+    places.push({ storedRunId, score });
+  }
+  return { entryCount, entryCountBeforeBoundary, firstEntryRank, places };
+}
+
+export function indexPagesOf(reply: unknown, indexCount: number): IndexPage[] {
+  const indexPages = Array.isArray(reply) && reply.length === indexCount ? reply.map(indexPageOf) : [undefined];
+  if (!indexPages.every((indexPage) => indexPage !== undefined)) {
     throw new Error(`The index page script sent a reply the reader cannot read: ${JSON.stringify(reply)}`);
   }
-  return indexPage;
+  return indexPages;
 }

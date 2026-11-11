@@ -13,6 +13,12 @@ import type { RedisClient, RedisScript } from "./redis-client.js";
 
 const ECHO_SCRIPT: RedisScript = { name: "nextaskingTestEcho", lua: "return { KEYS[1], ARGV[1] }", keyCount: 1 };
 
+const KEYS_AND_ARGUMENTS_ECHO_SCRIPT: RedisScript = {
+  name: "nextaskingTestKeysAndArgumentsEcho",
+  lua: "return { KEYS, ARGV }",
+  keyCount: "one or more",
+};
+
 function pairsOf(flatReply: unknown): [unknown, unknown][] {
   if (!Array.isArray(flatReply)) {
     throw new Error(`expected a flat array, got ${JSON.stringify(flatReply)}`);
@@ -167,6 +173,19 @@ integrationTest("a script answers alone and in a batch", async ({ redisUrl, keyP
     ]);
   });
 });
+
+integrationTest(
+  "a script taking one or more keys gets each key it is called with, and its arguments after them",
+  async ({ redisUrl, keyPrefix }) => {
+    await withRedisClient(redisUrl, async (client) => {
+      const echoKeys = [`${keyPrefix}first`, `${keyPrefix}second`, `${keyPrefix}third`];
+
+      const reply = await client.send(scriptCommandOf(KEYS_AND_ARGUMENTS_ECHO_SCRIPT, echoKeys, ["argument"]));
+
+      expect(reply).toEqual([echoKeys, ["argument"]]);
+    });
+  },
+);
 
 async function echoRunOnceThenFlushed(client: RedisClient, echoKey: string): Promise<void> {
   await client.send(scriptCommandOf(ECHO_SCRIPT, [echoKey], ["before the flush"]));

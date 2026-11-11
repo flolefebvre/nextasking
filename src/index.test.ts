@@ -177,6 +177,8 @@ describe("the root export", () => {
     expectTypeOf<FailedWelcomeEmailRun["lastErrorMessage"]>().toEqualTypeOf<string | undefined>();
     expectTypeOf<ListRunsOptions["task"]>().toEqualTypeOf<RegisteredTaskName | undefined>();
     expectTypeOf<RunPage["runs"][number]>().toEqualTypeOf<ListedRun>();
+    expectTypeOf<RunPage["totalRunCount"]>().toEqualTypeOf<number>();
+    expectTypeOf<RunPage["firstRunPosition"]>().toEqualTypeOf<number | undefined>();
     expectTypeOf<RunCounts["purge-expired-sessions"]["waitingForConcurrencySlot"]>().toEqualTypeOf<number>();
     expectTypeOf(nextasking.countRuns).returns.resolves.toEqualTypeOf<RunCounts>();
     // @ts-expect-error a listed run carries no payload

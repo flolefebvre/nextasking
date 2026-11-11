@@ -21,7 +21,7 @@ import { UnknownEventError, UnknownTaskError } from "./errors.js";
 import { deriveFiringRunId, deriveListenerRunId } from "./ids.js";
 import type { RunId } from "./ids.js";
 import { cursorOfFields } from "./run-list-cursor.js";
-import type { AnyListedRun, ListRunsOptionsOf } from "./read-api.js";
+import type { AnyListedRun, ListRunsOptionsOf, RunPageOf } from "./read-api.js";
 import { RUN_STATES } from "./run-states.js";
 import type { RunState } from "./run-states.js";
 import type { ScheduleSummary } from "./engine/engine.js";
@@ -510,19 +510,19 @@ type ListedIndexesOptions = Omit<ListRunsOptionsOf<string>, "limit" | "cursor">;
 
 const MOST_PAGES_WALKED = 1000;
 
-async function walkedPagesOf(
+async function walkedRunPagesOf(
   reader: ReadApi,
   options: ListedIndexesOptions,
   limits: readonly number[],
   firstCursor?: string,
-): Promise<AnyListedRun[][]> {
-  const pages: AnyListedRun[][] = [];
+): Promise<RunPageOf<AnyListedRun>[]> {
+  const pages: RunPageOf<AnyListedRun>[] = [];
   let cursor = firstCursor;
   for (let pageCount = 0; pageCount < MOST_PAGES_WALKED; pageCount += 1) {
     const limit = limits[pageCount % limits.length]!;
     const page = await reader.listRuns({ ...options, limit, ...(cursor === undefined ? {} : { cursor }) });
     expect(page.runs.length).toBeLessThanOrEqual(limit);
-    pages.push(page.runs);
+    pages.push(page);
     if (page.nextCursor === undefined) {
       return pages;
     }
@@ -530,6 +530,19 @@ async function walkedPagesOf(
     cursor = page.nextCursor;
   }
   throw new Error(`the walk did not end within ${String(MOST_PAGES_WALKED)} pages`);
+}
+
+async function walkedPagesOf(
+  reader: ReadApi,
+  options: ListedIndexesOptions,
+  limits: readonly number[],
+  firstCursor?: string,
+): Promise<AnyListedRun[][]> {
+  return (await walkedRunPagesOf(reader, options, limits, firstCursor)).map(({ runs }) => runs);
+}
+
+function pageFiguresOf({ runs, totalRunCount, firstRunPosition, nextCursor }: RunPageOf<AnyListedRun>) {
+  return { runCount: runs.length, totalRunCount, firstRunPosition, hasNextCursor: nextCursor !== undefined };
 }
 
 function runIdsOfPages(pages: readonly AnyListedRun[][]): RunId[] {
@@ -569,6 +582,14 @@ async function runsSuspendedUntilTheSameInstant(context: EngineTestContext, runs
   await settleEach(context, await fetchedLockedRunsOf(context, runs.length), { kind: "suspend", resumesAt });
 }
 
+async function readerOfTenRunsSuspendedUntilTheSameInstantOverTwoTasks(context: EngineTestContext): Promise<ReadApi> {
+  await runsSuspendedUntilTheSameInstant(context, [
+    ...runIdsOf("send-email-run", 7).map((runId) => runOf(runId, "send-email")),
+    ...runIdsOf("build-report-run", 3).map((runId) => runOf(runId, "build-report")),
+  ]);
+  return readerOf(context);
+}
+
 engineTest(
   "listRuns without a task pages through every task, listing every run once in the promised order",
   async (context) => {
@@ -605,11 +626,7 @@ engineTest(
 engineTest(
   "listRuns lists every run once when more runs than the limit share one score, in one task and across tasks",
   async (context) => {
-    await runsSuspendedUntilTheSameInstant(context, [
-      ...runIdsOf("send-email-run", 7).map((runId) => runOf(runId, "send-email")),
-      ...runIdsOf("build-report-run", 3).map((runId) => runOf(runId, "build-report")),
-    ]);
-    const reader = readerOf(context);
+    const reader = await readerOfTenRunsSuspendedUntilTheSameInstantOverTwoTasks(context);
 
     const pagesOfEveryTask = await walkedPagesOf(reader, { state: "suspended" }, [2]);
     const pagesOfOneTask = await walkedPagesOf(reader, { state: "suspended", task: "send-email" }, [3]);
@@ -619,6 +636,50 @@ engineTest(
     expect(runIdsOfPages(pagesOfOneTask)).toEqual([...runIdsOf("send-email-run", 7)].reverse());
   },
 );
+
+engineTest("listRuns hands no next cursor on a last page that is exactly full", async (context) => {
+  await endRunsOfEachTask(context, 2);
+  const reader = readerOf(context);
+
+  const pagesOfEveryTask = await walkedRunPagesOf(reader, { state: "completed" }, [3]);
+  const pagesOfOneTask = await walkedRunPagesOf(reader, { state: "completed", task: "send-email" }, [1]);
+
+  expect(pagesOfEveryTask.map(({ runs, nextCursor }) => [runs.length, nextCursor !== undefined])).toEqual([
+    [3, true],
+    [3, false],
+  ]);
+  expect(pagesOfOneTask.map(({ runs, nextCursor }) => [runs.length, nextCursor !== undefined])).toEqual([
+    [1, true],
+    [1, false],
+  ]);
+});
+
+engineTest(
+  "a page of listRuns gives the total of the listed indexes and the position of its first run, across tasks sharing a score",
+  async (context) => {
+    const reader = await readerOfTenRunsSuspendedUntilTheSameInstantOverTwoTasks(context);
+
+    const pagesOfEveryTask = await walkedRunPagesOf(reader, { state: "suspended" }, [3]);
+    const pagesOfOneTask = await walkedRunPagesOf(reader, { state: "suspended", task: "send-email" }, [4]);
+
+    expect(pagesOfEveryTask.map(pageFiguresOf)).toEqual([
+      { runCount: 3, totalRunCount: 10, firstRunPosition: 1, hasNextCursor: true },
+      { runCount: 3, totalRunCount: 10, firstRunPosition: 4, hasNextCursor: true },
+      { runCount: 3, totalRunCount: 10, firstRunPosition: 7, hasNextCursor: true },
+      { runCount: 1, totalRunCount: 10, firstRunPosition: 10, hasNextCursor: false },
+    ]);
+    expect(pagesOfOneTask.map(pageFiguresOf)).toEqual([
+      { runCount: 4, totalRunCount: 7, firstRunPosition: 1, hasNextCursor: true },
+      { runCount: 3, totalRunCount: 7, firstRunPosition: 5, hasNextCursor: false },
+    ]);
+  },
+);
+
+engineTest("an empty list gives a total of zero, no position and no next cursor", async (context) => {
+  const page = await readerOf(context).listRuns({ state: "failed" });
+
+  expect(page).toEqual({ runs: [], totalRunCount: 0 });
+});
 
 engineTest("listRuns lists every run once when the limit changes between pages", async (context) => {
   await endRunsOfEachTask(context, 5);
@@ -801,6 +862,10 @@ engineTest(
     expect(trafficByListing.nextPage.roundTripCount).toBe(2);
     expect(trafficByListing.oneTask.roundTripCount).toBe(2);
     expect(trafficByListing.emptyState.roundTripCount).toBe(1);
+    expect(trafficByListing.firstPage.sentCommands[0]).toEqual({
+      name: "evalsha",
+      args: [...[...TASK_NAMES, ...LISTENER_NAMES].map((taskName) => keys.runIndex(taskName, "completed")), 2],
+    });
     for (const traffic of Object.values(trafficByListing)) {
       expectOnlyBoundedReads(traffic);
       expect(traffic.sentCommands.flatMap(({ args }) => args)).not.toContain(

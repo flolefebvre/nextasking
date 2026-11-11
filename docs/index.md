@@ -250,7 +250,7 @@ import type {
 | `RunError`                 | The type of one entry of a run's `errors`: `attempt`, `name`, `message`, `stack` and `failedAt`                                                        |
 | `RunFailedPayload`         | The type of `runFailed`'s payload: `task`, `runId`, `reason`, `error`, `attempt`, `failedAt`, and the source event                                     |
 | `RunId`                    | The type of a run id: a string                                                                                                                         |
-| `RunPage`                  | The type `listRuns` returns: `runs` and `nextCursor`                                                                                                   |
+| `RunPage`                  | The type `listRuns` returns: `runs`, `totalRunCount`, `firstRunPosition` and `nextCursor`                                                              |
 | `RunState`                 | The type of a run's `state`: one of the eight run states                                                                                               |
 | `SavedStepResult`          | The type of one entry of a run's `steps`: `id` and `result`                                                                                            |
 | `Schedule`                 | The type of a scheduled task's `schedule` option: `cron` and `timezone`                                                                                |

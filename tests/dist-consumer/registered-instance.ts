@@ -406,6 +406,10 @@ export const failedRunsPage: Promise<RunPage> = nextasking.listRuns({ state: "fa
 
 export const listRunsOptions: ListRunsOptions = { state: "pending", task: "send-welcome-email" };
 
+export type RunPageHasItsTotal = Expect<IsEqual<RunPage["totalRunCount"], number>>;
+
+export type RunPageHasThePositionOfItsFirstRun = Expect<IsEqual<RunPage["firstRunPosition"], number | undefined>>;
+
 export type ListedRunHasNoPayload = Expect<IsEqual<"payload" extends keyof ListedRun ? true : false, false>>;
 
 export const runCounts: Promise<RunCounts> = nextasking.countRuns();

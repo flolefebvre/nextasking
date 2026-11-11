@@ -8,8 +8,8 @@ import type { RunId } from "../ids.js";
 import { storedRunIdOf } from "./engine-keys.js";
 import type { StoredRunId } from "./engine-keys.js";
 import type { LockedRun } from "./engine.js";
-import { indexPageCommandOf, indexPageOf } from "./index-page-script.js";
-import type { IndexPosition } from "./index-page-script.js";
+import { indexPagesCommandOf, indexPagesOf } from "./index-page-script.js";
+import type { IndexPage, IndexPlace } from "./index-page-script.js";
 
 const EARLIER_RUN_IDS_IN_INDEX_ORDER: readonly RunId[] = [
   "\u{1F600}-astral",
@@ -52,27 +52,37 @@ async function twoGroupsOfExecutingRunsOf(context: EngineTestContext): Promise<T
   return { earlier, later, indexKey: context.keys.runIndex("send-email", "executing") };
 }
 
-async function indexPageAfter(
+async function indexPagesAfter(
   { client }: EngineTestContext,
+  indexKeys: readonly string[],
+  limit: number,
+  after: IndexPlace | undefined,
+): Promise<IndexPage[]> {
+  return indexPagesOf(await client.send(indexPagesCommandOf({ indexKeys, limit, after })), indexKeys.length);
+}
+
+async function indexPageAfter(
+  context: EngineTestContext,
   indexKey: string,
   limit: number,
-  after: IndexPosition | undefined,
-): Promise<IndexPosition[]> {
-  return indexPageOf(await client.send(indexPageCommandOf({ indexKey, limit, after })));
+  after: IndexPlace | undefined,
+): Promise<IndexPlace[]> {
+  const [indexPage] = await indexPagesAfter(context, [indexKey], limit, after);
+  return indexPage!.places;
 }
 
 async function storedRunIdsAfter(
   context: EngineTestContext,
   indexKey: string,
   limit: number,
-  after: IndexPosition | undefined,
+  after: IndexPlace | undefined,
 ): Promise<string[]> {
   return (await indexPageAfter(context, indexKey, limit, after)).map(({ storedRunId }) => storedRunId);
 }
 
 async function walkedStoredRunIdsOf(context: EngineTestContext, indexKey: string, limit: number): Promise<string[]> {
   const walkedStoredRunIds: string[] = [];
-  let after: IndexPosition | undefined;
+  let after: IndexPlace | undefined;
   for (;;) {
     const indexPage = await indexPageAfter(context, indexKey, limit, after);
     walkedStoredRunIds.push(...indexPage.map(({ storedRunId }) => storedRunId));
@@ -187,4 +197,56 @@ engineTest("a page after a run id that is a prefix of the next one starts after 
 
   expect(storedRunIdsAfterTheLongerId).toEqual(storedRunIdsOf(["run"]));
   expect(storedRunIdsAfterThePrefix).toEqual(storedRunIdsOf(["apple"]));
+});
+
+engineTest(
+  "an index page counts the entries of its index and those before its first entry, among runs sharing a score",
+  async (context) => {
+    const { earlier, indexKey } = await twoGroupsOfExecutingRunsOf(context);
+
+    const [indexPage] = await indexPagesAfter(context, [indexKey], 2, {
+      score: earlier.startedAt,
+      storedRunId: storedRunIdOf("send-email", "épée"),
+    });
+
+    expect(indexPage).toEqual({
+      entryCount: 10,
+      entryCountBeforeBoundary: 5,
+      firstEntryRank: 5,
+      places: storedRunIdsOf(["run-1", "run"]).map((storedRunId) => ({ storedRunId, score: earlier.startedAt })),
+    });
+  },
+);
+
+engineTest(
+  "an index page after a run that left the index counts the entries before the place it left",
+  async (context) => {
+    const { earlier, indexKey } = await twoGroupsOfExecutingRunsOf(context);
+    const leavingRun = earlier.lockedRuns.find((lockedRun) => lockedRun.runId === "run")!;
+    await context.engine.settle({ ...leavingRun, outcome: { kind: "complete" } });
+
+    const [indexPage] = await indexPagesAfter(context, [indexKey], 1, {
+      score: earlier.startedAt,
+      storedRunId: storedRunIdOf("send-email", "run"),
+    });
+
+    expect(indexPage).toMatchObject({ entryCount: 9, entryCountBeforeBoundary: 6, firstEntryRank: 6 });
+  },
+);
+
+engineTest("one call reads a page of each index it is given, in the order of its keys", async (context) => {
+  const { later, indexKey } = await twoGroupsOfExecutingRunsOf(context);
+  const emptyIndexKey = context.keys.runIndex("build-report", "executing");
+
+  const indexPages = await indexPagesAfter(context, [emptyIndexKey, indexKey], 1, undefined);
+
+  expect(indexPages).toEqual([
+    { entryCount: 0, entryCountBeforeBoundary: 0, firstEntryRank: 0, places: [] },
+    {
+      entryCount: 10,
+      entryCountBeforeBoundary: 0,
+      firstEntryRank: 0,
+      places: [{ storedRunId: storedRunIdOf("send-email", LATER_RUN_IDS_IN_INDEX_ORDER[0]!), score: later.startedAt }],
+    },
+  ]);
 });

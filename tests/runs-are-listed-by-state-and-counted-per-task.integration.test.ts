@@ -98,6 +98,8 @@ integrationTest(
             dispatchedAt: expect.any(Date),
           },
         ],
+        totalRunCount: 1,
+        firstRunPosition: 1,
       });
     } finally {
       await closeNextaskingAndCheckItsDuration(nextasking);

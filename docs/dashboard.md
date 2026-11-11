@@ -96,7 +96,7 @@ const { runs, totalRunCount, firstRunPosition, previousCursor, nextCursor } = aw
 - `limit` defaults to 50; it must be a whole number, 1 or more.
 - `task` keeps the runs of one task; the runs come typed by that task and by the state.
 - `totalRunCount` is how many runs the list holds: the runs in `state`, of `task` or of every task the instance lists.
-- `firstRunPosition` is the position of the page's first run in the list, counted from 1. It is absent when no run of the list falls on the page: the list is empty, or the page lies past its end.
+- `firstRunPosition` is the position of the page's first run in the list, counted from 1. It is absent only when the list is empty or the page lies past its end.
 - `nextCursor` is present exactly when a run follows the page; `previousCursor` exactly when a run comes before it. Pass either back as `cursor`, with the same `state` and `task`, for the page after or the page before. The direction is inside the cursor: there is no other option to set.
 - A cursor is an opaque string; any other cursor throws:
 
@@ -109,10 +109,10 @@ Invalid listRuns cursor: pass back a nextCursor or previousCursor that listRuns 
 ```
 
 - A page may come back shorter than `limit`, even empty; only a missing `nextCursor` ends the walk.
-- `totalRunCount` and `firstRunPosition` count the list at the instant its page is read. A run written by a newer release, or one that leaves the state between that instant and the read of its fields, is counted but not listed: a page can hold fewer runs than its position and the total suggest. Two pages read at different instants can disagree on the total.
+- `totalRunCount` and `firstRunPosition` count the list at the instant its page is read. A run written by a newer release, or one that leaves the state between that instant and the read of its fields, is counted but not listed: a page can hold fewer runs than its position and the total suggest, down to none, with `runs` empty while `firstRunPosition` is present. Two pages read at different instants can disagree on the total.
 - Each listed run has the fields of a `Run` but `payload`, `errors` and `steps`, and adds `lastErrorMessage`, the message of its last error, when it has one. Call `getRun` for the rest.
 - Order: `completed` and `failed` most recently finished first; `executing` most recently started first; `delayed`, `suspended` and `backingOff` latest due first; `pending` and `waitingForConcurrencySlot` most recently queued first. A run queues anew when it is dispatched, comes due after a delay, a sleep or a backoff, or is replayed; a handed-back, yielded or stalled run keeps its place.
-- A page read through `previousCursor` comes in the same order, newest first.
+- A page read through `previousCursor` comes in the same order as any other page.
 - A cursor is a place in that order, not a page number and not a run that must still exist: `nextCursor` lists the runs after the page's last run, `previousCursor` the runs before its first. It stays valid after that run leaves the list, and reading it again returns the same runs, with a higher `firstRunPosition` when runs arrived before them.
 - A run that leaves the state between two pages is skipped, and one that leaves and comes back further along the order can be listed again.
 - A page read through `previousCursor` that reaches the head of the list is the first page: when fewer than `limit` runs come before the place, it returns what a call without `cursor` returns, full, with no `previousCursor`. Runs that arrive at the head while a dashboard pages back never leave it a short first page.
@@ -131,7 +131,7 @@ export default async function FailedRunsPage({ searchParams }: { searchParams: P
   });
   return (
     <>
-      {firstRunPosition !== undefined && (
+      {firstRunPosition !== undefined && runs.length > 0 && (
         <p>
           Runs {firstRunPosition} to {firstRunPosition + runs.length - 1} of {totalRunCount}
         </p>

@@ -79,36 +79,38 @@ export type ListedSchedule = ListedScheduleOf<ScheduledTaskNameOf<RegisteredTask
 type ScheduledTaskNameOf<Task> =
   Extract<Task, { schedule: object }> extends { name: infer Name extends string } ? Name : never;
 
-export type DispatchArguments<Task> = Task extends { schema: infer Schema extends PayloadSchema }
-  ? [payload: PayloadInput<Schema>, options?: DispatchOptions]
-  : [payload?: undefined, options?: DispatchOptions];
+export type DispatchArguments<Task, Given = DispatchOptions> = Task extends {
+  schema: infer Schema extends PayloadSchema;
+}
+  ? [payload: PayloadInput<Schema>, options?: OnlyKnownOptions<Given, DispatchOptions>]
+  : [payload?: undefined, options?: OnlyKnownOptions<Given, DispatchOptions>];
 
 export interface RegisteredDispatch {
-  <Name extends TaskName>(
+  <Name extends TaskName, Given = DispatchOptions>(
     name: Name,
-    ...dispatchArguments: DispatchArguments<Extract<RegisteredTask, { name: Name }>>
+    ...dispatchArguments: DispatchArguments<Extract<RegisteredTask, { name: Name }>, Given>
   ): Promise<DispatchedRun>;
 }
 
 export type EmittableEventNameOf<Event extends EventDefinition> = Exclude<Event["name"], BuiltInEventName>;
 
 export interface RegisteredEmit {
-  <Name extends Exclude<EventName, BuiltInEventName>>(
+  <Name extends Exclude<EventName, BuiltInEventName>, Given = EmitOptions>(
     name: Name,
     payload: PayloadInput<Extract<RegisteredEvent, { name: Name }>["schema"]>,
-    options?: EmitOptions,
+    options?: OnlyKnownOptions<Given, EmitOptions>,
   ): Promise<EmittedEvent>;
 }
 
 export type Nextasking<Task extends AnyTaskDefinition, Event extends EventDefinition = never> = {
-  readonly dispatch: <Name extends Task["name"]>(
+  readonly dispatch: <Name extends Task["name"], Given = DispatchOptions>(
     name: Name,
-    ...dispatchArguments: DispatchArguments<Extract<Task, { name: Name }>>
+    ...dispatchArguments: DispatchArguments<Extract<Task, { name: Name }>, Given>
   ) => Promise<DispatchedRun>;
-  readonly emit: <Name extends EmittableEventNameOf<Event>>(
+  readonly emit: <Name extends EmittableEventNameOf<Event>, Given = EmitOptions>(
     name: Name,
     payload: PayloadInput<Extract<Event, { name: Name }>["schema"]>,
-    options?: EmitOptions,
+    options?: OnlyKnownOptions<Given, EmitOptions>,
   ) => Promise<EmittedEvent>;
   readonly replay: <Name extends Task["name"]>(name: Name, runId: RunId) => Promise<ReplayedRun>;
   readonly isTaskName: (name: string) => name is Task["name"];

@@ -4,6 +4,10 @@ import { z } from "zod";
 import * as root from "./index.js";
 import { createNextasking, defineEvent, defineListener, defineScheduledTask, defineTask } from "./index.js";
 import type {
+  DispatchedRun,
+  DispatchOptions,
+  EmitOptions,
+  EmittedEvent,
   EventName,
   EventWithRuns,
   FailureReason,
@@ -97,6 +101,48 @@ describe("the root export", () => {
     expectTypeOf(sendFromAHandler).returns.resolves.toBeVoid();
     expectTypeOf<TaskContext<unknown>["dispatch"]>().parameter(0).toEqualTypeOf<RegisteredTaskName>();
     expectTypeOf<TaskContext<unknown>["emit"]>().parameter(0).toEqualTypeOf<"user.signed-up">();
+  });
+
+  test("refuses an option a handler's dispatch or emit doesn't know, in a literal, through a variable and through a spread", () => {
+    const unknownDispatchOptions = { delayy: "5m" };
+    const unknownEmitOptions = { eventID: "signed-up-1" };
+    const typedDispatchOptions: DispatchOptions = { delay: "5m" };
+    const typedEmitOptions: EmitOptions = { eventId: "signed-up-1" };
+    const sendFromAHandler = async ({ dispatch, emit }: TaskContext<unknown>) => {
+      const dispatchAScheduledTask: (
+        name: "purge-expired-sessions",
+        payload?: undefined,
+        options?: DispatchOptions,
+      ) => Promise<DispatchedRun> = dispatch;
+      const emitASignUp: (
+        name: "user.signed-up",
+        payload: { userId: string },
+        options?: EmitOptions,
+      ) => Promise<EmittedEvent> = emit;
+      await dispatchAScheduledTask("purge-expired-sessions");
+      await emitASignUp("user.signed-up", { userId: "user-1" });
+      await dispatch("send-welcome-email", { email: "ada@example.com" }, typedDispatchOptions);
+      await dispatch("purge-expired-sessions", undefined, { ...typedDispatchOptions, runId: "purge-now" });
+      await emit("user.signed-up", { userId: "user-1" }, typedEmitOptions);
+      // @ts-expect-error delayy is not an option of dispatch
+      await dispatch("send-welcome-email", { email: "ada@example.com" }, { delayy: "5m" });
+      // @ts-expect-error delayy is not an option of dispatch
+      await dispatch("send-welcome-email", { email: "ada@example.com" }, unknownDispatchOptions);
+      // @ts-expect-error delayy is not an option of dispatch
+      await dispatch("purge-expired-sessions", undefined, { runId: "purge-now", ...unknownDispatchOptions });
+      // @ts-expect-error a string is not the options
+      await dispatch("purge-expired-sessions", undefined, "5m");
+      // @ts-expect-error eventID is not an option of emit
+      await emit("user.signed-up", { userId: "user-1" }, unknownEmitOptions);
+      // @ts-expect-error eventID is not an option of emit
+      await emit("user.signed-up", { userId: "user-1" }, { eventId: "signed-up-1", ...unknownEmitOptions });
+      // @ts-expect-error null is not the options
+      await emit("user.signed-up", { userId: "user-1" }, null);
+    };
+
+    expectTypeOf(sendFromAHandler).returns.resolves.toBeVoid();
+    expectTypeOf<Parameters<TaskContext<unknown>["emit"]>[2]>().toEqualTypeOf<EmitOptions | undefined>();
+    expectTypeOf<Parameters<TaskContext<unknown>["dispatch"]>[0]>().toEqualTypeOf<RegisteredTaskName>();
   });
 
   test("types a handler's dispatch of a scheduled task with no payload", () => {

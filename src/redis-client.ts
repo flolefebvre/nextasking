@@ -1,6 +1,8 @@
 export type CommandArgument = string | number;
 
-export type RedisScript = { readonly name: string; readonly lua: string; readonly keyCount: number };
+export type ScriptKeyCount = number | "one or more";
+
+export type RedisScript = { readonly name: string; readonly lua: string; readonly keyCount: ScriptKeyCount };
 
 export type RedisCommand =
   | { readonly kind: "builtIn"; readonly name: string; readonly commandArguments: readonly CommandArgument[] }
@@ -35,7 +37,8 @@ export function scriptCommandOf(
   keys: readonly string[],
   scriptArguments: readonly CommandArgument[],
 ): RedisCommand {
-  if (keys.length !== script.keyCount) {
+  const isKeyCountTaken = script.keyCount === "one or more" ? keys.length >= 1 : keys.length === script.keyCount;
+  if (!isKeyCountTaken) {
     throw new Error(
       `The script command ${script.name} takes ${String(script.keyCount)} keys, not ${String(keys.length)}`,
     );

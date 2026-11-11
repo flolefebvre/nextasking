@@ -236,7 +236,7 @@ import type {
 | `ListedSchedule`           | The type of one entry `listSchedules` returns: `task`, `cron`, `timezone`, `nextFiringAt` and `previousFiring`                                         |
 | `ListenerDefinition`       | The type `defineListener` returns                                                                                                                      |
 | `ListenerOptions`          | The type of `defineListener`'s options: `on`, `retries`, `backoff`, `timeout`, `concurrency` and `handler`                                             |
-| `ListRunsOptions`          | The type of `listRuns`' argument: `state`, `task`, `limit` and `cursor`                                                                                |
+| `ListRunsOptions`          | The type of `listRuns`' argument: `state`, `task`, `limit` and `cursor`, a `previousCursor` or `nextCursor` a page returned                            |
 | `Logger`                   | The type of the `logger` option and of the handler's `logger`                                                                                          |
 | `Nextasking`               | The type of the instance `createNextasking` returns                                                                                                    |
 | `NextaskingConfig`         | The type of `createNextasking`'s argument: `connection`, `prefix`, `logger`, `events` and `tasks`                                                      |
@@ -250,7 +250,7 @@ import type {
 | `RunError`                 | The type of one entry of a run's `errors`: `attempt`, `name`, `message`, `stack` and `failedAt`                                                        |
 | `RunFailedPayload`         | The type of `runFailed`'s payload: `task`, `runId`, `reason`, `error`, `attempt`, `failedAt`, and the source event                                     |
 | `RunId`                    | The type of a run id: a string                                                                                                                         |
-| `RunPage`                  | The type `listRuns` returns: `runs` and `nextCursor`                                                                                                   |
+| `RunPage`                  | The type `listRuns` returns: `runs`, `totalRunCount`, `firstRunPosition`, `previousCursor` and `nextCursor`                                            |
 | `RunState`                 | The type of a run's `state`: one of the eight run states                                                                                               |
 | `SavedStepResult`          | The type of one entry of a run's `steps`: `id` and `result`                                                                                            |
 | `Schedule`                 | The type of a scheduled task's `schedule` option: `cron` and `timezone`                                                                                |

@@ -112,6 +112,6 @@ integrationTest(
       reader.listRuns({ state: "failed", task: CHARGE_CARD }),
     );
 
-    expect(page).toEqual({ runs: [] });
+    expect(page).toEqual({ runs: [], totalRunCount: 1, firstRunPosition: 1 });
   },
 );

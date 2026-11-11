@@ -41,7 +41,7 @@ export type ExecutedAttempt<Task extends AnyTaskDefinition, Event extends EventD
 };
 
 export type ExecuteAttemptArguments<Task> = Task extends { schema: infer Schema extends PayloadSchema }
-  ? [payload: PayloadInput<Schema>, options?: ExecuteAttemptOptions]
+  ? [payload: PayloadInput<Schema>, options?: Omit<ExecuteAttemptOptions, "scheduledAt">]
   : [payload?: undefined, options?: ExecuteAttemptOptions];
 
 const FIRST_ATTEMPT = 1;
@@ -53,8 +53,9 @@ export async function executeAttempt<
 >(
   nextasking: Nextasking<Task, Event>,
   taskName: Name,
-  ...[payload, options = {}]: ExecuteAttemptArguments<Extract<Task, { name: Name }>>
+  ...[payload, givenOptions]: ExecuteAttemptArguments<Extract<Task, { name: Name }>>
 ): Promise<ExecutedAttempt<Task, Event>> {
+  const options: ExecuteAttemptOptions = givenOptions ?? {};
   const controls = controlsOfInstance(nextasking, "executeAttempt");
   const task = controls.tasksByName.get(taskName);
   if (task === undefined) {

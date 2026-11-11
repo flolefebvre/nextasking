@@ -54,9 +54,19 @@ export type TaskName = TaskNameIn<Register>;
 
 export type EventName = EventNameIn<Register>;
 
-type RegisteredDefinitions = Register extends { nextasking: Nextasking<infer Task, infer Event> }
+type DefinitionsIn<Registration> = Registration extends { nextasking: Nextasking<infer Task, infer Event> }
   ? { task: Task; event: Event }
   : { task: never; event: never };
+
+type RegisteredDefinitions = DefinitionsIn<Register>;
+
+export type ControlledTaskNameIn<Registration> = Registration extends { nextasking: object }
+  ? DefinitionsIn<Registration>["task"]["name"]
+  : string;
+
+export type ControlledScheduledTaskNameIn<Registration> = Registration extends { nextasking: object }
+  ? ScheduledTaskNameOf<DefinitionsIn<Registration>["task"]>
+  : string;
 
 type RegisteredTask = RegisteredDefinitions["task"];
 

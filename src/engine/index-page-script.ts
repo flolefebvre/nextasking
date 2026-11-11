@@ -7,9 +7,15 @@ export type IndexPlace = { score: IndexScore; storedRunId: string };
 
 export type PagingDirection = "forward" | "backward";
 
-export type IndexPageBoundary = { direction: PagingDirection; place: IndexPlace | undefined };
+export type OrderGroupNumber = number;
 
-export type IndexPagesRequest = { indexKeys: readonly string[]; limit: number; boundary: IndexPageBoundary };
+export type ListPlace = IndexPlace & { orderGroupNumber: OrderGroupNumber };
+
+export type IndexPageBoundary = { direction: PagingDirection; place: ListPlace | undefined };
+
+export type IndexInList = { indexKey: string; orderGroupNumber: OrderGroupNumber };
+
+export type IndexPagesRequest = { indexesInList: readonly IndexInList[]; limit: number; boundary: IndexPageBoundary };
 
 export type IndexPage = {
   entryCount: number;
@@ -19,16 +25,36 @@ export type IndexPage = {
 };
 
 export const INDEX_PAGE_SCRIPT = `
-if #ARGV ~= 2 and #ARGV ~= 4 then
-  error("invalid argument: an index page takes a limit and a direction, then optionally a score and a run id, got " .. tostring(#ARGV) .. " arguments")
+local keyCount = #KEYS
+local hasPlace = #ARGV == keyCount + 5
+if #ARGV ~= keyCount + 2 and not hasPlace then
+  error("invalid argument: an index page takes a limit, a direction and the order group number of each index, then optionally the order group number, the score and the run id of a place, got " .. tostring(#ARGV) .. " arguments for " .. tostring(keyCount) .. " indexes")
+end
+local function isPositiveInteger(value)
+  return value ~= nil and value >= 1 and value == math.floor(value)
 end
 local limit = tonumber(ARGV[1])
-if not limit or limit < 1 or limit ~= math.floor(limit) then
+if not isPositiveInteger(limit) then
   error("invalid argument: limit must be a positive integer, got " .. tostring(ARGV[1]))
 end
 local isForward = ARGV[2] == "forward"
 if not isForward and ARGV[2] ~= "backward" then
   error("invalid argument: direction must be forward or backward, got " .. tostring(ARGV[2]))
+end
+local orderGroupNumbers = {}
+for keyNumber = 1, keyCount do
+  local orderGroupNumber = tonumber(ARGV[keyNumber + 2])
+  if not isPositiveInteger(orderGroupNumber) or orderGroupNumber < (orderGroupNumbers[keyNumber - 1] or 1) then
+    error("invalid argument: the order group numbers of the indexes must be positive integers in ascending order, got " .. tostring(ARGV[keyNumber + 2]))
+  end
+  orderGroupNumbers[keyNumber] = orderGroupNumber
+end
+local placeOrderGroupNumber, placeScore, placeRunId
+if hasPlace then
+  placeOrderGroupNumber, placeScore, placeRunId = tonumber(ARGV[keyCount + 3]), ARGV[keyCount + 4], ARGV[keyCount + 5]
+  if not isPositiveInteger(placeOrderGroupNumber) then
+    error("invalid argument: the order group number of the place must be a positive integer, got " .. tostring(ARGV[keyCount + 3]))
+  end
 end
 
 local function isBytewiseBefore(left, right)
@@ -49,18 +75,23 @@ local function isBeforeBoundary(entryRunId, placeRunId)
   return isBytewiseBefore(placeRunId, entryRunId)
 end
 
-local function entryCountBeforeBoundaryOf(indexKey, entryCount)
-  if #ARGV == 2 then
+local function entryCountBeforeBoundaryOf(indexKey, entryCount, orderGroupNumber)
+  if not hasPlace then
     return isForward and 0 or entryCount
   end
-  local score, runId = ARGV[3], ARGV[4]
-  local higherScoredCount = redis.call("ZCOUNT", indexKey, "(" .. score, "+inf")
-  local sameScoredCount = redis.call("ZCOUNT", indexKey, score, score)
+  if orderGroupNumber < placeOrderGroupNumber then
+    return entryCount
+  end
+  if orderGroupNumber > placeOrderGroupNumber then
+    return 0
+  end
+  local higherScoredCount = redis.call("ZCOUNT", indexKey, "(" .. placeScore, "+inf")
+  local sameScoredCount = redis.call("ZCOUNT", indexKey, placeScore, placeScore)
   local lowRank, highRank = higherScoredCount, higherScoredCount + sameScoredCount
   while lowRank < highRank do
     local middleRank = math.floor((lowRank + highRank) / 2)
     local middleRunId = redis.call("ZRANGE", indexKey, middleRank, middleRank, "REV")[1]
-    if isBeforeBoundary(middleRunId, runId) then
+    if isBeforeBoundary(middleRunId, placeRunId) then
       lowRank = middleRank + 1
     else
       highRank = middleRank
@@ -69,18 +100,59 @@ local function entryCountBeforeBoundaryOf(indexKey, entryCount)
   return lowRank
 end
 
-local indexPages = {}
+local entryCounts, entryCountsBeforeBoundary = {}, {}
+local listEntryCountBeforeBoundary = 0
 for keyNumber, indexKey in ipairs(KEYS) do
-  local entryCount = redis.call("ZCARD", indexKey)
-  local entryCountBeforeBoundary = entryCountBeforeBoundaryOf(indexKey, entryCount)
-  local firstEntryRank, lastEntryRank = entryCountBeforeBoundary, entryCountBeforeBoundary + limit - 1
-  if not isForward then
-    firstEntryRank, lastEntryRank = math.max(0, entryCountBeforeBoundary - limit), math.max(entryCountBeforeBoundary, limit) - 1
+  entryCounts[keyNumber] = redis.call("ZCARD", indexKey)
+  entryCountsBeforeBoundary[keyNumber] = entryCountBeforeBoundaryOf(indexKey, entryCounts[keyNumber], orderGroupNumbers[keyNumber])
+  listEntryCountBeforeBoundary = listEntryCountBeforeBoundary + entryCountsBeforeBoundary[keyNumber]
+end
+
+local isHeadOfList = not isForward and listEntryCountBeforeBoundary < limit
+local isReadInListOrder = isForward or isHeadOfList
+
+local function pageEntryCountOf(keyNumber)
+  if isHeadOfList then
+    return entryCounts[keyNumber]
   end
-  local indexPage = { entryCount, entryCountBeforeBoundary, firstEntryRank }
-  local entries = redis.call("ZRANGE", indexKey, firstEntryRank, lastEntryRank, "REV", "WITHSCORES")
-  for _, element in ipairs(entries) do
-    indexPage[#indexPage + 1] = element
+  if isForward then
+    return entryCounts[keyNumber] - entryCountsBeforeBoundary[keyNumber]
+  end
+  return entryCountsBeforeBoundary[keyNumber]
+end
+
+local function firstEntryRankOf(keyNumber, readEntryCount)
+  if isHeadOfList then
+    return 0
+  end
+  if isForward then
+    return entryCountsBeforeBoundary[keyNumber]
+  end
+  return entryCountsBeforeBoundary[keyNumber] - readEntryCount
+end
+
+local keyNumbersInReadingOrder = {}
+for keyNumber = 1, keyCount do
+  keyNumbersInReadingOrder[keyNumber] = isReadInListOrder and keyNumber or keyCount + 1 - keyNumber
+end
+
+local indexPages = {}
+local pageEntryCountOfGroupsRead, pageEntryCountOfGroupReading, orderGroupNumberReading = 0, 0, nil
+for _, keyNumber in ipairs(keyNumbersInReadingOrder) do
+  if orderGroupNumbers[keyNumber] ~= orderGroupNumberReading then
+    pageEntryCountOfGroupsRead = pageEntryCountOfGroupsRead + pageEntryCountOfGroupReading
+    pageEntryCountOfGroupReading, orderGroupNumberReading = 0, orderGroupNumbers[keyNumber]
+  end
+  local pageEntryCount = pageEntryCountOf(keyNumber)
+  local readEntryCount = math.min(math.max(0, limit - pageEntryCountOfGroupsRead), pageEntryCount)
+  pageEntryCountOfGroupReading = pageEntryCountOfGroupReading + pageEntryCount
+  local firstEntryRank = firstEntryRankOf(keyNumber, readEntryCount)
+  local indexPage = { entryCounts[keyNumber], entryCountsBeforeBoundary[keyNumber], firstEntryRank }
+  if readEntryCount > 0 then
+    local entries = redis.call("ZRANGE", KEYS[keyNumber], firstEntryRank, firstEntryRank + readEntryCount - 1, "REV", "WITHSCORES")
+    for _, element in ipairs(entries) do
+      indexPage[#indexPage + 1] = element
+    end
   end
   indexPages[keyNumber] = indexPage
 end
@@ -93,12 +165,17 @@ const INDEX_PAGE_REDIS_SCRIPT: RedisScript = {
   keyCount: "one or more",
 };
 
-export function indexPagesCommandOf({ indexKeys, limit, boundary }: IndexPagesRequest): RedisCommand {
+export function indexPagesCommandOf({ indexesInList, limit, boundary }: IndexPagesRequest): RedisCommand {
   const { direction, place } = boundary;
   return scriptCommandOf(
     INDEX_PAGE_REDIS_SCRIPT,
-    indexKeys,
-    place === undefined ? [limit, direction] : [limit, direction, String(place.score), place.storedRunId],
+    indexesInList.map(({ indexKey }) => indexKey),
+    [
+      limit,
+      direction,
+      ...indexesInList.map(({ orderGroupNumber }) => orderGroupNumber),
+      ...(place === undefined ? [] : [place.orderGroupNumber, String(place.score), place.storedRunId]),
+    ],
   );
 }
 

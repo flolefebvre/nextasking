@@ -38,6 +38,8 @@ const DECLARED_SCHEDULES: readonly ScheduleSummary[] = [
 
 const READ_COMMAND_NAMES = new Set(["hmget", "get", "lrange", "lindex", "hgetall", "zcard", "eval", "evalsha"]);
 
+const ENDED_ORDER_GROUP_NUMBER = 4;
+
 const ATTEMPT_ERROR = { attempt: 1, name: "Error", message: "boom", stack: "Error: boom" };
 
 function taskDefinitionOf(taskName: string): AnyTaskDefinition {
@@ -1048,6 +1050,7 @@ engineTest(
         ...[...TASK_NAMES, ...LISTENER_NAMES].map((taskName) => keys.runIndex(taskName, "completed")),
         2,
         "forward",
+        ...[...TASK_NAMES, ...LISTENER_NAMES].map(() => ENDED_ORDER_GROUP_NUMBER),
       ],
     });
     for (const traffic of Object.values(trafficByListing)) {

@@ -5,15 +5,21 @@ import type { RunIdentity } from "./engine/engine-keys.js";
 import { deserializePayload, isFailureReason, isRecordVersionReadable, storedIntegerOf } from "./engine/engine.js";
 import type { ErrorRecord, ScheduleSummary } from "./engine/engine.js";
 import { indexPagesCommandOf, indexPagesOf } from "./engine/index-page-script.js";
-import type { IndexPage, IndexPageBoundary, IndexPlace, PagingDirection } from "./engine/index-page-script.js";
+import type {
+  IndexPage,
+  IndexPageBoundary,
+  IndexPlace,
+  OrderGroupNumber,
+  PagingDirection,
+} from "./engine/index-page-script.js";
 import { listedRunReadCommandOf, readPartsOf, runReadCommandOf } from "./engine/run-read-scripts.js";
 import { UnknownEventError, UnknownTaskError } from "./errors.js";
 import { deriveFiringRunId, deriveListenerRunId } from "./ids.js";
 import type { EventId, RunId } from "./ids.js";
 import { decodeRunListCursor, encodeRunListCursor } from "./run-list-cursor.js";
 import type { ListedIndexes, RunListCursor } from "./run-list-cursor.js";
-import { RUN_STATES, isRunState } from "./run-states.js";
-import type { RunState, RunStateFields } from "./run-states.js";
+import { ORDER_GROUPS, RUN_STATES, isRunState, orderGroupOf } from "./run-states.js";
+import type { OrderGroup, RunState, RunStateFields } from "./run-states.js";
 import type { CronExpression, IanaTimeZone } from "./schedules.js";
 import { builtInCommandOf } from "./redis-client.js";
 import type { CommandResult, RedisClient, RedisCommand } from "./redis-client.js";
@@ -349,6 +355,10 @@ function compareInIndexOrder(left: IndexEntry, right: IndexEntry): number {
   );
 }
 
+function orderGroupNumberOf(orderGroup: OrderGroup): OrderGroupNumber {
+  return ORDER_GROUPS.findIndex(({ name }) => name === orderGroup) + 1;
+}
+
 function pageBoundaryOf(cursor: unknown, listedIndexes: ListedIndexes): IndexPageBoundary {
   if (cursor === undefined) {
     return { direction: "forward", place: undefined };
@@ -357,7 +367,13 @@ function pageBoundaryOf(cursor: unknown, listedIndexes: ListedIndexes): IndexPag
   return {
     direction,
     place:
-      place === undefined ? undefined : { score: place.score, storedRunId: storedRunIdOf(place.task, place.runId) },
+      place === undefined
+        ? undefined
+        : {
+            orderGroupNumber: orderGroupNumberOf(orderGroupOf(listedIndexes.state)),
+            score: place.score,
+            storedRunId: storedRunIdOf(place.task, place.runId),
+          },
   };
 }
 
@@ -441,14 +457,15 @@ export function createReadApi(config: ReadApiConfig): ReadApi {
     if (taskNames.length === 0) {
       return [];
     }
-    const indexKeys = taskNames.map((taskName) => keys.runIndex(taskName, state));
+    const orderGroupNumber = orderGroupNumberOf(orderGroupOf(state));
+    const indexesInList = taskNames.map((taskName) => ({ indexKey: keys.runIndex(taskName, state), orderGroupNumber }));
     const indexPages = indexPagesOf(
-      await client.send(indexPagesCommandOf({ indexKeys, limit, boundary })),
-      indexKeys.length,
+      await client.send(indexPagesCommandOf({ indexesInList, limit, boundary })),
+      indexesInList.length,
     );
     return indexPages.map(({ places, ...entryCounts }, indexNumber) => ({
       ...entryCounts,
-      indexEntries: places.map((indexPlace) => indexEntryOf(indexKeys[indexNumber] ?? "", indexPlace)),
+      indexEntries: places.map((indexPlace) => indexEntryOf(indexesInList[indexNumber]?.indexKey ?? "", indexPlace)),
     }));
   };
 

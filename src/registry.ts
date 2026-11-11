@@ -122,8 +122,12 @@ export type Nextasking<Task extends AnyTaskDefinition, Event extends EventDefini
     name: Name,
     runId: RunId,
   ) => Promise<RunOfTask<Extract<Task, { name: Name }>> | undefined>;
-  readonly listRuns: <State extends RunState = RunState, Name extends Task["name"] = Task["name"]>(
-    options?: ListRunsOptionsOf<Name, State>,
+  readonly listRuns: <
+    State extends RunState = RunState,
+    Name extends Task["name"] = Task["name"],
+    Given = ListRunsOptionsOf<Name, State>,
+  >(
+    options?: OnlyKnownOptions<Given, ListRunsOptionsOf<Name, State>>,
   ) => Promise<RunPageOf<Extract<ListedRunOfTask<Extract<Task, { name: Name }>>, { state: State }>>>;
   readonly countRuns: () => Promise<RunCountsOf<Task["name"]>>;
   readonly getEvent: <Name extends Event["name"]>(

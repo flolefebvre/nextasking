@@ -3,6 +3,10 @@ import type {
   DispatchOptions,
   EmitOptions,
   EmittedEvent,
+  ListedRun,
+  ListRunsOptions,
+  RunPage,
+  RunState,
   StartWorkerOptions,
   TaskContext,
 } from "@flefebvre/nextasking";
@@ -214,4 +218,102 @@ export type StartWorkerGivenTheMembersOfAStringTakesItsOptions = Expect<
 
 export type StartWorkerGivenAListTakesItsOptions = Expect<
   IsEqual<Parameters<typeof nextasking.startWorker<string[]>>, [options?: StartWorkerOptions]>
+>;
+
+interface ListRunsOptionsWithASearch extends ListRunsOptions {
+  search: string;
+}
+
+const unknownListOptions = { states: ["failed"], search: "abc" };
+
+const listOptionsWithOneKnown = { limit: 20, states: ["failed"] };
+
+declare const listOptionsWiderThanTheirType: ListRunsOptionsWithASearch;
+
+export async function listRunsWithUnknownOptions(): Promise<void> {
+  // @ts-expect-error states is not an option of listRuns
+  await nextasking.listRuns({ states: ["failed"] });
+  // @ts-expect-error states is not an option of listRuns
+  await nextasking.listRuns(unknownListOptions);
+  // @ts-expect-error states is not an option of listRuns
+  await nextasking.listRuns(listOptionsWithOneKnown);
+  // @ts-expect-error states is not an option of listRuns
+  await nextasking.listRuns({ limit: 20, ...unknownListOptions });
+  // @ts-expect-error search is not an option of listRuns
+  await nextasking.listRuns(listOptionsWiderThanTheirType);
+  // @ts-expect-error a string is not the options
+  await nextasking.listRuns("failed");
+  // @ts-expect-error a list is not the options
+  await nextasking.listRuns(["failed"]);
+  // @ts-expect-error null is not the options
+  await nextasking.listRuns(null);
+  // @ts-expect-error a limit is a number
+  await nextasking.listRuns({ limit: "20" });
+  // @ts-expect-error the state named by the type argument is not the state listed
+  await nextasking.listRuns<"failed">({ state: "completed" });
+}
+
+declare const typedListOptions: ListRunsOptions;
+
+declare const pickedListOptions: Pick<ListRunsOptions, "limit" | "cursor">;
+
+declare const readonlyListOptions: Readonly<ListRunsOptions>;
+
+declare const listedStates: RunState[];
+
+declare const listCursor: string | undefined;
+
+export async function listRunsWithKnownOptions(): Promise<void> {
+  await nextasking.listRuns(typedListOptions);
+  await nextasking.listRuns(pickedListOptions);
+  await nextasking.listRuns(readonlyListOptions);
+  await nextasking.listRuns({ state: listedStates, limit: 10 });
+  await nextasking.listRuns({ state: "failed", cursor: listCursor });
+  await nextasking.listRuns({ ...pickedListOptions, state: isDraining ? ["completed", "failed"] : "pending" });
+  await nextasking.listRuns(isDraining ? { state: "failed" } : {});
+  await nextasking.listRuns({ state: "failed", limit: undefined });
+}
+
+export const listFailedRunsOfTypedOptions = () => nextasking.listRuns({ ...typedListOptions, state: "failed" });
+
+export const listWelcomeEmailRunsOfAVariableCursor = () =>
+  nextasking.listRuns({ task: "send-welcome-email", cursor: listCursor });
+
+export const listFailedWelcomeEmailRunsByTypeArguments = () =>
+  nextasking.listRuns<"failed", "send-welcome-email">({ state: "failed", task: "send-welcome-email" });
+
+type ListedRunOf<List extends () => Promise<RunPage>> = Awaited<ReturnType<List>>["runs"][number];
+
+export type SpreadOptionsKeepTheirStateType = Expect<
+  IsEqual<ListedRunOf<typeof listFailedRunsOfTypedOptions>, Extract<ListedRun, { state: "failed" }>>
+>;
+
+export type AVariableCursorKeepsTheTaskType = Expect<
+  IsEqual<ListedRunOf<typeof listWelcomeEmailRunsOfAVariableCursor>, Extract<ListedRun, { task: "send-welcome-email" }>>
+>;
+
+export type TypeArgumentsKeepTheirType = Expect<
+  IsEqual<
+    ListedRunOf<typeof listFailedWelcomeEmailRunsByTypeArguments>,
+    Extract<ListedRun, { state: "failed"; task: "send-welcome-email" }>
+  >
+>;
+
+export const listRunsAsAFunctionOfItsOptions: (options?: ListRunsOptions) => Promise<RunPage> = nextasking.listRuns;
+
+export type ListRunsTakesItsOptions = Expect<
+  IsEqual<Parameters<typeof nextasking.listRuns>, [options?: ListRunsOptions]>
+>;
+
+export type ListRunsGivenTheMembersOfABooleanTakesItsOptions = Expect<
+  IsEqual<
+    Parameters<
+      typeof nextasking.listRuns<
+        RunState,
+        "send-welcome-email" | "create-default-workspace" | "purge-expired-sessions",
+        { [Member in keyof boolean]: unknown }
+      >
+    >,
+    [options?: ListRunsOptions]
+  >
 >;

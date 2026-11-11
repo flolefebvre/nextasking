@@ -23,7 +23,12 @@ import type {
   TaskContext,
   TaskName,
 } from "./index.js";
+import type { ListRunsOptionsOf } from "./read-api.js";
 import type { EventNameIn, TaskNameIn } from "./registry.js";
+
+interface ListRunsOptionsWithASearch extends ListRunsOptions {
+  search: string;
+}
 
 const sendWelcomeEmail = defineTask("send-welcome-email", {
   schema: z.object({ email: z.email() }),
@@ -258,6 +263,73 @@ describe("the root export", () => {
     expectTypeOf(listEveryRun).returns.resolves.items.toEqualTypeOf<ListedRun>();
     expectTypeOf(listEveryRunOfUndefined).returns.resolves.items.toEqualTypeOf<ListedRun>();
     expectTypeOf(nextasking.listRuns).returns.resolves.toEqualTypeOf<RunPage>();
+  });
+
+  test("refuses an option listRuns doesn't know at compile time, in a literal, through a variable and through a spread", () => {
+    const unknownOptions = { states: ["failed"], search: "abc" };
+    const optionsWithOneKnown = { limit: 20, states: ["failed"] };
+    const optionsWiderThanTheirType: ListRunsOptionsWithASearch = { state: "failed", search: "abc" };
+    const listWithUnknownOptions = async () => {
+      // @ts-expect-error a string is not the options
+      await nextasking.listRuns("pending");
+      // @ts-expect-error a list is not the options
+      await nextasking.listRuns(["pending"]);
+      // @ts-expect-error null is not the options
+      await nextasking.listRuns(null);
+      // @ts-expect-error states is not an option of listRuns
+      await nextasking.listRuns({ states: ["failed"] });
+      // @ts-expect-error states is not an option of listRuns
+      await nextasking.listRuns(unknownOptions);
+      // @ts-expect-error states is not an option of listRuns
+      await nextasking.listRuns(optionsWithOneKnown);
+      // @ts-expect-error states is not an option of listRuns
+      await nextasking.listRuns({ limit: 20, ...unknownOptions });
+      // @ts-expect-error search is not an option of listRuns
+      await nextasking.listRuns(optionsWiderThanTheirType);
+      // @ts-expect-error the state named by the type argument is not the state listed
+      await nextasking.listRuns<"pending">({ state: "executing" });
+      // @ts-expect-error a limit is a number
+      await nextasking.listRuns({ limit: "10" });
+    };
+
+    expectTypeOf(listWithUnknownOptions).toBeFunction();
+  });
+
+  test("takes listRuns' options from a typed variable, a spread, a conditional or a variable value, typing its runs as today", () => {
+    const typedOptions: ListRunsOptions = { limit: 5 };
+    const pickedOptions: Pick<ListRunsOptions, "limit" | "cursor"> = {};
+    const readonlyOptions: Readonly<ListRunsOptions> = {};
+    const states: RunState[] = ["failed"];
+    const isEnded = Math.random() < 0.5;
+    const cursor: string | undefined = undefined;
+    const listWithKnownOptions = async () => {
+      await nextasking.listRuns(typedOptions);
+      await nextasking.listRuns(pickedOptions);
+      await nextasking.listRuns(readonlyOptions);
+      await nextasking.listRuns({ state: states, limit: 10 });
+      await nextasking.listRuns({ state: "failed", cursor });
+      await nextasking.listRuns({ ...pickedOptions, state: isEnded ? ["completed", "failed"] : "pending" });
+      await nextasking.listRuns(isEnded ? { state: "failed" } : {});
+      await nextasking.listRuns({ state: "failed", limit: undefined });
+      await nextasking.listRuns<"failed", "send-welcome-email">({ state: "failed", task: "send-welcome-email" });
+    };
+    const listFailedRuns = async () => (await nextasking.listRuns({ ...typedOptions, state: "failed" })).runs;
+    const listOneTaskOfAVariable = async () => (await nextasking.listRuns({ task: "send-welcome-email", cursor })).runs;
+    const list: (options?: ListRunsOptions) => Promise<RunPage> = nextasking.listRuns;
+
+    expectTypeOf(listWithKnownOptions).toBeFunction();
+    expectTypeOf(list).toBeFunction();
+    expectTypeOf(listFailedRuns).returns.resolves.items.toEqualTypeOf<Extract<ListedRun, { state: "failed" }>>();
+    expectTypeOf(listOneTaskOfAVariable).returns.resolves.items.toEqualTypeOf<
+      Extract<ListedRun, { task: "send-welcome-email" }>
+    >();
+    expectTypeOf<Parameters<typeof nextasking.listRuns>>().toEqualTypeOf<[options?: ListRunsOptions]>();
+    expectTypeOf(nextasking.listRuns<"failed", "send-welcome-email">)
+      .parameter(0)
+      .toEqualTypeOf<ListRunsOptionsOf<"send-welcome-email", "failed"> | undefined>();
+    expectTypeOf(nextasking.listRuns<RunState, RegisteredTaskName, { [Member in keyof string]: unknown }>)
+      .parameter(0)
+      .toEqualTypeOf<ListRunsOptions | undefined>();
   });
 
   test("takes a time range of Dates and an order on listRuns", () => {

@@ -200,7 +200,7 @@ function placeOf(
 }
 
 function isTimeBound(value: unknown): value is EpochMilliseconds | null {
-  return value === null || Number.isSafeInteger(value);
+  return value === null || (Number.isInteger(value) && !Number.isNaN(new Date(value as number).getTime()));
 }
 
 function timeRangeOf(from: unknown, until: unknown): TimeRange | undefined {

@@ -363,6 +363,22 @@ describe("the listRuns cursor on the indexes", () => {
       cursorOfFields([3, "backward", null, ["failed"], null, 2 ** 60, null, "descending"]),
     ],
     [
+      "of version 3 with a start past the latest time a Date holds",
+      cursorOfFields([3, "backward", null, ["failed"], null, 8_640_000_000_000_001, null, "descending"]),
+    ],
+    [
+      "of version 3 with an end past the latest time a Date holds",
+      cursorOfFields([3, "backward", null, ["failed"], null, null, 8.9e15, "descending"]),
+    ],
+    [
+      "of version 3 with a start before the earliest time a Date holds",
+      cursorOfFields([3, "backward", null, ["failed"], null, -8.9e15, null, "descending"]),
+    ],
+    [
+      "of version 3 with an end before the earliest time a Date holds",
+      cursorOfFields([3, "backward", null, ["failed"], null, null, -8_640_000_000_000_001, "descending"]),
+    ],
+    [
       "of version 3 with a start after its end",
       cursorOfFields([3, "backward", null, ["failed"], null, 2, 1, "descending"]),
     ],

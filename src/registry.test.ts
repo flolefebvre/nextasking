@@ -26,42 +26,42 @@ interface StartWorkerOptionsWithATenant extends StartWorkerOptions {
   tenant: string;
 }
 
-const sendWelcomeEmail = defineTask("send-welcome-email", {
+const sendWelcomeEmailTask = defineTask("send-welcome-email", {
   schema: z.object({ email: z.email(), address: z.object({ zipCode: z.string().length(5) }) }),
   handler: async () => undefined,
 });
 
-const generateInvoicePdf = defineTask("generate-invoice-pdf", {
+const generateInvoicePdfTask = defineTask("generate-invoice-pdf", {
   schema: v.object({ invoiceId: v.string(), contactEmail: v.pipe(v.string(), v.email()) }),
   handler: async () => undefined,
 });
 
-const countPageViews = defineTask("count-page-views", {
+const countPageViewsTask = defineTask("count-page-views", {
   schema: z.object({ views: z.string().transform((views) => Number(views)) }),
   handler: async () => undefined,
 });
 
-const invoicePaid = defineEvent("invoice.paid", {
+const invoicePaidEvent = defineEvent("invoice.paid", {
   schema: z.object({ invoiceId: z.string(), amountInCents: z.int().positive() }),
 });
 
-const userSignedUp = defineEvent("user.signed-up", {
+const userSignedUpEvent = defineEvent("user.signed-up", {
   schema: z.object({ userId: z.string() }),
 });
 
-const recordInvoicePayment = defineListener("record-invoice-payment", {
-  on: invoicePaid,
+const recordInvoicePaymentTask = defineListener("record-invoice-payment", {
+  on: invoicePaidEvent,
   handler: async () => undefined,
 });
 
-const importedThroughACycle = undefined as unknown as typeof sendWelcomeEmail;
+const importedThroughACycle = undefined as unknown as typeof sendWelcomeEmailTask;
 
 function createTestNextasking(logger?: Logger) {
   return createNextasking({
     connection: { url: UNREACHABLE_URL },
     ...(logger === undefined ? {} : { logger }),
-    events: [invoicePaid, userSignedUp],
-    tasks: [sendWelcomeEmail, generateInvoicePdf, countPageViews, recordInvoicePayment],
+    events: [invoicePaidEvent, userSignedUpEvent],
+    tasks: [sendWelcomeEmailTask, generateInvoicePdfTask, countPageViewsTask, recordInvoicePaymentTask],
   });
 }
 
@@ -88,7 +88,7 @@ describe("createNextasking", () => {
   });
 
   test("rejects two tasks with the same name", () => {
-    const otherSendWelcomeEmail = defineTask("send-welcome-email", {
+    const otherSendWelcomeEmailTask = defineTask("send-welcome-email", {
       schema: z.object({}),
       handler: async () => undefined,
     });
@@ -96,7 +96,7 @@ describe("createNextasking", () => {
     expect(() =>
       createNextasking({
         connection: { url: UNREACHABLE_URL },
-        tasks: [sendWelcomeEmail, generateInvoicePdf, otherSendWelcomeEmail],
+        tasks: [sendWelcomeEmailTask, generateInvoicePdfTask, otherSendWelcomeEmailTask],
       }),
     ).toThrow('Duplicate name "send-welcome-email": every task and event needs its own name');
   });
@@ -105,15 +105,19 @@ describe("createNextasking", () => {
     const invoicePaidTask = defineTask("invoice.paid", { schema: z.object({}), handler: async () => undefined });
 
     expect(() =>
-      createNextasking({ connection: { url: UNREACHABLE_URL }, events: [invoicePaid], tasks: [invoicePaidTask] }),
+      createNextasking({ connection: { url: UNREACHABLE_URL }, events: [invoicePaidEvent], tasks: [invoicePaidTask] }),
     ).toThrow('Duplicate name "invoice.paid": every task and event needs its own name');
   });
 
   test("rejects a listener whose event is not listed in events", () => {
     expect(() =>
-      createNextasking({ connection: { url: UNREACHABLE_URL }, events: [userSignedUp], tasks: [recordInvoicePayment] }),
+      createNextasking({
+        connection: { url: UNREACHABLE_URL },
+        events: [userSignedUpEvent],
+        tasks: [recordInvoicePaymentTask],
+      }),
     ).toThrow('Listener "record-invoice-payment" listens to event "invoice.paid", which is not listed in events');
-    expect(() => createNextasking({ connection: { url: UNREACHABLE_URL }, tasks: [recordInvoicePayment] })).toThrow(
+    expect(() => createNextasking({ connection: { url: UNREACHABLE_URL }, tasks: [recordInvoicePaymentTask] })).toThrow(
       'Listener "record-invoice-payment" listens to event "invoice.paid", which is not listed in events',
     );
   });
@@ -143,8 +147,12 @@ describe("createNextasking", () => {
   });
 
   test.each([
-    { position: "first", tasks: [importedThroughACycle, sendWelcomeEmail], message: "tasks[0]" },
-    { position: "last", tasks: [sendWelcomeEmail, generateInvoicePdf, importedThroughACycle], message: "tasks[2]" },
+    { position: "first", tasks: [importedThroughACycle, sendWelcomeEmailTask], message: "tasks[0]" },
+    {
+      position: "last",
+      tasks: [sendWelcomeEmailTask, generateInvoicePdfTask, importedThroughACycle],
+      message: "tasks[2]",
+    },
     { position: "alone", tasks: [importedThroughACycle], message: "tasks[0]" },
   ])(
     "rejects an undefined entry of tasks, $position, naming its position and the import cycle",
@@ -158,13 +166,13 @@ describe("createNextasking", () => {
   );
 
   test("rejects an undefined entry of events, naming its position and the import cycle", () => {
-    const eventImportedThroughACycle = undefined as unknown as typeof userSignedUp;
+    const eventImportedThroughACycle = undefined as unknown as typeof userSignedUpEvent;
 
     expect(() =>
       createNextasking({
         connection: { url: UNREACHABLE_URL },
-        events: [invoicePaid, eventImportedThroughACycle],
-        tasks: [sendWelcomeEmail],
+        events: [invoicePaidEvent, eventImportedThroughACycle],
+        tasks: [sendWelcomeEmailTask],
       }),
     ).toThrow(
       new Error(
@@ -174,14 +182,14 @@ describe("createNextasking", () => {
   });
 
   test.each([
-    { kind: "task", unnamed: defineTask("", { schema: z.object({}), handler: async () => undefined }) },
-    { kind: "listener", unnamed: defineListener("", { on: invoicePaid, handler: async () => undefined }) },
-  ])("rejects a $kind with an empty name, naming its position in tasks", ({ unnamed }) => {
+    { kind: "task", unnamedTask: defineTask("", { schema: z.object({}), handler: async () => undefined }) },
+    { kind: "listener", unnamedTask: defineListener("", { on: invoicePaidEvent, handler: async () => undefined }) },
+  ])("rejects a $kind with an empty name, naming its position in tasks", ({ unnamedTask }) => {
     expect(() =>
       createNextasking({
         connection: { url: UNREACHABLE_URL },
-        events: [invoicePaid],
-        tasks: [sendWelcomeEmail, unnamed],
+        events: [invoicePaidEvent],
+        tasks: [sendWelcomeEmailTask, unnamedTask],
       }),
     ).toThrow(new Error("tasks[1] has an empty name: every task and event needs a name"));
   });
@@ -190,7 +198,7 @@ describe("createNextasking", () => {
     const unnamedEvent = defineEvent("", { schema: z.object({}) });
 
     expect(() =>
-      createNextasking({ connection: { url: UNREACHABLE_URL }, events: [unnamedEvent, invoicePaid], tasks: [] }),
+      createNextasking({ connection: { url: UNREACHABLE_URL }, events: [unnamedEvent, invoicePaidEvent], tasks: [] }),
     ).toThrow(new Error("events[0] has an empty name: every task and event needs a name"));
   });
 
@@ -204,17 +212,21 @@ describe("createNextasking", () => {
   });
 
   test("refuses a task, a listener or a scheduled task listed in events", () => {
-    const purgeExpiredSessions = defineScheduledTask("purge-expired-sessions", {
+    const purgeExpiredSessionsTask = defineScheduledTask("purge-expired-sessions", {
       schedule: { cron: "0 3 * * *" },
       handler: async () => undefined,
     });
     const createWithEvents = () => {
-      // @ts-expect-error a task is not an event
-      createNextasking({ connection: { url: UNREACHABLE_URL }, events: [invoicePaid, sendWelcomeEmail], tasks: [] });
+      createNextasking({
+        connection: { url: UNREACHABLE_URL },
+        // @ts-expect-error a task is not an event
+        events: [invoicePaidEvent, sendWelcomeEmailTask],
+        tasks: [],
+      });
       // @ts-expect-error a listener is not an event
-      createNextasking({ connection: { url: UNREACHABLE_URL }, events: [recordInvoicePayment], tasks: [] });
+      createNextasking({ connection: { url: UNREACHABLE_URL }, events: [recordInvoicePaymentTask], tasks: [] });
       // @ts-expect-error a scheduled task is not an event
-      createNextasking({ connection: { url: UNREACHABLE_URL }, events: [purgeExpiredSessions], tasks: [] });
+      createNextasking({ connection: { url: UNREACHABLE_URL }, events: [purgeExpiredSessionsTask], tasks: [] });
     };
 
     expect(createWithEvents).toBeTypeOf("function");
@@ -222,7 +234,9 @@ describe("createNextasking", () => {
 
   test("accepts events and their listeners, and no events at all", () => {
     expect(() => createTestNextasking()).not.toThrow();
-    expect(() => createNextasking({ connection: { url: UNREACHABLE_URL }, tasks: [sendWelcomeEmail] })).not.toThrow();
+    expect(() =>
+      createNextasking({ connection: { url: UNREACHABLE_URL }, tasks: [sendWelcomeEmailTask] }),
+    ).not.toThrow();
   });
 
   test.each([
@@ -232,13 +246,13 @@ describe("createNextasking", () => {
     [Number.NaN, "NaN"],
     ["2" as unknown as number, '"2"'],
   ])("rejects a concurrency limit of %s", (limit, shownLimit) => {
-    const rebuildIndex = defineTask("rebuild-index", {
+    const rebuildIndexTask = defineTask("rebuild-index", {
       schema: z.object({}),
       concurrency: { limit },
       handler: async () => undefined,
     });
 
-    expect(() => createNextasking({ connection: { url: UNREACHABLE_URL }, tasks: [rebuildIndex] })).toThrow(
+    expect(() => createNextasking({ connection: { url: UNREACHABLE_URL }, tasks: [rebuildIndexTask] })).toThrow(
       `Task "rebuild-index" has an invalid concurrency.limit: ${shownLimit} is not a positive integer`,
     );
   });
@@ -260,7 +274,7 @@ describe("createNextasking", () => {
     const creating = () =>
       createNextasking({
         connection: { url: UNREACHABLE_URL, giveUpAfter: "half a second" as Duration },
-        tasks: [sendWelcomeEmail],
+        tasks: [sendWelcomeEmailTask],
       });
 
     expect(creating).toThrow(
@@ -276,7 +290,7 @@ describe("createNextasking", () => {
   ])("rejects a connection.url %s, before opening any connection", async (_, url, shownUrl) => {
     const networkResourcesBefore = networkResources();
 
-    expect(() => createNextasking({ connection: { url }, tasks: [sendWelcomeEmail] })).toThrow(
+    expect(() => createNextasking({ connection: { url }, tasks: [sendWelcomeEmailTask] })).toThrow(
       `Invalid connection.url: ${shownUrl} is not a valid redis:// or rediss:// URL, such as "redis://localhost:6379"`,
     );
     await setImmediate();
@@ -288,7 +302,7 @@ describe("createNextasking", () => {
     const networkResourcesBefore = networkResources();
 
     expect(() =>
-      createNextasking({ connection: { url: UNREACHABLE_URL }, prefix: "", tasks: [sendWelcomeEmail] }),
+      createNextasking({ connection: { url: UNREACHABLE_URL }, prefix: "", tasks: [sendWelcomeEmailTask] }),
     ).toThrow('Invalid prefix: "" is empty: leave prefix out for the default "nextasking", or give a non-empty one');
     await setImmediate();
 
@@ -297,13 +311,13 @@ describe("createNextasking", () => {
 
   test("accepts a prefix of one character", () => {
     expect(() =>
-      createNextasking({ connection: { url: UNREACHABLE_URL }, prefix: "q", tasks: [sendWelcomeEmail] }),
+      createNextasking({ connection: { url: UNREACHABLE_URL }, prefix: "q", tasks: [sendWelcomeEmailTask] }),
     ).not.toThrow();
   });
 
   test("accepts a valid connection.giveUpAfter", () => {
     expect(() =>
-      createNextasking({ connection: { url: UNREACHABLE_URL, giveUpAfter: "2s" }, tasks: [sendWelcomeEmail] }),
+      createNextasking({ connection: { url: UNREACHABLE_URL, giveUpAfter: "2s" }, tasks: [sendWelcomeEmailTask] }),
     ).not.toThrow();
   });
 
@@ -314,13 +328,13 @@ describe("createNextasking", () => {
   });
 
   test.each(["backoff", "timeout"] as const)("rejects an invalid %s, naming the task and the option", (option) => {
-    const rebuildIndex = defineTask("rebuild-index", {
+    const rebuildIndexTask = defineTask("rebuild-index", {
       schema: z.object({}),
       [option]: "0.5h" as Duration,
       handler: async () => undefined,
     });
 
-    const creating = () => createNextasking({ connection: { url: UNREACHABLE_URL }, tasks: [rebuildIndex] });
+    const creating = () => createNextasking({ connection: { url: UNREACHABLE_URL }, tasks: [rebuildIndexTask] });
 
     expect(creating).toThrow(
       `Task "rebuild-index" has an invalid ${option}: "0.5h" is not a duration: a whole number followed by s, m, h or d, such as "30s"`,
@@ -329,7 +343,7 @@ describe("createNextasking", () => {
   });
 
   test("accepts valid options", () => {
-    const rebuildIndex = defineTask("rebuild-index", {
+    const rebuildIndexTask = defineTask("rebuild-index", {
       schema: z.object({ accountId: z.string() }),
       retries: 3,
       backoff: "30s",
@@ -338,18 +352,18 @@ describe("createNextasking", () => {
       handler: async () => undefined,
     });
 
-    expect(() => createNextasking({ connection: { url: UNREACHABLE_URL }, tasks: [rebuildIndex] })).not.toThrow();
+    expect(() => createNextasking({ connection: { url: UNREACHABLE_URL }, tasks: [rebuildIndexTask] })).not.toThrow();
   });
 
   test("rejects an invalid config before opening any connection", async () => {
-    const rebuildIndex = defineTask("rebuild-index", {
+    const rebuildIndexTask = defineTask("rebuild-index", {
       schema: z.object({}),
       timeout: "soon" as Duration,
       handler: async () => undefined,
     });
     const networkResourcesBefore = networkResources();
 
-    expect(() => createNextasking({ connection: { url: UNREACHABLE_URL }, tasks: [rebuildIndex] })).toThrow();
+    expect(() => createNextasking({ connection: { url: UNREACHABLE_URL }, tasks: [rebuildIndexTask] })).toThrow();
     await setImmediate();
 
     expect(networkResources()).toEqual(networkResourcesBefore);
@@ -480,7 +494,7 @@ describe("dispatch", () => {
   });
 
   test("rejects a run whose concurrency key function throws or returns an empty string, naming the task", async () => {
-    const rebuildIndex = defineTask("rebuild-index", {
+    const rebuildIndexTask = defineTask("rebuild-index", {
       schema: z.object({ accountId: z.string() }),
       concurrency: {
         key: (payload) => {
@@ -493,7 +507,7 @@ describe("dispatch", () => {
       },
       handler: async () => undefined,
     });
-    const nextasking = createNextasking({ connection: { url: UNREACHABLE_URL }, tasks: [rebuildIndex] });
+    const nextasking = createNextasking({ connection: { url: UNREACHABLE_URL }, tasks: [rebuildIndexTask] });
 
     const throwingKeyDispatch = nextasking.dispatch("rebuild-index", { accountId: "unknown" });
     const emptyKeyDispatch = nextasking.dispatch("rebuild-index", { accountId: "" });
@@ -603,7 +617,7 @@ describe("emit", () => {
   });
 
   test("takes no name on an instance without events", () => {
-    const nextasking = createNextasking({ connection: { url: UNREACHABLE_URL }, tasks: [sendWelcomeEmail] });
+    const nextasking = createNextasking({ connection: { url: UNREACHABLE_URL }, tasks: [sendWelcomeEmailTask] });
 
     expectTypeOf(nextasking.emit).parameter(0).toBeNever();
   });
@@ -711,11 +725,14 @@ describe("the options of dispatch and emit", () => {
 });
 
 function createScheduledTaskNextasking(schedule: { cron: string; timezone?: string }) {
-  const purgeExpiredSessions = defineScheduledTask("purge-expired-sessions", {
+  const purgeExpiredSessionsTask = defineScheduledTask("purge-expired-sessions", {
     schedule,
     handler: async () => undefined,
   });
-  return createNextasking({ connection: { url: UNREACHABLE_URL }, tasks: [sendWelcomeEmail, purgeExpiredSessions] });
+  return createNextasking({
+    connection: { url: UNREACHABLE_URL },
+    tasks: [sendWelcomeEmailTask, purgeExpiredSessionsTask],
+  });
 }
 
 describe("createNextasking with a scheduled task", () => {
@@ -805,8 +822,8 @@ const MISSING_URL_MESSAGE =
 function createNextaskingWithUrl(url: string | undefined) {
   return createNextasking({
     connection: { url: url as string },
-    events: [invoicePaid],
-    tasks: [sendWelcomeEmail, recordInvoicePayment],
+    events: [invoicePaidEvent],
+    tasks: [sendWelcomeEmailTask, recordInvoicePaymentTask],
   });
 }
 
@@ -1063,7 +1080,7 @@ describe("replay", () => {
 });
 
 describe("built-in events", () => {
-  const alertOnRunFailed = defineListener("alert-on-run-failed", {
+  const alertOnRunFailedTask = defineListener("alert-on-run-failed", {
     on: runFailedEvent,
     handler: async ({ payload }) => {
       expectTypeOf(payload).toEqualTypeOf<RunFailedPayload>();
@@ -1073,8 +1090,8 @@ describe("built-in events", () => {
   function createAlertingNextasking() {
     return createNextasking({
       connection: { url: UNREACHABLE_URL },
-      events: [invoicePaid],
-      tasks: [recordInvoicePayment, alertOnRunFailed],
+      events: [invoicePaidEvent],
+      tasks: [recordInvoicePaymentTask, alertOnRunFailedTask],
     });
   }
 

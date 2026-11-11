@@ -125,12 +125,12 @@ function linesWithMessage(lines: readonly RecordedLogLine[], message: string): R
 }
 
 async function scenarioOfALockTakenOverWhileGated(
-  sendEmail: AnyTaskDefinition,
+  sendEmailTask: AnyTaskDefinition,
   handlerGate: HandlerGate,
 ): Promise<LoopScenario> {
   const engine = createInMemoryEngine();
   await engine.enqueue({ runs: runsOf("send-email", 1) });
-  const scenario = startedLoopOf([sendEmail], { engine, concurrency: 1 });
+  const scenario = startedLoopOf([sendEmailTask], { engine, concurrency: 1 });
   await vi.advanceTimersByTimeAsync(0);
   engine.expireLock("send-email", "send-email-1");
   await engine.promote();
@@ -153,10 +153,10 @@ afterEach(async () => {
 
 test("with capacity 50 and 120 pending runs the loop fetches 50, then as many as it freed, never holding more than 50", async () => {
   const handlerGate = createHandlerGate();
-  const sendEmail = defineTask("send-email", { schema: v.object({}), handler: handlerGate.enter });
+  const sendEmailTask = defineTask("send-email", { schema: v.object({}), handler: handlerGate.enter });
   const engine = createInMemoryEngine();
   await engine.enqueue({ runs: runsOf("send-email", 120) });
-  startedLoopOf([sendEmail] as AnyTaskDefinition[], { engine, concurrency: 50 });
+  startedLoopOf([sendEmailTask] as AnyTaskDefinition[], { engine, concurrency: 50 });
   await vi.advanceTimersByTimeAsync(0);
   const firstFetchTokenCounts = requestsOf<FetchRequest>(engine, "fetch").map(({ lockTokens }) => lockTokens.length);
 
@@ -177,8 +177,8 @@ test("with capacity 50 and 120 pending runs the loop fetches 50, then as many as
 });
 
 test("a run enqueued while the loop waits is fetched on the wake-up, before the next tick", async () => {
-  const sendEmail = defineTask("send-email", { schema: v.object({}), handler: async () => undefined });
-  const { engine } = startedLoopOf([sendEmail] as AnyTaskDefinition[]);
+  const sendEmailTask = defineTask("send-email", { schema: v.object({}), handler: async () => undefined });
+  const { engine } = startedLoopOf([sendEmailTask] as AnyTaskDefinition[]);
   await vi.advanceTimersByTimeAsync(100);
 
   await engine.enqueue({ runs: runsOf("send-email", 1) });
@@ -189,7 +189,7 @@ test("a run enqueued while the loop waits is fetched on the wake-up, before the 
 });
 
 test("a completed, retried, failed and suspended attempt each settle with their kind, the failing one with its notice", async () => {
-  const alertOnCall = defineListener("alert-on-call", { on: runFailedEvent, handler: async () => undefined });
+  const alertOnCallTask = defineListener("alert-on-call", { on: runFailedEvent, handler: async () => undefined });
   const tasks = [
     defineTask("completes", { schema: v.object({}), handler: async () => undefined }),
     defineTask("retries", {
@@ -211,7 +211,7 @@ test("a completed, retried, failed and suspended attempt each settle with their 
         await step.sleep("wait", "1h");
       },
     }),
-    alertOnCall,
+    alertOnCallTask,
   ] as AnyTaskDefinition[];
   const engine = createInMemoryEngine();
   await engine.enqueue({
@@ -328,7 +328,7 @@ test("two runs sharing a run id on two tasks each hand their handler, their line
 });
 
 test("a run of a listener of runFailedEvent that fails carries an empty notice", async () => {
-  const failingListener = defineListener("failing-listener", {
+  const failingListenerTask = defineListener("failing-listener", {
     on: runFailedEvent,
     retries: 0,
     handler: async () => {
@@ -343,7 +343,7 @@ test("a run of a listener of runFailedEvent that fails carries an empty notice",
     }),
   });
 
-  startedLoopOf([failingListener] as AnyTaskDefinition[], { engine });
+  startedLoopOf([failingListenerTask] as AnyTaskDefinition[], { engine });
   await vi.advanceTimersByTimeAsync(0);
 
   const [settleRequest] = requestsOf<SettleRequest>(engine, "settle");
@@ -351,8 +351,8 @@ test("a run of a listener of runFailedEvent that fails carries an empty notice",
 });
 
 test("a listener whose key throws costs its own notice run and writes one worker error, and the run still fails", async () => {
-  const alertOnCall = defineListener("alert-on-call", { on: runFailedEvent, handler: async () => undefined });
-  const fails = defineTask("fails", {
+  const alertOnCallTask = defineListener("alert-on-call", { on: runFailedEvent, handler: async () => undefined });
+  const failingTask = defineTask("fails", {
     schema: v.object({}),
     retries: 0,
     handler: async () => {
@@ -362,7 +362,9 @@ test("a listener whose key throws costs its own notice run and writes one worker
   const engine = createInMemoryEngine();
   await engine.enqueue({ runs: runsOf("fails", 1, { retries: 0 }) });
 
-  const { lines } = startedLoopOf([fails, brokenKeyRunFailedListener, alertOnCall] as AnyTaskDefinition[], { engine });
+  const { lines } = startedLoopOf([failingTask, brokenKeyRunFailedListener, alertOnCallTask] as AnyTaskDefinition[], {
+    engine,
+  });
   await vi.advanceTimersByTimeAsync(0);
 
   const [settleRequest] = requestsOf<SettleRequest>(engine, "settle");
@@ -378,9 +380,9 @@ test("a listener whose key throws costs its own notice run and writes one worker
 
 test("a settle answered stale writes attempt outcome discarded: lock lost with the kind as outcome", async () => {
   const handlerGate = createHandlerGate();
-  const sendEmail = defineTask("send-email", { schema: v.object({}), handler: handlerGate.enter });
+  const sendEmailTask = defineTask("send-email", { schema: v.object({}), handler: handlerGate.enter });
 
-  const { lines } = await scenarioOfALockTakenOverWhileGated(sendEmail as AnyTaskDefinition, handlerGate);
+  const { lines } = await scenarioOfALockTakenOverWhileGated(sendEmailTask as AnyTaskDefinition, handlerGate);
 
   expect(linesWithMessage(lines, "attempt outcome discarded: lock lost")).toEqual([
     {
@@ -393,7 +395,7 @@ test("a settle answered stale writes attempt outcome discarded: lock lost with t
 });
 
 test("a settle answered already writes the normal completion line", async () => {
-  const sendEmail = defineTask("send-email", { schema: v.object({}), handler: async () => undefined });
+  const sendEmailTask = defineTask("send-email", { schema: v.object({}), handler: async () => undefined });
   const engine = createInMemoryEngine();
   await engine.enqueue({ runs: runsOf("send-email", 1) });
   const settleWhoseFirstReplyIsLost: WorkerLoopEngine["settle"] = async (request) => {
@@ -401,7 +403,7 @@ test("a settle answered already writes the normal completion line", async () => 
     return engine.settle(request);
   };
 
-  const { lines } = startedLoopOf([sendEmail] as AnyTaskDefinition[], {
+  const { lines } = startedLoopOf([sendEmailTask] as AnyTaskDefinition[], {
     engine,
     loopEngine: { ...engine, settle: settleWhoseFirstReplyIsLost },
   });
@@ -481,7 +483,7 @@ test("an attempt whose renewal replies stale is aborted with lock lost and sends
 
 test("a step refused for a lost lock aborts the attempt with lock lost, and it sends no settle", async () => {
   const handlerGate = createHandlerGate();
-  const sendEmail = defineTask("send-email", {
+  const sendEmailTask = defineTask("send-email", {
     schema: v.object({}),
     handler: async ({ step }) => {
       await handlerGate.enter();
@@ -489,18 +491,18 @@ test("a step refused for a lost lock aborts the attempt with lock lost, and it s
     },
   }) as AnyTaskDefinition;
 
-  const { engine, lines } = await scenarioOfALockTakenOverWhileGated(sendEmail, handlerGate);
+  const { engine, lines } = await scenarioOfALockTakenOverWhileGated(sendEmailTask, handlerGate);
 
   expect(linesWithMessage(lines, "attempt aborted: lock lost")).toEqual([LOCK_LOST_ABORT_LINE]);
   expect(requestsOf(engine, "settle")).toEqual([]);
 });
 
 test("a settle answered unknownVersion writes one worker error and no lost-lock line", async () => {
-  const sendEmail = defineTask("send-email", { schema: v.object({}), handler: async () => undefined });
+  const sendEmailTask = defineTask("send-email", { schema: v.object({}), handler: async () => undefined });
   const engine = createInMemoryEngine();
   await engine.enqueue({ runs: runsOf("send-email", 1) });
 
-  const { lines } = startedLoopOf([sendEmail] as AnyTaskDefinition[], {
+  const { lines } = startedLoopOf([sendEmailTask] as AnyTaskDefinition[], {
     engine,
     loopEngine: { ...engine, settle: async () => ({ kind: "unknownVersion", recordVersion: 2 }) },
   });
@@ -534,10 +536,10 @@ test("every tick is one round trip to the engine, and a tick still running when 
 
 test("a tick renews only the locks with less than a minute left", async () => {
   const handlerGate = createHandlerGate();
-  const sendEmail = defineTask("send-email", { schema: v.object({}), handler: handlerGate.enter });
+  const sendEmailTask = defineTask("send-email", { schema: v.object({}), handler: handlerGate.enter });
   const engine = createInMemoryEngine();
   await engine.enqueue({ runs: runsOf("send-email", 1, { runId: "early-run" }) });
-  startedLoopOf([sendEmail] as AnyTaskDefinition[], { engine });
+  startedLoopOf([sendEmailTask] as AnyTaskDefinition[], { engine });
   await vi.advanceTimersByTimeAsync(30_000);
   await engine.enqueue({ runs: runsOf("send-email", 1, { runId: "late-run" }) });
   await vi.advanceTimersByTimeAsync(30_000);
@@ -733,7 +735,7 @@ test(`a task whose prune fails while it holds the turn gives it away, and its ne
 
 test("a tick whose prune fails still applies its renewals, writes one worker error, and the next tick prunes the next task", async () => {
   const handlerGate = createHandlerGate();
-  const sendEmail = defineTask("send-email", { schema: v.object({}), handler: handlerGate.enter });
+  const sendEmailTask = defineTask("send-email", { schema: v.object({}), handler: handlerGate.enter });
   const engine = createInMemoryEngine();
   await engine.enqueue({
     runs: [
@@ -747,7 +749,7 @@ test("a tick whose prune fails still applies its renewals, writes one worker err
       ? { ...reply, prune: { kind: "failed", error: new Error("WRONGTYPE Operation against a key") } }
       : reply;
   };
-  const { lines } = startedLoopOf([sendEmail] as AnyTaskDefinition[], {
+  const { lines } = startedLoopOf([sendEmailTask] as AnyTaskDefinition[], {
     engine,
     loopEngine: { ...engine, tick: tickWithAFailedPruneWhenItRenews },
   });
@@ -787,12 +789,12 @@ async function expireTheLockOfAFetchedRun(engine: InMemoryEngine, stallsBefore: 
 
 test("an expired lock found by the tick writes attempt stalled with its stalls and its run's source event", async () => {
   const handlerGate = createHandlerGate();
-  const sendEmail = defineTask("send-email", { schema: v.object({}), handler: handlerGate.enter });
+  const sendEmailTask = defineTask("send-email", { schema: v.object({}), handler: handlerGate.enter });
   const engine = createInMemoryEngine();
   await engine.enqueue({ runs: runsOf("send-email", 1, { sourceEvent: SIGNED_UP }) });
   await expireTheLockOfAFetchedRun(engine, 0);
 
-  const { lines } = startedLoopOf([sendEmail] as AnyTaskDefinition[], { engine });
+  const { lines } = startedLoopOf([sendEmailTask] as AnyTaskDefinition[], { engine });
   await vi.advanceTimersByTimeAsync(1_000);
 
   expect(linesWithMessage(lines, "attempt stalled")).toEqual([
@@ -824,7 +826,7 @@ for (const {
   messagesBeforeTheTickReply,
 } of PICKUP_AFTER_A_STALL_ORDERS) {
   test(`${description}: both orders are valid, the stall and the pickup being two round trips`, async () => {
-    const sendEmail = defineTask("send-email", { schema: v.object({}), handler: async () => undefined });
+    const sendEmailTask = defineTask("send-email", { schema: v.object({}), handler: async () => undefined });
     const engine = createInMemoryEngine();
     await engine.enqueue({ runs: runsOf("send-email", 1) });
     await expireTheLockOfAFetchedRun(engine, 0);
@@ -839,7 +841,7 @@ for (const {
       await tickReplyRelease;
       return reply;
     };
-    const { lines } = startedLoopOf([sendEmail] as AnyTaskDefinition[], {
+    const { lines } = startedLoopOf([sendEmailTask] as AnyTaskDefinition[], {
       engine,
       loopEngine: { ...engine, tick: tickWhoseReplyWaitsForTheRelease },
     });
@@ -858,9 +860,9 @@ for (const {
 }
 
 test("two loops ticking on the same reported third stall end with one failed run, one notice and one run failed line", async () => {
-  const alertOnCall = defineListener("alert-on-call", { on: runFailedEvent, handler: async () => undefined });
-  const sendEmail = defineTask("send-email", { schema: v.object({}), handler: async () => undefined });
-  const tasks = [sendEmail, alertOnCall, brokenKeyRunFailedListener] as AnyTaskDefinition[];
+  const alertOnCallTask = defineListener("alert-on-call", { on: runFailedEvent, handler: async () => undefined });
+  const sendEmailTask = defineTask("send-email", { schema: v.object({}), handler: async () => undefined });
+  const tasks = [sendEmailTask, alertOnCallTask, brokenKeyRunFailedListener] as AnyTaskDefinition[];
   const engine = createInMemoryEngine();
   await engine.enqueue({ runs: runsOf("send-email", 1, { sourceEvent: SIGNED_UP }) });
   await expireTheLockOfAFetchedRun(engine, 2);
@@ -908,11 +910,11 @@ test("two loops ticking on the same reported third stall end with one failed run
 });
 
 test("a run of an unknown task is held 10 seconds against the concurrency, then handed back to the front of pending with its order", async () => {
-  const sendEmail = defineTask("send-email", { schema: v.object({}), handler: async () => undefined });
+  const sendEmailTask = defineTask("send-email", { schema: v.object({}), handler: async () => undefined });
   const engine = createInMemoryEngine();
   await engine.enqueue({ runs: [...runsOf("resize-image", 1), ...runsOf("send-email", 1)] });
   const orderBefore = engine.storedRunOf("resize-image", "resize-image-1")?.order;
-  const { lines } = startedLoopOf([sendEmail] as AnyTaskDefinition[], { engine, concurrency: 1 });
+  const { lines } = startedLoopOf([sendEmailTask] as AnyTaskDefinition[], { engine, concurrency: 1 });
 
   await vi.advanceTimersByTimeAsync(10_000 - 1);
   const settlesDuringTheHold = requestsOf<SettleRequest>(engine, "settle");
@@ -940,10 +942,10 @@ test("a run of an unknown task is held 10 seconds against the concurrency, then 
 });
 
 test("a run of an unknown task first found 30 minutes ago fails unknown task with its notice", async () => {
-  const alertOnCall = defineListener("alert-on-call", { on: runFailedEvent, handler: async () => undefined });
+  const alertOnCallTask = defineListener("alert-on-call", { on: runFailedEvent, handler: async () => undefined });
   const engine = createInMemoryEngine();
   await engine.enqueue({ runs: runsOf("resize-image", 1) });
-  const { lines } = startedLoopOf([alertOnCall] as AnyTaskDefinition[], { engine });
+  const { lines } = startedLoopOf([alertOnCallTask] as AnyTaskDefinition[], { engine });
 
   await vi.advanceTimersByTimeAsync(30 * MINUTE_IN_MILLISECONDS + 10_000);
 
@@ -1000,7 +1002,7 @@ const PASS_OVER_LINE = {
 };
 
 test("a fetch answered unknownVersion writes one pass-over line and no fetch happens for 10 seconds", async () => {
-  const sendEmail = defineTask("send-email", { schema: v.object({}), handler: async () => undefined });
+  const sendEmailTask = defineTask("send-email", { schema: v.object({}), handler: async () => undefined });
   const engine = createInMemoryEngine();
   await engine.enqueue({ runs: runsOf("send-email", 1) });
   let fetchCount = 0;
@@ -1008,7 +1010,7 @@ test("a fetch answered unknownVersion writes one pass-over line and no fetch hap
     fetchCount += 1;
     return fetchCount === 1 ? { kind: "unknownVersion", recordVersion: 2 } : engine.fetch(request);
   };
-  const { lines } = startedLoopOf([sendEmail] as AnyTaskDefinition[], {
+  const { lines } = startedLoopOf([sendEmailTask] as AnyTaskDefinition[], {
     engine,
     loopEngine: { ...engine, fetch: fetchAnsweredUnknownVersionFirst },
   });
@@ -1046,13 +1048,13 @@ test("a promote answered unknownVersion leaves the promote out of the ticks for 
 });
 
 test("a fetched reply that passed over records writes the pass-over line once per version and does not wait", async () => {
-  const sendEmail = defineTask("send-email", { schema: v.object({}), handler: async () => undefined });
+  const sendEmailTask = defineTask("send-email", { schema: v.object({}), handler: async () => undefined });
   const engine = createInMemoryEngine();
   const fetchPassingOverVersion2: WorkerLoopEngine["fetch"] = async (request) => {
     const reply = await engine.fetch(request);
     return reply.kind === "fetched" ? { ...reply, passedOverRecordVersions: [2, 2] } : reply;
   };
-  const { lines } = startedLoopOf([sendEmail] as AnyTaskDefinition[], {
+  const { lines } = startedLoopOf([sendEmailTask] as AnyTaskDefinition[], {
     engine,
     loopEngine: { ...engine, fetch: fetchPassingOverVersion2 },
   });
@@ -1132,7 +1134,7 @@ test("a pickup after a suspend writes run resumed, and a pickup after a stall wr
 
 test("a parked run writes run waiting for a concurrency slot", async () => {
   const handlerGate = createHandlerGate();
-  const sendEmail = defineTask("send-email", {
+  const sendEmailTask = defineTask("send-email", {
     schema: v.object({}),
     concurrency: { limit: 1 },
     handler: handlerGate.enter,
@@ -1140,7 +1142,7 @@ test("a parked run writes run waiting for a concurrency slot", async () => {
   const engine = createInMemoryEngine();
   await engine.enqueue({ runs: runsOf("send-email", 2) });
 
-  const { lines } = startedLoopOf([sendEmail] as AnyTaskDefinition[], { engine });
+  const { lines } = startedLoopOf([sendEmailTask] as AnyTaskDefinition[], { engine });
   await vi.advanceTimersByTimeAsync(0);
 
   expect(linesWithMessage(lines, "run waiting for a concurrency slot")).toEqual([
@@ -1153,7 +1155,7 @@ test("a parked run writes run waiting for a concurrency slot", async () => {
 });
 
 test("the loop survives a rejected fetch and keeps fetching", async () => {
-  const sendEmail = defineTask("send-email", { schema: v.object({}), handler: async () => undefined });
+  const sendEmailTask = defineTask("send-email", { schema: v.object({}), handler: async () => undefined });
   const engine = createInMemoryEngine();
   let rejectedFetchCount = 0;
   const fetchRejectedOnce: WorkerLoopEngine["fetch"] = async (request) => {
@@ -1165,7 +1167,10 @@ test("the loop survives a rejected fetch and keeps fetching", async () => {
   };
   await engine.enqueue({ runs: runsOf("send-email", 1) });
 
-  startedLoopOf([sendEmail] as AnyTaskDefinition[], { engine, loopEngine: { ...engine, fetch: fetchRejectedOnce } });
+  startedLoopOf([sendEmailTask] as AnyTaskDefinition[], {
+    engine,
+    loopEngine: { ...engine, fetch: fetchRejectedOnce },
+  });
   await vi.advanceTimersByTimeAsync(1_000);
 
   expect(rejectedFetchCount).toBe(1);
@@ -1174,7 +1179,7 @@ test("the loop survives a rejected fetch and keeps fetching", async () => {
 
 test("the loop survives a rejected wake-up wait without spinning, and a run enqueued afterwards still completes", async () => {
   const unhandledRejections = await unhandledRejectionsDuring(async () => {
-    const sendEmail = defineTask("send-email", { schema: v.object({}), handler: async () => undefined });
+    const sendEmailTask = defineTask("send-email", { schema: v.object({}), handler: async () => undefined });
     const engine = createInMemoryEngine();
     let waitCount = 0;
     const waitRejectedFirst: WaitForWakeUp = async (timeoutInMilliseconds) => {
@@ -1184,7 +1189,7 @@ test("the loop survives a rejected wake-up wait without spinning, and a run enqu
       }
       return engine.waitForWakeUp(timeoutInMilliseconds);
     };
-    startedLoopOf([sendEmail] as AnyTaskDefinition[], { engine, waitForWakeUp: waitRejectedFirst });
+    startedLoopOf([sendEmailTask] as AnyTaskDefinition[], { engine, waitForWakeUp: waitRejectedFirst });
     await vi.advanceTimersByTimeAsync(100);
 
     await engine.enqueue({ runs: runsOf("send-email", 1) });
@@ -1199,7 +1204,7 @@ test("the loop survives a rejected wake-up wait without spinning, and a run enqu
 
 test("a wake-up landing while a fetch is in flight is followed by another fetch, with no tick in between", async () => {
   const handlerGate = createHandlerGate();
-  const sendEmail = defineTask("send-email", { schema: v.object({}), handler: handlerGate.enter });
+  const sendEmailTask = defineTask("send-email", { schema: v.object({}), handler: handlerGate.enter });
   const engine = createInMemoryEngine();
   let isNextFetchReplyHeld = false;
   let releaseFetchReply = () => undefined as void;
@@ -1214,7 +1219,7 @@ test("a wake-up landing while a fetch is in flight is followed by another fetch,
     return reply;
   };
   await engine.enqueue({ runs: runsOf("send-email", 1, { runId: "first-run" }) });
-  startedLoopOf([sendEmail] as AnyTaskDefinition[], {
+  startedLoopOf([sendEmailTask] as AnyTaskDefinition[], {
     engine,
     concurrency: 2,
     loopEngine: { ...engine, fetch: fetchWithAReplyHeldOnce },
@@ -1241,7 +1246,7 @@ type OutageScenario = LoopScenario & { handlerGate: HandlerGate };
 
 async function scenarioOfAnOutageWhileAStepRuns(awayEngineCalls: AwayEngineCalls): Promise<OutageScenario> {
   const handlerGate = createHandlerGate();
-  const sendEmail = defineTask("send-email", {
+  const sendEmailTask = defineTask("send-email", {
     schema: v.object({}),
     handler: async ({ step }) => {
       await step.run("look-up", () => "found");
@@ -1253,7 +1258,7 @@ async function scenarioOfAnOutageWhileAStepRuns(awayEngineCalls: AwayEngineCalls
   await engine.enqueue({ runs: runsOf("send-email", 1) });
   const recordingLogger = createRecordingLogger();
   const simulatedRedisOutage = createSimulatedRedisOutage(recordingLogger.logger);
-  const scenario = startedLoopOf([sendEmail] as AnyTaskDefinition[], {
+  const scenario = startedLoopOf([sendEmailTask] as AnyTaskDefinition[], {
     engine,
     loopEngine: engineAwayDuringOutage(engine, simulatedRedisOutage, awayEngineCalls),
     recordingLogger,
@@ -1324,13 +1329,13 @@ test("an out-of-memory reply lasting several ticks, with answered reads in betwe
 });
 
 test("a settle answered out of memory across several retries, with ticks answered completely in between, writes one connection pair, restored once the settle is accepted", async () => {
-  const sendEmail = defineTask("send-email", { schema: v.object({}), handler: async () => undefined });
+  const sendEmailTask = defineTask("send-email", { schema: v.object({}), handler: async () => undefined });
   const engine = createInMemoryEngine();
   await engine.enqueue({ runs: runsOf("send-email", 1) });
   let isOutOfMemory = true;
   const settleRefusedWhileOutOfMemory: WorkerLoopEngine["settle"] = async (request) =>
     isOutOfMemory ? Promise.reject(OUT_OF_MEMORY_REPLY) : engine.settle(request);
-  const { lines } = startedLoopOf([sendEmail] as AnyTaskDefinition[], {
+  const { lines } = startedLoopOf([sendEmailTask] as AnyTaskDefinition[], {
     engine,
     loopEngine: { ...engine, settle: settleRefusedWhileOutOfMemory },
   });
@@ -1346,7 +1351,7 @@ test("a settle answered out of memory across several retries, with ticks answere
 });
 
 test("a handler's emit and dispatch on the instance's sender wait out an outage and succeed, and the attempt completes with no attempt failed line", async () => {
-  const userSignedUp = defineEvent("user.signed-up", { schema: v.object({ userId: v.string() }) });
+  const userSignedUpEvent = defineEvent("user.signed-up", { schema: v.object({ userId: v.string() }) });
   const tasks = [
     defineTask("onboard-user", {
       schema: v.object({}),
@@ -1356,12 +1361,12 @@ test("a handler's emit and dispatch on the instance's sender wait out an outage 
       },
     }),
     defineTask("send-welcome-email", { schema: v.object({ email: v.string() }), handler: async () => undefined }),
-    defineListener("create-workspace", { on: userSignedUp, handler: async () => undefined }),
+    defineListener("create-workspace", { on: userSignedUpEvent, handler: async () => undefined }),
   ] as AnyTaskDefinition[];
   const { tasksByName, listenerNamesByEventName } = workerDefinitionsOf(tasks);
   const requests = createEnqueueRequests({
     tasksByName,
-    eventsByName: new Map([[userSignedUp.name, userSignedUp]]),
+    eventsByName: new Map([[userSignedUpEvent.name, userSignedUpEvent]]),
     listenerNamesByEventName,
   });
   const engine = createInMemoryEngine();
@@ -1457,11 +1462,11 @@ test("stopFetching and stopTicking wait for a call the client holds unanswered, 
 });
 
 test("stopFetching with a fetch in flight resolves once the fetch answers, and the batch's attempt runs", async () => {
-  const sendEmail = defineTask("send-email", { schema: v.object({}), handler: async () => undefined });
+  const sendEmailTask = defineTask("send-email", { schema: v.object({}), handler: async () => undefined });
   const engine = createInMemoryEngine();
   await engine.enqueue({ runs: runsOf("send-email", 1) });
   const heldFetches = engine.holdCalls("fetch");
-  const { loop } = startedLoopOf([sendEmail] as AnyTaskDefinition[], { engine });
+  const { loop } = startedLoopOf([sendEmailTask] as AnyTaskDefinition[], { engine });
   await vi.advanceTimersByTimeAsync(0);
   let isStopped = false;
 
@@ -1511,12 +1516,12 @@ async function stoppingOfTheTickAcross(loop: WorkerLoop, heldCalls: HeldCalls): 
 }
 
 test("stopTicking with a third stall's settle in flight resolves once the settle answers, and its run failed line is written", async () => {
-  const sendEmail = defineTask("send-email", { schema: v.object({}), handler: async () => undefined });
+  const sendEmailTask = defineTask("send-email", { schema: v.object({}), handler: async () => undefined });
   const engine = createInMemoryEngine();
   await engine.enqueue({ runs: runsOf("send-email", 1) });
   await expireTheLockOfAFetchedRun(engine, 2);
   const heldSettles = engine.holdCalls("settle");
-  const { loop, lines } = startedLoopOf([sendEmail] as AnyTaskDefinition[], { engine });
+  const { loop, lines } = startedLoopOf([sendEmailTask] as AnyTaskDefinition[], { engine });
   await vi.advanceTimersByTimeAsync(1_000);
 
   const stopping = await stoppingOfTheTickAcross(loop, heldSettles);
@@ -1690,7 +1695,7 @@ test("stopFetching during a give-back waiting for Redis ends the wait, with no r
 });
 
 test("an unreadable reply is logged once as worker error, and the loop goes on at its next cue", async () => {
-  const sendEmail = defineTask("send-email", { schema: v.object({}), handler: async () => undefined });
+  const sendEmailTask = defineTask("send-email", { schema: v.object({}), handler: async () => undefined });
   const engine = createInMemoryEngine();
   await engine.enqueue({ runs: runsOf("send-email", 1) });
   const unreadableReply = new Error('The fetch script sent a reply the engine cannot read: ["fetched"]');
@@ -1699,7 +1704,7 @@ test("an unreadable reply is logged once as worker error, and the loop goes on a
     fetchCount += 1;
     return fetchCount === 1 ? Promise.reject(unreadableReply) : engine.fetch(request);
   };
-  const { lines } = startedLoopOf([sendEmail] as AnyTaskDefinition[], {
+  const { lines } = startedLoopOf([sendEmailTask] as AnyTaskDefinition[], {
     engine,
     loopEngine: { ...engine, fetch: fetchUnreadableOnce },
   });
@@ -1766,12 +1771,12 @@ async function tickAtEachNextFiring(engine: InMemoryEngine, task: string, firing
 }
 
 test("two loops ticking the same instant fire once, and the loser writes nothing", async () => {
-  const buildReport = scheduledTaskOf("build-report", HOURLY);
-  const engine = await engineSyncedWith([buildReport]);
+  const buildReportTask = scheduledTaskOf("build-report", HOURLY);
+  const engine = await engineSyncedWith([buildReportTask]);
   vi.setSystemTime(ONE_AM - 500);
   const heldFires = engine.holdCalls("fire");
-  const firstLoop = startedLoopOf([buildReport], { engine });
-  const secondLoop = startedLoopOf([buildReport], { engine });
+  const firstLoop = startedLoopOf([buildReportTask], { engine });
+  const secondLoop = startedLoopOf([buildReportTask], { engine });
   await vi.advanceTimersByTimeAsync(1_000);
 
   heldFires.release();
@@ -1785,10 +1790,10 @@ test("two loops ticking the same instant fire once, and the loser writes nothing
 });
 
 test("every line of a fired run carries its scheduledAt, and the firing itself writes no line", async () => {
-  const buildReport = scheduledTaskOf("build-report", HOURLY);
-  const engine = await engineSyncedWith([buildReport]);
+  const buildReportTask = scheduledTaskOf("build-report", HOURLY);
+  const engine = await engineSyncedWith([buildReportTask]);
   vi.setSystemTime(ONE_AM - 500);
-  const { lines } = startedLoopOf([buildReport], { engine });
+  const { lines } = startedLoopOf([buildReportTask], { engine });
 
   await vi.advanceTimersByTimeAsync(1_000);
 
@@ -1819,8 +1824,11 @@ test("a worker whose release does not schedule a stored task never fires it", as
     scheduledTaskOf("send-digest", HOURLY),
   ]);
   vi.setSystemTime(ONE_AM - 500);
-  const unscheduledBuildReport = defineTask("build-report", { schema: v.object({}), handler: async () => undefined });
-  startedLoopOf([unscheduledBuildReport as AnyTaskDefinition, scheduledTaskOf("send-digest", HOURLY)], { engine });
+  const unscheduledBuildReportTask = defineTask("build-report", {
+    schema: v.object({}),
+    handler: async () => undefined,
+  });
+  startedLoopOf([unscheduledBuildReportTask as AnyTaskDefinition, scheduledTaskOf("send-digest", HOURLY)], { engine });
 
   await vi.advanceTimersByTimeAsync(5_000);
 
@@ -1832,11 +1840,11 @@ test("a worker whose release does not schedule a stored task never fires it", as
 const RESTARTED_AT = Date.UTC(2030, 0, 1, 3, 30);
 
 test("a worker restarted after three missed instants fires once with the first planned instant as scheduledAt and skips the rest", async () => {
-  const buildReport = scheduledTaskOf("build-report", HOURLY);
-  const engine = await engineSyncedWith([buildReport]);
+  const buildReportTask = scheduledTaskOf("build-report", HOURLY);
+  const engine = await engineSyncedWith([buildReportTask]);
   vi.setSystemTime(RESTARTED_AT);
-  await bootSync(engine, [buildReport]);
-  startedLoopOf([buildReport], { engine });
+  await bootSync(engine, [buildReportTask]);
+  startedLoopOf([buildReportTask], { engine });
 
   await vi.advanceTimersByTimeAsync(5_000);
 
@@ -1848,9 +1856,9 @@ test("a worker restarted after three missed instants fires once with the first p
 test("a worker restarted after three missed instants with a cron changed at its boot fires none of them", async () => {
   const engine = await engineSyncedWith([scheduledTaskOf("build-report", HOURLY)]);
   vi.setSystemTime(RESTARTED_AT);
-  const changedBuildReport = scheduledTaskOf("build-report", { cron: "45 * * * *" });
-  await bootSync(engine, [changedBuildReport]);
-  startedLoopOf([changedBuildReport], { engine });
+  const changedBuildReportTask = scheduledTaskOf("build-report", { cron: "45 * * * *" });
+  await bootSync(engine, [changedBuildReportTask]);
+  startedLoopOf([changedBuildReportTask], { engine });
 
   await vi.advanceTimersByTimeAsync(5_000);
 
@@ -1882,9 +1890,9 @@ const EUROPE_PARIS_DAYLIGHT_SAVING_SEQUENCES = [
 for (const { description, cron, bootedAt, firedScheduledAts } of EUROPE_PARIS_DAYLIGHT_SAVING_SEQUENCES) {
   test(`in Europe/Paris ${description}`, async () => {
     vi.setSystemTime(bootedAt);
-    const buildReport = scheduledTaskOf("build-report", { cron, timezone: "Europe/Paris" });
-    const engine = await engineSyncedWith([buildReport]);
-    startedLoopOf([buildReport], { engine, timing: TIMING_KEEPING_COMPLETED_RUNS });
+    const buildReportTask = scheduledTaskOf("build-report", { cron, timezone: "Europe/Paris" });
+    const engine = await engineSyncedWith([buildReportTask]);
+    startedLoopOf([buildReportTask], { engine, timing: TIMING_KEEPING_COMPLETED_RUNS });
 
     await tickAtEachNextFiring(engine, "build-report", firedScheduledAts.length);
 
@@ -1893,12 +1901,12 @@ for (const { description, cron, bootedAt, firedScheduledAts } of EUROPE_PARIS_DA
 }
 
 test("two releases with different crons on one record fire one sequence, from the record's cron", async () => {
-  const olderBuildReport = scheduledTaskOf("build-report", { cron: "30 * * * *" });
-  const newerBuildReport = scheduledTaskOf("build-report", HOURLY);
-  const engine = await engineSyncedWith([olderBuildReport]);
-  await bootSync(engine, [newerBuildReport]);
-  startedLoopOf([olderBuildReport], { engine, timing: TIMING_KEEPING_COMPLETED_RUNS });
-  startedLoopOf([newerBuildReport], { engine, timing: TIMING_KEEPING_COMPLETED_RUNS });
+  const olderBuildReportTask = scheduledTaskOf("build-report", { cron: "30 * * * *" });
+  const newerBuildReportTask = scheduledTaskOf("build-report", HOURLY);
+  const engine = await engineSyncedWith([olderBuildReportTask]);
+  await bootSync(engine, [newerBuildReportTask]);
+  startedLoopOf([olderBuildReportTask], { engine, timing: TIMING_KEEPING_COMPLETED_RUNS });
+  startedLoopOf([newerBuildReportTask], { engine, timing: TIMING_KEEPING_COMPLETED_RUNS });
 
   await tickAtEachNextFiring(engine, "build-report", 3);
 
@@ -1911,8 +1919,8 @@ test("two releases with different crons on one record fire one sequence, from th
 });
 
 test("a lost fire reply fires nothing twice: the resend after the outage hears already and writes nothing", async () => {
-  const buildReport = scheduledTaskOf("build-report", HOURLY);
-  const engine = await engineSyncedWith([buildReport]);
+  const buildReportTask = scheduledTaskOf("build-report", HOURLY);
+  const engine = await engineSyncedWith([buildReportTask]);
   vi.setSystemTime(ONE_AM - 500);
   const recordingLogger = createRecordingLogger();
   const simulatedRedisOutage = createSimulatedRedisOutage(recordingLogger.logger);
@@ -1926,7 +1934,7 @@ test("a lost fire reply fires nothing twice: the resend after the outage hears a
     simulatedRedisOutage.startOutage();
     throw UNANSWERED_COMMAND_ERROR;
   };
-  const { lines } = startedLoopOf([buildReport], {
+  const { lines } = startedLoopOf([buildReportTask], {
     engine,
     loopEngine: engineAwayDuringOutage(
       { ...engine, fire: fireWhoseFirstReplyIsLost },
@@ -1951,11 +1959,11 @@ test("a lost fire reply fires nothing twice: the resend after the outage hears a
 });
 
 test("stopTicking with a fire in flight resolves once the fire answers, and the firing's run is created", async () => {
-  const buildReport = scheduledTaskOf("build-report", HOURLY);
-  const engine = await engineSyncedWith([buildReport]);
+  const buildReportTask = scheduledTaskOf("build-report", HOURLY);
+  const engine = await engineSyncedWith([buildReportTask]);
   vi.setSystemTime(ONE_AM - 500);
   const heldFires = engine.holdCalls("fire");
-  const { loop } = startedLoopOf([buildReport], { engine });
+  const { loop } = startedLoopOf([buildReportTask], { engine });
   await vi.advanceTimersByTimeAsync(1_000);
 
   const stopping = await stoppingOfTheTickAcross(loop, heldFires);
@@ -2017,10 +2025,10 @@ async function scenarioOfAnAttemptInItsHandler(
   handlerOf: (handlerGate: HandlerGate) => TaskHandler<object>,
 ): Promise<LoopScenario & { handlerGate: HandlerGate }> {
   const handlerGate = createHandlerGate();
-  const sendEmail = defineTask("send-email", { schema: v.object({}), handler: handlerOf(handlerGate) });
+  const sendEmailTask = defineTask("send-email", { schema: v.object({}), handler: handlerOf(handlerGate) });
   const engine = createInMemoryEngine();
   await engine.enqueue({ runs: runsOf("send-email", 1) });
-  const scenario = startedLoopOf([sendEmail] as AnyTaskDefinition[], { engine });
+  const scenario = startedLoopOf([sendEmailTask] as AnyTaskDefinition[], { engine });
   await vi.advanceTimersByTimeAsync(0);
   void scenario.loop.stopFetching();
   return { ...scenario, handlerGate };
@@ -2093,7 +2101,7 @@ test("an attempt whose handler throws after the shutdown deadline abort yields i
 
 test("an attempt a fetch starts after the shutdown deadline is aborted at once and yields", async () => {
   let isHandlerAbortedAtItsStart = false;
-  const sendEmail = defineTask("send-email", {
+  const sendEmailTask = defineTask("send-email", {
     schema: v.object({}),
     handler: async ({ abortSignal, step }) => {
       isHandlerAbortedAtItsStart = abortSignal.aborted;
@@ -2103,7 +2111,7 @@ test("an attempt a fetch starts after the shutdown deadline is aborted at once a
   const engine = createInMemoryEngine();
   await engine.enqueue({ runs: runsOf("send-email", 1) });
   const heldFetches = engine.holdCalls("fetch");
-  const { loop, lines } = startedLoopOf([sendEmail] as AnyTaskDefinition[], { engine });
+  const { loop, lines } = startedLoopOf([sendEmailTask] as AnyTaskDefinition[], { engine });
   await vi.advanceTimersByTimeAsync(0);
 
   const fetchingStopped = loop.stopFetching();

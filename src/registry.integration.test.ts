@@ -7,7 +7,7 @@ import { createRecordingLogger } from "../tests/recording-logger.js";
 import { defineTask } from "./definitions.js";
 import { createNextasking } from "./registry.js";
 
-const purgeSessions = defineTask("purge-sessions", {
+const purgeSessionsTask = defineTask("purge-sessions", {
   schema: z.object({}),
   handler: async () => undefined,
 });
@@ -17,13 +17,13 @@ integrationTest("startWorker refuses a second worker in the same process", async
     connection: { url: redisUrl },
     prefix: keyPrefix,
     logger: createRecordingLogger().logger,
-    tasks: [purgeSessions],
+    tasks: [purgeSessionsTask],
   });
   const otherNextasking = createNextasking({
     connection: { url: redisUrl },
     prefix: keyPrefix,
     logger: createRecordingLogger().logger,
-    tasks: [purgeSessions],
+    tasks: [purgeSessionsTask],
   });
 
   try {
@@ -43,7 +43,7 @@ integrationTest("a closed worker lets the process start another one", async ({ r
     connection: { url: redisUrl },
     prefix: keyPrefix,
     logger: createRecordingLogger().logger,
-    tasks: [purgeSessions],
+    tasks: [purgeSessionsTask],
   });
   await nextasking.startWorker();
   await closeNextaskingAndCheckItsDuration(nextasking);
@@ -51,7 +51,7 @@ integrationTest("a closed worker lets the process start another one", async ({ r
     connection: { url: redisUrl },
     prefix: keyPrefix,
     logger: createRecordingLogger().logger,
-    tasks: [purgeSessions],
+    tasks: [purgeSessionsTask],
   });
 
   try {

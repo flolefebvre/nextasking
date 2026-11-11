@@ -30,31 +30,31 @@ interface ListRunsOptionsWithASearch extends ListRunsOptions {
   search: string;
 }
 
-const sendWelcomeEmail = defineTask("send-welcome-email", {
+const sendWelcomeEmailTask = defineTask("send-welcome-email", {
   schema: z.object({ email: z.email() }),
   handler: async () => undefined,
 });
 
-const userSignedUp = defineEvent("user.signed-up", {
+const userSignedUpEvent = defineEvent("user.signed-up", {
   schema: z.object({ userId: z.string() }),
 });
 
-const createDefaultWorkspace = defineListener("create-default-workspace", {
-  on: userSignedUp,
+const createDefaultWorkspaceTask = defineListener("create-default-workspace", {
+  on: userSignedUpEvent,
   handler: async ({ payload, dispatch }) => {
     await dispatch("send-welcome-email", { email: `${payload.userId}@example.com` });
   },
 });
 
-const purgeExpiredSessions = defineScheduledTask("purge-expired-sessions", {
+const purgeExpiredSessionsTask = defineScheduledTask("purge-expired-sessions", {
   schedule: { cron: "0 3 * * *" },
   handler: async () => undefined,
 });
 
 export const nextasking = createNextasking({
   connection: { url: "redis://nextasking.invalid:6379" },
-  events: [userSignedUp],
-  tasks: [sendWelcomeEmail, createDefaultWorkspace, purgeExpiredSessions],
+  events: [userSignedUpEvent],
+  tasks: [sendWelcomeEmailTask, createDefaultWorkspaceTask, purgeExpiredSessionsTask],
 });
 
 declare module "./index.js" {

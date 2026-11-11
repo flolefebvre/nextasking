@@ -23,26 +23,26 @@ const ONE_DAY_IN_MILLISECONDS = 24 * 60 * 60 * 1000;
 
 type SignUpHandler = (context: TaskContext<{ email: string; plan: string }>) => Promise<void>;
 
-const userSignedUp = defineEvent("user.signed-up", {
+const userSignedUpEvent = defineEvent("user.signed-up", {
   schema: z.object({ userId: z.string() }),
 });
 
-const sendWelcomeEmail = defineTask("send-welcome-email", {
+const sendWelcomeEmailTask = defineTask("send-welcome-email", {
   schema: z.object({ email: z.email() }),
   handler: async () => undefined,
 });
 
-const createDefaultWorkspace = defineListener("create-default-workspace", {
-  on: userSignedUp,
+const createDefaultWorkspaceTask = defineListener("create-default-workspace", {
+  on: userSignedUpEvent,
   handler: async () => undefined,
 });
 
 function createSignUpNextasking(signUpHandler: SignUpHandler, scheduledAtsSeen: (Date | undefined)[] = []) {
-  const signUpUser = defineTask("sign-up-user", {
+  const signUpUserTask = defineTask("sign-up-user", {
     schema: z.object({ email: z.email(), plan: z.string().default("free") }),
     handler: signUpHandler,
   });
-  const purgeExpiredSessions = defineScheduledTask("purge-expired-sessions", {
+  const purgeExpiredSessionsTask = defineScheduledTask("purge-expired-sessions", {
     schedule: { cron: "0 3 * * *" },
     handler: async ({ scheduledAt, step }) => {
       scheduledAtsSeen.push(scheduledAt);
@@ -51,8 +51,8 @@ function createSignUpNextasking(signUpHandler: SignUpHandler, scheduledAtsSeen: 
   });
   return createNextasking({
     connection: { url: "redis://nextasking.invalid:6379", giveUpAfter: "1s" },
-    events: [userSignedUp],
-    tasks: [signUpUser, sendWelcomeEmail, createDefaultWorkspace, purgeExpiredSessions],
+    events: [userSignedUpEvent],
+    tasks: [signUpUserTask, sendWelcomeEmailTask, createDefaultWorkspaceTask, purgeExpiredSessionsTask],
   });
 }
 
@@ -70,10 +70,10 @@ async function announcedThenResumed({
   listeners,
 }: {
   emitCount: number;
-  listeners: readonly (typeof createDefaultWorkspace)[];
+  listeners: readonly (typeof createDefaultWorkspaceTask)[];
 }) {
   const { logger, lines } = createRecordingLogger();
-  const announceUser = defineTask("announce-user", {
+  const announceUserTask = defineTask("announce-user", {
     schema: z.object({ userId: z.string() }),
     handler: async ({ payload, emit }) => {
       for (let emitted = 0; emitted < emitCount; emitted += 1) {
@@ -84,8 +84,8 @@ async function announcedThenResumed({
   const nextasking = createNextasking({
     connection: { url: "redis://nextasking.invalid:6379", giveUpAfter: "1s" },
     logger,
-    events: [userSignedUp],
-    tasks: [announceUser, ...listeners],
+    events: [userSignedUpEvent],
+    tasks: [announceUserTask, ...listeners],
   });
   const firstAttempt = await executeAttempt(nextasking, "announce-user", { userId: "user-1" }, { runId: "announce-1" });
   const linesOfTheFirstAttempt = [...lines];
@@ -330,7 +330,7 @@ describe("executeAttempt", () => {
   test("saves an emit of an event id already emitted among its steps, so passing them back as savedSteps skips it", async () => {
     const { firstAttempt, resumedAttempt, linesOfTheFirstAttempt, lines } = await announcedThenResumed({
       emitCount: 2,
-      listeners: [createDefaultWorkspace],
+      listeners: [createDefaultWorkspaceTask],
     });
     const isDroppedRepeat = ({ message }: { message: string }) => message === "duplicate dispatch dropped";
 

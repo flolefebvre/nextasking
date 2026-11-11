@@ -48,7 +48,7 @@ export default defineConfig([
     },
   },
   {
-    files: ["src/**", "tests/**"],
+    files: ["tests/**"],
     ignores: ["tests/e2e/fixture-app/**", "tests/dist-consumer/**"],
     rules: {
       "no-restricted-syntax": "off",

@@ -8,16 +8,16 @@ import { builtFailureNoticeOf } from "./failure-notices.js";
 import { deriveFailureNoticeEventId, deriveListenerRunId } from "./ids.js";
 import { brokenKeyRunFailedListener, workerDefinitionsOf } from "../tests/worker-definitions.js";
 
-const sendEmail = defineTask("send-email", { schema: v.object({}), handler: async () => undefined });
+const sendEmailTask = defineTask("send-email", { schema: v.object({}), handler: async () => undefined });
 
-const alertOnCall = defineListener("alert-on-call", {
+const alertOnCallTask = defineListener("alert-on-call", {
   on: runFailedEvent,
   retries: 2,
   concurrency: { key: (payload) => payload.task, limit: 1 },
   handler: async () => undefined,
 });
 
-const archiveFailure = defineListener("archive-failure", { on: runFailedEvent, handler: async () => undefined });
+const archiveFailureTask = defineListener("archive-failure", { on: runFailedEvent, handler: async () => undefined });
 
 const FAILING_RUN = { runId: "run-1", task: "send-email", attempt: 3, replays: 1 };
 
@@ -27,7 +27,7 @@ test("a failure notice holds one run of each runFailedEvent listener of the rele
   const { failureNotice: notice, listenersLeftOut } = builtFailureNoticeOf(
     { ...FAILING_RUN, sourceEvent: { eventName: "user.signed-up", eventId: "event-1" } },
     { error: ERROR, reason: "retries exhausted" },
-    workerDefinitionsOf([sendEmail, alertOnCall, archiveFailure] as AnyTaskDefinition[]),
+    workerDefinitionsOf([sendEmailTask, alertOnCallTask, archiveFailureTask] as AnyTaskDefinition[]),
   );
 
   const eventId = deriveFailureNoticeEventId("send-email", "run-1", 1);
@@ -65,7 +65,7 @@ test("a listener whose concurrency key throws is left out of the notice with its
   const { failureNotice, listenersLeftOut } = builtFailureNoticeOf(
     FAILING_RUN,
     { error: ERROR, reason: "retries exhausted" },
-    workerDefinitionsOf([sendEmail, brokenKeyRunFailedListener, archiveFailure] as AnyTaskDefinition[]),
+    workerDefinitionsOf([sendEmailTask, brokenKeyRunFailedListener, archiveFailureTask] as AnyTaskDefinition[]),
   );
 
   expect(failureNotice.runs.map(({ task }) => task)).toEqual(["archive-failure"]);
@@ -76,7 +76,7 @@ test("a listener whose concurrency key throws is left out of the notice with its
 });
 
 test("a replayed run that fails again gets a notice of its own event id", () => {
-  const definitions = workerDefinitionsOf([sendEmail, alertOnCall] as AnyTaskDefinition[]);
+  const definitions = workerDefinitionsOf([sendEmailTask, alertOnCallTask] as AnyTaskDefinition[]);
   const failure = { error: ERROR, reason: "retries exhausted" as const };
 
   const firstNotice = builtFailureNoticeOf({ ...FAILING_RUN, replays: 0 }, failure, definitions);
@@ -89,7 +89,7 @@ test("a failing listener of a built-in event gets an empty notice", () => {
   const { failureNotice: notice } = builtFailureNoticeOf(
     { ...FAILING_RUN, task: "alert-on-call", sourceEvent: { eventName: runFailedEvent.name, eventId: "notice-1" } },
     { error: ERROR, reason: "non-retriable" },
-    workerDefinitionsOf([sendEmail, alertOnCall] as AnyTaskDefinition[]),
+    workerDefinitionsOf([sendEmailTask, alertOnCallTask] as AnyTaskDefinition[]),
   );
 
   expect(notice.runs).toEqual([]);
@@ -99,7 +99,7 @@ test("a release with no runFailedEvent listener gets an empty notice", () => {
   const { failureNotice: notice } = builtFailureNoticeOf(
     FAILING_RUN,
     { error: ERROR, reason: "non-retriable" },
-    workerDefinitionsOf([sendEmail] as AnyTaskDefinition[]),
+    workerDefinitionsOf([sendEmailTask] as AnyTaskDefinition[]),
   );
 
   expect(notice.runs).toEqual([]);

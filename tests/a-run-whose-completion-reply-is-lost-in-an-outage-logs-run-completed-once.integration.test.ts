@@ -19,7 +19,7 @@ integrationTest(
     const proxy = await startTcpProxy(redisUrl);
     const { logger, lines } = createRecordingLogger();
     let completionReplyCut: Promise<void> | undefined;
-    const sendWelcomeEmail = defineTask("send-welcome-email", {
+    const sendWelcomeEmailTask = defineTask("send-welcome-email", {
       schema: z.object({ email: z.string() }),
       handler: async ({ runId }) => {
         completionReplyCut = proxy.cutBeforeReplyTo((request) =>
@@ -31,12 +31,12 @@ integrationTest(
       connection: { url: proxy.url, giveUpAfter: "1s" },
       prefix: keyPrefix,
       logger,
-      tasks: [sendWelcomeEmail],
+      tasks: [sendWelcomeEmailTask],
     });
     const directNextasking = createNextasking({
       connection: { url: redisUrl },
       prefix: keyPrefix,
-      tasks: [sendWelcomeEmail],
+      tasks: [sendWelcomeEmailTask],
     });
     closeWhenTestFinishes({ proxy, nextaskings: [workerNextasking, directNextasking], lines });
 

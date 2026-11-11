@@ -10,16 +10,16 @@ integrationTest(
   "getEvent lists the run of each listener of an event id, pending from the emit on, and none for an id never emitted",
   { timeout: 20_000 },
   async ({ redisUrl, keyPrefix }) => {
-    const invoicePaid = defineEvent("invoice.paid", { schema: z.object({ invoiceId: z.string() }) });
+    const invoicePaidEvent = defineEvent("invoice.paid", { schema: z.object({ invoiceId: z.string() }) });
     const nextasking = createNextasking({
       connection: { url: redisUrl },
       prefix: keyPrefix,
       logger: createRecordingLogger().logger,
-      events: [invoicePaid],
+      events: [invoicePaidEvent],
       tasks: [
-        defineListener("record-invoice-payment", { on: invoicePaid, handler: async () => undefined }),
+        defineListener("record-invoice-payment", { on: invoicePaidEvent, handler: async () => undefined }),
         defineListener("notify-accountant", {
-          on: invoicePaid,
+          on: invoicePaidEvent,
           handler: async () => {
             throw new NonRetriableError("no accountant on file");
           },

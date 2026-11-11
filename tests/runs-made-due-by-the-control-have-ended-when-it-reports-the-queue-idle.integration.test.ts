@@ -29,14 +29,14 @@ const NO_SENDER: HandlerSender = {
   emit: () => Promise.reject(new Error("this scenario sends nothing")),
 };
 
-const sendEmail = defineTask("send-email", {
+const sendEmailTask = defineTask("send-email", {
   schema: v.object({}),
   handler: async () => {
     await sleep(HANDLER_WORK_IN_MILLISECONDS);
   },
 }) as AnyTaskDefinition;
 
-const sendReminder = defineTask("send-reminder", {
+const sendReminderTask = defineTask("send-reminder", {
   schema: v.object({}),
   handler: async ({ step }) => {
     await step.sleep("wait-a-day", "1d");
@@ -54,7 +54,7 @@ integrationTest(
       const { logger, lines } = createRecordingLogger();
       const loop = startWorkerLoop({
         engine,
-        definitions: workerDefinitionsOf([sendEmail, sendReminder]),
+        definitions: workerDefinitionsOf([sendEmailTask, sendReminderTask]),
         timing: { ...DEFAULT_WORKER_TIMING, tickIntervalInMilliseconds: 100 },
         logger,
         concurrency: 10,
@@ -110,14 +110,14 @@ integrationTest(
     const finish = (task: string, attempt: number) => {
       finishedRuns.push({ task, attempt });
     };
-    const syncCalendar = defineTask("sync-calendar", {
+    const syncCalendarTask = defineTask("sync-calendar", {
       schema: z.object({ calendarId: z.string() }),
       handler: async ({ step, attempt }) => {
         await step.sleep("wait-for-next-sync", "1h");
         finish("sync-calendar", attempt);
       },
     });
-    const chargeCard = defineTask("charge-card", {
+    const chargeCardTask = defineTask("charge-card", {
       schema: z.object({ cardId: z.string() }),
       backoff: "1h",
       handler: async ({ attempt }) => {
@@ -127,13 +127,13 @@ integrationTest(
         finish("charge-card", attempt);
       },
     });
-    const sendDigest = defineTask("send-digest", {
+    const sendDigestTask = defineTask("send-digest", {
       schema: z.object({ userId: z.string() }),
       handler: async ({ attempt }) => {
         finish("send-digest", attempt);
       },
     });
-    const sendReminder = defineTask("send-reminder", {
+    const sendReminderTask = defineTask("send-reminder", {
       schema: z.object({ userId: z.string() }),
       handler: async ({ attempt }) => {
         finish("send-reminder", attempt);
@@ -143,7 +143,7 @@ integrationTest(
       connection: { url: redisUrl },
       prefix: keyPrefix,
       logger,
-      tasks: [syncCalendar, chargeCard, sendDigest, sendReminder],
+      tasks: [syncCalendarTask, chargeCardTask, sendDigestTask, sendReminderTask],
     });
     await using control = createNextaskingControl({ connection: { url: redisUrl }, prefix: keyPrefix });
 
@@ -160,7 +160,7 @@ integrationTest(
         },
         { timeout: 10_000 },
       );
-      const sendReminderTaskName: string = sendReminder.name;
+      const sendReminderTaskName: string = sendReminderTask.name;
       const remindersMadeDue = await control.makeRunsDueNow({ task: sendReminderTaskName });
       await control.waitForIdle({ timeout: "10s" });
       const finishedAfterTheReminder = [...finishedRuns];

@@ -92,7 +92,7 @@ On the first SIGTERM or SIGINT (a repeat is ignored):
 The handler receives `abortSignal`. It aborts when the attempt must stop: at the shutdown deadline, or when the attempt lost its lock. Pass it to the calls that accept one, and check it in long loops.
 
 ```ts
-export const exportOrders = defineTask("export-orders", {
+export const exportOrdersTask = defineTask("export-orders", {
   schema: z.object({ accountId: z.string() }),
   handler: async ({ payload, step, abortSignal }) => {
     const pageCount = await step.run("count-pages", () => countOrderPages(payload.accountId));

@@ -13,7 +13,7 @@ integrationTest(
     const { logger, lines } = createRecordingLogger();
     const idempotencyKeysSeenByFn: string[] = [];
     const chargesSeenByAttempt: unknown[] = [];
-    const chargeInvoice = defineTask("charge-invoice", {
+    const chargeInvoiceTask = defineTask("charge-invoice", {
       schema: z.object({ invoiceId: z.string() }),
       retries: 1,
       backoff: "0s",
@@ -32,7 +32,7 @@ integrationTest(
       connection: { url: redisUrl },
       prefix: keyPrefix,
       logger,
-      tasks: [chargeInvoice],
+      tasks: [chargeInvoiceTask],
     });
 
     try {

@@ -17,7 +17,7 @@ integrationTest(
     const proxy = await startTcpProxy(redisUrl);
     let isConnectionCut = false;
     const { logger, lines } = createRecordingLogger();
-    const chargeInvoice = defineTask("charge-invoice", {
+    const chargeInvoiceTask = defineTask("charge-invoice", {
       schema: z.object({ invoiceId: z.string() }),
       retries: 1,
       backoff: "1s",
@@ -31,12 +31,12 @@ integrationTest(
       connection: { url: proxy.url, giveUpAfter: "1s" },
       prefix: keyPrefix,
       logger,
-      tasks: [chargeInvoice],
+      tasks: [chargeInvoiceTask],
     });
     const directNextasking = createNextasking({
       connection: { url: redisUrl },
       prefix: keyPrefix,
-      tasks: [chargeInvoice],
+      tasks: [chargeInvoiceTask],
     });
     closeWhenTestFinishes({ proxy, nextaskings: [workerNextasking, directNextasking], lines });
 

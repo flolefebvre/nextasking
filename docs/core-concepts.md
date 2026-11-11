@@ -5,16 +5,16 @@ The words the rest of this manual uses, each in one or two sentences, with the p
 ## Definitions
 
 ```ts
-export const invoicePaid = defineEvent("invoice.paid", { schema: z.object({ invoiceId: z.string() }) });
+export const invoicePaidEvent = defineEvent("invoice.paid", { schema: z.object({ invoiceId: z.string() }) });
 
-export const sendReceipt = defineListener("send-receipt", { on: invoicePaid, handler: async () => {} });
+export const sendReceiptTask = defineListener("send-receipt", { on: invoicePaidEvent, handler: async () => {} });
 
-export const syncAccount = defineTask("sync-account", {
+export const syncAccountTask = defineTask("sync-account", {
   schema: z.object({ accountId: z.string() }),
   handler: async () => {},
 });
 
-export const purgeSessions = defineScheduledTask("purge-sessions", {
+export const purgeSessionsTask = defineScheduledTask("purge-sessions", {
   schedule: { cron: "0 3 * * *" },
   handler: async () => {},
 });

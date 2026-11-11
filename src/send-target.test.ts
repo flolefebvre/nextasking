@@ -18,14 +18,17 @@ import type { SendTarget } from "./send-target.js";
 import type { SendFence } from "./step-engine.js";
 import { DEFAULT_WORKER_TIMING } from "./worker-timing.js";
 
-const userSignedUp = defineEvent("user.signed-up", { schema: v.object({ userId: v.string() }) });
+const userSignedUpEvent = defineEvent("user.signed-up", { schema: v.object({ userId: v.string() }) });
 
-const sendWelcomeEmail = defineTask("send-welcome-email", {
+const sendWelcomeEmailTask = defineTask("send-welcome-email", {
   schema: v.object({ email: v.string() }),
   handler: async () => undefined,
 });
 
-const createWorkspace = defineListener("create-workspace", { on: userSignedUp, handler: async () => undefined });
+const createWorkspaceTask = defineListener("create-workspace", {
+  on: userSignedUpEvent,
+  handler: async () => undefined,
+});
 
 function requestsOf(tasks: readonly AnyTaskDefinition[], events: readonly EventDefinition[]): EnqueueRequests {
   const { tasksByName, listenerNamesByEventName } = workerDefinitionsOf(tasks);
@@ -36,7 +39,7 @@ function requestsOf(tasks: readonly AnyTaskDefinition[], events: readonly EventD
   });
 }
 
-const SIGN_UP_REQUESTS = requestsOf([sendWelcomeEmail, createWorkspace], [userSignedUp]);
+const SIGN_UP_REQUESTS = requestsOf([sendWelcomeEmailTask, createWorkspaceTask], [userSignedUpEvent]);
 
 async function lockedParentRunOf(engine: InMemoryEngine): Promise<LockedRun> {
   await engine.enqueue({ runs: [{ runId: "onboard-ada", task: "onboard-user", payload: "{}", retries: 0 }] });
@@ -136,7 +139,7 @@ describe("the app's senders", () => {
         return Promise.resolve(replayReply);
       },
     };
-    const { tasksByName } = workerDefinitionsOf([sendWelcomeEmail]);
+    const { tasksByName } = workerDefinitionsOf([sendWelcomeEmailTask]);
     const { logger, lines } = createRecordingLogger();
     const senders = appSendersOn({ requests: SIGN_UP_REQUESTS, tasksByName, sendTarget: () => sendTarget, logger });
     return { senders, sentReplays, lines };
@@ -171,8 +174,8 @@ describe("the app's senders", () => {
   });
 
   test("throw an emit whose listener's concurrency key throws, naming the listener, and send nothing", async () => {
-    const brokenListener = defineListener("bill-workspace", {
-      on: userSignedUp,
+    const brokenListenerTask = defineListener("bill-workspace", {
+      on: userSignedUpEvent,
       concurrency: {
         key: () => {
           throw new Error("no tenant");
@@ -181,7 +184,7 @@ describe("the app's senders", () => {
       },
       handler: async () => undefined,
     });
-    const tasks = [createWorkspace, brokenListener] as AnyTaskDefinition[];
+    const tasks = [createWorkspaceTask, brokenListenerTask] as AnyTaskDefinition[];
     const sentRequests: unknown[] = [];
     const sendTarget: SendTarget = {
       enqueue: (request) => {
@@ -191,7 +194,7 @@ describe("the app's senders", () => {
       replay: () => Promise.reject(new Error("this test replays nothing")),
     };
     const senders = appSendersOn({
-      requests: requestsOf(tasks, [userSignedUp]),
+      requests: requestsOf(tasks, [userSignedUpEvent]),
       tasksByName: workerDefinitionsOf(tasks).tasksByName,
       sendTarget: () => sendTarget,
       logger: createRecordingLogger().logger,

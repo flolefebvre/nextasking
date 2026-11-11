@@ -14,7 +14,7 @@ integrationTest(
   async ({ redisUrl, keyPrefix }) => {
     const { logger, lines } = createRecordingLogger();
     const trialEndedAt = new Date(Date.now() - 60_000);
-    const closeTrial = defineTask("close-trial", {
+    const closeTrialTask = defineTask("close-trial", {
       schema: z.object({ accountId: z.string() }),
       retries: 0,
       handler: async ({ step }) => {
@@ -26,7 +26,7 @@ integrationTest(
       connection: { url: redisUrl },
       prefix: keyPrefix,
       logger,
-      tasks: [closeTrial],
+      tasks: [closeTrialTask],
     });
 
     try {

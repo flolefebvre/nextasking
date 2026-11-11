@@ -9,7 +9,7 @@ A handler that throws fails its attempt. The run retries after a backoff until i
 import { defineTask } from "@flefebvre/nextasking";
 import { z } from "zod";
 
-export const syncAccount = defineTask("sync-account", {
+export const syncAccountTask = defineTask("sync-account", {
   schema: z.object({ accountId: z.string() }),
   retries: 3,
   backoff: "1m",
@@ -34,7 +34,7 @@ Throw `NonRetriableError` when retrying can't help: a declined card, a deleted a
 ```ts
 import { defineTask, NonRetriableError } from "@flefebvre/nextasking";
 
-export const chargeCard = defineTask("charge-card", {
+export const chargeCardTask = defineTask("charge-card", {
   schema: z.object({ invoiceId: z.string() }),
   handler: async ({ payload }) => {
     const invoice = await db.invoice.find(payload.invoiceId);
@@ -54,7 +54,7 @@ export const chargeCard = defineTask("charge-card", {
 ## Bound an attempt with timeout
 
 ```ts
-export const renderReport = defineTask("render-report", {
+export const renderReportTask = defineTask("render-report", {
   schema: z.object({ reportId: z.string() }),
   timeout: "2m",
   handler: async ({ payload }) => {
@@ -121,7 +121,7 @@ The library emits a built-in event on each final failure. Listen to it with an o
 // src/nextasking/tasks/alert-on-run-failed.ts
 import { defineListener, runFailedEvent } from "@flefebvre/nextasking";
 
-export const alertOnRunFailed = defineListener("alert-on-run-failed", {
+export const alertOnRunFailedTask = defineListener("alert-on-run-failed", {
   on: runFailedEvent,
   handler: async ({ payload, step }) => {
     await step.run("page-on-call", () =>
@@ -135,8 +135,8 @@ export const alertOnRunFailed = defineListener("alert-on-run-failed", {
 // src/nextasking/index.ts
 export const nextasking = createNextasking({
   connection: { url: process.env.REDIS_URL! },
-  events: [invoicePaid],
-  tasks: [syncAccount, recordInvoicePayment, alertOnRunFailed],
+  events: [invoicePaidEvent],
+  tasks: [syncAccountTask, recordInvoicePaymentTask, alertOnRunFailedTask],
 });
 ```
 

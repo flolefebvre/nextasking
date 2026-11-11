@@ -17,7 +17,7 @@ integrationTest(
   { timeout: 25_000 },
   async ({ redisUrl, keyPrefix }) => {
     const { logger, lines } = createRecordingLogger();
-    const importContacts = defineTask("import-contacts", {
+    const importContactsTask = defineTask("import-contacts", {
       schema: z.object({ fileId: z.string() }),
       handler: async ({ step }) => {
         await step.run("parse-file", () => ({ contactCount: 2 }));
@@ -28,7 +28,7 @@ integrationTest(
       connection: { url: redisUrl },
       prefix: keyPrefix,
       logger,
-      tasks: [importContacts],
+      tasks: [importContactsTask],
     });
 
     try {

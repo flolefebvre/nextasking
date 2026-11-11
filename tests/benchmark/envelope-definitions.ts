@@ -30,18 +30,18 @@ export function envelopeDefinitionsOf(writeRecord: WriteRecord) {
       },
     });
   });
-  const loadArrived = defineEvent(LOAD_EVENT_NAME, { schema: z.object({}) });
-  const yearlyReport = defineScheduledTask(SCHEDULED_TASK_NAME, {
+  const loadArrivedEvent = defineEvent(LOAD_EVENT_NAME, { schema: z.object({}) });
+  const yearlyReportTask = defineScheduledTask(SCHEDULED_TASK_NAME, {
     schedule: { cron: "0 0 29 2 *" },
     handler: ({ runId }) => recordHandled(SCHEDULED_TASK_NAME, runId),
   });
-  const recordLoadEvent = defineListener("record-load-event", {
-    on: loadArrived,
+  const recordLoadEventTask = defineListener("record-load-event", {
+    on: loadArrivedEvent,
     handler: ({ runId }) => recordHandled("record-load-event", runId),
   });
   return {
     plainTaskNames: plainTasks.map(({ name }) => name),
-    tasks: [...plainTasks, yearlyReport, recordLoadEvent],
-    events: [loadArrived],
+    tasks: [...plainTasks, yearlyReportTask, recordLoadEventTask],
+    events: [loadArrivedEvent],
   };
 }

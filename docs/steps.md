@@ -9,7 +9,7 @@ A retry runs the handler again from the top. Wrap each side effect in `step.run(
 import { defineTask } from "@flefebvre/nextasking";
 import { z } from "zod";
 
-export const chargeInvoice = defineTask("charge-invoice", {
+export const chargeInvoiceTask = defineTask("charge-invoice", {
   schema: z.object({ invoiceId: z.string() }),
   handler: async ({ payload, step }) => {
     const invoice = await step.run("load-invoice", async () => {
@@ -76,7 +76,7 @@ const [plan, orderCount] = await Promise.all([
 
 ```ts
 // src/nextasking/tasks/onboard-user.ts
-export const onboardUser = defineTask("onboard-user", {
+export const onboardUserTask = defineTask("onboard-user", {
   schema: z.object({ userId: z.string() }),
   handler: async ({ payload, step }) => {
     await step.run("send-welcome-email", async () => {
@@ -134,7 +134,7 @@ Use the handler's `emit` and `dispatch`, not the instance's: a handler can't imp
 
 ```ts
 // src/nextasking/tasks/sign-up-user.ts
-export const signUpUser = defineTask("sign-up-user", {
+export const signUpUserTask = defineTask("sign-up-user", {
   schema: z.object({ userId: z.string(), email: z.email() }),
   handler: async ({ payload, step, emit, dispatch }) => {
     await step.run("create-account", async () => {

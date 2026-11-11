@@ -86,7 +86,7 @@ export function workerProcessTasks(writeRecord: WriteRecord) {
     },
   });
 
-  const recordAbortAfterBlocking = defineTask("record-abort-after-blocking", {
+  const recordAbortAfterBlockingTask = defineTask("record-abort-after-blocking", {
     schema: z.object({ blockInMilliseconds: z.int() }),
     handler: async ({ payload, step, abortSignal }) => {
       blockEventLoop(payload.blockInMilliseconds);
@@ -103,7 +103,7 @@ export function workerProcessTasks(writeRecord: WriteRecord) {
     },
   });
 
-  const waitThenRecord = defineTask("wait-then-record", {
+  const waitThenRecordTask = defineTask("wait-then-record", {
     schema: z.object({ waitInMilliseconds: z.int() }),
     handler: async ({ payload, step, attempt }) => {
       await step.run("wait", async () => {
@@ -129,13 +129,13 @@ export function workerProcessTasks(writeRecord: WriteRecord) {
     },
   });
 
-  const completeAtOnce = defineTask("complete-at-once", {
+  const completeAtOnceTask = defineTask("complete-at-once", {
     schema: z.object({}),
     handler: async () => undefined,
   });
 
   const runIdsAbortedOnce = new Set<string>();
-  const waitForAbortOnce = defineTask("wait-for-abort-once", {
+  const waitForAbortOnceTask = defineTask("wait-for-abort-once", {
     schema: z.object({}),
     handler: async ({ runId, abortSignal }) => {
       await writeRecord("wait-for-abort-once", { event: "started", at: Date.now() });
@@ -151,7 +151,7 @@ export function workerProcessTasks(writeRecord: WriteRecord) {
     },
   });
 
-  const blockEventLoopOnSchedule = defineScheduledTask("block-event-loop-on-schedule", {
+  const blockEventLoopOnScheduleTask = defineScheduledTask("block-event-loop-on-schedule", {
     schedule: { cron: "0 0 1 1 *" },
     handler: async ({ runId, scheduledAt }) => {
       await writeRecord("block-event-loop-on-schedule", { runId, scheduledAt, event: "started" });
@@ -159,7 +159,7 @@ export function workerProcessTasks(writeRecord: WriteRecord) {
     },
   });
 
-  const holdConcurrencySlot = defineTask("hold-concurrency-slot", {
+  const holdConcurrencySlotTask = defineTask("hold-concurrency-slot", {
     schema: z.object({}),
     concurrency: { limit: 1 },
     handler: async ({ abortSignal }) => {
@@ -169,14 +169,14 @@ export function workerProcessTasks(writeRecord: WriteRecord) {
     },
   });
 
-  const emitProcessWarning = defineTask("emit-process-warning", {
+  const emitProcessWarningTask = defineTask("emit-process-warning", {
     schema: z.object({ warning: z.string() }),
     handler: async ({ payload }) => {
       process.emitWarning(payload.warning);
     },
   });
 
-  const rejectWithNoHandler = defineTask("reject-with-no-handler", {
+  const rejectWithNoHandlerTask = defineTask("reject-with-no-handler", {
     schema: z.object({ reason: z.string() }),
     handler: async ({ payload }) => {
       void Promise.reject(new Error(payload.reason));
@@ -185,17 +185,17 @@ export function workerProcessTasks(writeRecord: WriteRecord) {
 
   return [
     limitedExecutionTask(writeRecord, "one-per-key", { limit: 1, isKeyed: true }),
-    emitProcessWarning,
-    rejectWithNoHandler,
+    emitProcessWarningTask,
+    rejectWithNoHandlerTask,
     limitedExecutionTask(writeRecord, "two-per-key", { limit: 2, isKeyed: true }),
     limitedExecutionTask(writeRecord, "three-in-all", { limit: 3, isKeyed: false }),
-    holdConcurrencySlot,
+    holdConcurrencySlotTask,
     blockEventLoopTask,
-    recordAbortAfterBlocking,
-    waitThenRecord,
+    recordAbortAfterBlockingTask,
+    waitThenRecordTask,
     waitForAbortTask,
-    waitForAbortOnce,
-    completeAtOnce,
-    blockEventLoopOnSchedule,
+    waitForAbortOnceTask,
+    completeAtOnceTask,
+    blockEventLoopOnScheduleTask,
   ] as const;
 }

@@ -12,14 +12,14 @@ const GIVE_UP_AFTER_IN_MILLISECONDS = 1_000;
 const SLOWEST_GIVE_UP_IN_MILLISECONDS = 4_000;
 
 function createInvoicingNextasking(url: string, keyPrefix: string) {
-  const invoicePaid = defineEvent("invoice.paid", { schema: z.object({ invoiceId: z.string() }) });
+  const invoicePaidEvent = defineEvent("invoice.paid", { schema: z.object({ invoiceId: z.string() }) });
   return createNextasking({
     connection: { url, giveUpAfter: "1s" },
     prefix: keyPrefix,
-    events: [invoicePaid],
+    events: [invoicePaidEvent],
     tasks: [
       defineTask("send-welcome-email", { schema: z.object({ email: z.string() }), handler: async () => undefined }),
-      defineListener("send-receipt", { on: invoicePaid, handler: async () => undefined }),
+      defineListener("send-receipt", { on: invoicePaidEvent, handler: async () => undefined }),
     ],
   });
 }

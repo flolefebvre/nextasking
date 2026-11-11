@@ -20,10 +20,10 @@ integrationTest(
   async ({ redisUrl, keyPrefix }) => {
     const { logger, lines } = createRecordingLogger();
     const recordedListenerNames: string[] = [];
-    const invoicePaid = defineEvent("invoice.paid", { schema: z.object({ invoiceId: z.string() }) });
+    const invoicePaidEvent = defineEvent("invoice.paid", { schema: z.object({ invoiceId: z.string() }) });
     const listenerOf = (name: string) =>
       defineListener(name, {
-        on: invoicePaid,
+        on: invoicePaidEvent,
         handler: async () => {
           recordedListenerNames.push(name);
         },
@@ -32,7 +32,7 @@ integrationTest(
       connection: { url: redisUrl },
       prefix: keyPrefix,
       logger,
-      events: [invoicePaid],
+      events: [invoicePaidEvent],
       tasks: [listenerOf("record-payment"), listenerOf("send-receipt")],
     });
     const eventId = "stripe-evt-7";

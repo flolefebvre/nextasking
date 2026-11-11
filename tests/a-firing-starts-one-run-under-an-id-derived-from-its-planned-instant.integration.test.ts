@@ -18,7 +18,7 @@ integrationTest(
   { timeout: 15_000 },
   async ({ redisUrl, keyPrefix }) => {
     const recordedRuns: RecordedFiringRun[] = [];
-    const purgeExpiredSessions = defineScheduledTask("purge-expired-sessions", {
+    const purgeExpiredSessionsTask = defineScheduledTask("purge-expired-sessions", {
       schedule: { cron: "0 0 1 1 *", timezone: "Europe/Paris" },
       handler: async ({ runId, scheduledAt, attempt }) => {
         recordedRuns.push({ runId, scheduledAt, attempt });
@@ -28,7 +28,7 @@ integrationTest(
       connection: { url: redisUrl },
       prefix: keyPrefix,
       logger: createRecordingLogger().logger,
-      tasks: [purgeExpiredSessions],
+      tasks: [purgeExpiredSessionsTask],
     });
     const plannedInstant = Date.parse("2025-12-31T23:00:00.000Z");
     const firingRunId = deriveFiringRunId("purge-expired-sessions", plannedInstant);

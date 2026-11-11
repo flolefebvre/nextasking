@@ -12,7 +12,7 @@ integrationTest(
   async ({ redisUrl, keyPrefix }) => {
     const { logger, lines } = createRecordingLogger();
     const handlerEvents: string[] = [];
-    const refreshAccount = defineTask("refresh-account", {
+    const refreshAccountTask = defineTask("refresh-account", {
       schema: z.object({ accountId: z.string(), role: z.enum(["fail once", "sleep", "other"]) }),
       backoff: "2s",
       concurrency: { key: (payload) => payload.accountId, limit: 1 },
@@ -31,7 +31,7 @@ integrationTest(
       connection: { url: redisUrl },
       prefix: keyPrefix,
       logger,
-      tasks: [refreshAccount],
+      tasks: [refreshAccountTask],
     });
 
     try {

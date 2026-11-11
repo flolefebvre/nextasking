@@ -13,18 +13,18 @@ integrationTest(
   async ({ redisUrl, keyPrefix }) => {
     const { logger, lines } = createRecordingLogger();
     const recordedEmails: string[] = [];
-    const sendWelcomeEmail = defineTask("send-welcome-email", {
+    const sendWelcomeEmailTask = defineTask("send-welcome-email", {
       schema: z.object({ email: z.string() }),
       handler: async ({ payload }) => {
         recordedEmails.push(payload.email);
       },
     });
-    const purgeSessions = defineTask("purge-sessions", { schema: z.object({}), handler: async () => undefined });
+    const purgeSessionsTask = defineTask("purge-sessions", { schema: z.object({}), handler: async () => undefined });
     const nextasking = createNextasking({
       connection: { url: redisUrl },
       prefix: keyPrefix,
       logger,
-      tasks: [sendWelcomeEmail, purgeSessions],
+      tasks: [sendWelcomeEmailTask, purgeSessionsTask],
     });
     const runId = "welcome-user-7";
 

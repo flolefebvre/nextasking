@@ -9,7 +9,7 @@ import { createRecordingLogger } from "./recording-logger.js";
 import { storedRunIdentities } from "./stored-run-identities.js";
 import { storedRun } from "./stored-run.js";
 
-const invoicePaid = defineEvent("invoice.paid", {
+const invoicePaidEvent = defineEvent("invoice.paid", {
   schema: z.object({ accountId: z.string(), invoiceId: z.string() }),
 });
 
@@ -17,13 +17,13 @@ integrationTest(
   "a dispatched run and a listener run store the concurrency key computed from their validated payload",
   { timeout: 15_000 },
   async ({ redisUrl, keyPrefix }) => {
-    const rebuildIndex = defineTask("rebuild-index", {
+    const rebuildIndexTask = defineTask("rebuild-index", {
       schema: z.object({ accountId: z.string().trim() }),
       concurrency: { key: (payload) => `account-${payload.accountId}`, limit: 1 },
       handler: async () => undefined,
     });
-    const recordInvoicePayment = defineListener("record-invoice-payment", {
-      on: invoicePaid,
+    const recordInvoicePaymentTask = defineListener("record-invoice-payment", {
+      on: invoicePaidEvent,
       concurrency: { key: (payload) => payload.accountId, limit: 2 },
       handler: async () => undefined,
     });
@@ -31,8 +31,8 @@ integrationTest(
       connection: { url: redisUrl },
       prefix: keyPrefix,
       logger: createRecordingLogger().logger,
-      events: [invoicePaid],
-      tasks: [rebuildIndex, recordInvoicePayment],
+      events: [invoicePaidEvent],
+      tasks: [rebuildIndexTask, recordInvoicePaymentTask],
     });
 
     try {
@@ -62,12 +62,12 @@ integrationTest(
 integrationTest(
   "an emit whose listener's key function throws throws, naming the listener, and stores no run of any listener",
   async ({ redisUrl, keyPrefix }) => {
-    const recordInvoicePayment = defineListener("record-invoice-payment", {
-      on: invoicePaid,
+    const recordInvoicePaymentTask = defineListener("record-invoice-payment", {
+      on: invoicePaidEvent,
       handler: async () => undefined,
     });
-    const billAccount = defineListener("bill-account", {
-      on: invoicePaid,
+    const billAccountTask = defineListener("bill-account", {
+      on: invoicePaidEvent,
       concurrency: {
         key: () => {
           throw new Error("no account");
@@ -80,8 +80,8 @@ integrationTest(
       connection: { url: redisUrl },
       prefix: keyPrefix,
       logger: createRecordingLogger().logger,
-      events: [invoicePaid],
-      tasks: [recordInvoicePayment, billAccount],
+      events: [invoicePaidEvent],
+      tasks: [recordInvoicePaymentTask, billAccountTask],
     });
 
     try {

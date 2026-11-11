@@ -15,7 +15,7 @@ integrationTest(
     const { logger, lines } = createRecordingLogger();
     const attemptsSeenAfterTheSleep: number[] = [];
     let resumedAt: number | undefined;
-    const waitForTrialEnd = defineTask("wait-for-trial-end", {
+    const waitForTrialEndTask = defineTask("wait-for-trial-end", {
       schema: z.object({ trialEndsAt: z.iso.datetime() }),
       handler: async ({ payload, step, attempt }) => {
         await step.sleepUntil("wait-for-trial-end", payload.trialEndsAt);
@@ -23,7 +23,7 @@ integrationTest(
         attemptsSeenAfterTheSleep.push(attempt);
       },
     });
-    const sendWelcomeEmail = defineTask("send-welcome-email", {
+    const sendWelcomeEmailTask = defineTask("send-welcome-email", {
       schema: z.object({ email: z.email() }),
       handler: async ({ logger: runLogger }) => {
         runLogger.info({}, "welcome email sent");
@@ -33,7 +33,7 @@ integrationTest(
       connection: { url: redisUrl },
       prefix: keyPrefix,
       logger,
-      tasks: [waitForTrialEnd, sendWelcomeEmail],
+      tasks: [waitForTrialEndTask, sendWelcomeEmailTask],
     });
 
     try {
@@ -82,7 +82,7 @@ integrationTest(
   { timeout: 15_000 },
   async ({ redisUrl, keyPrefix }) => {
     const { logger, lines } = createRecordingLogger();
-    const remindTrialEnd = defineTask("remind-trial-end", {
+    const remindTrialEndTask = defineTask("remind-trial-end", {
       schema: z.object({ trialEndsAt: z.iso.datetime() }),
       timeout: "1s",
       retries: 0,
@@ -94,7 +94,7 @@ integrationTest(
       connection: { url: redisUrl },
       prefix: keyPrefix,
       logger,
-      tasks: [remindTrialEnd],
+      tasks: [remindTrialEndTask],
     });
 
     try {

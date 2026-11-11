@@ -19,16 +19,16 @@ const CHARGE_CARD = "charge-card";
 
 const EMAIL_RECEIPT = "email-receipt";
 
-const invoicePaid = defineEvent("invoice.paid", { schema: z.object({ invoiceId: z.string() }) });
+const invoicePaidEvent = defineEvent("invoice.paid", { schema: z.object({ invoiceId: z.string() }) });
 
 function createReader(url: string, keyPrefix: string) {
   return createNextasking({
     connection: { url },
     prefix: keyPrefix,
-    events: [invoicePaid],
+    events: [invoicePaidEvent],
     tasks: [
       defineTask(CHARGE_CARD, { schema: z.string(), handler: async () => undefined }),
-      defineListener(EMAIL_RECEIPT, { on: invoicePaid, handler: async () => undefined }),
+      defineListener(EMAIL_RECEIPT, { on: invoicePaidEvent, handler: async () => undefined }),
     ],
   });
 }

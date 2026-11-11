@@ -24,7 +24,7 @@ Define a task:
 import { defineTask } from "@flefebvre/nextasking";
 import { z } from "zod";
 
-export const sendWelcomeEmail = defineTask("send-welcome-email", {
+export const sendWelcomeEmailTask = defineTask("send-welcome-email", {
   schema: z.object({ userId: z.string(), email: z.email() }),
   handler: async ({ payload }) => {
     await email.send({ to: payload.email, template: "welcome" });
@@ -37,11 +37,11 @@ List it in the instance, and register the instance's type:
 ```ts
 // src/nextasking/index.ts
 import { createNextasking } from "@flefebvre/nextasking";
-import { sendWelcomeEmail } from "@/nextasking/tasks/send-welcome-email";
+import { sendWelcomeEmailTask } from "@/nextasking/tasks/send-welcome-email";
 
 export const nextasking = createNextasking({
   connection: { url: process.env.REDIS_URL ?? "redis://localhost:6379" },
-  tasks: [sendWelcomeEmail],
+  tasks: [sendWelcomeEmailTask],
 });
 
 declare module "@flefebvre/nextasking" {

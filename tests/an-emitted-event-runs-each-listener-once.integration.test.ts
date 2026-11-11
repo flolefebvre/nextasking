@@ -20,17 +20,17 @@ integrationTest(
       "record-invoice-payment": [],
       "send-receipt": [],
     };
-    const invoicePaid = defineEvent("invoice.paid", {
+    const invoicePaidEvent = defineEvent("invoice.paid", {
       schema: z.object({ invoiceId: z.string().trim(), amountInCents: z.int().positive() }),
     });
-    const recordInvoicePayment = defineListener("record-invoice-payment", {
-      on: invoicePaid,
+    const recordInvoicePaymentTask = defineListener("record-invoice-payment", {
+      on: invoicePaidEvent,
       handler: async (context) => {
         recordedContextsByListener["record-invoice-payment"]?.push(context);
       },
     });
-    const sendReceipt = defineListener("send-receipt", {
-      on: invoicePaid,
+    const sendReceiptTask = defineListener("send-receipt", {
+      on: invoicePaidEvent,
       handler: async (context) => {
         context.logger.info({}, "receipt sent");
         recordedContextsByListener["send-receipt"]?.push(context);
@@ -40,8 +40,8 @@ integrationTest(
       connection: { url: redisUrl },
       prefix: keyPrefix,
       logger,
-      events: [invoicePaid],
-      tasks: [recordInvoicePayment, sendReceipt],
+      events: [invoicePaidEvent],
+      tasks: [recordInvoicePaymentTask, sendReceiptTask],
     });
 
     try {

@@ -19,31 +19,31 @@ import { closeNextasking } from "./registry.js";
 import { fakeNextasking } from "./testing.js";
 import type { NextaskingFake } from "./testing.js";
 
-const sendInvoice = defineTask("send-invoice", {
+const sendInvoiceTask = defineTask("send-invoice", {
   schema: z.object({ accountId: z.string(), currency: z.string().default("EUR") }),
   concurrency: { key: (payload) => (payload.accountId === "broken" ? "" : payload.accountId), limit: 1 },
   handler: async () => undefined,
 });
 
-const orderPlaced = defineEvent("order.placed", {
+const orderPlacedEvent = defineEvent("order.placed", {
   schema: z.object({ orderId: z.string(), quantity: z.number().default(1) }),
 });
 
-const orderCancelled = defineEvent("order.cancelled", {
+const orderCancelledEvent = defineEvent("order.cancelled", {
   schema: z.object({ orderId: z.string() }),
 });
 
-const reserveStock = defineListener("reserve-stock", {
-  on: orderPlaced,
+const reserveStockTask = defineListener("reserve-stock", {
+  on: orderPlacedEvent,
   handler: async () => undefined,
 });
 
-const alertOnRunFailed = defineListener("alert-on-run-failed", {
+const alertOnRunFailedTask = defineListener("alert-on-run-failed", {
   on: runFailedEvent,
   handler: async () => undefined,
 });
 
-const closeBooks = defineScheduledTask("close-books", {
+const closeBooksTask = defineScheduledTask("close-books", {
   schedule: { cron: "0 0 1 * *" },
   handler: async () => undefined,
 });
@@ -52,8 +52,8 @@ function createShopNextasking({ logger }: { logger?: Logger } = {}) {
   return createNextasking({
     connection: { url: "redis://nextasking.invalid:6379", giveUpAfter: "1s" },
     ...(logger === undefined ? {} : { logger }),
-    events: [orderPlaced, orderCancelled],
-    tasks: [sendInvoice, reserveStock, alertOnRunFailed, closeBooks],
+    events: [orderPlacedEvent, orderCancelledEvent],
+    tasks: [sendInvoiceTask, reserveStockTask, alertOnRunFailedTask, closeBooksTask],
   });
 }
 
@@ -96,13 +96,13 @@ describe("fakeNextasking", () => {
 
   test("records a payload in dispatches and in emits after its JSON round trip, as the handler would receive it", async () => {
     const reminderSchema = z.object({ dueAt: z.string(), note: z.string().optional() });
-    const sendReminder = defineTask("send-reminder", { schema: reminderSchema, handler: async () => undefined });
-    const reminderDue = defineEvent("reminder.due", { schema: reminderSchema });
-    const logReminder = defineListener("log-reminder", { on: reminderDue, handler: async () => undefined });
+    const sendReminderTask = defineTask("send-reminder", { schema: reminderSchema, handler: async () => undefined });
+    const reminderDueEvent = defineEvent("reminder.due", { schema: reminderSchema });
+    const logReminderTask = defineListener("log-reminder", { on: reminderDueEvent, handler: async () => undefined });
     const nextasking = createNextasking({
       connection: { url: "redis://nextasking.invalid:6379", giveUpAfter: "1s" },
-      events: [reminderDue],
-      tasks: [sendReminder, logReminder],
+      events: [reminderDueEvent],
+      tasks: [sendReminderTask, logReminderTask],
     });
     using fake = fakeNextasking(nextasking);
 
@@ -309,6 +309,6 @@ type ShopTaskName = "send-invoice" | "reserve-stock" | "alert-on-run-failed" | "
 
 type ShopEventName = "order.placed" | "order.cancelled";
 
-type ShopTask = typeof sendInvoice | typeof reserveStock | typeof alertOnRunFailed | typeof closeBooks;
+type ShopTask = typeof sendInvoiceTask | typeof reserveStockTask | typeof alertOnRunFailedTask | typeof closeBooksTask;
 
-type ShopEvent = typeof orderPlaced | typeof orderCancelled | typeof runFailedEvent;
+type ShopEvent = typeof orderPlacedEvent | typeof orderCancelledEvent | typeof runFailedEvent;

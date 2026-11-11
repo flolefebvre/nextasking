@@ -14,7 +14,7 @@ integrationTest(
   { timeout: 15_000 },
   async ({ redisUrl, keyPrefix }) => {
     const recordedContexts: TaskContext<{ email: string }>[] = [];
-    const sendWelcomeEmail = defineTask("send-welcome-email", {
+    const sendWelcomeEmailTask = defineTask("send-welcome-email", {
       schema: z.object({ email: z.string().trim().toLowerCase() }),
       handler: async (context) => {
         recordedContexts.push(context);
@@ -24,7 +24,7 @@ integrationTest(
       connection: { url: redisUrl },
       prefix: keyPrefix,
       logger: createRecordingLogger().logger,
-      tasks: [sendWelcomeEmail],
+      tasks: [sendWelcomeEmailTask],
     });
 
     try {

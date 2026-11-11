@@ -8,7 +8,7 @@ This is not `startWorker({ concurrency })`, which caps the attempts of every tas
 
 ```ts
 // src/nextasking/tasks/rebuild-search-index.ts
-export const rebuildSearchIndex = defineTask("rebuild-search-index", {
+export const rebuildSearchIndexTask = defineTask("rebuild-search-index", {
   schema: z.object({ reason: z.string() }),
   concurrency: { limit: 1 },
   handler: async () => {
@@ -26,7 +26,7 @@ Give `key` a function of the payload. Runs sharing a key share the limit; runs o
 
 ```ts
 // src/nextasking/tasks/sync-account.ts
-export const syncAccount = defineTask("sync-account", {
+export const syncAccountTask = defineTask("sync-account", {
   schema: z.object({ accountId: z.string() }),
   concurrency: { key: (payload) => payload.accountId, limit: 2 },
   handler: async ({ payload }) => {
@@ -45,7 +45,7 @@ export const syncAccount = defineTask("sync-account", {
 ## Keep a scheduled task's firings from overlapping
 
 ```ts
-export const purgeExpiredSessions = defineScheduledTask("purge-expired-sessions", {
+export const purgeExpiredSessionsTask = defineScheduledTask("purge-expired-sessions", {
   schedule: { cron: "*/5 * * * *" },
   concurrency: { limit: 1 },
   handler: async () => {

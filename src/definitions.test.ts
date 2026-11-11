@@ -8,26 +8,26 @@ import type { StepTools } from "./step-engine.js";
 
 describe("defineTask", () => {
   test("takes a Zod schema and hands the handler the schema's output", () => {
-    const sendWelcomeEmail = defineTask("send-welcome-email", {
+    const sendWelcomeEmailTask = defineTask("send-welcome-email", {
       schema: z.object({ email: z.email(), visits: z.string().transform((visits) => Number(visits)) }),
       handler: async ({ payload }) => {
         expectTypeOf(payload).toEqualTypeOf<{ email: string; visits: number }>();
       },
     });
 
-    expect(sendWelcomeEmail.name).toBe("send-welcome-email");
-    expectTypeOf(sendWelcomeEmail.name).toEqualTypeOf<"send-welcome-email">();
+    expect(sendWelcomeEmailTask.name).toBe("send-welcome-email");
+    expectTypeOf(sendWelcomeEmailTask.name).toEqualTypeOf<"send-welcome-email">();
   });
 
   test("takes a Valibot schema and hands the handler the schema's output", () => {
-    const generateInvoicePdf = defineTask("generate-invoice-pdf", {
+    const generateInvoicePdfTask = defineTask("generate-invoice-pdf", {
       schema: v.object({ invoiceId: v.string(), pages: v.pipe(v.string(), v.transform(Number)) }),
       handler: async ({ payload }) => {
         expectTypeOf(payload).toEqualTypeOf<{ invoiceId: string; pages: number }>();
       },
     });
 
-    expect(generateInvoicePdf.name).toBe("generate-invoice-pdf");
+    expect(generateInvoicePdfTask.name).toBe("generate-invoice-pdf");
   });
 
   test("hands the handler the run id, the attempt number and the step tools", () => {
@@ -84,7 +84,7 @@ describe("defineTask", () => {
   });
 
   test("records the task options as passed, with no defaults", () => {
-    const rebuildIndex = defineTask("rebuild-index", {
+    const rebuildIndexTask = defineTask("rebuild-index", {
       schema: z.object({ accountId: z.string() }),
       retries: 5,
       backoff: "30s",
@@ -92,11 +92,11 @@ describe("defineTask", () => {
       concurrency: { key: (payload) => payload.accountId, limit: 1 },
       handler: async () => undefined,
     });
-    const purgeSessions = defineTask("purge-sessions", { schema: z.object({}), handler: async () => undefined });
+    const purgeSessionsTask = defineTask("purge-sessions", { schema: z.object({}), handler: async () => undefined });
 
-    expect(rebuildIndex).toMatchObject({ retries: 5, backoff: "30s", timeout: "10m", concurrency: { limit: 1 } });
-    expect(rebuildIndex.concurrency?.key?.({ accountId: "account-7" })).toBe("account-7");
-    expect(Object.keys(purgeSessions).sort()).toEqual(["handler", "name", "schema"]);
+    expect(rebuildIndexTask).toMatchObject({ retries: 5, backoff: "30s", timeout: "10m", concurrency: { limit: 1 } });
+    expect(rebuildIndexTask.concurrency?.key?.({ accountId: "account-7" })).toBe("account-7");
+    expect(Object.keys(purgeSessionsTask).sort()).toEqual(["handler", "name", "schema"]);
   });
 
   test("types the concurrency key from the schema's output", () => {
@@ -114,30 +114,30 @@ describe("defineTask", () => {
   });
 
   test("computes no concurrency key without a key function", () => {
-    const rebuildIndex = defineTask("rebuild-index", {
+    const rebuildIndexTask = defineTask("rebuild-index", {
       schema: z.object({ accountId: z.string() }),
       concurrency: { limit: 2 },
       handler: async () => undefined,
     });
-    const purgeSessions = defineTask("purge-sessions", { schema: z.object({}), handler: async () => undefined });
+    const purgeSessionsTask = defineTask("purge-sessions", { schema: z.object({}), handler: async () => undefined });
 
-    expect(concurrencyKeyOf(rebuildIndex, { accountId: "account-7" })).toBeUndefined();
-    expect(concurrencyKeyOf(purgeSessions, {})).toBeUndefined();
+    expect(concurrencyKeyOf(rebuildIndexTask, { accountId: "account-7" })).toBeUndefined();
+    expect(concurrencyKeyOf(purgeSessionsTask, {})).toBeUndefined();
   });
 
   test("computes the concurrency key from the payload", () => {
-    const rebuildIndex = defineTask("rebuild-index", {
+    const rebuildIndexTask = defineTask("rebuild-index", {
       schema: z.object({ accountId: z.string() }),
       concurrency: { key: (payload) => payload.accountId, limit: 1 },
       handler: async () => undefined,
     });
 
-    expect(concurrencyKeyOf(rebuildIndex, { accountId: "account-7" })).toBe("account-7");
+    expect(concurrencyKeyOf(rebuildIndexTask, { accountId: "account-7" })).toBe("account-7");
   });
 
   test("rejects a concurrency key function that throws, naming the task, with the thrown error as cause", () => {
     const keyError = new Error("no account");
-    const rebuildIndex = defineTask("rebuild-index", {
+    const rebuildIndexTask = defineTask("rebuild-index", {
       schema: z.object({ accountId: z.string() }),
       concurrency: {
         key: () => {
@@ -148,7 +148,7 @@ describe("defineTask", () => {
       handler: async () => undefined,
     });
 
-    const computeKey = () => concurrencyKeyOf(rebuildIndex, { accountId: "account-7" });
+    const computeKey = () => concurrencyKeyOf(rebuildIndexTask, { accountId: "account-7" });
 
     expect(computeKey).toThrow('Task "rebuild-index" has an invalid concurrency.key: it threw "no account"');
     expect(() => computeKey()).toThrow(expect.objectContaining({ cause: keyError }));
@@ -214,15 +214,15 @@ describe("defineTask", () => {
   });
 });
 
-const invoicePaid = defineEvent("invoice.paid", {
+const invoicePaidEvent = defineEvent("invoice.paid", {
   schema: z.object({ invoiceId: z.string(), amountInCents: z.string().transform((amount) => Number(amount)) }),
 });
 
 describe("defineEvent", () => {
   test("records the name and the schema, and nothing else", () => {
-    expect(Object.keys(invoicePaid).sort()).toEqual(["name", "schema"]);
-    expect(invoicePaid.name).toBe("invoice.paid");
-    expectTypeOf(invoicePaid.name).toEqualTypeOf<"invoice.paid">();
+    expect(Object.keys(invoicePaidEvent).sort()).toEqual(["name", "schema"]);
+    expect(invoicePaidEvent.name).toBe("invoice.paid");
+    expectTypeOf(invoicePaidEvent.name).toEqualTypeOf<"invoice.paid">();
   });
 
   test("rejects a schema whose output isn't JSON", () => {
@@ -243,8 +243,8 @@ describe("defineEvent", () => {
 
 describe("defineListener", () => {
   test("hands the handler the event's schema output, the run id and the attempt", () => {
-    const recordInvoicePayment = defineListener("record-invoice-payment", {
-      on: invoicePaid,
+    const recordInvoicePaymentTask = defineListener("record-invoice-payment", {
+      on: invoicePaidEvent,
       handler: async ({ payload, runId, attempt }) => {
         expectTypeOf(payload).toEqualTypeOf<{ invoiceId: string; amountInCents: number }>();
         expectTypeOf(runId).toEqualTypeOf<string>();
@@ -252,31 +252,34 @@ describe("defineListener", () => {
       },
     });
 
-    expect(recordInvoicePayment.name).toBe("record-invoice-payment");
-    expectTypeOf(recordInvoicePayment.name).toEqualTypeOf<"record-invoice-payment">();
-    expect(recordInvoicePayment.on).toBe(invoicePaid);
-    expect(recordInvoicePayment.schema).toBe(invoicePaid.schema);
+    expect(recordInvoicePaymentTask.name).toBe("record-invoice-payment");
+    expectTypeOf(recordInvoicePaymentTask.name).toEqualTypeOf<"record-invoice-payment">();
+    expect(recordInvoicePaymentTask.on).toBe(invoicePaidEvent);
+    expect(recordInvoicePaymentTask.schema).toBe(invoicePaidEvent.schema);
   });
 
   test("records the task options as passed, with no defaults", () => {
-    const sendReceipt = defineListener("send-receipt", {
-      on: invoicePaid,
+    const sendReceiptTask = defineListener("send-receipt", {
+      on: invoicePaidEvent,
       retries: 3,
       backoff: "1m",
       timeout: "30s",
       concurrency: { key: (payload) => payload.invoiceId, limit: 2 },
       handler: async () => undefined,
     });
-    const archiveInvoice = defineListener("archive-invoice", { on: invoicePaid, handler: async () => undefined });
+    const archiveInvoiceTask = defineListener("archive-invoice", {
+      on: invoicePaidEvent,
+      handler: async () => undefined,
+    });
 
-    expect(sendReceipt).toMatchObject({ retries: 3, backoff: "1m", timeout: "30s", concurrency: { limit: 2 } });
-    expect(sendReceipt.concurrency?.key?.({ invoiceId: "inv-7", amountInCents: 100 })).toBe("inv-7");
-    expect(Object.keys(archiveInvoice).sort()).toEqual(["handler", "name", "on", "schema"]);
+    expect(sendReceiptTask).toMatchObject({ retries: 3, backoff: "1m", timeout: "30s", concurrency: { limit: 2 } });
+    expect(sendReceiptTask.concurrency?.key?.({ invoiceId: "inv-7", amountInCents: 100 })).toBe("inv-7");
+    expect(Object.keys(archiveInvoiceTask).sort()).toEqual(["handler", "name", "on", "schema"]);
   });
 
   test("rejects a handler typed for another payload", () => {
     defineListener("record-invoice-payment", {
-      on: invoicePaid,
+      on: invoicePaidEvent,
       // @ts-expect-error the event gives amountInCents as a number
       handler: async (context: { payload: { amountInCents: string } }) => {
         expectTypeOf(context.payload.amountInCents).toBeString();
@@ -286,13 +289,13 @@ describe("defineListener", () => {
 
   test("rejects a schema of its own and a misspelt option", () => {
     defineListener("record-invoice-payment", {
-      on: invoicePaid,
+      on: invoicePaidEvent,
       // @ts-expect-error a listener takes its event's schema
       schema: z.object({}),
       handler: async () => undefined,
     });
     defineListener("record-invoice-payment", {
-      on: invoicePaid,
+      on: invoicePaidEvent,
       // @ts-expect-error retires is not an option
       retires: 3,
       handler: async () => undefined,
@@ -300,7 +303,7 @@ describe("defineListener", () => {
   });
 
   test("throws on an undefined on, naming the listener and the import cycle", () => {
-    const eventImportedThroughACycle = undefined as unknown as typeof invoicePaid;
+    const eventImportedThroughACycle = undefined as unknown as typeof invoicePaidEvent;
 
     expect(() =>
       defineListener("record-invoice-payment", { on: eventImportedThroughACycle, handler: async () => undefined }),
@@ -327,41 +330,44 @@ describe("a definer called from a generic factory", () => {
       defineTask(name, { schema, handler: async () => undefined });
     const syncEventOf = <const Name extends string>(name: Name) => defineEvent(name, { schema });
 
-    const syncInvoices = syncTaskOf("sync-invoices");
-    const invoicesSynced = syncEventOf("invoices.synced");
+    const syncInvoicesTask = syncTaskOf("sync-invoices");
+    const invoicesSyncedEvent = syncEventOf("invoices.synced");
 
-    expect(syncInvoices.name).toBe("sync-invoices");
-    expectTypeOf(syncInvoices.name).toEqualTypeOf<"sync-invoices">();
-    expectTypeOf(invoicesSynced.name).toEqualTypeOf<"invoices.synced">();
+    expect(syncInvoicesTask.name).toBe("sync-invoices");
+    expectTypeOf(syncInvoicesTask.name).toEqualTypeOf<"sync-invoices">();
+    expectTypeOf(invoicesSyncedEvent.name).toEqualTypeOf<"invoices.synced">();
   });
 });
 
 describe("an event's place", () => {
-  const sendReceipt = defineTask("send-receipt", {
+  const sendReceiptTask = defineTask("send-receipt", {
     schema: z.object({ invoiceId: z.string() }),
     handler: async () => undefined,
   });
-  const archiveInvoice = defineListener("archive-invoice", { on: invoicePaid, handler: async () => undefined });
-  const purgeExpiredSessions = defineScheduledTask("purge-expired-sessions", {
+  const archiveInvoiceTask = defineListener("archive-invoice", {
+    on: invoicePaidEvent,
+    handler: async () => undefined,
+  });
+  const purgeExpiredSessionsTask = defineScheduledTask("purge-expired-sessions", {
     schedule: { cron: "0 3 * * *" },
     handler: async () => undefined,
   });
 
   test("refuses a task, a listener or a scheduled task as a listener's on", () => {
     // @ts-expect-error a task is not an event
-    defineListener("record-invoice-payment", { on: sendReceipt, handler: async () => undefined });
+    defineListener("record-invoice-payment", { on: sendReceiptTask, handler: async () => undefined });
     // @ts-expect-error a listener is not an event
-    defineListener("record-invoice-payment", { on: archiveInvoice, handler: async () => undefined });
+    defineListener("record-invoice-payment", { on: archiveInvoiceTask, handler: async () => undefined });
     // @ts-expect-error a scheduled task is not an event
-    defineListener("record-invoice-payment", { on: purgeExpiredSessions, handler: async () => undefined });
+    defineListener("record-invoice-payment", { on: purgeExpiredSessionsTask, handler: async () => undefined });
   });
 
   test("refuses a task or a listener as an EventDefinition", () => {
     // @ts-expect-error a task is not an event
-    const taskAsEvent: EventDefinition = sendReceipt;
+    const taskAsEvent: EventDefinition = sendReceiptTask;
     // @ts-expect-error a listener is not an event
-    const listenerAsEvent: EventDefinition = archiveInvoice;
-    const event: EventDefinition = invoicePaid;
+    const listenerAsEvent: EventDefinition = archiveInvoiceTask;
+    const event: EventDefinition = invoicePaidEvent;
 
     expect([taskAsEvent, listenerAsEvent, event]).toHaveLength(3);
   });
@@ -369,7 +375,7 @@ describe("an event's place", () => {
 
 describe("defineScheduledTask", () => {
   test("hands the handler scheduledAt and no payload, with the other context fields of a task", () => {
-    const purgeExpiredSessions = defineScheduledTask("purge-expired-sessions", {
+    const purgeExpiredSessionsTask = defineScheduledTask("purge-expired-sessions", {
       schedule: { cron: "0 3 * * *", timezone: "Europe/Paris" },
       handler: async (context) => {
         expectTypeOf(context.scheduledAt).toEqualTypeOf<Date | undefined>();
@@ -380,12 +386,12 @@ describe("defineScheduledTask", () => {
       },
     });
 
-    expect(purgeExpiredSessions.name).toBe("purge-expired-sessions");
-    expectTypeOf(purgeExpiredSessions.name).toEqualTypeOf<"purge-expired-sessions">();
+    expect(purgeExpiredSessionsTask.name).toBe("purge-expired-sessions");
+    expectTypeOf(purgeExpiredSessionsTask.name).toEqualTypeOf<"purge-expired-sessions">();
   });
 
   test("records the schedule and the task options as passed, with no defaults", () => {
-    const sendDigest = defineScheduledTask("send-digest", {
+    const sendDigestTask = defineScheduledTask("send-digest", {
       schedule: { cron: "0 8 * * 1", timezone: "America/New_York" },
       retries: 2,
       backoff: "1m",
@@ -393,20 +399,20 @@ describe("defineScheduledTask", () => {
       concurrency: { limit: 1 },
       handler: async () => undefined,
     });
-    const purgeExpiredSessions = defineScheduledTask("purge-expired-sessions", {
+    const purgeExpiredSessionsTask = defineScheduledTask("purge-expired-sessions", {
       schedule: { cron: "0 3 * * *" },
       handler: async () => undefined,
     });
 
-    expect(sendDigest).toMatchObject({
+    expect(sendDigestTask).toMatchObject({
       schedule: { cron: "0 8 * * 1", timezone: "America/New_York" },
       retries: 2,
       backoff: "1m",
       timeout: "10m",
       concurrency: { limit: 1 },
     });
-    expect(Object.keys(purgeExpiredSessions).sort()).toEqual(["handler", "name", "schedule"]);
-    expect(purgeExpiredSessions.schedule).toEqual({ cron: "0 3 * * *" });
+    expect(Object.keys(purgeExpiredSessionsTask).sort()).toEqual(["handler", "name", "schedule"]);
+    expect(purgeExpiredSessionsTask.schedule).toEqual({ cron: "0 3 * * *" });
   });
 
   test("rejects a schema, a concurrency key and a schedule without a cron", () => {

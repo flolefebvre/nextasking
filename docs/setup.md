@@ -41,19 +41,20 @@ src/
       invoice-paid.ts                defineEvent("invoice.paid", …)
     tasks/
       send-welcome-email.ts          defineTask("send-welcome-email", …)
-      record-invoice-payment.ts      defineListener("record-invoice-payment", { on: invoicePaid, … })
+      record-invoice-payment.ts      defineListener("record-invoice-payment", { on: invoicePaidEvent, … })
       purge-expired-sessions.ts      defineScheduledTask("purge-expired-sessions", …)
 ```
 
-| What           | Name                                   | Example                           |
-| -------------- | -------------------------------------- | --------------------------------- |
-| Task           | kebab-case, what it does               | `send-welcome-email`              |
-| Listener       | kebab-case, what it does, under tasks/ | `record-invoice-payment`          |
-| Scheduled task | kebab-case, under tasks/               | `purge-expired-sessions`          |
-| Event          | dotted, what happened                  | `invoice.paid`, `user.signed-up`  |
-| File           | the definition's name, kebab-case      | `tasks/send-welcome-email.ts`     |
-| Exported const | the name in camelCase                  | `sendWelcomeEmail`, `invoicePaid` |
+| What           | Name                                          | Example                                    |
+| -------------- | --------------------------------------------- | ------------------------------------------ |
+| Task           | kebab-case, what it does                      | `send-welcome-email`                       |
+| Listener       | kebab-case, what it does, under tasks/        | `record-invoice-payment`                   |
+| Scheduled task | kebab-case, under tasks/                      | `purge-expired-sessions`                   |
+| Event          | dotted, what happened                         | `invoice.paid`, `user.signed-up`           |
+| File           | the definition's name, kebab-case             | `tasks/send-welcome-email.ts`              |
+| Exported const | the name in camelCase, then `Task` or `Event` | `sendWelcomeEmailTask`, `invoicePaidEvent` |
 
+- End the const of a listener or a scheduled task in `Task` too: both are tasks. The suffix keeps `sendWelcomeEmailTask` from reading as a function you call, and `invoicePaidEvent` from reading as a boolean.
 - Tasks and events share one namespace: two definitions with the same name make `createNextasking` throw.
 - Names starting with `nextasking/` are reserved for the library.
 - Choose names to keep: a name is stored with every run, and renaming takes two deploys. See [Deploys](deploys.md#rename-a-task-or-an-event).
@@ -65,14 +66,14 @@ See [Tasks and events](tasks-and-events.md) to write each kind of definition.
 ```ts
 // src/nextasking/index.ts
 import { createNextasking } from "@flefebvre/nextasking";
-import { invoicePaid } from "@/nextasking/events/invoice-paid";
-import { recordInvoicePayment } from "@/nextasking/tasks/record-invoice-payment";
-import { sendWelcomeEmail } from "@/nextasking/tasks/send-welcome-email";
+import { invoicePaidEvent } from "@/nextasking/events/invoice-paid";
+import { recordInvoicePaymentTask } from "@/nextasking/tasks/record-invoice-payment";
+import { sendWelcomeEmailTask } from "@/nextasking/tasks/send-welcome-email";
 
 export const nextasking = createNextasking({
   connection: { url: process.env.REDIS_URL ?? "redis://localhost:6379" },
-  events: [invoicePaid],
-  tasks: [sendWelcomeEmail, recordInvoicePayment],
+  events: [invoicePaidEvent],
+  tasks: [sendWelcomeEmailTask, recordInvoicePaymentTask],
 });
 
 declare module "@flefebvre/nextasking" {

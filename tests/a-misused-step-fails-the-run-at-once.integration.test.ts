@@ -13,7 +13,7 @@ integrationTest(
   { timeout: 15_000 },
   async ({ redisUrl, keyPrefix }) => {
     const { logger, lines } = createRecordingLogger();
-    const notifyFollowers = defineTask("notify-followers", {
+    const notifyFollowersTask = defineTask("notify-followers", {
       schema: z.object({ postId: z.string() }),
       backoff: "0s",
       handler: async ({ step }) => {
@@ -26,7 +26,7 @@ integrationTest(
       connection: { url: redisUrl },
       prefix: keyPrefix,
       logger,
-      tasks: [notifyFollowers],
+      tasks: [notifyFollowersTask],
     });
 
     try {
@@ -57,7 +57,7 @@ integrationTest(
   { timeout: 15_000 },
   async ({ redisUrl, keyPrefix }) => {
     const { logger, lines } = createRecordingLogger();
-    const buildExport = defineTask("build-export", {
+    const buildExportTask = defineTask("build-export", {
       schema: z.object({ exportId: z.string() }),
       backoff: "0s",
       handler: async ({ step }) => {
@@ -70,7 +70,7 @@ integrationTest(
       connection: { url: redisUrl },
       prefix: keyPrefix,
       logger,
-      tasks: [buildExport],
+      tasks: [buildExportTask],
     });
 
     try {

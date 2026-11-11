@@ -14,7 +14,7 @@ integrationTest(
   async ({ redisUrl, keyPrefix }) => {
     const { logger, lines } = createRecordingLogger();
     const stallCountsBeforeEachStep: (string | null)[] = [];
-    const syncCalendar = defineTask("sync-calendar", {
+    const syncCalendarTask = defineTask("sync-calendar", {
       schema: z.object({ calendarId: z.string() }),
       handler: async ({ step, runId }) => {
         const recordKey = engineKeysOf(keyPrefix).runRecord("sync-calendar", runId);
@@ -27,7 +27,7 @@ integrationTest(
       connection: { url: redisUrl },
       prefix: keyPrefix,
       logger,
-      tasks: [syncCalendar],
+      tasks: [syncCalendarTask],
     });
 
     try {

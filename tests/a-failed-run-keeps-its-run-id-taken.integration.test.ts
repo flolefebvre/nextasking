@@ -13,7 +13,7 @@ integrationTest(
   async ({ redisUrl, keyPrefix }) => {
     const { logger, lines } = createRecordingLogger();
     let attemptCount = 0;
-    const importContacts = defineTask("import-contacts", {
+    const importContactsTask = defineTask("import-contacts", {
       schema: z.object({ fileId: z.string() }),
       retries: 0,
       handler: async () => {
@@ -25,7 +25,7 @@ integrationTest(
       connection: { url: redisUrl },
       prefix: keyPrefix,
       logger,
-      tasks: [importContacts],
+      tasks: [importContactsTask],
     });
     const runId = "import-contacts-file-7";
 

@@ -200,11 +200,13 @@ afterEach(async () => {
 
 describe("the boot", () => {
   test("reads one INFO, syncs the schedules, opens the blocking client and starts the loop, then writes worker started", async () => {
-    const dailyReport = defineScheduledTask("daily-report", {
+    const dailyReportTask = defineScheduledTask("daily-report", {
       schedule: { cron: "0 6 * * *", timezone: "UTC" },
       handler: async () => undefined,
     }) as AnyTaskDefinition;
-    const { lifecycle, engine, lines, commandDriver, blockingDrivers } = lifecycleScenarioOf({ tasks: [dailyReport] });
+    const { lifecycle, engine, lines, commandDriver, blockingDrivers } = lifecycleScenarioOf({
+      tasks: [dailyReportTask],
+    });
 
     await lifecycle.startWorker();
     await vi.advanceTimersByTimeAsync(DEFAULT_WORKER_TIMING.tickIntervalInMilliseconds);
@@ -652,8 +654,8 @@ describe("the close of a running worker", () => {
     const engine = createInMemoryEngine();
     await engine.enqueue({ runs: runsOf("send-email", 3) });
     const heldFetches = engine.holdCalls("fetch");
-    const sendEmail = defineTask("send-email", { schema: v.object({}), handler: async () => undefined });
-    const { lifecycle } = lifecycleScenarioOf({ tasks: [sendEmail] as AnyTaskDefinition[], engine });
+    const sendEmailTask = defineTask("send-email", { schema: v.object({}), handler: async () => undefined });
+    const { lifecycle } = lifecycleScenarioOf({ tasks: [sendEmailTask] as AnyTaskDefinition[], engine });
     await lifecycle.startWorker({ shutdownTimeout: "5s" });
     await vi.advanceTimersByTimeAsync(0);
 
@@ -721,9 +723,9 @@ describe("the close of a running worker", () => {
 
       const engine = createInMemoryEngine();
       await engine.enqueue({ runs: runsOf("send-email", 1) });
-      const sendEmail = defineTask("send-email", { schema: v.object({}), handler: async () => undefined });
+      const sendEmailTask = defineTask("send-email", { schema: v.object({}), handler: async () => undefined });
       const running = lifecycleScenarioOf({
-        tasks: [sendEmail] as AnyTaskDefinition[],
+        tasks: [sendEmailTask] as AnyTaskDefinition[],
         engine,
         prepareDriver: (fakeRedisDriver) => {
           readyAtTheFloor(fakeRedisDriver);

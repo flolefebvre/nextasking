@@ -1,7 +1,7 @@
 import type { EpochMilliseconds } from "./durations.js";
 import { storedRunIdOf } from "./engine/engine-keys.js";
 import type { RunIdentity } from "./engine/engine-keys.js";
-import type { IndexScore, PagingDirection } from "./engine/index-page-script.js";
+import type { IndexScore, ListOrder, PagingDirection } from "./engine/index-page-script.js";
 import { isOrderGroup, isRunState, orderGroupOf } from "./run-states.js";
 import type { OrderGroup, RunState } from "./run-states.js";
 
@@ -15,6 +15,7 @@ export type RunListRequest = {
   listedStates: readonly RunState[] | null;
   listedTasks: readonly string[] | null;
   timeRange: TimeRange;
+  order: ListOrder;
 };
 
 export type RunListPlace = RunIdentity & { orderGroup: OrderGroup; score: IndexScore };
@@ -85,6 +86,7 @@ export function encodeRunListCursor({
   listedStates,
   listedTasks,
   timeRange,
+  order,
   direction,
   place,
 }: RunListCursorContent): RunListCursor {
@@ -97,6 +99,7 @@ export function encodeRunListCursor({
     listedTasks,
     timeRange.from ?? null,
     timeRange.until ?? null,
+    order,
   ]);
 }
 
@@ -132,6 +135,11 @@ export function decodeRunListCursor(cursor: unknown, runListRequest: RunListRequ
       `Invalid listRuns cursor: it pages through ${shownTimeRangeOf(content.timeRange)}, not ${shownTimeRangeOf(runListRequest.timeRange)}`,
     );
   }
+  if (content.order !== runListRequest.order) {
+    throw new Error(
+      `Invalid listRuns cursor: it pages through runs in ${content.order} order, not in ${runListRequest.order} order`,
+    );
+  }
   return { direction: content.direction, place: content.place };
 }
 
@@ -154,6 +162,10 @@ function isStorableRun(task: string, runId: string): boolean {
 
 function isPagingDirection(value: unknown): value is PagingDirection {
   return value === "forward" || value === "backward";
+}
+
+function isListOrder(value: unknown): value is ListOrder {
+  return value === "descending" || value === "ascending";
 }
 
 function isListOrEvery<Name>(value: unknown, isName: (element: unknown) => element is Name): value is Name[] | null {
@@ -204,6 +216,7 @@ type CursorFields = {
   listedStates: unknown;
   listedTasks: unknown;
   timeRange: TimeRange | undefined;
+  order: unknown;
 };
 
 function contentOf({
@@ -212,16 +225,18 @@ function contentOf({
   listedStates,
   listedTasks,
   timeRange,
+  order,
 }: CursorFields): RunListCursorContent | undefined {
   if (
     !isListOrEvery(listedStates, isRunState) ||
     !isListOrEvery(listedTasks, isNonEmptyString) ||
     timeRange === undefined ||
+    !isListOrder(order) ||
     !isPagingDirection(direction)
   ) {
     return undefined;
   }
-  const runListRequest = { listedStates, listedTasks, timeRange };
+  const runListRequest = { listedStates, listedTasks, timeRange, order };
   if (placeFields === null) {
     return direction === "backward" ? { ...runListRequest, direction, place: undefined } : undefined;
   }
@@ -231,9 +246,16 @@ function contentOf({
 
 function contentIn(cursor: unknown): RunListCursorContent | undefined {
   const fields = cursorFieldsOf(cursor);
-  if (fields?.[0] === CURSOR_FORMAT_VERSION && fields.length === 7) {
-    const [, direction, placeFields, listedStates, listedTasks, from, until] = fields;
-    return contentOf({ direction, placeFields, listedStates, listedTasks, timeRange: timeRangeOf(from, until) });
+  if (fields?.[0] === CURSOR_FORMAT_VERSION && fields.length === 8) {
+    const [, direction, placeFields, listedStates, listedTasks, from, until, order] = fields;
+    return contentOf({
+      direction,
+      placeFields,
+      listedStates,
+      listedTasks,
+      timeRange: timeRangeOf(from, until),
+      order,
+    });
   }
   if (fields?.[0] === FORWARD_ONLY_CURSOR_FORMAT_VERSION && fields.length === 6) {
     const [, state, listedTask, score, task, runId] = fields;
@@ -244,6 +266,7 @@ function contentIn(cursor: unknown): RunListCursorContent | undefined {
           listedStates: [state],
           listedTasks: listedTask === null ? null : [listedTask],
           timeRange: EVERY_TIME,
+          order: "descending",
         })
       : undefined;
   }

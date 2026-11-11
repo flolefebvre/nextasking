@@ -107,6 +107,11 @@ describe("listRuns refuses, before any round trip", () => {
     ["a task that is null", { task: null }, 'Unknown task "null"'],
     ["a task that is a number", { task: 7 }, 'Unknown task "7"'],
     [
+      "an order that is not one",
+      { state: "failed", order: "newest" },
+      'Invalid listRuns order: "newest" is not "descending" or "ascending"',
+    ],
+    [
       "a start that is not a Date",
       { state: "failed", from: "2026-11-11T08:00:00.000Z" },
       'Invalid listRuns from: pass a Date, got "2026-11-11T08:00:00.000Z"',

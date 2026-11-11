@@ -205,9 +205,10 @@ describe("the root export", () => {
     expectTypeOf<ListRunsOptions["state"]>().toEqualTypeOf<RunState | readonly RunState[] | undefined>();
   });
 
-  test("takes a time range of Dates on listRuns", () => {
+  test("takes a time range of Dates and an order on listRuns", () => {
     expectTypeOf<ListRunsOptions["from"]>().toEqualTypeOf<Date | undefined>();
     expectTypeOf<ListRunsOptions["until"]>().toEqualTypeOf<Date | undefined>();
+    expectTypeOf<ListRunsOptions["order"]>().toEqualTypeOf<"descending" | "ascending" | undefined>();
     const listRecentFailures = () => nextasking.listRuns({ state: "failed", from: new Date(0), until: new Date() });
 
     expectTypeOf(listRecentFailures).returns.resolves.toHaveProperty("totalRunCount").toEqualTypeOf<number>();

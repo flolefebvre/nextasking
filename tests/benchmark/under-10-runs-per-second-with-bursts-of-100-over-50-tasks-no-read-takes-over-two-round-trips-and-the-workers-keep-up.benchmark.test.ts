@@ -181,6 +181,18 @@ benchmarkTest(
             const cursor = cursorAfterTheFirstPageOfEveryState;
             await measureRead("listRuns every state, second page", () => reader.listRuns({ cursor }));
           }
+          let cursorAfterTheFirstAscendingPageOfEveryState: string | undefined;
+          await measureRead("listRuns every state ascending", async () => {
+            ({ nextCursor: cursorAfterTheFirstAscendingPageOfEveryState } = await reader.listRuns({
+              order: "ascending",
+            }));
+          });
+          if (cursorAfterTheFirstAscendingPageOfEveryState !== undefined) {
+            const cursor = cursorAfterTheFirstAscendingPageOfEveryState;
+            await measureRead("listRuns every state ascending, second page", () =>
+              reader.listRuns({ order: "ascending", cursor }),
+            );
+          }
           await measureRead("listRuns pending of one task", () => reader.listRuns({ state: "pending", task }));
           await measureRead("countRuns", () => reader.countRuns());
           await measureRead("getEvent", () => reader.getEvent(LOAD_EVENT_NAME, latestEventId));

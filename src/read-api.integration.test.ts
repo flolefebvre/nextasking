@@ -986,6 +986,21 @@ engineTest(
   },
 );
 
+type WalksBothWays = { forwardPages: RunPageOf<AnyListedRun>[]; backwardPages: RunPageOf<AnyListedRun>[] };
+
+async function walksBothWaysOf(reader: ReadApi, options: RunListOptions, limit: number): Promise<WalksBothWays> {
+  const forwardPages = await walkedRunPagesOf(reader, options, [limit]);
+  const lastPage = forwardPages.at(-1)!;
+  const pagesBeforeTheLast = await walkedRunPagesOf(
+    reader,
+    options,
+    [limit],
+    lastPage.previousCursor!,
+    "previousCursor",
+  );
+  return { forwardPages, backwardPages: [...pagesBeforeTheLast, lastPage] };
+}
+
 function runIdsOfRunPages(pages: readonly RunPageOf<AnyListedRun>[]): RunId[] {
   return runIdsOfPages(pages.map(({ runs }) => runs));
 }
@@ -997,24 +1012,29 @@ for (const [options, limit, readerOfTheRuns] of [
   [{}, 3, readerOfRunsInFourOrderGroupsOverTwoTasks],
   [{}, 4, readerOfRunsInFourOrderGroupsOverTwoTasks],
   [{ state: ["executing", "failed"] }, 1, readerOfRunsInFourOrderGroupsOverTwoTasks],
+  [{ state: "suspended", order: "ascending" }, 3, readerOfTenRunsSuspendedUntilTheSameInstantOverTwoTasks],
+  [
+    { state: "suspended", task: "send-email", order: "ascending" },
+    2,
+    readerOfTenRunsSuspendedUntilTheSameInstantOverTwoTasks,
+  ],
+  [{ order: "ascending" }, 3, readerOfRunsInFourOrderGroupsOverTwoTasks],
+  [{ state: ["executing", "failed"], order: "ascending" }, 1, readerOfRunsInFourOrderGroupsOverTwoTasks],
 ] as const) {
   engineTest(
     `a walk backward from the last page lists the runs of a walk forward in the same order, ${JSON.stringify(options)} in pages of ${String(limit)}`,
     async (context) => {
       const reader = await readerOfTheRuns(context);
-      const forwardPages = await walkedRunPagesOf(reader, options, [limit]);
+      const { forwardPages, backwardPages } = await walksBothWaysOf(reader, options, limit);
       const lastPage = forwardPages.at(-1)!;
 
-      const backwardPages = await walkedRunPagesOf(
-        reader,
-        options,
-        [limit],
-        lastPage.previousCursor!,
-        "previousCursor",
+      expect(runIdsOfRunPages(backwardPages)).toEqual(runIdsOfRunPages(forwardPages));
+      expect(backwardPages.map(pageFiguresOf)).toEqual(forwardPages.map(pageFiguresOf));
+      expect(forwardPages.map(({ firstRunPosition }) => firstRunPosition)).toEqual(
+        forwardPages.map((_page, pageNumber) => pageNumber * limit + 1),
       );
-
-      expect(runIdsOfRunPages([...backwardPages, lastPage])).toEqual(runIdsOfRunPages(forwardPages));
-      expect([...backwardPages, lastPage].map(pageFiguresOf)).toEqual(forwardPages.map(pageFiguresOf));
+      expect(lastPage.totalRunCount).toBe(runIdsOfRunPages(forwardPages).length);
+      expect(forwardPages[0]).not.toHaveProperty("previousCursor");
     },
   );
 }
@@ -1425,7 +1445,7 @@ engineTest(
       oldCursor: reader.listRuns({ state: "failed", cursor: cursorOfFields([1, "failed", 0, 50]) }),
       forwardFromNoPlace: reader.listRuns({
         state: "failed",
-        cursor: cursorOfFields([3, "forward", null, ["failed"], null, null, null]),
+        cursor: cursorOfFields([3, "forward", null, ["failed"], null, null, null, "descending"]),
       }),
       invalidState: reader.listRuns({ state: "sleeping" as RunState }),
       invalidLimit: reader.listRuns({ state: "failed", limit: 0 }),
@@ -1559,9 +1579,7 @@ engineTest(
     const reader = readerOf(context);
     const options = rangeOfRunsTwoToSixOf(runsFinishedApart);
 
-    const forwardPages = await walkedRunPagesOf(reader, options, [2]);
-    const lastPage = forwardPages.at(-1)!;
-    const backwardPages = await walkedRunPagesOf(reader, options, [2], lastPage.previousCursor!, "previousCursor");
+    const { forwardPages, backwardPages } = await walksBothWaysOf(reader, options, 2);
     const pageFromAStartAlone = await reader.listRuns({ state: ENDED_STATES, from: new Date(finishedAts[2]!) });
     const pageUpToAnEndAlone = await reader.listRuns({ state: ENDED_STATES, until: new Date(finishedAts[6]!) });
 
@@ -1572,8 +1590,8 @@ engineTest(
       { runCount: 1, totalRunCount: 5, firstRunPosition: 5, hasNextCursor: false },
     ]);
     expect(forwardPages[0]).not.toHaveProperty("previousCursor");
-    expect(runIdsOfRunPages([...backwardPages, lastPage])).toEqual(runIds.slice(2, 7));
-    expect([...backwardPages, lastPage].map(pageFiguresOf)).toEqual(forwardPages.map(pageFiguresOf));
+    expect(runIdsOfRunPages(backwardPages)).toEqual(runIds.slice(2, 7));
+    expect(backwardPages.map(pageFiguresOf)).toEqual(forwardPages.map(pageFiguresOf));
     expect(pageFromAStartAlone.runs.map(({ runId }) => runId)).toEqual(runIds.slice(0, 3));
     expect(pageFromAStartAlone.totalRunCount).toBe(3);
     expect(pageUpToAnEndAlone.runs.map(({ runId }) => runId)).toEqual(runIds.slice(6));
@@ -1715,3 +1733,141 @@ engineTest(
     ]);
   },
 );
+
+engineTest(
+  "listRuns in ascending order over one order group, equal scores across tasks, lists the descending walk reversed",
+  async (context) => {
+    const reader = await readerOfTenRunsSuspendedUntilTheSameInstantOverTwoTasks(context);
+
+    const descendingPages = await walkedPagesOf(reader, { state: "suspended" }, [3]);
+    const ascendingPages = await walkedPagesOf(reader, { state: "suspended", order: "ascending" }, [3]);
+
+    expect(runIdsOfPages(ascendingPages)).toEqual([...runIdsOfPages(descendingPages)].reverse());
+    expect(runIdsOfPages(ascendingPages)).toHaveLength(10);
+  },
+);
+
+engineTest(
+  "listRuns in ascending order over every state keeps the blocks in their sequence, each reversed inside",
+  async (context) => {
+    const reader = await readerOfRunsInFourOrderGroupsOverTwoTasks(context);
+
+    const pages = await walkedRunPagesOf(reader, { order: "ascending" }, [2]);
+
+    const runIdsOfEachBlockReversed: RunId[] = [];
+    for (const groupStates of STATES_BY_ORDER_GROUP_IN_BLOCK_SEQUENCE) {
+      runIdsOfEachBlockReversed.push(...(await runIdsInPromisedOrderOf(context, TASK_NAMES, groupStates)).reverse());
+    }
+    expect(runIdsOfRunPages(pages)).toEqual(runIdsOfEachBlockReversed);
+    expect(pages.flatMap(({ runs }) => runs.map(({ state }) => state))).toEqual([
+      "executing",
+      "executing",
+      "pending",
+      "pending",
+      "pending",
+      "suspended",
+      "suspended",
+      "completed",
+      "completed",
+      "failed",
+      "completed",
+    ]);
+    expect(pages.map(pageFiguresOf).map(({ totalRunCount }) => totalRunCount)).toEqual(
+      pages.map(() => RUN_COUNT_IN_FOUR_ORDER_GROUPS),
+    );
+  },
+);
+
+engineTest(
+  "listRuns with no order lists exactly what it lists in descending order, and their cursors agree",
+  async (context) => {
+    const reader = await readerOfRunsInFourOrderGroupsOverTwoTasks(context);
+    const pageWithNoOrder = await reader.listRuns({ limit: 3 });
+    const descendingPage = await reader.listRuns({ limit: 3, order: "descending" });
+
+    const pageAfterTheNoOrderCursor = await reader.listRuns({
+      limit: 3,
+      order: "descending",
+      cursor: pageWithNoOrder.nextCursor!,
+    });
+    const pageAfterTheDescendingCursor = await reader.listRuns({ limit: 3, cursor: descendingPage.nextCursor! });
+
+    expect(descendingPage).toEqual(pageWithNoOrder);
+    expect(pageAfterTheNoOrderCursor).toEqual(pageAfterTheDescendingCursor);
+    expect(pageWithNoOrder.runs.map(({ runId }) => runId)).toEqual(
+      (await runIdsInBlocksOf(context, TASK_NAMES)).slice(0, 3),
+    );
+  },
+);
+
+engineTest("listRuns refuses a cursor of one order with the other, naming both", async (context) => {
+  const reader = await readerOfTenRunsSuspendedUntilTheSameInstantOverTwoTasks(context);
+  const descendingCursor = (await reader.listRuns({ state: "suspended", limit: 2 })).nextCursor!;
+  const ascendingCursor = (await reader.listRuns({ state: "suspended", limit: 2, order: "ascending" })).nextCursor!;
+
+  const listings = [
+    reader.listRuns({ state: "suspended", order: "ascending", cursor: descendingCursor }),
+    reader.listRuns({ state: "suspended", cursor: ascendingCursor }),
+  ];
+
+  await expect(listings[0]).rejects.toThrow(
+    "Invalid listRuns cursor: it pages through runs in descending order, not in ascending order",
+  );
+  await expect(listings[1]).rejects.toThrow(
+    "Invalid listRuns cursor: it pages through runs in ascending order, not in descending order",
+  );
+});
+
+const RUNS_SHARING_A_SCORE_AT_EACH_BOUND = [0, 1, 1, 1, 2, 2, 3, 3, 3, 4, 5];
+
+for (const limit of [2, 3]) {
+  engineTest(
+    `listRuns in ascending order inside a time range, runs of two tasks sharing the score of each bound, walks both ways in pages of ${String(limit)} with its total, positions and cursors`,
+    async (context) => {
+      const { runIds, finishedAts } = await endedRunsOfTwoTasksFinishedSecondsApart(
+        context,
+        RUNS_SHARING_A_SCORE_AT_EACH_BOUND,
+      );
+      const reader = readerOf(context);
+      const options: RunListOptions = {
+        state: ENDED_STATES,
+        from: new Date(finishedAts[6]!),
+        until: new Date(finishedAts[1]!),
+        order: "ascending",
+      };
+      const runIdsInside = new Set(runIds.slice(1, 9));
+      const runIdsInAscendingOrder = (await runIdsInPromisedOrderOf(context, TASK_NAMES, ENDED_STATES))
+        .filter((runId) => runIdsInside.has(runId))
+        .reverse();
+
+      const { forwardPages, backwardPages } = await walksBothWaysOf(reader, options, limit);
+      const pageBeforeTheSecond = await reader.listRuns({
+        ...options,
+        limit,
+        cursor: forwardPages[1]!.previousCursor!,
+      });
+      const traffic = await readTrafficOf(context.client, () =>
+        reader.listRuns({ ...options, limit, cursor: forwardPages[1]!.nextCursor! }),
+      );
+
+      expect(finishedAts.slice(1, 4)).toEqual([finishedAts[1], finishedAts[1], finishedAts[1]]);
+      expect(finishedAts.slice(6, 9)).toEqual([finishedAts[6], finishedAts[6], finishedAts[6]]);
+      expect(runIdsOfRunPages(forwardPages)).toEqual(runIdsInAscendingOrder);
+      expect(runIdsOfRunPages(forwardPages)).toHaveLength(8);
+      expect(forwardPages.map(pageFiguresOf)).toEqual(
+        forwardPages.map((page, pageNumber) => ({
+          runCount: page.runs.length,
+          totalRunCount: 8,
+          firstRunPosition: pageNumber * limit + 1,
+          hasNextCursor: pageNumber < forwardPages.length - 1,
+        })),
+      );
+      expect(forwardPages[0]).not.toHaveProperty("previousCursor");
+      expect(runIdsOfRunPages(backwardPages)).toEqual(runIdsInAscendingOrder);
+      expect(backwardPages.map(pageFiguresOf)).toEqual(forwardPages.map(pageFiguresOf));
+      expect(pageBeforeTheSecond).toEqual(forwardPages[0]);
+      expect(traffic.roundTripCount).toBe(2);
+      expect(traffic.sentCommands[0]?.args).toContain("ascending");
+    },
+  );
+}

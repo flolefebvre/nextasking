@@ -160,7 +160,16 @@ export type NextaskingConfig<
   tasks: Tasks;
 };
 
-export const DEFAULT_PREFIX = "nextasking";
+const DEFAULT_PREFIX = "nextasking";
+
+export function prefixOf(configuredPrefix: string | undefined): string {
+  if (configuredPrefix === "") {
+    throw new Error(
+      `Invalid prefix: "" is empty: leave prefix out for the default "${DEFAULT_PREFIX}", or give a non-empty one`,
+    );
+  }
+  return configuredPrefix ?? DEFAULT_PREFIX;
+}
 
 export type NextaskingControls = {
   close: () => Promise<void>;
@@ -189,7 +198,7 @@ export function createNextasking<
   const appEvents: readonly EventDefinition[] = config.events ?? [];
   rejectInvalidConfig(config.tasks, appEvents);
   const events: readonly EventDefinition[] = [...appEvents, ...BUILT_IN_EVENTS];
-  const prefix = config.prefix ?? DEFAULT_PREFIX;
+  const prefix = prefixOf(config.prefix);
   const logger = config.logger ?? silentLogger;
   const connections = createRedisConnections(config.connection, logger);
   const tasksByName = new Map<string, AnyTaskDefinition>(config.tasks.map((task) => [task.name, task]));

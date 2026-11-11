@@ -254,6 +254,23 @@ describe("createNextasking", () => {
     expect(networkResources()).toEqual(networkResourcesBefore);
   });
 
+  test("rejects an empty prefix, before opening any connection", async () => {
+    const networkResourcesBefore = networkResources();
+
+    expect(() =>
+      createNextasking({ connection: { url: UNREACHABLE_URL }, prefix: "", tasks: [sendWelcomeEmail] }),
+    ).toThrow('Invalid prefix: "" is empty: leave prefix out for the default "nextasking", or give a non-empty one');
+    await setImmediate();
+
+    expect(networkResources()).toEqual(networkResourcesBefore);
+  });
+
+  test("accepts a prefix of one character", () => {
+    expect(() =>
+      createNextasking({ connection: { url: UNREACHABLE_URL }, prefix: "q", tasks: [sendWelcomeEmail] }),
+    ).not.toThrow();
+  });
+
   test("accepts a valid connection.giveUpAfter", () => {
     expect(() =>
       createNextasking({ connection: { url: UNREACHABLE_URL, giveUpAfter: "2s" }, tasks: [sendWelcomeEmail] }),

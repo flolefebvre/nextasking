@@ -15,7 +15,7 @@ import type { RunId } from "./ids.js";
 import { silentLogger } from "./logger.js";
 import { builtInCommandOf } from "./redis-client.js";
 import type { RedisClient } from "./redis-client.js";
-import { DEFAULT_PREFIX } from "./registry.js";
+import { prefixOf } from "./registry.js";
 import type { ControlledScheduledTaskNameIn, ControlledTaskNameIn, Register } from "./registry.js";
 
 export type NextaskingControlOptions = {
@@ -67,8 +67,8 @@ const KEYS_SCANNED_PER_CALL = 1000;
 const GLOB_SPECIAL_CHARACTERS = /[*?[\]\\]/g;
 
 export function createNextaskingControl(options: NextaskingControlOptions): NextaskingControl {
+  const prefix = prefixOf(options.prefix);
   const connections = createRedisConnections(options.connection, silentLogger);
-  const prefix = options.prefix ?? DEFAULT_PREFIX;
   const keys = engineKeysOf(prefix);
   let openEngine: OpenEngine | undefined;
 

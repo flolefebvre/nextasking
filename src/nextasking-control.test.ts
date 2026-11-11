@@ -75,6 +75,12 @@ describe("createNextaskingControl", () => {
     );
   });
 
+  test("rejects an empty prefix", () => {
+    expect(() => createNextaskingControl({ connection: { url: "redis://localhost:6379" }, prefix: "" })).toThrow(
+      'Invalid prefix: "" is empty: leave prefix out for the default "nextasking", or give a non-empty one',
+    );
+  });
+
   test.each(["redis://localhost:6379", "rediss://default:s3cr3t@cache.example.com:6380/2"])("accepts %s", (url) => {
     expect(() => createNextaskingControl({ connection: { url } })).not.toThrow();
   });

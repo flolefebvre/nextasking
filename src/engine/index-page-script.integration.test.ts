@@ -1,5 +1,6 @@
 import { expect, vi } from "vitest";
 
+import { endRuns } from "../../tests/ended-runs.js";
 import { engineTest, fetchedLockedRunsOf } from "../../tests/engine-test.js";
 import type { EngineTestContext } from "../../tests/engine-test.js";
 import { serverInstantInMillisecondsOf } from "../../tests/server-instant.js";
@@ -9,7 +10,14 @@ import { storedRunIdOf } from "./engine-keys.js";
 import type { StoredRunId } from "./engine-keys.js";
 import type { LockedRun } from "./engine.js";
 import { indexPagesCommandOf, indexPagesOf } from "./index-page-script.js";
-import type { IndexPage, IndexPageBoundary, IndexPlace } from "./index-page-script.js";
+import type {
+  IndexInList,
+  IndexPage,
+  IndexPageBoundary,
+  IndexPlace,
+  ListPlace,
+  PagingDirection,
+} from "./index-page-script.js";
 
 const EARLIER_RUN_IDS_IN_INDEX_ORDER: readonly RunId[] = [
   "\u{1F600}-astral",
@@ -49,16 +57,33 @@ async function twoGroupsOfExecutingRunsOf(context: EngineTestContext): Promise<T
     interval: 1,
   });
   const later = await runsStartedTogether(context, LATER_RUN_IDS_IN_INDEX_ORDER);
+  expect(later.startedAt).toBeGreaterThan(earlier.startedAt);
   return { earlier, later, indexKey: context.keys.runIndex("send-email", "executing") };
 }
 
-async function indexPagesAt(
+async function indexPagesInListAt(
   { client }: EngineTestContext,
-  indexKeys: readonly string[],
+  indexesInList: readonly IndexInList[],
   limit: number,
   boundary: IndexPageBoundary,
 ): Promise<IndexPage[]> {
-  return indexPagesOf(await client.send(indexPagesCommandOf({ indexKeys, limit, boundary })), indexKeys.length);
+  return indexPagesOf(await client.send(indexPagesCommandOf({ indexesInList, limit, boundary })), indexesInList.length);
+}
+
+const ONE_ORDER_GROUP_NUMBER = 1;
+
+async function indexPagesAt(
+  context: EngineTestContext,
+  indexKeys: readonly string[],
+  limit: number,
+  { direction, place }: { direction: PagingDirection; place: IndexPlace | undefined },
+): Promise<IndexPage[]> {
+  return indexPagesInListAt(
+    context,
+    indexKeys.map((indexKey) => ({ indexKey, orderGroupNumber: ONE_ORDER_GROUP_NUMBER })),
+    limit,
+    { direction, place: place === undefined ? undefined : { ...place, orderGroupNumber: ONE_ORDER_GROUP_NUMBER } },
+  );
 }
 
 async function indexPagesAfter(
@@ -399,5 +424,150 @@ engineTest(
     expect(indexPage.places.map(({ storedRunId }) => storedRunId)).toEqual(
       storedRunIdsOf(RUN_IDS_IN_INDEX_ORDER.slice(0, 6)),
     );
+  },
+);
+
+type IndexesOfThreeGroups = {
+  executing: IndexInList;
+  pending: IndexInList;
+  completed: IndexInList;
+  indexesInList: IndexInList[];
+};
+
+async function indexesOfThreeGroupsOf(context: EngineTestContext): Promise<IndexesOfThreeGroups> {
+  await endRuns(context.engine, "send-email", ["ended-1", "ended-2", "ended-3"], "complete");
+  await context.engine.enqueue({
+    runs: ["queued-1", "queued-2", "queued-3", "queued-4"].map((runId) => ({
+      runId,
+      task: "send-email",
+      payload: "",
+      retries: 0,
+    })),
+  });
+  await fetchedLockedRunsOf(context, 2);
+  const [executing, pending, completed] = [
+    { indexKey: context.keys.runIndex("send-email", "executing"), orderGroupNumber: 1 },
+    { indexKey: context.keys.runIndex("send-email", "pending"), orderGroupNumber: 2 },
+    { indexKey: context.keys.runIndex("send-email", "completed"), orderGroupNumber: 4 },
+  ];
+  return { executing, pending, completed, indexesInList: [executing, pending, completed] };
+}
+
+async function placesAtRanksOf(
+  { redis }: EngineTestContext,
+  { indexKey }: IndexInList,
+  firstRank: number,
+  lastRank: number,
+): Promise<IndexPlace[]> {
+  const entries = await redis.zRangeWithScores(indexKey, firstRank, lastRank, { REV: true });
+  return entries.map(({ value, score }) => ({ storedRunId: value, score }));
+}
+
+async function listPlaceAtRankOf(
+  context: EngineTestContext,
+  indexInList: IndexInList,
+  rank: number,
+): Promise<ListPlace> {
+  const [place] = await placesAtRanksOf(context, indexInList, rank, rank);
+  return { ...place!, orderGroupNumber: indexInList.orderGroupNumber };
+}
+
+engineTest(
+  "a page forward from a place counts the indexes of the groups before its group wholly before it, those after wholly after, and reads only what the page can hold",
+  async (context) => {
+    const { pending, completed, indexesInList } = await indexesOfThreeGroupsOf(context);
+    const place = await listPlaceAtRankOf(context, pending, 0);
+
+    const indexPages = await indexPagesInListAt(context, indexesInList, 2, { direction: "forward", place });
+
+    expect(indexPages).toEqual([
+      { entryCount: 2, entryCountBeforeBoundary: 2, firstEntryRank: 2, places: [] },
+      {
+        entryCount: 2,
+        entryCountBeforeBoundary: 1,
+        firstEntryRank: 1,
+        places: await placesAtRanksOf(context, pending, 1, 1),
+      },
+      {
+        entryCount: 3,
+        entryCountBeforeBoundary: 0,
+        firstEntryRank: 0,
+        places: await placesAtRanksOf(context, completed, 0, 0),
+      },
+    ]);
+  },
+);
+
+engineTest("a page forward that the first groups fill reads no entry of the groups after them", async (context) => {
+  const { executing, indexesInList } = await indexesOfThreeGroupsOf(context);
+
+  const indexPages = await indexPagesInListAt(context, indexesInList, 2, { direction: "forward", place: undefined });
+
+  expect(indexPages).toEqual([
+    {
+      entryCount: 2,
+      entryCountBeforeBoundary: 0,
+      firstEntryRank: 0,
+      places: await placesAtRanksOf(context, executing, 0, 1),
+    },
+    { entryCount: 2, entryCountBeforeBoundary: 0, firstEntryRank: 0, places: [] },
+    { entryCount: 3, entryCountBeforeBoundary: 0, firstEntryRank: 0, places: [] },
+  ]);
+});
+
+engineTest(
+  "a page backward from a place reads the groups before its group from the last, only what the page can hold",
+  async (context) => {
+    const { pending, completed, indexesInList } = await indexesOfThreeGroupsOf(context);
+    const place = await listPlaceAtRankOf(context, completed, 1);
+
+    const indexPages = await indexPagesInListAt(context, indexesInList, 2, { direction: "backward", place });
+
+    expect(indexPages).toEqual([
+      { entryCount: 2, entryCountBeforeBoundary: 2, firstEntryRank: 2, places: [] },
+      {
+        entryCount: 2,
+        entryCountBeforeBoundary: 2,
+        firstEntryRank: 1,
+        places: await placesAtRanksOf(context, pending, 1, 1),
+      },
+      {
+        entryCount: 3,
+        entryCountBeforeBoundary: 1,
+        firstEntryRank: 0,
+        places: await placesAtRanksOf(context, completed, 0, 0),
+      },
+    ]);
+  },
+);
+
+engineTest(
+  "a page backward from a place with fewer entries before it than the limit, across every group, reads the head of the list",
+  async (context) => {
+    const { executing, pending, completed, indexesInList } = await indexesOfThreeGroupsOf(context);
+    const place = await listPlaceAtRankOf(context, completed, 1);
+
+    const indexPages = await indexPagesInListAt(context, indexesInList, 6, { direction: "backward", place });
+
+    expect(indexPages).toEqual([
+      {
+        entryCount: 2,
+        entryCountBeforeBoundary: 2,
+        firstEntryRank: 0,
+        places: await placesAtRanksOf(context, executing, 0, 1),
+      },
+      {
+        entryCount: 2,
+        entryCountBeforeBoundary: 2,
+        firstEntryRank: 0,
+        places: await placesAtRanksOf(context, pending, 0, 1),
+      },
+      {
+        entryCount: 3,
+        entryCountBeforeBoundary: 1,
+        firstEntryRank: 0,
+        places: await placesAtRanksOf(context, completed, 0, 1),
+      },
+    ]);
   },
 );

@@ -175,7 +175,9 @@ describe("the root export", () => {
     expectTypeOf<FailedWelcomeEmailRun["task"]>().toEqualTypeOf<"send-welcome-email">();
     expectTypeOf<FailedWelcomeEmailRun["reason"]>().toEqualTypeOf<FailureReason>();
     expectTypeOf<FailedWelcomeEmailRun["lastErrorMessage"]>().toEqualTypeOf<string | undefined>();
-    expectTypeOf<ListRunsOptions["task"]>().toEqualTypeOf<RegisteredTaskName | undefined>();
+    expectTypeOf<ListRunsOptions["task"]>().toEqualTypeOf<
+      RegisteredTaskName | readonly RegisteredTaskName[] | undefined
+    >();
     expectTypeOf<RunPage["runs"][number]>().toEqualTypeOf<ListedRun>();
     expectTypeOf<RunPage["totalRunCount"]>().toEqualTypeOf<number>();
     expectTypeOf<RunPage["firstRunPosition"]>().toEqualTypeOf<number | undefined>();
@@ -184,6 +186,37 @@ describe("the root export", () => {
     expectTypeOf(nextasking.countRuns).returns.resolves.toEqualTypeOf<RunCounts>();
     // @ts-expect-error a listed run carries no payload
     expectTypeOf<ListedRun["payload"]>().toBeUnknown();
+  });
+
+  test("types listRuns' runs by the states listed, one state keeping its own type, and every state when none is", () => {
+    const listFailedRuns = async () => (await nextasking.listRuns({ state: "failed" })).runs;
+    const listEndedRuns = async () => (await nextasking.listRuns({ state: ["completed", "failed"] })).runs;
+    const listEveryRun = async () => (await nextasking.listRuns({ limit: 10 })).runs;
+
+    expectTypeOf(listFailedRuns).returns.resolves.items.toEqualTypeOf<
+      Awaited<ReturnType<typeof nextasking.listRuns<"failed">>>["runs"][number]
+    >();
+    expectTypeOf(listFailedRuns).returns.resolves.items.toHaveProperty("state").toEqualTypeOf<"failed">();
+    expectTypeOf(listEndedRuns).returns.resolves.items.toHaveProperty("state").toEqualTypeOf<"completed" | "failed">();
+    expectTypeOf(listEveryRun).returns.resolves.items.toEqualTypeOf<ListedRun>();
+    expectTypeOf<ListRunsOptions["state"]>().toEqualTypeOf<RunState | readonly RunState[] | undefined>();
+  });
+
+  test("types listRuns' runs by the tasks listed, one task keeping its own type", () => {
+    const listWelcomeEmailRuns = async () =>
+      (await nextasking.listRuns({ state: "pending", task: "send-welcome-email" })).runs;
+    const listRunsOfTwoTasks = async () =>
+      (await nextasking.listRuns({ task: ["send-welcome-email", "purge-expired-sessions"] })).runs;
+
+    expectTypeOf(listWelcomeEmailRuns).returns.resolves.items.toEqualTypeOf<
+      Awaited<ReturnType<typeof nextasking.listRuns<"pending", "send-welcome-email">>>["runs"][number]
+    >();
+    expectTypeOf(listWelcomeEmailRuns)
+      .returns.resolves.items.toHaveProperty("task")
+      .toEqualTypeOf<"send-welcome-email">();
+    expectTypeOf(listRunsOfTwoTasks)
+      .returns.resolves.items.toHaveProperty("task")
+      .toEqualTypeOf<"send-welcome-email" | "purge-expired-sessions">();
   });
 
   test("describes the tasks and events, with no schema and no handler, for a run-now picker", () => {

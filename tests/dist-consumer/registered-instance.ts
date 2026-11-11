@@ -406,6 +406,45 @@ export const failedRunsPage: Promise<RunPage> = nextasking.listRuns({ state: "fa
 
 export const listRunsOptions: ListRunsOptions = { state: "pending", task: "send-welcome-email" };
 
+export const listRunsOptionsOfSeveralStates: ListRunsOptions = { state: ["pending", "executing"] };
+
+export const listRunsOptionsOfEveryState: ListRunsOptions = { limit: 20 };
+
+export const listFailedRuns = () => nextasking.listRuns({ state: "failed" });
+
+export const listEndedRuns = () => nextasking.listRuns({ state: ["completed", "failed"] });
+
+export const listEveryRun = () => nextasking.listRuns({});
+
+type ListedRunOf<List extends () => Promise<RunPage>> = Awaited<ReturnType<List>>["runs"][number];
+
+export type OneListedStateKeepsItsOwnType = Expect<
+  IsEqual<ListedRunOf<typeof listFailedRuns>, Extract<ListedRun, { state: "failed" }>>
+>;
+
+export type SeveralListedStatesGiveTheirUnion = Expect<
+  IsEqual<ListedRunOf<typeof listEndedRuns>["state"], "completed" | "failed">
+>;
+
+export type NoListedStateGivesEveryState = Expect<IsEqual<ListedRunOf<typeof listEveryRun>, ListedRun>>;
+
+export const listRunsOptionsOfSeveralTasks: ListRunsOptions = {
+  task: ["send-welcome-email", "create-default-workspace"],
+};
+
+export const listWelcomeEmailRuns = () => nextasking.listRuns({ state: "failed", task: "send-welcome-email" });
+
+export const listRunsOfTwoTasks = () =>
+  nextasking.listRuns({ task: ["send-welcome-email", "create-default-workspace"] });
+
+export type OneListedTaskKeepsItsOwnType = Expect<
+  IsEqual<ListedRunOf<typeof listWelcomeEmailRuns>, Extract<ListedRun, { state: "failed"; task: "send-welcome-email" }>>
+>;
+
+export type SeveralListedTasksGiveTheirUnion = Expect<
+  IsEqual<ListedRunOf<typeof listRunsOfTwoTasks>["task"], "send-welcome-email" | "create-default-workspace">
+>;
+
 export type RunPageHasItsTotal = Expect<IsEqual<RunPage["totalRunCount"], number>>;
 
 export type RunPageHasThePositionOfItsFirstRun = Expect<IsEqual<RunPage["firstRunPosition"], number | undefined>>;

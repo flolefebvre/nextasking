@@ -5,6 +5,7 @@ import { backdateEndedRun, engineTest, engineTestContextOf, fetchedLockedRunsOf 
 import type { EngineTestContext } from "../tests/engine-test.js";
 import type { EpochMilliseconds } from "./durations.js";
 import { integrationTest } from "../tests/integration-test.js";
+import { freshLockTokensOf } from "../tests/lock-tokens.js";
 import { readTrafficOf } from "../tests/read-traffic.js";
 import type { ReadTraffic } from "../tests/read-traffic.js";
 import { storedKeyViolationsOf } from "../tests/stored-key-violations.js";
@@ -13,10 +14,12 @@ import { withRedis } from "../tests/with-redis.js";
 import { defineScheduledTask } from "./definitions.js";
 import type { AnyTaskDefinition } from "./definitions.js";
 import { runIdentityOf, storedRunIdOf } from "./engine/engine-keys.js";
+import type { RunIdentity } from "./engine/engine-keys.js";
 import { RECORD_VERSION } from "./engine/engine.js";
 import type { LockedRun, RunToCreate, SettleOutcome } from "./engine/engine.js";
 import { createReadApi } from "./read-api.js";
 import type { ReadApi } from "./read-api.js";
+import type { RedisClient } from "./redis-client.js";
 import { UnknownEventError, UnknownTaskError } from "./errors.js";
 import { deriveFiringRunId, deriveListenerRunId } from "./ids.js";
 import type { RunId } from "./ids.js";
@@ -37,6 +40,8 @@ const DECLARED_SCHEDULES: readonly ScheduleSummary[] = [
 ];
 
 const READ_COMMAND_NAMES = new Set(["hmget", "get", "lrange", "lindex", "hgetall", "zcard", "eval", "evalsha"]);
+
+const ENDED_ORDER_GROUP_NUMBER = 4;
 
 const ATTEMPT_ERROR = { attempt: 1, name: "Error", message: "boom", stack: "Error: boom" };
 
@@ -557,12 +562,14 @@ function runIdsOfPages(pages: readonly AnyListedRun[][]): RunId[] {
 async function runIdsInPromisedOrderOf(
   { redis, keys }: EngineTestContext,
   taskNames: readonly string[],
-  state: RunState,
+  states: RunState | readonly RunState[],
 ): Promise<RunId[]> {
   const indexEntries: { storedRunId: string; score: number }[] = [];
-  for (const taskName of taskNames) {
-    for (const { value, score } of await redis.zRangeWithScores(keys.runIndex(taskName, state), 0, -1)) {
-      indexEntries.push({ storedRunId: value, score });
+  for (const state of typeof states === "string" ? [states] : states) {
+    for (const taskName of taskNames) {
+      for (const { value, score } of await redis.zRangeWithScores(keys.runIndex(taskName, state), 0, -1)) {
+        indexEntries.push({ storedRunId: value, score });
+      }
     }
   }
   const compareAsciiStoredRunIds = (left: string, right: string) => (left < right ? -1 : Number(left > right));
@@ -570,6 +577,58 @@ async function runIdsInPromisedOrderOf(
     .sort((left, right) => right.score - left.score || compareAsciiStoredRunIds(right.storedRunId, left.storedRunId))
     .map(({ storedRunId }) => runIdentityOf(storedRunId)!.runId);
 }
+
+const STATES_BY_ORDER_GROUP_IN_BLOCK_SEQUENCE: readonly (readonly RunState[])[] = [
+  ["executing"],
+  ["pending", "waitingForConcurrencySlot"],
+  ["delayed", "suspended", "backingOff"],
+  ["completed", "failed"],
+];
+
+async function runIdsInBlocksOf(
+  context: EngineTestContext,
+  taskNames: readonly string[],
+  listedStates: readonly RunState[] = RUN_STATES,
+): Promise<RunId[]> {
+  const runIds: RunId[] = [];
+  for (const groupStates of STATES_BY_ORDER_GROUP_IN_BLOCK_SEQUENCE) {
+    runIds.push(
+      ...(await runIdsInPromisedOrderOf(
+        context,
+        taskNames,
+        groupStates.filter((state) => listedStates.includes(state)),
+      )),
+    );
+  }
+  return runIds;
+}
+
+async function runsFinishedAtOneInstant(context: EngineTestContext, runs: readonly RunIdentity[]): Promise<void> {
+  const finishedAts = await Promise.all(
+    runs.map(async ({ task, runId }) => (await recordFieldOf(context, task, runId, "finishedAt")).getTime()),
+  );
+  const oneInstant = Math.min(...finishedAts) - 1000;
+  for (const [runNumber, { task, runId }] of runs.entries()) {
+    await backdateEndedRun(context, task, runId, finishedAts[runNumber]! - oneInstant);
+  }
+}
+
+async function readerOfRunsInFourOrderGroupsOverTwoTasks(context: EngineTestContext): Promise<ReadApi> {
+  await endRuns(context.engine, "send-email", ["ended-1", "ended-2"], "complete");
+  await endRuns(context.engine, "build-report", ["ended-3"], "fail");
+  await endRuns(context.engine, "build-report", ["ended-4"], "complete");
+  await runsSuspendedUntilTheSameInstant(context, [runOf("asleep-1", "send-email"), runOf("asleep-2", "build-report")]);
+  await enqueueRuns(context, [runOf("started-1", "send-email"), runOf("started-2", "build-report")]);
+  await fetchedLockedRunsOf(context, 2);
+  await enqueueRuns(context, [
+    runOf("queued-1", "send-email"),
+    runOf("queued-2", "build-report"),
+    runOf("queued-3", "send-email"),
+  ]);
+  return readerOf(context);
+}
+
+const RUN_COUNT_IN_FOUR_ORDER_GROUPS = 11;
 
 async function endRunsOfEachTask(context: EngineTestContext, runCountPerTask: number): Promise<RunId[]> {
   const endedRunIds: RunId[] = [];
@@ -826,15 +885,18 @@ function runIdsOfRunPages(pages: readonly RunPageOf<AnyListedRun>[]): RunId[] {
   return runIdsOfPages(pages.map(({ runs }) => runs));
 }
 
-for (const [options, limit] of [
-  [{ state: "suspended" }, 3],
-  [{ state: "suspended" }, 4],
-  [{ state: "suspended", task: "send-email" }, 2],
+for (const [options, limit, readerOfTheRuns] of [
+  [{ state: "suspended" }, 3, readerOfTenRunsSuspendedUntilTheSameInstantOverTwoTasks],
+  [{ state: "suspended" }, 4, readerOfTenRunsSuspendedUntilTheSameInstantOverTwoTasks],
+  [{ state: "suspended", task: "send-email" }, 2, readerOfTenRunsSuspendedUntilTheSameInstantOverTwoTasks],
+  [{}, 3, readerOfRunsInFourOrderGroupsOverTwoTasks],
+  [{}, 4, readerOfRunsInFourOrderGroupsOverTwoTasks],
+  [{ state: ["executing", "failed"] }, 1, readerOfRunsInFourOrderGroupsOverTwoTasks],
 ] as const) {
   engineTest(
     `a walk backward from the last page lists the runs of a walk forward in the same order, ${JSON.stringify(options)} in pages of ${String(limit)}`,
     async (context) => {
-      const reader = await readerOfTenRunsSuspendedUntilTheSameInstantOverTwoTasks(context);
+      const reader = await readerOfTheRuns(context);
       const forwardPages = await walkedRunPagesOf(reader, options, [limit]);
       const lastPage = forwardPages.at(-1)!;
 
@@ -984,6 +1046,264 @@ engineTest("listRuns refuses a cursor from another state or another task", async
 });
 
 engineTest(
+  "listRuns takes the same states listed in another order as the same list, and refuses a cursor from another set of states",
+  async (context) => {
+    await endRunsOfEachTask(context, 2);
+    const reader = readerOf(context);
+    const cursorOfTwoStates = (await reader.listRuns({ state: ["failed", "completed"], limit: 1 })).nextCursor!;
+    const cursorOfEveryState = (await reader.listRuns({ limit: 1 })).nextCursor!;
+
+    const pageOfTheStatesInAnotherOrder = await reader.listRuns({
+      state: ["completed", "failed"],
+      limit: 1,
+      cursor: cursorOfTwoStates,
+    });
+    const listings = [
+      reader.listRuns({ state: "completed", cursor: cursorOfTwoStates }),
+      reader.listRuns({ cursor: cursorOfTwoStates }),
+      reader.listRuns({ state: ["completed", "failed"], cursor: cursorOfEveryState }),
+    ];
+
+    expect(pageOfTheStatesInAnotherOrder.firstRunPosition).toBe(2);
+    await expect(listings[0]).rejects.toThrow(
+      'Invalid listRuns cursor: it pages through states "completed" and "failed", not "completed"',
+    );
+    await expect(listings[1]).rejects.toThrow(
+      'Invalid listRuns cursor: it pages through states "completed" and "failed", not every state',
+    );
+    await expect(listings[2]).rejects.toThrow(
+      'Invalid listRuns cursor: it pages through every state, not "completed" and "failed"',
+    );
+  },
+);
+
+engineTest(
+  "listRuns of two tasks out of three lists their runs in one order, and neither lists nor counts nor reads the third",
+  async (context) => {
+    const { client, keys } = context;
+    await endRunsOfEachTask(context, 3);
+    const reader = readerOf(context);
+
+    const pages = await walkedRunPagesOf(reader, { state: "completed", task: ["send-email", "resize-image"] }, [2]);
+    const traffic = await readTrafficOf(client, () =>
+      reader.listRuns({ state: "completed", task: ["send-email", "resize-image"] }),
+    );
+
+    expect(runIdsOfRunPages(pages)).toEqual(
+      await runIdsInPromisedOrderOf(context, ["send-email", "resize-image"], "completed"),
+    );
+    expect(pages.map(pageFiguresOf)).toEqual([
+      { runCount: 2, totalRunCount: 6, firstRunPosition: 1, hasNextCursor: true },
+      { runCount: 2, totalRunCount: 6, firstRunPosition: 3, hasNextCursor: true },
+      { runCount: 2, totalRunCount: 6, firstRunPosition: 5, hasNextCursor: false },
+    ]);
+    expect(traffic.roundTripCount).toBe(2);
+    expect(traffic.sentCommands[0]?.args.slice(0, 2)).toEqual([
+      keys.runIndex("send-email", "completed"),
+      keys.runIndex("resize-image", "completed"),
+    ]);
+    expect(traffic.sentCommands.flatMap(({ args }) => args)).not.toContain(keys.runIndex("build-report", "completed"));
+  },
+);
+
+engineTest("listRuns takes a state or a task listed twice as listed once, reading its index once", async (context) => {
+  const { client, keys } = context;
+  await endRunsOfEachTask(context, 2);
+  const reader = readerOf(context);
+  const cursorOfOneValue = (await reader.listRuns({ state: "completed", task: "send-email", limit: 1 })).nextCursor!;
+
+  const pageOfTheDuplicatedValues = await reader.listRuns({
+    state: ["completed", "completed"],
+    task: ["send-email", "send-email"],
+    limit: 1,
+    cursor: cursorOfOneValue,
+  });
+  const traffic = await readTrafficOf(client, () =>
+    reader.listRuns({ state: ["completed", "completed"], task: ["send-email", "send-email"], limit: 1 }),
+  );
+
+  expect(pageOfTheDuplicatedValues).toMatchObject({ totalRunCount: 2, firstRunPosition: 2 });
+  expect(traffic.sentCommands[0]).toEqual({
+    name: "evalsha",
+    args: [keys.runIndex("send-email", "completed"), 1, "forward", ENDED_ORDER_GROUP_NUMBER],
+  });
+});
+
+engineTest(
+  "listRuns takes the same tasks listed in another order as the same list, and refuses a cursor from another set of tasks",
+  async (context) => {
+    await endRunsOfEachTask(context, 2);
+    const reader = readerOf(context);
+    const cursorOfTwoTasks = (
+      await reader.listRuns({ state: "completed", task: ["resize-image", "send-email"], limit: 1 })
+    ).nextCursor!;
+
+    const pageOfTheTasksInAnotherOrder = await reader.listRuns({
+      state: "completed",
+      task: ["send-email", "resize-image"],
+      limit: 1,
+      cursor: cursorOfTwoTasks,
+    });
+    const listings = [
+      reader.listRuns({ state: "completed", task: "send-email", cursor: cursorOfTwoTasks }),
+      reader.listRuns({ state: "completed", task: ["send-email", "build-report"], cursor: cursorOfTwoTasks }),
+      reader.listRuns({ state: "completed", cursor: cursorOfTwoTasks }),
+    ];
+
+    expect(pageOfTheTasksInAnotherOrder.firstRunPosition).toBe(2);
+    await expect(listings[0]).rejects.toThrow(
+      'Invalid listRuns cursor: it pages through tasks "send-email" and "resize-image", not task "send-email"',
+    );
+    await expect(listings[1]).rejects.toThrow(
+      'Invalid listRuns cursor: it pages through tasks "send-email" and "resize-image", not tasks "send-email" and "build-report"',
+    );
+    await expect(listings[2]).rejects.toThrow(
+      'Invalid listRuns cursor: it pages through tasks "send-email" and "resize-image", not every task',
+    );
+  },
+);
+
+engineTest(
+  "listRuns of completed and failed runs of several tasks lists them in one order by finish time, equal finish times included",
+  async (context) => {
+    const endedRuns: RunIdentity[] = [];
+    for (const taskName of TASK_NAMES) {
+      const [completedRunIds, failedRunIds] = [runIdsOf(`${taskName}-done`, 2), runIdsOf(`${taskName}-broken`, 2)];
+      await endRuns(context.engine, taskName, completedRunIds, "complete");
+      await endRuns(context.engine, taskName, failedRunIds, "fail");
+      endedRuns.push(...[...completedRunIds, ...failedRunIds].map((runId) => ({ task: taskName, runId })));
+    }
+    await runsFinishedAtOneInstant(context, endedRuns.slice(2, 9));
+
+    const pages = await walkedPagesOf(readerOf(context), { state: ["failed", "completed"] }, [5]);
+
+    expect(runIdsOfPages(pages)).toEqual(await runIdsInPromisedOrderOf(context, TASK_NAMES, ["completed", "failed"]));
+    expect(runIdsOfPages(pages)).toHaveLength(12);
+    const finishedAts = pages.flat().map((run) => run.finishedAt!.getTime());
+    expect(finishedAts).toEqual([...finishedAts].sort((left, right) => right - left));
+    expect(new Set(pages.flat().map(({ state }) => state))).toEqual(new Set(["completed", "failed"]));
+  },
+);
+
+engineTest(
+  "listRuns of states of several order groups lists them as blocks in the fixed sequence, a page filling across a boundary",
+  async (context) => {
+    const reader = await readerOfRunsInFourOrderGroupsOverTwoTasks(context);
+
+    const pages = await walkedPagesOf(reader, { state: ["completed", "suspended", "pending", "executing"] }, [3]);
+
+    expect(runIdsOfPages(pages)).toEqual(
+      await runIdsInBlocksOf(context, TASK_NAMES, ["completed", "suspended", "pending", "executing"]),
+    );
+    expect(pages.map((runs) => runs.map(({ state }) => state))).toEqual([
+      ["executing", "executing", "pending"],
+      ["pending", "pending", "suspended"],
+      ["suspended", "completed", "completed"],
+      ["completed"],
+    ]);
+  },
+);
+
+engineTest(
+  "listRuns without a state lists every run of the instance once, block after block, and places each page in the whole list",
+  async (context) => {
+    const reader = await readerOfRunsInFourOrderGroupsOverTwoTasks(context);
+
+    const pages = await walkedRunPagesOf(reader, {}, [2]);
+
+    expect(runIdsOfRunPages(pages)).toEqual(await runIdsInBlocksOf(context, TASK_NAMES));
+    expect(pages.map(pageFiguresOf)).toEqual(
+      [2, 2, 2, 2, 2, 1].map((runCount, pageNumber) => ({
+        runCount,
+        totalRunCount: RUN_COUNT_IN_FOUR_ORDER_GROUPS,
+        firstRunPosition: pageNumber * 2 + 1,
+        hasNextCursor: pageNumber < 5,
+      })),
+    );
+    expect(pages[1]!.runs.map(({ state }) => state)).toEqual(["pending", "pending"]);
+  },
+);
+
+engineTest("a page read backward across a block boundary is the forward page it comes after", async (context) => {
+  const reader = await readerOfRunsInFourOrderGroupsOverTwoTasks(context);
+  const [, secondPage, thirdPage] = await walkedRunPagesOf(reader, {}, [3]);
+
+  const pageBeforeTheThird = await reader.listRuns({ limit: 3, cursor: thirdPage!.previousCursor! });
+
+  expect(secondPage!.runs.map(({ state }) => state)).toEqual(["pending", "pending", "suspended"]);
+  expect(pageBeforeTheThird).toEqual(secondPage);
+});
+
+engineTest(
+  "a page read backward from a place in a later block reaches the head of the whole list exactly when fewer runs than the limit come before it",
+  async (context) => {
+    const reader = await readerOfRunsInFourOrderGroupsOverTwoTasks(context);
+    const [, pageStartingTheQueuedBlock] = await walkedRunPagesOf(reader, {}, [2]);
+    const [, pageStartingAfterTheFirstQueuedRun] = await walkedRunPagesOf(reader, {}, [3, 3]);
+    const [cursorWithTwoRunsBefore, cursorWithThreeRunsBefore] = [
+      pageStartingTheQueuedBlock!.previousCursor!,
+      pageStartingAfterTheFirstQueuedRun!.previousCursor!,
+    ];
+
+    const pages = {
+      fewerThanTheLimitBefore: await reader.listRuns({ limit: 3, cursor: cursorWithTwoRunsBefore }),
+      asManyAsTheLimitBefore: await reader.listRuns({ limit: 2, cursor: cursorWithTwoRunsBefore }),
+      moreThanTheLimitBefore: await reader.listRuns({ limit: 2, cursor: cursorWithThreeRunsBefore }),
+    };
+
+    const runIdsInBlocks = await runIdsInBlocksOf(context, TASK_NAMES);
+    expect(pageStartingTheQueuedBlock!.runs[0]!.state).toBe("pending");
+    expect(pageStartingAfterTheFirstQueuedRun!.firstRunPosition).toBe(4);
+    expect(pages.fewerThanTheLimitBefore).toEqual(await reader.listRuns({ limit: 3 }));
+    expect(pages.fewerThanTheLimitBefore).toMatchObject({ firstRunPosition: 1 });
+    expect(pages.fewerThanTheLimitBefore).not.toHaveProperty("previousCursor");
+    expect(pages.asManyAsTheLimitBefore.runs.map(({ runId }) => runId)).toEqual(runIdsInBlocks.slice(0, 2));
+    expect(pages.asManyAsTheLimitBefore).toMatchObject({ firstRunPosition: 1 });
+    expect(pages.asManyAsTheLimitBefore).not.toHaveProperty("previousCursor");
+    expect(pages.moreThanTheLimitBefore.runs.map(({ runId }) => runId)).toEqual(runIdsInBlocks.slice(1, 3));
+    expect(pages.moreThanTheLimitBefore).toMatchObject({
+      firstRunPosition: 2,
+      previousCursor: expect.any(String),
+    });
+  },
+);
+
+engineTest(
+  "a run that moves between two listed states of one order group between the two round trips is left out of the page",
+  async (context) => {
+    const { client, engine } = context;
+    await enqueueRuns(context, [runOf("started-run", "send-email")]);
+    await fetchedLockedRunsOf(context, 1);
+    await enqueueRuns(context, [runOf("moving-run", "send-email")]);
+    let isRunMoved = false;
+    const clientMovingTheRunBeforeTheRunReads: RedisClient = {
+      send: (command) => client.send(command),
+      sendBatch: async (commands) => {
+        if (!isRunMoved) {
+          isRunMoved = true;
+          await engine.fetch({
+            lockTokens: freshLockTokensOf(1),
+            concurrencyLimitsByTask: { "send-email": 1 },
+            lockDurationInMilliseconds: 120_000,
+          });
+        }
+        return client.sendBatch(commands);
+      },
+    };
+    const reader = readerOf({ ...context, client: clientMovingTheRunBeforeTheRunReads });
+    const queuedStates = ["pending", "waitingForConcurrencySlot"] as const;
+
+    const pageReadAcrossTheMove = await reader.listRuns({ state: queuedStates });
+    const pageReadAfterTheMove = await reader.listRuns({ state: queuedStates });
+
+    expect(pageReadAcrossTheMove).toEqual({ runs: [], totalRunCount: 1, firstRunPosition: 1 });
+    expect(pageReadAfterTheMove.runs.map(({ runId, state }) => ({ runId, state }))).toEqual([
+      { runId: "moving-run", state: "waitingForConcurrencySlot" },
+    ]);
+  },
+);
+
+engineTest(
   "listRuns refuses a 0.1.x cursor, a forward cursor from no place, an invalid state or limit, and a task it does not define",
   async (context) => {
     const reader = readerOf(context);
@@ -1020,6 +1340,7 @@ engineTest(
     const { nextCursor } = await reader.listRuns({ state: "completed", limit: 2 });
     const secondPage = await reader.listRuns({ state: "completed", limit: 2, cursor: nextCursor! });
     const thirdPage = await reader.listRuns({ state: "completed", limit: 2, cursor: secondPage.nextCursor! });
+    const everyStatePage = await reader.listRuns({ limit: 2 });
 
     const trafficByListing = {
       firstPage: await readTrafficOf(client, () => reader.listRuns({ state: "completed", limit: 2 })),
@@ -1034,6 +1355,11 @@ engineTest(
       ),
       oneTask: await readTrafficOf(client, () => reader.listRuns({ state: "completed", task: "send-email" })),
       emptyState: await readTrafficOf(client, () => reader.listRuns({ state: "failed" })),
+      everyState: await readTrafficOf(client, () => reader.listRuns({ limit: 2 })),
+      everyStateNextPage: await readTrafficOf(client, () =>
+        reader.listRuns({ limit: 2, cursor: everyStatePage.nextCursor! }),
+      ),
+      twoStates: await readTrafficOf(client, () => reader.listRuns({ state: ["completed", "failed"], limit: 2 })),
     };
 
     expect(trafficByListing.firstPage.roundTripCount).toBe(2);
@@ -1042,12 +1368,19 @@ engineTest(
     expect(trafficByListing.previousPageReachingTheHead.roundTripCount).toBe(2);
     expect(trafficByListing.oneTask.roundTripCount).toBe(2);
     expect(trafficByListing.emptyState.roundTripCount).toBe(1);
+    expect(trafficByListing.everyState.roundTripCount).toBe(2);
+    expect(trafficByListing.everyStateNextPage.roundTripCount).toBe(2);
+    expect(trafficByListing.twoStates.roundTripCount).toBe(2);
+    expect(trafficByListing.everyState.sentCommands[0]?.args).toHaveLength(
+      (TASK_NAMES.length + LISTENER_NAMES.length) * RUN_STATES.length * 2 + 2,
+    );
     expect(trafficByListing.firstPage.sentCommands[0]).toEqual({
       name: "evalsha",
       args: [
         ...[...TASK_NAMES, ...LISTENER_NAMES].map((taskName) => keys.runIndex(taskName, "completed")),
         2,
         "forward",
+        ...[...TASK_NAMES, ...LISTENER_NAMES].map(() => ENDED_ORDER_GROUP_NUMBER),
       ],
     });
     for (const traffic of Object.values(trafficByListing)) {

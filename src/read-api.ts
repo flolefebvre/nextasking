@@ -5,15 +5,22 @@ import type { RunIdentity } from "./engine/engine-keys.js";
 import { deserializePayload, isFailureReason, isRecordVersionReadable, storedIntegerOf } from "./engine/engine.js";
 import type { ErrorRecord, ScheduleSummary } from "./engine/engine.js";
 import { indexPagesCommandOf, indexPagesOf } from "./engine/index-page-script.js";
-import type { IndexPage, IndexPageBoundary, IndexPlace, PagingDirection } from "./engine/index-page-script.js";
+import type {
+  IndexInList,
+  IndexPage,
+  IndexPageBoundary,
+  IndexPlace,
+  OrderGroupNumber,
+  PagingDirection,
+} from "./engine/index-page-script.js";
 import { listedRunReadCommandOf, readPartsOf, runReadCommandOf } from "./engine/run-read-scripts.js";
 import { UnknownEventError, UnknownTaskError } from "./errors.js";
 import { deriveFiringRunId, deriveListenerRunId } from "./ids.js";
 import type { EventId, RunId } from "./ids.js";
 import { decodeRunListCursor, encodeRunListCursor } from "./run-list-cursor.js";
 import type { ListedIndexes, RunListCursor } from "./run-list-cursor.js";
-import { RUN_STATES, isRunState } from "./run-states.js";
-import type { RunState, RunStateFields } from "./run-states.js";
+import { ORDER_GROUPS, RUN_STATES, isRunState, orderGroupOf } from "./run-states.js";
+import type { OrderGroup, RunState, RunStateFields } from "./run-states.js";
 import type { CronExpression, IanaTimeZone } from "./schedules.js";
 import { builtInCommandOf } from "./redis-client.js";
 import type { CommandResult, RedisClient, RedisCommand } from "./redis-client.js";
@@ -51,8 +58,8 @@ export type ListedRunOfTask<Task extends AnyTaskDefinition> = Task extends AnyTa
   : never;
 
 export type ListRunsOptionsOf<TaskName extends string, State extends RunState = RunState> = {
-  state: State;
-  task?: TaskName;
+  state?: State | readonly State[];
+  task?: TaskName | readonly TaskName[];
   limit?: number;
   cursor?: RunListCursor;
 };
@@ -172,7 +179,14 @@ type StoredValue = string | null;
 
 type AnyRunSummary = Omit<AnyListedRun, "lastErrorMessage">;
 
-type IndexEntry = { indexPlace: IndexPlace; runIdentity: RunIdentity };
+type IndexEntry = {
+  indexPlace: IndexPlace;
+  runIdentity: RunIdentity;
+  indexState: RunState;
+  orderGroupNumber: OrderGroupNumber;
+};
+
+type ListedRunIndex = IndexInList & { indexState: RunState };
 
 function storedDateOf(storedValue: unknown): Date | undefined {
   const instant: EpochMilliseconds | undefined = storedIntegerOf(storedValue);
@@ -327,12 +341,11 @@ function runOf(
 
 function listedRunOf(
   entry: IndexEntry,
-  state: RunState,
   [recordReply, lastErrorReply]: readonly unknown[],
   supportedRecordVersion: number,
 ) {
   const runSummary = runSummaryOf(entry.runIdentity.runId, recordReply, supportedRecordVersion);
-  if (runSummary?.task !== entry.runIdentity.task || runSummary.state !== state) {
+  if (runSummary?.task !== entry.runIdentity.task || runSummary.state !== entry.indexState) {
     return undefined;
   }
   if (lastErrorReply === null) {
@@ -342,11 +355,16 @@ function listedRunOf(
   return lastError === undefined ? undefined : ({ ...runSummary, lastErrorMessage: lastError.message } as AnyListedRun);
 }
 
-function compareInIndexOrder(left: IndexEntry, right: IndexEntry): number {
+function compareInListOrder(left: IndexEntry, right: IndexEntry): number {
   return (
+    left.orderGroupNumber - right.orderGroupNumber ||
     right.indexPlace.score - left.indexPlace.score ||
     compareInSortedSetMemberOrder(right.indexPlace.storedRunId, left.indexPlace.storedRunId)
   );
+}
+
+function orderGroupNumberOf(orderGroup: OrderGroup): OrderGroupNumber {
+  return ORDER_GROUPS.findIndex(({ name }) => name === orderGroup) + 1;
 }
 
 function pageBoundaryOf(cursor: unknown, listedIndexes: ListedIndexes): IndexPageBoundary {
@@ -357,16 +375,52 @@ function pageBoundaryOf(cursor: unknown, listedIndexes: ListedIndexes): IndexPag
   return {
     direction,
     place:
-      place === undefined ? undefined : { score: place.score, storedRunId: storedRunIdOf(place.task, place.runId) },
+      place === undefined
+        ? undefined
+        : {
+            orderGroupNumber: orderGroupNumberOf(place.orderGroup),
+            score: place.score,
+            storedRunId: storedRunIdOf(place.task, place.runId),
+          },
   };
+}
+
+function listedStatesOf(state: unknown): RunState[] | null {
+  if (state === undefined) {
+    return null;
+  }
+  if (!Array.isArray(state)) {
+    rejectInvalidState(state);
+    return [state];
+  }
+  if (state.length === 0) {
+    throw new Error("Invalid listRuns state: list at least one state, or leave state out to list every state");
+  }
+  state.forEach((listedState) => rejectInvalidState(listedState));
+  return RUN_STATES.filter((runState) => state.includes(runState));
+}
+
+function listedTasksOf(task: unknown, tasksByName: ReadonlyMap<string, AnyTaskDefinition>): string[] | null {
+  if (task === undefined) {
+    return null;
+  }
+  if (!Array.isArray(task)) {
+    rejectUnknownTask(tasksByName, String(task));
+    return [String(task)];
+  }
+  if (task.length === 0) {
+    throw new Error("Invalid listRuns task: list at least one task, or leave task out to list every task");
+  }
+  task.forEach((listedTask) => rejectUnknownTask(tasksByName, String(listedTask)));
+  return [...tasksByName.keys()].filter((taskName) => task.includes(taskName));
 }
 
 type IndexPageOfEntries = Omit<IndexPage, "places"> & { indexEntries: IndexEntry[] };
 
 type TakenEntries = { takenEntries: IndexEntry[]; entryCountBeforePage: number };
 
-function mergedInIndexOrder(indexEntries: readonly IndexEntry[]): IndexEntry[] {
-  return [...indexEntries].sort(compareInIndexOrder);
+function mergedInListOrder(indexEntries: readonly IndexEntry[]): IndexEntry[] {
+  return [...indexEntries].sort(compareInListOrder);
 }
 
 function takenEntriesOf(
@@ -378,30 +432,30 @@ function takenEntriesOf(
   const everyIndexEntry = indexPages.flatMap(({ indexEntries }) => indexEntries);
   if (direction === "forward") {
     return {
-      takenEntries: mergedInIndexOrder(everyIndexEntry).slice(0, limit),
+      takenEntries: mergedInListOrder(everyIndexEntry).slice(0, limit),
       entryCountBeforePage: entryCountBeforeBoundary,
     };
   }
   if (entryCountBeforeBoundary < limit) {
-    return { takenEntries: mergedInIndexOrder(everyIndexEntry).slice(0, limit), entryCountBeforePage: 0 };
+    return { takenEntries: mergedInListOrder(everyIndexEntry).slice(0, limit), entryCountBeforePage: 0 };
   }
   const entriesBeforeBoundary = indexPages.flatMap((indexPage) =>
     indexPage.indexEntries.slice(0, indexPage.entryCountBeforeBoundary - indexPage.firstEntryRank),
   );
   return {
-    takenEntries: mergedInIndexOrder(entriesBeforeBoundary).slice(-limit),
+    takenEntries: mergedInListOrder(entriesBeforeBoundary).slice(-limit),
     entryCountBeforePage: entryCountBeforeBoundary - limit,
   };
 }
 
-function indexEntryOf(indexKey: string, indexPlace: IndexPlace): IndexEntry {
+function indexEntryOf({ indexKey, indexState, orderGroupNumber }: ListedRunIndex, indexPlace: IndexPlace): IndexEntry {
   const runIdentity = runIdentityOf(indexPlace.storedRunId);
   if (runIdentity === undefined) {
     throw new Error(
       `The run index ${indexKey} holds a member that is not a stored run id: ${JSON.stringify(indexPlace.storedRunId)}`,
     );
   }
-  return { indexPlace, runIdentity };
+  return { indexPlace, runIdentity, indexState, orderGroupNumber };
 }
 
 function sumOf(counts: readonly number[]): number {
@@ -432,27 +486,41 @@ export function createReadApi(config: ReadApiConfig): ReadApi {
     );
   };
 
-  const readIndexPages = async (
-    state: RunState,
+  const listedRunIndexesOf = (
+    listedStates: readonly RunState[] | null,
     taskNames: readonly string[],
+  ): ListedRunIndex[] =>
+    ORDER_GROUPS.flatMap(({ name, states }) =>
+      states
+        .filter((state) => listedStates === null || listedStates.includes(state))
+        .flatMap((indexState) =>
+          taskNames.map((taskName) => ({
+            indexKey: keys.runIndex(taskName, indexState),
+            orderGroupNumber: orderGroupNumberOf(name),
+            indexState,
+          })),
+        ),
+    );
+
+  const readIndexPages = async (
+    listedRunIndexes: readonly ListedRunIndex[],
     limit: number,
     boundary: IndexPageBoundary,
   ): Promise<IndexPageOfEntries[]> => {
-    if (taskNames.length === 0) {
+    if (listedRunIndexes.length === 0) {
       return [];
     }
-    const indexKeys = taskNames.map((taskName) => keys.runIndex(taskName, state));
     const indexPages = indexPagesOf(
-      await client.send(indexPagesCommandOf({ indexKeys, limit, boundary })),
-      indexKeys.length,
+      await client.send(indexPagesCommandOf({ indexesInList: listedRunIndexes, limit, boundary })),
+      listedRunIndexes.length,
     );
     return indexPages.map(({ places, ...entryCounts }, indexNumber) => ({
       ...entryCounts,
-      indexEntries: places.map((indexPlace) => indexEntryOf(indexKeys[indexNumber] ?? "", indexPlace)),
+      indexEntries: places.map((indexPlace) => indexEntryOf(listedRunIndexes[indexNumber]!, indexPlace)),
     }));
   };
 
-  const readListedRuns = async (state: RunState, indexEntries: readonly IndexEntry[]): Promise<AnyListedRun[]> => {
+  const readListedRuns = async (indexEntries: readonly IndexEntry[]): Promise<AnyListedRun[]> => {
     if (indexEntries.length === 0) {
       return [];
     }
@@ -460,7 +528,7 @@ export function createReadApi(config: ReadApiConfig): ReadApi {
       indexEntries.map(({ runIdentity }) => listedRunReadCommandOf(keys, runIdentity, RUN_RECORD_FIELDS)),
     );
     return indexEntries.flatMap((entry, entryNumber) => {
-      const listedRun = listedRunOf(entry, state, readPartsOf(replies[entryNumber]), supportedRecordVersion);
+      const listedRun = listedRunOf(entry, readPartsOf(replies[entryNumber]), supportedRecordVersion);
       return listedRun === undefined ? [] : [listedRun];
     });
   };
@@ -476,24 +544,24 @@ export function createReadApi(config: ReadApiConfig): ReadApi {
     },
 
     listRuns: async (options) => {
-      const { state, task } = options;
-      rejectInvalidState(state);
-      if (task !== undefined) {
-        rejectUnknownTask(tasksByName, task);
-      }
+      const listedStates = listedStatesOf(options.state);
+      const listedTasks = listedTasksOf(options.task, tasksByName);
       const limit = listLimitOf(options.limit);
-      const listedIndexes = { state, listedTask: task ?? null };
+      const listedIndexes = { listedStates, listedTasks };
       const boundary = pageBoundaryOf(options.cursor, listedIndexes);
-      const taskNames = task === undefined ? [...tasksByName.keys()] : [task];
-      const indexPages = await readIndexPages(state, taskNames, limit, boundary);
+      const taskNames = listedTasks ?? [...tasksByName.keys()];
+      const indexPages = await readIndexPages(listedRunIndexesOf(listedStates, taskNames), limit, boundary);
       const totalRunCount = sumOf(indexPages.map(({ entryCount }) => entryCount));
       const { takenEntries, entryCountBeforePage } = takenEntriesOf(indexPages, boundary.direction, limit);
-      const runs = await readListedRuns(state, takenEntries);
+      const runs = await readListedRuns(takenEntries);
       const cursorOf = (direction: PagingDirection, entry: IndexEntry | undefined) =>
         encodeRunListCursor({
           ...listedIndexes,
           direction,
-          place: entry === undefined ? undefined : { score: entry.indexPlace.score, ...entry.runIdentity },
+          place:
+            entry === undefined
+              ? undefined
+              : { orderGroup: orderGroupOf(entry.indexState), score: entry.indexPlace.score, ...entry.runIdentity },
         });
       const [firstTakenEntry, lastTakenEntry] = [takenEntries[0], takenEntries.at(-1)];
       if (firstTakenEntry === undefined || lastTakenEntry === undefined) {

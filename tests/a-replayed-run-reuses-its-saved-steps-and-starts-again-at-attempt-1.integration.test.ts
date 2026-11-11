@@ -18,7 +18,7 @@ function createChargeInvoiceNextasking(
   receiptService: ReceiptService,
   logger?: Logger,
 ) {
-  const chargeInvoice = defineTask("charge-invoice", {
+  const chargeInvoiceTask = defineTask("charge-invoice", {
     schema: z.object({ invoiceId: z.string() }),
     retries: 1,
     backoff: "0s",
@@ -37,7 +37,7 @@ function createChargeInvoiceNextasking(
     connection: { url: redisUrl },
     prefix: keyPrefix,
     ...(logger === undefined ? {} : { logger }),
-    tasks: [chargeInvoice],
+    tasks: [chargeInvoiceTask],
   });
 }
 

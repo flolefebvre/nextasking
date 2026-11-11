@@ -19,7 +19,7 @@ import { serverInstantInMillisecondsOf } from "./server-instant.js";
 import { storedRun } from "./stored-run.js";
 import { withRedis } from "./with-redis.js";
 
-const userSignedUp = defineEvent("user.signed-up", {
+const userSignedUpEvent = defineEvent("user.signed-up", {
   schema: z.object({ userId: z.string() }),
 });
 
@@ -31,14 +31,14 @@ function createSignUpNextasking(
   workspaceRunIds: RunId[],
   { isListenerListed }: { isListenerListed: boolean } = { isListenerListed: true },
 ) {
-  const signUpUser = defineTask("sign-up-user", {
+  const signUpUserTask = defineTask("sign-up-user", {
     schema: z.object({ userId: z.string() }),
     retries: 1,
     backoff: "0s",
     handler: signUpHandler,
   });
-  const createDefaultWorkspace = defineListener("create-default-workspace", {
-    on: userSignedUp,
+  const createDefaultWorkspaceTask = defineListener("create-default-workspace", {
+    on: userSignedUpEvent,
     handler: async ({ runId }) => {
       workspaceRunIds.push(runId);
     },
@@ -47,8 +47,8 @@ function createSignUpNextasking(
     connection: { url: redisUrl },
     prefix: keyPrefix,
     logger,
-    events: [userSignedUp],
-    tasks: isListenerListed ? [signUpUser, createDefaultWorkspace] : [signUpUser],
+    events: [userSignedUpEvent],
+    tasks: isListenerListed ? [signUpUserTask, createDefaultWorkspaceTask] : [signUpUserTask],
   });
 }
 
@@ -290,7 +290,7 @@ integrationTest(
     const { logger, lines } = createRecordingLogger();
     const dispatchedRunIdsByAttempt: RunId[] = [];
     const welcomeEmailRunIds: RunId[] = [];
-    const inviteUser = defineTask("invite-user", {
+    const inviteUserTask = defineTask("invite-user", {
       schema: z.object({ email: z.email() }),
       retries: 1,
       backoff: "0s",
@@ -306,7 +306,7 @@ integrationTest(
         }
       },
     });
-    const sendWelcomeEmail = defineTask("send-welcome-email", {
+    const sendWelcomeEmailTask = defineTask("send-welcome-email", {
       schema: z.object({ email: z.email() }),
       handler: async ({ runId }) => {
         welcomeEmailRunIds.push(runId);
@@ -316,7 +316,7 @@ integrationTest(
       connection: { url: redisUrl },
       prefix: keyPrefix,
       logger,
-      tasks: [inviteUser, sendWelcomeEmail],
+      tasks: [inviteUserTask, sendWelcomeEmailTask],
     });
 
     try {

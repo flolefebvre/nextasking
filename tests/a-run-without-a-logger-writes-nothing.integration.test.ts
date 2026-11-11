@@ -13,14 +13,18 @@ integrationTest(
   async ({ redisUrl, keyPrefix }) => {
     const consoleSpies = CONSOLE_METHODS.map((method) => vi.spyOn(console, method));
     let isRunCompleted = false;
-    const purgeSessions = defineTask("purge-sessions", {
+    const purgeSessionsTask = defineTask("purge-sessions", {
       schema: z.object({}),
       handler: async (context) => {
         context.logger.info({}, "sessions purged");
         isRunCompleted = true;
       },
     });
-    const nextasking = createNextasking({ connection: { url: redisUrl }, prefix: keyPrefix, tasks: [purgeSessions] });
+    const nextasking = createNextasking({
+      connection: { url: redisUrl },
+      prefix: keyPrefix,
+      tasks: [purgeSessionsTask],
+    });
 
     try {
       await nextasking.startWorker();

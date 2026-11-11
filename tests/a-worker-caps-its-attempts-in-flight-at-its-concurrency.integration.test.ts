@@ -22,12 +22,12 @@ async function runABacklogOfResizes({
   startWorkerOptions?: StartWorkerOptions;
 }): Promise<void> {
   const { logger, lines } = createRecordingLogger();
-  const resizeImage = defineTask("resize-image", { schema: z.object({ imageId: z.string() }), handler });
+  const resizeImageTask = defineTask("resize-image", { schema: z.object({ imageId: z.string() }), handler });
   const nextasking = createNextasking({
     connection: { url: redisUrl },
     prefix: keyPrefix,
     logger,
-    tasks: [resizeImage],
+    tasks: [resizeImageTask],
   });
   try {
     for (let imageNumber = 0; imageNumber < BACKLOG_SIZE; imageNumber += 1) {

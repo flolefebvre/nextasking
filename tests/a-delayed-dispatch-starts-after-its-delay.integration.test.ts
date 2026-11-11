@@ -13,7 +13,7 @@ integrationTest(
   { timeout: 15_000 },
   async ({ redisUrl, keyPrefix }) => {
     let handlerStartedAt: number | undefined;
-    const sendReminder = defineTask("send-reminder", {
+    const sendReminderTask = defineTask("send-reminder", {
       schema: z.object({}),
       handler: async () => {
         handlerStartedAt = Date.now();
@@ -23,7 +23,7 @@ integrationTest(
       connection: { url: redisUrl },
       prefix: keyPrefix,
       logger: createRecordingLogger().logger,
-      tasks: [sendReminder],
+      tasks: [sendReminderTask],
     });
 
     try {

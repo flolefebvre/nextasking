@@ -12,7 +12,7 @@ integrationTest(
   async ({ redisUrl, keyPrefix }) => {
     const { logger } = createRecordingLogger();
     const recordedContexts: ScheduledTaskContext[] = [];
-    const purgeExpiredSessions = defineScheduledTask("purge-expired-sessions", {
+    const purgeExpiredSessionsTask = defineScheduledTask("purge-expired-sessions", {
       schedule: { cron: "0 0 1 1 *" },
       handler: async (context) => {
         recordedContexts.push(context);
@@ -22,7 +22,7 @@ integrationTest(
       connection: { url: redisUrl },
       prefix: keyPrefix,
       logger,
-      tasks: [purgeExpiredSessions],
+      tasks: [purgeExpiredSessionsTask],
     });
 
     try {

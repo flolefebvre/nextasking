@@ -29,9 +29,9 @@ function noAlerting(): Alerting {
   return { runFailedNotices: [], isRunFailedAlertBroken: false };
 }
 
-const invoicePaid = defineEvent("invoice.paid", { schema: z.object({ invoiceId: z.string() }) });
+const invoicePaidEvent = defineEvent("invoice.paid", { schema: z.object({ invoiceId: z.string() }) });
 
-const syncAccount = defineTask("sync-account", {
+const syncAccountTask = defineTask("sync-account", {
   schema: z.object({ accountId: z.string(), email: z.string() }),
   retries: 0,
   handler: async () => {
@@ -39,8 +39,8 @@ const syncAccount = defineTask("sync-account", {
   },
 });
 
-const recordPayment = defineListener("record-payment", {
-  on: invoicePaid,
+const recordPaymentTask = defineListener("record-payment", {
+  on: invoicePaidEvent,
   retries: 0,
   handler: async () => {
     throw new Error("ledger unavailable");
@@ -67,8 +67,8 @@ function createAlertingNextasking(redisUrl: string, keyPrefix: string, logger: L
     connection: { url: redisUrl },
     prefix: keyPrefix,
     logger,
-    events: [invoicePaid],
-    tasks: [syncAccount, recordPayment, ...alertListeners],
+    events: [invoicePaidEvent],
+    tasks: [syncAccountTask, recordPaymentTask, ...alertListeners],
   });
 }
 

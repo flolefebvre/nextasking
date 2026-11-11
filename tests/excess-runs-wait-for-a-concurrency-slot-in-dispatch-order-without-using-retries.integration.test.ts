@@ -29,7 +29,7 @@ integrationTest(
     const holdingRunReleased = new Promise<void>((resolve) => {
       releaseHoldingRun = resolve;
     });
-    const rebuildIndex = defineTask("rebuild-index", {
+    const rebuildIndexTask = defineTask("rebuild-index", {
       schema: z.object({ accountId: z.string(), order: z.int() }),
       retries: 0,
       concurrency: { key: (payload) => payload.accountId, limit: 1 },
@@ -44,7 +44,7 @@ integrationTest(
       connection: { url: redisUrl },
       prefix: keyPrefix,
       logger,
-      tasks: [rebuildIndex],
+      tasks: [rebuildIndexTask],
     });
 
     try {

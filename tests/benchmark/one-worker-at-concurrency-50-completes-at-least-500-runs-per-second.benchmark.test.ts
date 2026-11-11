@@ -28,7 +28,7 @@ benchmarkTest(
   { timeout: DISPATCH_BUDGET_IN_MILLISECONDS + DRAIN_TIMEOUT_IN_MILLISECONDS + 25_000 },
   async ({ redisUrl, keyPrefix }) => {
     let handledRunCount = 0;
-    const noOp = defineTask("no-op", {
+    const noOpTask = defineTask("no-op", {
       schema: z.object({}),
       handler: async () => {
         handledRunCount += 1;
@@ -38,7 +38,7 @@ benchmarkTest(
       connection: { url: redisUrl },
       prefix: keyPrefix,
       logger: createRecordingLogger().logger,
-      tasks: [noOp],
+      tasks: [noOpTask],
     });
     try {
       const dispatchStartedAt = performance.now();

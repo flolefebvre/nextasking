@@ -3,7 +3,7 @@ import { defineListener } from "../src/definitions.js";
 import type { AnyTaskDefinition } from "../src/definitions.js";
 import type { WorkerDefinitions } from "../src/definitions.js";
 
-export const brokenKeyRunFailedListener = defineListener("broken-key-listener", {
+export const brokenKeyRunFailedListenerTask = defineListener("broken-key-listener", {
   on: runFailedEvent,
   concurrency: {
     key: () => {

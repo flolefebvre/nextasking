@@ -44,7 +44,7 @@ import { expectOneStallAndOneCompletedPickupOfTheRun } from "../tests/recording-
 import type { RecordedLogLine } from "../tests/recording-logger.js";
 import { repliedOf } from "../tests/tick-replies.js";
 import { unhandledRejectionsDuring } from "../tests/unhandled-rejections.js";
-import { brokenKeyRunFailedListener, workerDefinitionsOf } from "../tests/worker-definitions.js";
+import { brokenKeyRunFailedListenerTask, workerDefinitionsOf } from "../tests/worker-definitions.js";
 
 const NO_SENDER: HandlerSender = {
   dispatch: () => Promise.reject(new Error("this scenario sends nothing")),
@@ -362,9 +362,12 @@ test("a listener whose key throws costs its own notice run and writes one worker
   const engine = createInMemoryEngine();
   await engine.enqueue({ runs: runsOf("fails", 1, { retries: 0 }) });
 
-  const { lines } = startedLoopOf([failingTask, brokenKeyRunFailedListener, alertOnCallTask] as AnyTaskDefinition[], {
-    engine,
-  });
+  const { lines } = startedLoopOf(
+    [failingTask, brokenKeyRunFailedListenerTask, alertOnCallTask] as AnyTaskDefinition[],
+    {
+      engine,
+    },
+  );
   await vi.advanceTimersByTimeAsync(0);
 
   const [settleRequest] = requestsOf<SettleRequest>(engine, "settle");
@@ -862,7 +865,7 @@ for (const {
 test("two loops ticking on the same reported third stall end with one failed run, one notice and one run failed line", async () => {
   const alertOnCallTask = defineListener("alert-on-call", { on: runFailedEvent, handler: async () => undefined });
   const sendEmailTask = defineTask("send-email", { schema: v.object({}), handler: async () => undefined });
-  const tasks = [sendEmailTask, alertOnCallTask, brokenKeyRunFailedListener] as AnyTaskDefinition[];
+  const tasks = [sendEmailTask, alertOnCallTask, brokenKeyRunFailedListenerTask] as AnyTaskDefinition[];
   const engine = createInMemoryEngine();
   await engine.enqueue({ runs: runsOf("send-email", 1, { sourceEvent: SIGNED_UP }) });
   await expireTheLockOfAFetchedRun(engine, 2);

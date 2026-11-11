@@ -23,7 +23,7 @@ integrationTest(
       failedAt: "2026-11-03T10:00:00.000Z",
     };
     const keys = engineKeysOf(keyPrefix);
-    const sendNewsletter = defineTask("send-newsletter", {
+    const sendNewsletterTask = defineTask("send-newsletter", {
       schema: z.object({ issueId: z.string() }),
       retries: 1,
       handler: async ({ runId }) => {
@@ -39,7 +39,7 @@ integrationTest(
       connection: { url: redisUrl },
       prefix: keyPrefix,
       logger,
-      tasks: [sendNewsletter],
+      tasks: [sendNewsletterTask],
     });
 
     try {

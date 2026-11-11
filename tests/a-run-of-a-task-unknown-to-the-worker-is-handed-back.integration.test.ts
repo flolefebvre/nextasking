@@ -22,7 +22,7 @@ const FAST_HAND_BACK = {
 
 const EPOCH_MILLISECONDS = /^\d+$/;
 
-const accountClosed = defineEvent("account.closed", { schema: z.object({ accountId: z.string() }) });
+const accountClosedEvent = defineEvent("account.closed", { schema: z.object({ accountId: z.string() }) });
 
 type NextReleaseAndOlderReleaseWorker = {
   nextasking: ReturnType<typeof createNextReleaseNextasking>["nextasking"];
@@ -49,15 +49,15 @@ async function withNextReleaseAndOlderReleaseWorker(
 
 function createNextReleaseNextasking(redisUrl: string, keyPrefix: string, handledAccountIds: string[]) {
   const { logger, lines } = createRecordingLogger();
-  const archiveAccount = defineTask("archive-account", {
+  const archiveAccountTask = defineTask("archive-account", {
     schema: z.object({ accountId: z.string() }),
     concurrency: { limit: 1 },
     handler: async ({ payload }) => {
       handledAccountIds.push(payload.accountId);
     },
   });
-  const notifyAccountClosed = defineListener("notify-account-closed", {
-    on: accountClosed,
+  const notifyAccountClosedTask = defineListener("notify-account-closed", {
+    on: accountClosedEvent,
     handler: async ({ payload }) => {
       handledAccountIds.push(payload.accountId);
     },
@@ -66,13 +66,13 @@ function createNextReleaseNextasking(redisUrl: string, keyPrefix: string, handle
     connection: { url: redisUrl },
     prefix: keyPrefix,
     logger,
-    events: [accountClosed],
+    events: [accountClosedEvent],
     tasks: [
       ...workerProcessTasks(async () => {
         throw new Error("The test process runs only the next release's tasks");
       }),
-      archiveAccount,
-      notifyAccountClosed,
+      archiveAccountTask,
+      notifyAccountClosedTask,
     ],
   });
   return { nextasking, lines };

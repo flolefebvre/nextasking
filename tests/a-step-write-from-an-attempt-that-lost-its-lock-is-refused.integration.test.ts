@@ -15,7 +15,7 @@ integrationTest(
   { timeout: 15_000 },
   async ({ redisUrl, keyPrefix, expectInvariantViolation }) => {
     const stepErrors: unknown[] = [];
-    const sendNewsletter = defineTask("send-newsletter", {
+    const sendNewsletterTask = defineTask("send-newsletter", {
       schema: z.object({ issueId: z.string() }),
       retries: 0,
       handler: async ({ step, runId }) => {
@@ -35,7 +35,7 @@ integrationTest(
       connection: { url: redisUrl },
       prefix: keyPrefix,
       logger: createRecordingLogger().logger,
-      tasks: [sendNewsletter],
+      tasks: [sendNewsletterTask],
     });
 
     try {

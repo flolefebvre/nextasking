@@ -16,7 +16,7 @@ integrationTest(
   async ({ redisUrl, keyPrefix }) => {
     const { logger, lines } = createRecordingLogger();
     const handledPayloads: unknown[] = [];
-    const rebuildIndex = defineTask("rebuild-index", {
+    const rebuildIndexTask = defineTask("rebuild-index", {
       schema: z.object({}),
       handler: async ({ payload }) => {
         handledPayloads.push(payload);
@@ -26,7 +26,7 @@ integrationTest(
       connection: { url: redisUrl },
       prefix: keyPrefix,
       logger,
-      tasks: [rebuildIndex],
+      tasks: [rebuildIndexTask],
     });
     await withRedisClient(redisUrl, (client) =>
       createEngine(client, keyPrefix).syncSchedules({

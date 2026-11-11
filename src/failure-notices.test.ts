@@ -6,7 +6,7 @@ import { defineListener, defineTask } from "./definitions.js";
 import type { AnyTaskDefinition } from "./definitions.js";
 import { builtFailureNoticeOf } from "./failure-notices.js";
 import { deriveFailureNoticeEventId, deriveListenerRunId } from "./ids.js";
-import { brokenKeyRunFailedListener, workerDefinitionsOf } from "../tests/worker-definitions.js";
+import { brokenKeyRunFailedListenerTask, workerDefinitionsOf } from "../tests/worker-definitions.js";
 
 const sendEmailTask = defineTask("send-email", { schema: v.object({}), handler: async () => undefined });
 
@@ -65,7 +65,7 @@ test("a listener whose concurrency key throws is left out of the notice with its
   const { failureNotice, listenersLeftOut } = builtFailureNoticeOf(
     FAILING_RUN,
     { error: ERROR, reason: "retries exhausted" },
-    workerDefinitionsOf([sendEmailTask, brokenKeyRunFailedListener, archiveFailureTask] as AnyTaskDefinition[]),
+    workerDefinitionsOf([sendEmailTask, brokenKeyRunFailedListenerTask, archiveFailureTask] as AnyTaskDefinition[]),
   );
 
   expect(failureNotice.runs.map(({ task }) => task)).toEqual(["archive-failure"]);

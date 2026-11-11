@@ -14,11 +14,11 @@ integrationTest(
   async ({ redisUrl, keyPrefix }) => {
     const { logger, lines } = createRecordingLogger();
     const recordedInvoiceIds: string[] = [];
-    const invoicePaid = defineEvent("invoice.paid", {
+    const invoicePaidEvent = defineEvent("invoice.paid", {
       schema: z.object({ invoiceId: z.string() }),
     });
-    const recordInvoicePayment = defineListener("record-invoice-payment", {
-      on: invoicePaid,
+    const recordInvoicePaymentTask = defineListener("record-invoice-payment", {
+      on: invoicePaidEvent,
       handler: async ({ payload }) => {
         recordedInvoiceIds.push(payload.invoiceId);
       },
@@ -27,8 +27,8 @@ integrationTest(
       connection: { url: redisUrl },
       prefix: keyPrefix,
       logger,
-      events: [invoicePaid],
-      tasks: [recordInvoicePayment],
+      events: [invoicePaidEvent],
+      tasks: [recordInvoicePaymentTask],
     });
     const eventId = "stripe-evt-1";
 

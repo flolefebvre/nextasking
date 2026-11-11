@@ -9,18 +9,18 @@ import { integrationTest } from "./integration-test.js";
 import { createRecordingLogger } from "./recording-logger.js";
 import { withReaderAndWorker } from "./with-reader-and-worker.js";
 
-const userSignedUp = defineEvent("user.signed-up", { schema: z.object({ userId: z.string() }) });
+const userSignedUpEvent = defineEvent("user.signed-up", { schema: z.object({ userId: z.string() }) });
 
 function createDispatchOnlyNextasking(redisUrl: string, keyPrefix: string) {
   return createNextasking({
     connection: { url: redisUrl },
     prefix: keyPrefix,
     logger: createRecordingLogger().logger,
-    events: [userSignedUp],
+    events: [userSignedUpEvent],
     tasks: [
       defineTask("send-reminder", { schema: z.object({ email: z.string() }), handler: async () => undefined }),
       defineTask("archive-invoices", { schema: z.object({ year: z.number() }), handler: async () => undefined }),
-      defineListener("create-default-workspace", { on: userSignedUp, handler: async () => undefined }),
+      defineListener("create-default-workspace", { on: userSignedUpEvent, handler: async () => undefined }),
     ],
   });
 }

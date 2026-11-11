@@ -16,14 +16,14 @@ integrationTest(
   { timeout: 15_000 },
   async ({ redisUrl, keyPrefix }) => {
     const { logger, lines } = createRecordingLogger();
-    const chargeCard = defineTask("charge-card", {
+    const chargeCardTask = defineTask("charge-card", {
       schema: z.object({ cardId: z.string() }),
       backoff: "0s",
       handler: async () => {
         throw new NonRetriableError("card declined");
       },
     });
-    const refundCard = defineTask("refund-card", {
+    const refundCardTask = defineTask("refund-card", {
       schema: z.object({ cardId: z.string() }),
       backoff: "0s",
       handler: async () => {
@@ -34,7 +34,7 @@ integrationTest(
       connection: { url: redisUrl },
       prefix: keyPrefix,
       logger,
-      tasks: [chargeCard, refundCard],
+      tasks: [chargeCardTask, refundCardTask],
     });
 
     try {

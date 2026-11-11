@@ -13,20 +13,20 @@ integrationTest(
   { timeout: 15_000 },
   async ({ redisUrl, keyPrefix }) => {
     const { logger, lines } = createRecordingLogger();
-    const sendWelcomeEmail = defineTask("send-welcome-email", {
+    const sendWelcomeEmailTask = defineTask("send-welcome-email", {
       schema: z.object({ email: z.string(), profile: z.object({ nickname: z.string() }) }),
       handler: async (context) => {
         context.logger.info({ template: "welcome" }, "welcome email sent");
       },
     });
-    const userSignedUp = defineEvent("user.signed-up", {
+    const userSignedUpEvent = defineEvent("user.signed-up", {
       schema: z.object({ userId: z.string() }),
     });
-    const userDeleted = defineEvent("user.deleted", {
+    const userDeletedEvent = defineEvent("user.deleted", {
       schema: z.object({ userId: z.string() }),
     });
-    const createDefaultWorkspace = defineListener("create-default-workspace", {
-      on: userSignedUp,
+    const createDefaultWorkspaceTask = defineListener("create-default-workspace", {
+      on: userSignedUpEvent,
       handler: async (context) => {
         context.logger.info({}, "workspace created");
       },
@@ -35,8 +35,8 @@ integrationTest(
       connection: { url: redisUrl },
       prefix: keyPrefix,
       logger,
-      events: [userSignedUp, userDeleted],
-      tasks: [sendWelcomeEmail, createDefaultWorkspace],
+      events: [userSignedUpEvent, userDeletedEvent],
+      tasks: [sendWelcomeEmailTask, createDefaultWorkspaceTask],
     });
 
     try {

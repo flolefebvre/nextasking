@@ -16,7 +16,7 @@ integrationTest(
   async ({ redisUrl, keyPrefix }) => {
     const { logger, lines } = createRecordingLogger();
     const savedStepsSeenByHandler: SavedSteps[] = [];
-    const exportReport = defineTask("export-report", {
+    const exportReportTask = defineTask("export-report", {
       schema: z.object({ reportId: z.string() }),
       handler: async ({ step, runId }) => {
         await step.run("render", () => ({ pages: 3 }));
@@ -28,7 +28,7 @@ integrationTest(
       connection: { url: redisUrl },
       prefix: keyPrefix,
       logger,
-      tasks: [exportReport],
+      tasks: [exportReportTask],
     });
 
     try {

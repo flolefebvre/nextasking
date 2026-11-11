@@ -14,7 +14,7 @@ integrationTest(
   { timeout: 15_000 },
   async ({ redisUrl, keyPrefix }) => {
     const { logger, lines } = createRecordingLogger();
-    const syncAccount = defineTask("sync-account", {
+    const syncAccountTask = defineTask("sync-account", {
       schema: z.object({ accountId: z.string() }),
       retries: 1,
       backoff: "1s",
@@ -29,7 +29,7 @@ integrationTest(
       connection: { url: redisUrl },
       prefix: keyPrefix,
       logger,
-      tasks: [syncAccount],
+      tasks: [syncAccountTask],
     });
 
     try {
@@ -105,7 +105,7 @@ integrationTest(
   { timeout: 20_000 },
   async ({ redisUrl, keyPrefix }) => {
     const { logger, lines } = createRecordingLogger();
-    const syncAccount = defineTask("sync-account", {
+    const syncAccountTask = defineTask("sync-account", {
       schema: z.object({ accountId: z.string() }),
       backoff: "0s",
       handler: async () => {
@@ -116,7 +116,7 @@ integrationTest(
       connection: { url: redisUrl },
       prefix: keyPrefix,
       logger,
-      tasks: [syncAccount],
+      tasks: [syncAccountTask],
     });
 
     try {
@@ -144,7 +144,7 @@ integrationTest(
   { timeout: 15_000 },
   async ({ redisUrl, keyPrefix }) => {
     const { logger, lines } = createRecordingLogger();
-    const renderReport = defineTask("render-report", {
+    const renderReportTask = defineTask("render-report", {
       schema: z.object({ reportId: z.string() }),
       retries: 1,
       backoff: "0s",
@@ -155,7 +155,7 @@ integrationTest(
       connection: { url: redisUrl },
       prefix: keyPrefix,
       logger,
-      tasks: [renderReport],
+      tasks: [renderReportTask],
     });
 
     try {

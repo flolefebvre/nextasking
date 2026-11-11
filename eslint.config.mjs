@@ -48,13 +48,6 @@ export default defineConfig([
     },
   },
   {
-    files: ["tests/**"],
-    ignores: ["tests/e2e/fixture-app/**", "tests/dist-consumer/**"],
-    rules: {
-      "no-restricted-syntax": "off",
-    },
-  },
-  {
     files: ["src/**/*.ts"],
     ignores: ["src/**/*.test.ts", "src/node-redis-driver.ts"],
     rules: {

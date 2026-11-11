@@ -42,7 +42,7 @@ integrationTest.skipIf(providedRedisUrl() !== undefined)(
     const handlerGate = createHandlerGate();
     const stepOutcomes: StepOutcome[] = [];
     let handlerExecutionCount = 0;
-    const sendNewsletter = defineTask("send-newsletter", {
+    const sendNewsletterTask = defineTask("send-newsletter", {
       schema: z.object({ issueId: z.string() }),
       handler: async ({ step }) => {
         handlerExecutionCount += 1;
@@ -67,7 +67,7 @@ integrationTest.skipIf(providedRedisUrl() !== undefined)(
       connection: { url: primaryAndReplica.proxy.url },
       prefix: keyPrefix,
       logger,
-      tasks: [sendNewsletter],
+      tasks: [sendNewsletterTask],
     });
 
     try {

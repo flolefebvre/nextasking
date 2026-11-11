@@ -16,7 +16,7 @@ import type { InMemoryEngine } from "../tests/in-memory-engine.js";
 import { freshLockTokensOf } from "../tests/lock-tokens.js";
 import { createRecordingLogger } from "../tests/recording-logger.js";
 import { createSimulatedRedisOutage } from "../tests/simulated-redis-outage.js";
-import { brokenKeyRunFailedListener, workerDefinitionsOf } from "../tests/worker-definitions.js";
+import { brokenKeyRunFailedListenerTask, workerDefinitionsOf } from "../tests/worker-definitions.js";
 
 const NO_SENDER: HandlerSender = {
   dispatch: () => Promise.reject(new Error("this attempt sends nothing")),
@@ -217,7 +217,7 @@ test("a failing attempt built for a third stall carries the notice and the liste
   const { attemptOutcome, listenersLeftOut } = failingAttemptOf(
     { runId: "run-1", task: "send-email", attempt: 1, replays: 0 },
     { error, reason: "stalled" },
-    workerDefinitionsOf([alertOnCallTask, brokenKeyRunFailedListener] as AnyTaskDefinition[]),
+    workerDefinitionsOf([alertOnCallTask, brokenKeyRunFailedListenerTask] as AnyTaskDefinition[]),
   );
 
   expect(attemptOutcome).toMatchObject({ kind: "fail", reason: "stalled", error });

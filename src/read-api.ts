@@ -59,7 +59,7 @@ export type ListedRunOfTask<Task extends AnyTaskDefinition> = Task extends AnyTa
 
 export type ListRunsOptionsOf<TaskName extends string, State extends RunState = RunState> = {
   state?: State | readonly State[];
-  task?: TaskName;
+  task?: TaskName | readonly TaskName[];
   limit?: number;
   cursor?: RunListCursor;
 };
@@ -395,6 +395,21 @@ function listedStatesOf(state: unknown): RunState[] | null {
   return RUN_STATES.filter((runState) => state.includes(runState));
 }
 
+function listedTasksOf(task: unknown, tasksByName: ReadonlyMap<string, AnyTaskDefinition>): string[] | null {
+  if (task === undefined) {
+    return null;
+  }
+  if (!Array.isArray(task)) {
+    rejectUnknownTask(tasksByName, String(task));
+    return [String(task)];
+  }
+  if (task.length === 0) {
+    throw new Error("Invalid listRuns task: list at least one task, or leave task out to list every task");
+  }
+  task.forEach((listedTask) => rejectUnknownTask(tasksByName, String(listedTask)));
+  return [...tasksByName.keys()].filter((taskName) => task.includes(taskName));
+}
+
 type IndexPageOfEntries = Omit<IndexPage, "places"> & { indexEntries: IndexEntry[] };
 
 type TakenEntries = { takenEntries: IndexEntry[]; entryCountBeforePage: number };
@@ -524,15 +539,12 @@ export function createReadApi(config: ReadApiConfig): ReadApi {
     },
 
     listRuns: async (options) => {
-      const { task } = options;
       const listedStates = listedStatesOf(options.state);
-      if (task !== undefined) {
-        rejectUnknownTask(tasksByName, task);
-      }
+      const listedTasks = listedTasksOf(options.task, tasksByName);
       const limit = listLimitOf(options.limit);
-      const listedIndexes = { listedStates, listedTasks: task === undefined ? null : [task] };
+      const listedIndexes = { listedStates, listedTasks };
       const boundary = pageBoundaryOf(options.cursor, listedIndexes);
-      const taskNames = task === undefined ? [...tasksByName.keys()] : [task];
+      const taskNames = listedTasks ?? [...tasksByName.keys()];
       const indexPages = await readIndexPages(listedRunIndexesOf(listedStates, taskNames), limit, boundary);
       const totalRunCount = sumOf(indexPages.map(({ entryCount }) => entryCount));
       const { takenEntries, entryCountBeforePage } = takenEntriesOf(indexPages, boundary.direction, limit);

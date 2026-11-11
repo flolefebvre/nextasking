@@ -175,7 +175,9 @@ describe("the root export", () => {
     expectTypeOf<FailedWelcomeEmailRun["task"]>().toEqualTypeOf<"send-welcome-email">();
     expectTypeOf<FailedWelcomeEmailRun["reason"]>().toEqualTypeOf<FailureReason>();
     expectTypeOf<FailedWelcomeEmailRun["lastErrorMessage"]>().toEqualTypeOf<string | undefined>();
-    expectTypeOf<ListRunsOptions["task"]>().toEqualTypeOf<RegisteredTaskName | undefined>();
+    expectTypeOf<ListRunsOptions["task"]>().toEqualTypeOf<
+      RegisteredTaskName | readonly RegisteredTaskName[] | undefined
+    >();
     expectTypeOf<RunPage["runs"][number]>().toEqualTypeOf<ListedRun>();
     expectTypeOf<RunPage["totalRunCount"]>().toEqualTypeOf<number>();
     expectTypeOf<RunPage["firstRunPosition"]>().toEqualTypeOf<number | undefined>();
@@ -198,6 +200,23 @@ describe("the root export", () => {
     expectTypeOf(listEndedRuns).returns.resolves.items.toHaveProperty("state").toEqualTypeOf<"completed" | "failed">();
     expectTypeOf(listEveryRun).returns.resolves.items.toEqualTypeOf<ListedRun>();
     expectTypeOf<ListRunsOptions["state"]>().toEqualTypeOf<RunState | readonly RunState[] | undefined>();
+  });
+
+  test("types listRuns' runs by the tasks listed, one task keeping its own type", () => {
+    const listWelcomeEmailRuns = async () =>
+      (await nextasking.listRuns({ state: "pending", task: "send-welcome-email" })).runs;
+    const listRunsOfTwoTasks = async () =>
+      (await nextasking.listRuns({ task: ["send-welcome-email", "purge-expired-sessions"] })).runs;
+
+    expectTypeOf(listWelcomeEmailRuns).returns.resolves.items.toEqualTypeOf<
+      Awaited<ReturnType<typeof nextasking.listRuns<"pending", "send-welcome-email">>>["runs"][number]
+    >();
+    expectTypeOf(listWelcomeEmailRuns)
+      .returns.resolves.items.toHaveProperty("task")
+      .toEqualTypeOf<"send-welcome-email">();
+    expectTypeOf(listRunsOfTwoTasks)
+      .returns.resolves.items.toHaveProperty("task")
+      .toEqualTypeOf<"send-welcome-email" | "purge-expired-sessions">();
   });
 
   test("describes the tasks and events, with no schema and no handler, for a run-now picker", () => {

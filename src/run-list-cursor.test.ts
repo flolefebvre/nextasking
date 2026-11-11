@@ -106,6 +106,17 @@ describe("the listRuns cursor on the indexes", () => {
     [null, ["send-email"], 'it pages through every task, not task "send-email"'],
     [["send-email"], null, 'it pages through task "send-email", not every task'],
     [["send-email"], ["build-report"], 'it pages through task "send-email", not task "build-report"'],
+    [
+      ["build-report", "send-email"],
+      ["send-email"],
+      'it pages through tasks "build-report" and "send-email", not task "send-email"',
+    ],
+    [
+      null,
+      ["build-report", "send-email", "resize-image"],
+      'it pages through every task, not tasks "build-report", "send-email" and "resize-image"',
+    ],
+    [["build-report", "send-email"], null, 'it pages through tasks "build-report" and "send-email", not every task'],
   ] as const)("is refused when it pages through %j and the call asks for %j", (cursorTasks, calledTasks, reason) => {
     const cursor = encodeRunListCursor({ ...FORWARD_FROM_A_FAILED_RUN, listedTasks: cursorTasks });
 

@@ -1078,6 +1078,69 @@ engineTest(
 );
 
 engineTest(
+  "listRuns of two tasks out of three lists their runs in one order, and neither lists nor counts nor reads the third",
+  async (context) => {
+    const { client, keys } = context;
+    await endRunsOfEachTask(context, 3);
+    const reader = readerOf(context);
+
+    const pages = await walkedRunPagesOf(reader, { state: "completed", task: ["send-email", "resize-image"] }, [2]);
+    const traffic = await readTrafficOf(client, () =>
+      reader.listRuns({ state: "completed", task: ["send-email", "resize-image"] }),
+    );
+
+    expect(runIdsOfRunPages(pages)).toEqual(
+      await runIdsInPromisedOrderOf(context, ["send-email", "resize-image"], "completed"),
+    );
+    expect(pages.map(pageFiguresOf)).toEqual([
+      { runCount: 2, totalRunCount: 6, firstRunPosition: 1, hasNextCursor: true },
+      { runCount: 2, totalRunCount: 6, firstRunPosition: 3, hasNextCursor: true },
+      { runCount: 2, totalRunCount: 6, firstRunPosition: 5, hasNextCursor: false },
+    ]);
+    expect(traffic.roundTripCount).toBe(2);
+    expect(traffic.sentCommands[0]?.args.slice(0, 2)).toEqual([
+      keys.runIndex("send-email", "completed"),
+      keys.runIndex("resize-image", "completed"),
+    ]);
+    expect(traffic.sentCommands.flatMap(({ args }) => args)).not.toContain(keys.runIndex("build-report", "completed"));
+  },
+);
+
+engineTest(
+  "listRuns takes the same tasks listed in another order as the same list, and refuses a cursor from another set of tasks",
+  async (context) => {
+    await endRunsOfEachTask(context, 2);
+    const reader = readerOf(context);
+    const cursorOfTwoTasks = (
+      await reader.listRuns({ state: "completed", task: ["resize-image", "send-email"], limit: 1 })
+    ).nextCursor!;
+
+    const pageOfTheTasksInAnotherOrder = await reader.listRuns({
+      state: "completed",
+      task: ["send-email", "resize-image"],
+      limit: 1,
+      cursor: cursorOfTwoTasks,
+    });
+    const listings = [
+      reader.listRuns({ state: "completed", task: "send-email", cursor: cursorOfTwoTasks }),
+      reader.listRuns({ state: "completed", task: ["send-email", "build-report"], cursor: cursorOfTwoTasks }),
+      reader.listRuns({ state: "completed", cursor: cursorOfTwoTasks }),
+    ];
+
+    expect(pageOfTheTasksInAnotherOrder.firstRunPosition).toBe(2);
+    await expect(listings[0]).rejects.toThrow(
+      'Invalid listRuns cursor: it pages through tasks "send-email" and "resize-image", not task "send-email"',
+    );
+    await expect(listings[1]).rejects.toThrow(
+      'Invalid listRuns cursor: it pages through tasks "send-email" and "resize-image", not tasks "send-email" and "build-report"',
+    );
+    await expect(listings[2]).rejects.toThrow(
+      'Invalid listRuns cursor: it pages through tasks "send-email" and "resize-image", not every task',
+    );
+  },
+);
+
+engineTest(
   "listRuns of completed and failed runs of several tasks lists them in one order by finish time, equal finish times included",
   async (context) => {
     const endedRuns: RunIdentity[] = [];

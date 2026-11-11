@@ -95,8 +95,8 @@ const { runs, totalRunCount, firstRunPosition, previousCursor, nextCursor } = aw
 
 - `state` takes one state or a list of states; left out, the list holds every state. See [List several states](#list-several-states).
 - `limit` defaults to 50; it must be a whole number, 1 or more.
-- `task` keeps the runs of one task; the runs come typed by that task and by the states listed.
-- `totalRunCount` is how many runs the list holds: the runs in the states listed, of `task` or of every task the instance lists.
+- `task` takes one task name or a list of names, and keeps their runs; left out, the list holds every task the instance lists. The runs come typed by the tasks and the states listed. See [List several tasks](#list-several-tasks).
+- `totalRunCount` is how many runs the list holds: the runs in the states listed, of the tasks listed.
 - `firstRunPosition` is the position of the page's first run in the list, counted from 1. It is absent only when the list is empty or the page lies past its end.
 - `nextCursor` is present exactly when a run follows the page; `previousCursor` exactly when a run comes before it. Pass either back as `cursor`, with the same `state` and `task`, for the page after or the page before. The direction is inside the cursor: there is no other option to set.
 - A cursor is an opaque string; any other cursor throws:
@@ -108,6 +108,7 @@ Invalid listRuns cursor: it pages through every state, not "completed" and "fail
 Invalid listRuns cursor: it pages through task "send-welcome-email", not task "create-default-workspace"
 Invalid listRuns cursor: it pages through every task, not task "send-welcome-email"
 Invalid listRuns cursor: it pages through task "send-welcome-email", not every task
+Invalid listRuns cursor: it pages through tasks "send-welcome-email" and "create-default-workspace", not task "send-welcome-email"
 Invalid listRuns cursor: pass back a nextCursor or previousCursor that listRuns returned
 ```
 
@@ -185,6 +186,26 @@ const { runs, totalRunCount, firstRunPosition, nextCursor } = await nextasking.l
 - The runs come typed by the states listed: one state gives that state's run, a list the union, no `state` every state.
 - An empty list throws: list at least one state, or leave `state` out.
 - The same states in another order are the same list, and accept each other's cursors. A list of all eight states is not the same list as `state` left out: their cursors refuse each other.
+
+## List several tasks
+
+```ts
+const { runs, nextCursor } = await nextasking.listRuns({
+  state: "failed",
+  task: ["send-welcome-email", "create-default-workspace"],
+});
+```
+
+- The runs of the tasks listed merge into one order, as the runs of every task do. The call reads the indexes of those tasks only, so it costs less than listing every task.
+- `totalRunCount`, `firstRunPosition` and both cursors count the tasks listed only.
+- The runs come typed by the tasks listed: one name gives that task's run, a list the union.
+- A name the instance doesn't list throws `UnknownTaskError`, wherever it is in the list. An empty list throws: list at least one task, or leave `task` out.
+- The same names in another order are the same list, and accept each other's cursors. Another set is refused, naming both, and so is a list of every task against `task` left out:
+
+```text
+Invalid listRuns cursor: it pages through tasks "send-welcome-email" and "create-default-workspace", not every task
+Invalid listRuns cursor: it pages through every task, not tasks "send-welcome-email" and "create-default-workspace"
+```
 
 ## Count the backlog
 
@@ -268,10 +289,10 @@ export async function runNow(taskName: TaskName) {
 - One run is read at one instant: the record, payload, errors and steps `getRun` returns are of the same moment, and so are each listed run's state and `lastErrorMessage`. A run replayed during the read is read whole, as it was before the `replay` or after it, never `failed` without the errors it failed with. Two runs of one `getEvent` or one `listRuns` page can still be of different instants.
 - One `listRuns` page is placed in its list at one instant: which runs fall on the page, `totalRunCount` and `firstRunPosition` are read together, across every state and task listed. Each run's fields are read afterwards, at an instant of its own.
 
-| Read            | Cost                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `getRun`        | One round trip: record, payload, errors and steps together                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| `listRuns`      | Two round trips, whatever the number of states: one script reading the counts of one index per state and task listed (the tasks the instance lists, or `task`), and at most `limit` entries from each index of an order group the page reaches, none from the others, all at one instant; then the page's runs with their last error, each at its own instant. One round trip when no task has a run left to list. Every state of 50 tasks is 400 indexes in that one script |
-| `countRuns`     | One round trip: one count per task and state, whatever the queue holds                                                                                                                                                                                                                                                                                                                                                                                                       |
-| `getEvent`      | One round trip: every listener's run together                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| `listSchedules` | One round trip: one read per scheduled task the instance lists                                                                                                                                                                                                                                                                                                                                                                                                               |
+| Read            | Cost                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `getRun`        | One round trip: record, payload, errors and steps together                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| `listRuns`      | Two round trips, whatever the number of states: one script reading the counts of one index per state and task listed (the tasks the instance lists, or those of `task`), and at most `limit` entries from each index of an order group the page reaches, none from the others, all at one instant; then the page's runs with their last error, each at its own instant. One round trip when no task has a run left to list. Every state of 50 tasks is 400 indexes in that one script |
+| `countRuns`     | One round trip: one count per task and state, whatever the queue holds                                                                                                                                                                                                                                                                                                                                                                                                                |
+| `getEvent`      | One round trip: every listener's run together                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `listSchedules` | One round trip: one read per scheduled task the instance lists                                                                                                                                                                                                                                                                                                                                                                                                                        |

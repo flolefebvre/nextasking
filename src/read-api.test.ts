@@ -7,7 +7,8 @@ import { RECORD_VERSION } from "./engine/engine.js";
 import { createReadApi } from "./read-api.js";
 import type { ReadApi } from "./read-api.js";
 import type { CommandResult, RedisClient, RedisCommand } from "./redis-client.js";
-import type { RunState } from "./run-states.js";
+import { UnknownTaskError } from "./errors.js";
+import type { ListRunsOptionsOf } from "./read-api.js";
 
 const UNREADABLE_REPLIES: readonly unknown[] = ["not an array", null, 3, []];
 
@@ -78,23 +79,46 @@ describe("listRuns refuses, before any round trip", () => {
   test.each([
     [
       "an empty list of states",
-      [],
+      { state: [] },
       "Invalid listRuns state: list at least one state, or leave state out to list every state",
     ],
     [
       "a list holding a state that is not one",
-      ["failed", "sleeping"],
+      { state: ["failed", "sleeping"] },
       'Invalid listRuns state: "sleeping" is not one of',
     ],
-    ["a state that is null", null, "Invalid listRuns state: null is not one of"],
-    ["a state that is a number", 7, "Invalid listRuns state: 7 is not one of"],
-  ])("%s", async (_description, state, message) => {
+    ["a state that is null", { state: null }, "Invalid listRuns state: null is not one of"],
+    ["a state that is a number", { state: 7 }, "Invalid listRuns state: 7 is not one of"],
+    [
+      "an empty list of tasks",
+      { task: [] },
+      "Invalid listRuns task: list at least one task, or leave task out to list every task",
+    ],
+    [
+      "a list holding a task the instance does not list, last",
+      { task: ["send-email", "removed-task"] },
+      'Unknown task "removed-task". Valid task names: "send-email", "build-report".',
+    ],
+    [
+      "a list holding a task the instance does not list, first",
+      { task: ["removed-task", "send-email"] },
+      'Unknown task "removed-task". Valid task names: "send-email", "build-report".',
+    ],
+    ["a task that is null", { task: null }, 'Unknown task "null"'],
+    ["a task that is a number", { task: 7 }, 'Unknown task "7"'],
+  ])("%s", async (_description, options, message) => {
     const client = clientRefusingEveryCommand();
 
     await expect(
-      readerOfTasks(client, ["send-email"]).listRuns({ state: state as unknown as RunState }),
+      readerOfTasks(client, ["send-email", "build-report"]).listRuns(options as unknown as ListRunsOptionsOf<string>),
     ).rejects.toThrow(message);
     expect(client.send).not.toHaveBeenCalled();
+  });
+
+  test("an unknown task in a list throws UnknownTaskError", async () => {
+    await expect(
+      readerOfTasks(clientRefusingEveryCommand(), ["send-email"]).listRuns({ task: ["send-email", "removed-task"] }),
+    ).rejects.toThrow(UnknownTaskError);
   });
 });
 

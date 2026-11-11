@@ -428,6 +428,23 @@ export type SeveralListedStatesGiveTheirUnion = Expect<
 
 export type NoListedStateGivesEveryState = Expect<IsEqual<ListedRunOf<typeof listEveryRun>, ListedRun>>;
 
+export const listRunsOptionsOfSeveralTasks: ListRunsOptions = {
+  task: ["send-welcome-email", "create-default-workspace"],
+};
+
+export const listWelcomeEmailRuns = () => nextasking.listRuns({ state: "failed", task: "send-welcome-email" });
+
+export const listRunsOfTwoTasks = () =>
+  nextasking.listRuns({ task: ["send-welcome-email", "create-default-workspace"] });
+
+export type OneListedTaskKeepsItsOwnType = Expect<
+  IsEqual<ListedRunOf<typeof listWelcomeEmailRuns>, Extract<ListedRun, { state: "failed"; task: "send-welcome-email" }>>
+>;
+
+export type SeveralListedTasksGiveTheirUnion = Expect<
+  IsEqual<ListedRunOf<typeof listRunsOfTwoTasks>["task"], "send-welcome-email" | "create-default-workspace">
+>;
+
 export type RunPageHasItsTotal = Expect<IsEqual<RunPage["totalRunCount"], number>>;
 
 export type RunPageHasThePositionOfItsFirstRun = Expect<IsEqual<RunPage["firstRunPosition"], number | undefined>>;

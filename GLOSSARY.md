@@ -120,6 +120,10 @@ _Avoid_: Waiting, ready; not queued, which names the order group of pending runs
 The states whose runs a list can put in one order, because each orders its runs by the same measure: executing (when the run started), queued (pending and waiting for a concurrency slot, by its place in the queue), waiting for a time (delayed, suspended and backing off, by when it is due) and ended (completed and failed, by when it finished). Runs of two order groups never share an order, so a list of several comes as one block per group, in that sequence.
 _Avoid_: Score family, state group, stage, category
 
+**Time range**:
+A start and an end of a list of runs, both included and each optional, applied to the time its order group orders its runs by: when the run started, when it is due, or when it finished. Queued runs have no such time, so a time range never applies to them.
+_Avoid_: Period, window, interval; not dedup window, which is how long a repeated id is dropped (see **Dedup window**)
+
 **Idle**:
 Said of the queue when no run is pending, executing or waiting for a concurrency slot; runs that wait for a set time don't count.
 _Avoid_: Settled, empty; not drained, which describes a worker shutting down (see **Drain**)

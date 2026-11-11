@@ -205,6 +205,14 @@ describe("the root export", () => {
     expectTypeOf<ListRunsOptions["state"]>().toEqualTypeOf<RunState | readonly RunState[] | undefined>();
   });
 
+  test("takes a time range of Dates on listRuns", () => {
+    expectTypeOf<ListRunsOptions["from"]>().toEqualTypeOf<Date | undefined>();
+    expectTypeOf<ListRunsOptions["until"]>().toEqualTypeOf<Date | undefined>();
+    const listRecentFailures = () => nextasking.listRuns({ state: "failed", from: new Date(0), until: new Date() });
+
+    expectTypeOf(listRecentFailures).returns.resolves.toHaveProperty("totalRunCount").toEqualTypeOf<number>();
+  });
+
   test("types listRuns' runs by the tasks listed, one task keeping its own type", () => {
     const listWelcomeEmailRuns = async () =>
       (await nextasking.listRuns({ state: "pending", task: "send-welcome-email" })).runs;

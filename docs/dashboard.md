@@ -94,14 +94,15 @@ const { runs, totalRunCount, firstRunPosition, previousCursor, nextCursor } = aw
 });
 ```
 
-`listRuns({ state?, task?, limit?, cursor? })` returns `{ runs, totalRunCount, firstRunPosition?, previousCursor?, nextCursor? }`:
+`listRuns({ state?, task?, from?, until?, limit?, cursor? })` returns `{ runs, totalRunCount, firstRunPosition?, previousCursor?, nextCursor? }`:
 
 - `state` takes one state or a list of states; left out, the list holds every state. See [List several states](#list-several-states).
+- `from` and `until` keep the runs of a time range, by the time their state is ordered by. See [List the runs of a time range](#list-the-runs-of-a-time-range).
 - `limit` defaults to 50; it must be a whole number, 1 or more.
 - `task` takes one task name or a list of names, and keeps their runs; left out, the list holds every task the instance lists. The runs come typed by the tasks and the states listed. See [List several tasks](#list-several-tasks).
 - `totalRunCount` is how many runs the list holds: the runs in the states listed, of the tasks listed.
 - `firstRunPosition` is the position of the page's first run in the list, counted from 1. It is absent only when the list is empty or the page lies past its end.
-- `nextCursor` is present exactly when a run follows the page; `previousCursor` exactly when a run comes before it. Pass either back as `cursor`, with the same `state` and `task`, for the page after or the page before. The direction is inside the cursor: there is no other option to set.
+- `nextCursor` is present exactly when a run follows the page; `previousCursor` exactly when a run comes before it. Pass either back as `cursor`, with the same `state`, `task`, `from` and `until`, for the page after or the page before. The direction is inside the cursor: there is no other option to set.
 - A cursor is an opaque string; any other cursor throws:
 
 ```text
@@ -112,6 +113,7 @@ Invalid listRuns cursor: it pages through task "send-welcome-email", not task "c
 Invalid listRuns cursor: it pages through every task, not task "send-welcome-email"
 Invalid listRuns cursor: it pages through task "send-welcome-email", not every task
 Invalid listRuns cursor: it pages through tasks "send-welcome-email" and "create-default-workspace", not task "send-welcome-email"
+Invalid listRuns cursor: it pages through runs from 2026-11-11T08:00:00.000Z until 2026-11-11T10:00:00.000Z, not runs from 2026-11-11T08:05:00.000Z until 2026-11-11T10:05:00.000Z
 Invalid listRuns cursor: pass back a nextCursor or previousCursor that listRuns returned
 ```
 
@@ -210,6 +212,94 @@ const { runs, nextCursor } = await nextasking.listRuns({
 Invalid listRuns cursor: it pages through tasks "send-welcome-email" and "create-default-workspace", not every task
 Invalid listRuns cursor: it pages through every task, not tasks "send-welcome-email" and "create-default-workspace"
 ```
+
+## List the runs of a time range
+
+`from` and `until` keep the runs whose time falls between them, both included. Each takes a `Date` and works alone. The time is the one the order group of the listed states is ordered by:
+
+| Order group        | States                               | `from` and `until` apply to                              |
+| ------------------ | ------------------------------------ | -------------------------------------------------------- |
+| executing          | `executing`                          | `startedAt`                                              |
+| waiting for a time | `delayed`, `suspended`, `backingOff` | When it is due: `startsAt`, `resumesAt`, `nextAttemptAt` |
+| ended              | `completed`, `failed`                | `finishedAt`                                             |
+
+Runs that failed in the last two hours:
+
+```ts
+const now = Date.now();
+const { runs, totalRunCount } = await nextasking.listRuns({
+  state: "failed",
+  from: new Date(now - 2 * 60 * 60 * 1000),
+  until: new Date(now),
+});
+```
+
+Runs executing for more than ten minutes, their attempt taken ten minutes ago or earlier:
+
+```ts
+const { runs } = await nextasking.listRuns({
+  state: "executing",
+  until: new Date(Date.now() - 10 * 60 * 1000),
+});
+```
+
+Runs due in the next thirty minutes:
+
+```ts
+const now = Date.now();
+const { runs } = await nextasking.listRuns({
+  state: ["delayed", "suspended", "backingOff"],
+  from: new Date(now),
+  until: new Date(now + 30 * 60 * 1000),
+});
+```
+
+- `totalRunCount`, `firstRunPosition` and both cursors count the runs inside the time range only, and paging in either direction stays inside it.
+- A cursor carries its `from` and `until`, and is refused with any other bounds. Compute the bounds once, on the first page, and pass the same bounds with every cursor: keep them beside the cursor, in the URL for instance. A page that computes `from` again from the current time is refused.
+
+```ts
+// src/app/admin/recent-failures/page.tsx
+export default async function RecentFailuresPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ from?: string; until?: string; cursor?: string }>;
+}) {
+  await requireAdmin();
+  const params = await searchParams;
+  const until = params.until ? new Date(Number(params.until)) : new Date();
+  const from = params.from ? new Date(Number(params.from)) : new Date(until.getTime() - 2 * 60 * 60 * 1000);
+  const { runs, previousCursor, nextCursor } = await nextasking.listRuns({
+    state: "failed",
+    from,
+    until,
+    limit: 20,
+    ...(params.cursor ? { cursor: params.cursor } : {}),
+  });
+  const pageLinkOf = (cursor: string) => `?from=${from.getTime()}&until=${until.getTime()}&cursor=${cursor}`;
+  return (
+    <>
+      <FailedRunsTable runs={runs} />
+      {previousCursor && <Link href={pageLinkOf(previousCursor)}>Previous</Link>}
+      {nextCursor && <Link href={pageLinkOf(nextCursor)}>Next</Link>}
+    </>
+  );
+}
+```
+
+- The bounds are compared with times the server wrote from its own clock: the app's clock and the server's can differ by their skew.
+- A run that yielded, retried, resumed, or was handed back and taken again has the `startedAt` of its latest take, and is filtered on it.
+- The call costs the same two round trips as without a time range.
+- A time range is refused, before any round trip, with a message that says why:
+
+```text
+Invalid listRuns range: the states listed are of several order groups, each ordered its own way: "executing" by startedAt; "failed" by finishedAt. A range takes the states of one order group ordered by a time: executing, waiting for a time, or ended
+Invalid listRuns range: "pending" runs are ordered by their place in the queue, not by a time. A range takes the states of one order group ordered by a time: executing, waiting for a time, or ended
+Invalid listRuns range: from 2026-11-11T10:00:00.000Z is after until 2026-11-11T08:00:00.000Z; pass a from at or before until
+Invalid listRuns from: pass a Date, got "2026-11-11T08:00:00.000Z"
+Invalid listRuns until: pass a valid Date, got an Invalid Date
+```
+
+- A time range takes the states of one order group ordered by a time: neither `state` left out, nor `pending` or `waitingForConcurrencySlot`, takes one. Queued runs are ordered by their place in the queue, and a run holds no time at which it became pending.
 
 ## Count the backlog
 

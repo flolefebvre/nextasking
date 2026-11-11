@@ -416,6 +416,12 @@ export const listRunsOptionsOfSeveralStates: ListRunsOptions = { state: ["pendin
 
 export const listRunsOptionsOfEveryState: ListRunsOptions = { limit: 20 };
 
+export const listRunsOptionsOfATimeRange: ListRunsOptions = {
+  state: "failed",
+  from: new Date("2026-11-11T08:00:00.000Z"),
+  until: new Date("2026-11-11T10:00:00.000Z"),
+};
+
 export const listFailedRuns = () => nextasking.listRuns({ state: "failed" });
 
 export const listEndedRuns = () => nextasking.listRuns({ state: ["completed", "failed"] });

@@ -572,13 +572,13 @@ engineTest(
   },
 );
 
-type ListedIndexesOptions = Omit<ListRunsOptionsOf<string>, "limit" | "cursor">;
+type RunListOptions = Omit<ListRunsOptionsOf<string>, "limit" | "cursor">;
 
 const MOST_PAGES_WALKED = 1000;
 
 async function walkedRunPagesOf(
   reader: ReadApi,
-  options: ListedIndexesOptions,
+  options: RunListOptions,
   limits: readonly number[],
   firstCursor?: string,
   followedCursor: "nextCursor" | "previousCursor" = "nextCursor",
@@ -605,7 +605,7 @@ async function walkedRunPagesOf(
 
 async function walkedPagesOf(
   reader: ReadApi,
-  options: ListedIndexesOptions,
+  options: RunListOptions,
   limits: readonly number[],
   firstCursor?: string,
 ): Promise<AnyListedRun[][]> {
@@ -664,15 +664,59 @@ async function runIdsInBlocksOf(
   return runIds;
 }
 
-async function runsFinishedAtOneInstant(context: EngineTestContext, runs: readonly RunIdentity[]): Promise<void> {
+async function runsFinishedSecondsApart(
+  context: EngineTestContext,
+  runs: readonly RunIdentity[],
+  secondsBeforeTheLatestOfRun: readonly number[],
+): Promise<EpochMilliseconds[]> {
   const finishedAts = await Promise.all(
     runs.map(async ({ task, runId }) => (await recordFieldOf(context, task, runId, "finishedAt")).getTime()),
   );
-  const oneInstant = Math.min(...finishedAts) - 1000;
+  const latestFinishedAt = Math.min(...finishedAts) - 1000;
+  const backdatedFinishedAts = runs.map(
+    (_run, runNumber) => latestFinishedAt - secondsBeforeTheLatestOfRun[runNumber]! * 1000,
+  );
   for (const [runNumber, { task, runId }] of runs.entries()) {
-    await backdateEndedRun(context, task, runId, finishedAts[runNumber]! - oneInstant);
+    await backdateEndedRun(context, task, runId, finishedAts[runNumber]! - backdatedFinishedAts[runNumber]!);
   }
+  return backdatedFinishedAts;
 }
+
+async function runsFinishedAtOneInstant(context: EngineTestContext, runs: readonly RunIdentity[]): Promise<void> {
+  await runsFinishedSecondsApart(
+    context,
+    runs,
+    runs.map(() => 0),
+  );
+}
+
+type RunsFinishedApart = { runIds: RunId[]; finishedAts: EpochMilliseconds[] };
+
+async function endedRunsOfTwoTasksFinishedSecondsApart(
+  context: EngineTestContext,
+  secondsBeforeTheLatestOfRun: readonly number[],
+): Promise<RunsFinishedApart> {
+  const runs = secondsBeforeTheLatestOfRun.map((_seconds, runNumber) => ({
+    task: runNumber % 2 === 0 ? "send-email" : "build-report",
+    runId: `ended-${String(runNumber)}`,
+  }));
+  await endRuns(
+    context.engine,
+    "send-email",
+    runs.filter(({ task }) => task === "send-email").map(({ runId }) => runId),
+    "complete",
+  );
+  await endRuns(
+    context.engine,
+    "build-report",
+    runs.filter(({ task }) => task === "build-report").map(({ runId }) => runId),
+    "fail",
+  );
+  const finishedAts = await runsFinishedSecondsApart(context, runs, secondsBeforeTheLatestOfRun);
+  return { runIds: runs.map(({ runId }) => runId), finishedAts };
+}
+
+const ENDED_STATES = ["completed", "failed"] as const;
 
 async function readerOfRunsInFourOrderGroupsOverTwoTasks(context: EngineTestContext): Promise<ReadApi> {
   await endRuns(context.engine, "send-email", ["ended-1", "ended-2"], "complete");
@@ -1186,7 +1230,15 @@ engineTest("listRuns takes a state or a task listed twice as listed once, readin
   expect(pageOfTheDuplicatedValues).toMatchObject({ totalRunCount: 2, firstRunPosition: 2 });
   expect(traffic.sentCommands[0]).toEqual({
     name: "evalsha",
-    args: [keys.runIndex("send-email", "completed"), 1, "forward", ENDED_ORDER_GROUP_NUMBER],
+    args: [
+      keys.runIndex("send-email", "completed"),
+      1,
+      "forward",
+      "descending",
+      "-inf",
+      "+inf",
+      ENDED_ORDER_GROUP_NUMBER,
+    ],
   });
 });
 
@@ -1373,7 +1425,7 @@ engineTest(
       oldCursor: reader.listRuns({ state: "failed", cursor: cursorOfFields([1, "failed", 0, 50]) }),
       forwardFromNoPlace: reader.listRuns({
         state: "failed",
-        cursor: cursorOfFields([3, "forward", null, "failed", null]),
+        cursor: cursorOfFields([3, "forward", null, ["failed"], null, null, null]),
       }),
       invalidState: reader.listRuns({ state: "sleeping" as RunState }),
       invalidLimit: reader.listRuns({ state: "failed", limit: 0 }),
@@ -1433,7 +1485,7 @@ engineTest(
     expect(trafficByListing.everyStateNextPage.roundTripCount).toBe(2);
     expect(trafficByListing.twoStates.roundTripCount).toBe(2);
     expect(trafficByListing.everyState.sentCommands[0]?.args).toHaveLength(
-      (TASK_NAMES.length + LISTENER_NAMES.length) * RUN_STATES.length * 2 + 2,
+      (TASK_NAMES.length + LISTENER_NAMES.length) * RUN_STATES.length * 2 + 5,
     );
     expect(trafficByListing.firstPage.sentCommands[0]).toEqual({
       name: "evalsha",
@@ -1441,6 +1493,9 @@ engineTest(
         ...[...TASK_NAMES, ...LISTENER_NAMES].map((taskName) => keys.runIndex(taskName, "completed")),
         2,
         "forward",
+        "descending",
+        "-inf",
+        "+inf",
         ...[...TASK_NAMES, ...LISTENER_NAMES].map(() => ENDED_ORDER_GROUP_NUMBER),
       ],
     });
@@ -1487,5 +1542,176 @@ integrationTest(
       expect([...runIdsOfPages(pages)].sort()).toEqual(keptRunIds);
       expect([...(await storedKeyViolationsOf(redis, keyPrefix))].sort()).toEqual([...corruptions].sort());
     });
+  },
+);
+
+const EIGHT_RUNS_ONE_SECOND_APART = [0, 1, 2, 3, 4, 5, 6, 7];
+
+function rangeOfRunsTwoToSixOf({ finishedAts }: RunsFinishedApart): RunListOptions {
+  return { state: ENDED_STATES, from: new Date(finishedAts[6]!), until: new Date(finishedAts[2]!) };
+}
+
+engineTest(
+  "listRuns in a time range lists and counts only the runs finished inside it, bounds included, and its pages stay inside in both directions",
+  async (context) => {
+    const runsFinishedApart = await endedRunsOfTwoTasksFinishedSecondsApart(context, EIGHT_RUNS_ONE_SECOND_APART);
+    const { runIds, finishedAts } = runsFinishedApart;
+    const reader = readerOf(context);
+    const options = rangeOfRunsTwoToSixOf(runsFinishedApart);
+
+    const forwardPages = await walkedRunPagesOf(reader, options, [2]);
+    const lastPage = forwardPages.at(-1)!;
+    const backwardPages = await walkedRunPagesOf(reader, options, [2], lastPage.previousCursor!, "previousCursor");
+    const pageFromAStartAlone = await reader.listRuns({ state: ENDED_STATES, from: new Date(finishedAts[2]!) });
+    const pageUpToAnEndAlone = await reader.listRuns({ state: ENDED_STATES, until: new Date(finishedAts[6]!) });
+
+    expect(runIdsOfRunPages(forwardPages)).toEqual(runIds.slice(2, 7));
+    expect(forwardPages.map(pageFiguresOf)).toEqual([
+      { runCount: 2, totalRunCount: 5, firstRunPosition: 1, hasNextCursor: true },
+      { runCount: 2, totalRunCount: 5, firstRunPosition: 3, hasNextCursor: true },
+      { runCount: 1, totalRunCount: 5, firstRunPosition: 5, hasNextCursor: false },
+    ]);
+    expect(forwardPages[0]).not.toHaveProperty("previousCursor");
+    expect(runIdsOfRunPages([...backwardPages, lastPage])).toEqual(runIds.slice(2, 7));
+    expect([...backwardPages, lastPage].map(pageFiguresOf)).toEqual(forwardPages.map(pageFiguresOf));
+    expect(pageFromAStartAlone.runs.map(({ runId }) => runId)).toEqual(runIds.slice(0, 3));
+    expect(pageFromAStartAlone.totalRunCount).toBe(3);
+    expect(pageUpToAnEndAlone.runs.map(({ runId }) => runId)).toEqual(runIds.slice(6));
+    expect(pageUpToAnEndAlone.totalRunCount).toBe(2);
+  },
+);
+
+function startedAtOfExecuting(run: AnyListedRun): EpochMilliseconds | undefined {
+  return run.state === "executing" ? run.startedAt.getTime() : undefined;
+}
+
+engineTest(
+  "listRuns in a time range of executing runs filters on startedAt, the time each listed run shows",
+  async (context) => {
+    await enqueueRuns(context, [runOf("earlier-1", "send-email"), runOf("earlier-2", "build-report")]);
+    const [earlierLock] = await fetchedLockedRunsOf(context, 2);
+    await waitForServerInstantAfter(context, earlierLock!.startedAt);
+    await enqueueRuns(context, [runOf("later-1", "send-email")]);
+    const [laterLock] = await fetchedLockedRunsOf(context, 1);
+    const reader = readerOf(context);
+
+    const pageUpToTheEarlier = await reader.listRuns({ state: "executing", until: new Date(earlierLock!.startedAt) });
+    const pageFromTheLater = await reader.listRuns({ state: "executing", from: new Date(laterLock!.startedAt) });
+
+    expect(pageUpToTheEarlier.totalRunCount).toBe(2);
+    expect(pageUpToTheEarlier.runs.map(({ runId }) => runId)).toEqual(["earlier-1", "earlier-2"]);
+    expect(pageUpToTheEarlier.runs.map(startedAtOfExecuting)).toEqual([earlierLock!.startedAt, earlierLock!.startedAt]);
+    expect(pageFromTheLater.runs.map(({ runId }) => runId)).toEqual(["later-1"]);
+    expect(pageFromTheLater.runs.map(startedAtOfExecuting)).toEqual([laterLock!.startedAt]);
+  },
+);
+
+engineTest(
+  "listRuns in a time range of delayed, suspended and backing off runs together filters each on its own due time",
+  async (context) => {
+    const serverInstant = await serverInstantInMillisecondsOf(context.redis);
+    await enqueueRuns(context, [runOf("delayed-run", "send-email", { delayInMilliseconds: 60_000 })]);
+    await enqueueRuns(context, [runOf("suspended-run", "send-email"), runOf("backing-off-run", "build-report")]);
+    const lockedRuns = await fetchedLockedRunsOf(context, 2);
+    const lockedRunOf = (runId: RunId) => lockedRuns.find((lockedRun) => lockedRun.runId === runId)!;
+    await context.engine.settle({
+      ...lockedRunOf("suspended-run"),
+      outcome: { kind: "suspend", resumesAt: serverInstant + 120_000 },
+    });
+    await context.engine.settle({
+      ...lockedRunOf("backing-off-run"),
+      outcome: { kind: "retry", error: ATTEMPT_ERROR, backoffInMilliseconds: 180_000 },
+    });
+    const [startsAt, resumesAt, nextAttemptAt] = [
+      await recordFieldOf(context, "send-email", "delayed-run", "startsAt"),
+      await recordFieldOf(context, "send-email", "suspended-run", "resumesAt"),
+      await recordFieldOf(context, "build-report", "backing-off-run", "nextAttemptAt"),
+    ];
+    const statesWaitingForATime = ["delayed", "suspended", "backingOff"] as const;
+    const reader = readerOf(context);
+
+    const pageFromTheResume = await reader.listRuns({ state: statesWaitingForATime, from: resumesAt });
+    const pageUpToTheResume = await reader.listRuns({ state: statesWaitingForATime, until: resumesAt });
+    const pageOfTheStartAlone = await reader.listRuns({
+      state: statesWaitingForATime,
+      from: startsAt,
+      until: new Date(resumesAt.getTime() - 1),
+    });
+
+    expect(startsAt.getTime()).toBeLessThan(resumesAt.getTime());
+    expect(resumesAt.getTime()).toBeLessThan(nextAttemptAt.getTime());
+    expect(pageFromTheResume.runs.map(({ runId }) => runId)).toEqual(["backing-off-run", "suspended-run"]);
+    expect(pageUpToTheResume.runs.map(({ runId }) => runId)).toEqual(["suspended-run", "delayed-run"]);
+    expect(pageOfTheStartAlone).toMatchObject({ totalRunCount: 1, runs: [{ runId: "delayed-run", startsAt }] });
+  },
+);
+
+engineTest("listRuns refuses a cursor made with one time range when given another, naming both", async (context) => {
+  const runsFinishedApart = await endedRunsOfTwoTasksFinishedSecondsApart(context, EIGHT_RUNS_ONE_SECOND_APART);
+  const { finishedAts } = runsFinishedApart;
+  const reader = readerOf(context);
+  const rangedOptions = rangeOfRunsTwoToSixOf(runsFinishedApart);
+  const rangedCursor = (await reader.listRuns({ ...rangedOptions, limit: 1 })).nextCursor!;
+  const unrangedCursor = (await reader.listRuns({ state: ENDED_STATES, limit: 1 })).nextCursor!;
+  const [from, until] = [new Date(finishedAts[6]!), new Date(finishedAts[2]!)];
+  const fromRecomputedLater = new Date(from.getTime() + 1000);
+
+  const listings = [
+    reader.listRuns({ ...rangedOptions, from: fromRecomputedLater, cursor: rangedCursor }),
+    reader.listRuns({ state: ENDED_STATES, cursor: rangedCursor }),
+    reader.listRuns({ ...rangedOptions, cursor: unrangedCursor }),
+  ];
+
+  await expect(listings[0]).rejects.toThrow(
+    `Invalid listRuns cursor: it pages through runs from ${from.toISOString()} until ${until.toISOString()}, not runs from ${fromRecomputedLater.toISOString()} until ${until.toISOString()}`,
+  );
+  await expect(listings[1]).rejects.toThrow(
+    `Invalid listRuns cursor: it pages through runs from ${from.toISOString()} until ${until.toISOString()}, not runs at any time`,
+  );
+  await expect(listings[2]).rejects.toThrow(
+    `Invalid listRuns cursor: it pages through runs at any time, not runs from ${from.toISOString()} until ${until.toISOString()}`,
+  );
+  expect(await reader.listRuns({ ...rangedOptions, cursor: rangedCursor })).toMatchObject({ firstRunPosition: 2 });
+});
+
+engineTest(
+  "listRuns in a time range is two round trips of bounded reads, its bounds sent to the one script",
+  async (context) => {
+    const { client, keys } = context;
+    const runsFinishedApart = await endedRunsOfTwoTasksFinishedSecondsApart(context, EIGHT_RUNS_ONE_SECOND_APART);
+    const { finishedAts } = runsFinishedApart;
+    const reader = readerOf(context);
+    const rangedOptions = rangeOfRunsTwoToSixOf(runsFinishedApart);
+    const secondPage = await reader.listRuns({
+      ...rangedOptions,
+      limit: 2,
+      cursor: (await reader.listRuns({ ...rangedOptions, limit: 2 })).nextCursor!,
+    });
+
+    const trafficByListing = {
+      firstPage: await readTrafficOf(client, () => reader.listRuns({ ...rangedOptions, limit: 2 })),
+      nextPage: await readTrafficOf(client, () =>
+        reader.listRuns({ ...rangedOptions, limit: 2, cursor: secondPage.nextCursor! }),
+      ),
+      previousPage: await readTrafficOf(client, () =>
+        reader.listRuns({ ...rangedOptions, limit: 2, cursor: secondPage.previousCursor! }),
+      ),
+    };
+
+    for (const traffic of Object.values(trafficByListing)) {
+      expect(traffic.roundTripCount).toBe(2);
+      expectOnlyBoundedReads(traffic);
+    }
+    const listedIndexKeys = ENDED_STATES.flatMap((state) =>
+      [...TASK_NAMES, ...LISTENER_NAMES].map((taskName) => keys.runIndex(taskName, state)),
+    );
+    expect(trafficByListing.firstPage.sentCommands[0]?.args.slice(0, listedIndexKeys.length + 5)).toEqual([
+      ...listedIndexKeys,
+      2,
+      "forward",
+      "descending",
+      String(finishedAts[6]),
+      String(finishedAts[2]),
+    ]);
   },
 );

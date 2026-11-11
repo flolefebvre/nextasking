@@ -34,6 +34,8 @@ Typed background tasks and events for Next.js, on Redis or Valkey. Define tasks 
 | Set how long a call waits with `giveUpAfter`              | [Tasks and events](tasks-and-events.md)         |
 | Write a duration                                          | [Tasks and events](tasks-and-events.md)         |
 | Fix an error `createNextasking` throws at startup         | [Tasks and events](tasks-and-events.md)         |
+| Fix `Missing connection.url` or `Invalid connection.url`  | [Tasks and events](tasks-and-events.md)         |
+| Fix a listener's `undefined on`, from an import cycle     | [Tasks and events](tasks-and-events.md)         |
 | Start the embedded worker                                 | [Tasks and events](tasks-and-events.md)         |
 | Pass `startWorker` options                                | [Worker](worker.md)                             |
 | Cap the attempts in flight with `concurrency`             | [Worker](worker.md)                             |
@@ -44,6 +46,7 @@ Typed background tasks and events for Next.js, on Redis or Valkey. Define tasks 
 | Know what happens to runs during a deploy overlap         | [Worker](worker.md)                             |
 | Know what an old release does with a newer release's runs | [Worker](worker.md)                             |
 | Know which release decides each task option               | [Deploys](deploys.md)                           |
+| Know which release reads a `listRuns` cursor              | [Deploys](deploys.md)                           |
 | Change a payload schema without breaking runs             | [Deploys](deploys.md)                           |
 | Rename or rework a step that is already deployed          | [Deploys](deploys.md)                           |
 | Remove a task, a listener or an event                     | [Deploys](deploys.md)                           |

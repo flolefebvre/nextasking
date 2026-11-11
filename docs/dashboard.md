@@ -97,6 +97,7 @@ const { runs, totalRunCount, firstRunPosition, previousCursor, nextCursor } = aw
 `listRuns({ state?, task?, from?, until?, order?, limit?, cursor? }?)` returns `{ runs, totalRunCount, firstRunPosition?, previousCursor?, nextCursor? }`:
 
 - The argument can be left out: `listRuns()` is `listRuns({})`, the first 50 runs of every state of every task.
+- An option `listRuns` doesn't take doesn't compile, written inline, held in a variable or spread in; the error names it: `"limitt" is not an option of this call`.
 - `state` takes one state or a list of states; left out, the list holds every state. See [List several states](#list-several-states).
 - `from` and `until` keep the runs of a time range, by the time their state is ordered by. See [List the runs of a time range](#list-the-runs-of-a-time-range).
 - `order` is `"descending"`, the default, or `"ascending"`. See [Order](#order).

@@ -22,15 +22,16 @@ export async function register() {
 `startWorker()` boots in this order, and resolves once the last step is done:
 
 1. It checks the options, and rejects an invalid one before opening any connection.
-2. It opens the instance's connection to Redis.
+2. It opens the instance's connection to Redis, and rejects at once when `connection.url` is missing: `Missing connection.url: …`. See [Startup checks](tasks-and-events.md#startup-checks).
 3. It reads the server's `maxmemory-policy` and version once, and rejects a server that would lose runs or is below the floor. See [Give queues their own Valkey or Redis](#give-queues-their-own-valkey-or-redis).
 4. It reconciles the schedules stored in Redis with the instance's scheduled tasks, in one step: the last worker to boot sets them. See [Scheduled tasks](scheduled-tasks.md#what-a-deploy-does-to-schedules).
 5. It opens a second connection, on which an idle worker waits to hear of a new run, starts taking attempts and writes `worker started`.
 
 - With Redis down, `startWorker()` resolves anyway and the boot finishes in the background. See [When Redis is down](#when-redis-is-down).
 - An instance with a worker holds two connections: one for commands, shared by your calls and the worker's, and the one the worker waits on. An instance with no worker holds one, opened by its first call.
-- One worker per process: calling `startWorker()` a second time in the same process throws.
+- One worker per process: calling `startWorker()` again in the same process throws `The nextasking worker is already started in this process`. A call that rejected started no worker, so `startWorker()` can be called again.
 - Type the options with `StartWorkerOptions`.
+- An option `startWorker` doesn't take doesn't compile, written inline, held in a variable or spread in; the error names it: `"concurency" is not an option of this call`.
 
 ## Cap the attempts in flight with concurrency
 

@@ -46,12 +46,15 @@ function isUrlMissing(url: string | undefined): boolean {
   return url === undefined || url === "";
 }
 
+const PASSWORD_FIELD_PATTERN = /(password=)[^,&;#\s]*/gi;
+
 function shownUrlOf(url: string): string {
-  const scheme = URL_SCHEME_PATTERN.exec(url)?.[0] ?? "";
-  const afterScheme = url.slice(scheme.length);
+  const urlWithPasswordFieldsHidden = url.replace(PASSWORD_FIELD_PATTERN, "$1***");
+  const scheme = URL_SCHEME_PATTERN.exec(urlWithPasswordFieldsHidden)?.[0] ?? "";
+  const afterScheme = urlWithPasswordFieldsHidden.slice(scheme.length);
   const userinfoEnd = afterScheme.lastIndexOf("@");
   if (userinfoEnd === -1) {
-    return url;
+    return urlWithPasswordFieldsHidden;
   }
   const userinfo = afterScheme.slice(0, userinfoEnd);
   const usernameEnd = userinfo.indexOf(":");

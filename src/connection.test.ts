@@ -1162,6 +1162,27 @@ describe("the connection.url", () => {
     ["a URL with a bare credential", "http://s3cr3t@cache.internal", '"http://***@cache.internal"'],
     ["a database that is not a number", "redis://user:s3cr3t@localhost/queues", '"redis://user:***@localhost/queues"'],
     ["a password holding a slash and an at sign", "user:s3/cr@3t@localhost:6379", '"user:***@localhost:6379"'],
+    [
+      "an Azure connection string",
+      "myredis.redis.cache.windows.net:6380,password=s3cr3t,ssl=True,abortConnect=False",
+      '"myredis.redis.cache.windows.net:6380,password=***,ssl=True,abortConnect=False"',
+    ],
+    [
+      "a scheme-less URL with a password query field",
+      "localhost:6379?password=s3cr3t",
+      '"localhost:6379?password=***"',
+    ],
+    [
+      "a URL of another scheme with a password query field",
+      "http://cache.internal:6379/?password=s3cr3t&db=2",
+      '"http://cache.internal:6379/?password=***&db=2"',
+    ],
+    [
+      "a URL with both a userinfo password and a password field",
+      "http://user:s3cr3t@cache.internal/?password=s3cr3t",
+      '"http://user:***@cache.internal/?password=***"',
+    ],
+    ["an upper-case Password field", "localhost:6379,Password=s3cr3t", '"localhost:6379,Password=***"'],
   ])("hides the password of %s, in the message and everywhere in the error", (_, url, shownUrl) => {
     const error = errorThrownBy(() => createRedisConnections({ url }, createRecordingLogger().logger));
 

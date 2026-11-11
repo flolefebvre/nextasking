@@ -500,6 +500,50 @@ export const taskDefinitions: readonly TaskDefinitionSummary<TaskName, EventName
 
 export const eventDefinitions: readonly EventDefinitionSummary<EventName, TaskName>[] = nextasking.eventDefinitions;
 
+export type RunFailedIsAnEventDefinition = Expect<
+  IsEqual<
+    typeof runFailed,
+    EventDefinition<"nextasking/run.failed", StandardSchemaV1<RunFailedPayload, RunFailedPayload>>
+  >
+>;
+
+// @ts-expect-error a task is not an event
+export const taskAsEvent: EventDefinition = sendWelcomeEmail;
+
+// @ts-expect-error a listener is not an event
+export const listenerAsEvent: EventDefinition = createDefaultWorkspace;
+
+export const eventAsEvent: EventDefinition = userSignedUp;
+
+export const listenerOnATask = defineListener("send-welcome-sms", {
+  // @ts-expect-error a task is not an event
+  on: sendWelcomeEmail,
+  handler: async () => undefined,
+});
+
+export const instanceListingATaskAsAnEvent = createNextasking({
+  connection,
+  // @ts-expect-error a task is not an event
+  events: [userSignedUp, sendWelcomeEmail],
+  tasks: [],
+});
+
+export const instanceListingAListenerAsAnEvent = createNextasking({
+  connection,
+  // @ts-expect-error a listener is not an event
+  events: [createDefaultWorkspace],
+  tasks: [],
+});
+
+const welcomeEmailTaskOf = <const Name extends string>(name: Name) =>
+  defineTask(name, { schema: welcomeEmailSchema, handler: async () => undefined });
+
+export const sendWelcomeEmailAgain = welcomeEmailTaskOf("send-welcome-email-again");
+
+export type AGenericFactoryKeepsTheLiteralName = Expect<
+  IsEqual<typeof sendWelcomeEmailAgain, TaskDefinition<"send-welcome-email-again", typeof welcomeEmailSchema>>
+>;
+
 export type TaskDefinitionsAreNamedByTaskName = Expect<
   IsEqual<(typeof nextasking.taskDefinitions)[number]["name"], TaskName>
 >;

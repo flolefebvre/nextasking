@@ -54,9 +54,19 @@ export type TaskName = TaskNameIn<Register>;
 
 export type EventName = EventNameIn<Register>;
 
-type RegisteredDefinitions = Register extends { nextasking: Nextasking<infer Task, infer Event> }
+type DefinitionsIn<Registration> = Registration extends { nextasking: Nextasking<infer Task, infer Event> }
   ? { task: Task; event: Event }
   : { task: never; event: never };
+
+type RegisteredDefinitions = DefinitionsIn<Register>;
+
+export type ControlledTaskNameIn<Registration> = Registration extends { nextasking: object }
+  ? DefinitionsIn<Registration>["task"]["name"]
+  : string;
+
+export type ControlledScheduledTaskNameIn<Registration> = Registration extends { nextasking: object }
+  ? ScheduledTaskNameOf<DefinitionsIn<Registration>["task"]>
+  : string;
 
 type RegisteredTask = RegisteredDefinitions["task"];
 
@@ -295,6 +305,8 @@ export function createNextasking<
 }
 
 function rejectInvalidConfig(tasks: readonly AnyTaskDefinition[], events: readonly EventDefinition[]): void {
+  rejectUndefinedEntries("tasks", "task", tasks);
+  rejectUndefinedEntries("events", "event", events);
   rejectDuplicateNames([...tasks.map((task) => task.name), ...events.map((event) => event.name)]);
   for (const event of events) {
     if (isBuiltInEventName(event.name)) {
@@ -319,6 +331,19 @@ function rejectInvalidConfig(tasks: readonly AnyTaskDefinition[], events: readon
       throw new Error(`Listener "${task.name}" listens to event "${task.on.name}", which is not listed in events`);
     }
     rejectInvalidTaskOptions(task);
+  }
+}
+
+function rejectUndefinedEntries(
+  listName: "tasks" | "events",
+  definitionKind: "task" | "event",
+  definitions: readonly (AnyTaskDefinition | EventDefinition | undefined)[],
+): void {
+  const undefinedPosition = definitions.indexOf(undefined);
+  if (undefinedPosition !== -1) {
+    throw new Error(
+      `${listName}[${String(undefinedPosition)}] is undefined: an import cycle is the usual cause, the file that defines this ${definitionKind} imports the file that calls createNextasking`,
+    );
   }
 }
 

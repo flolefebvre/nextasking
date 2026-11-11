@@ -16,16 +16,31 @@ import { silentLogger } from "./logger.js";
 import { builtInCommandOf } from "./redis-client.js";
 import type { RedisClient } from "./redis-client.js";
 import { DEFAULT_PREFIX } from "./registry.js";
+import type { ControlledScheduledTaskNameIn, ControlledTaskNameIn, Register } from "./registry.js";
 
 export type NextaskingControlOptions = {
   connection: ConnectionConfig;
   prefix?: string;
 };
 
+type CheckedTaskNameOf<Name extends string, ListedName extends string> = Name extends ListedName
+  ? Name
+  : string extends Name
+    ? Name
+    : ListedName;
+
+type ControlledTaskName = ControlledTaskNameIn<Register>;
+
+type ControlledScheduledTaskName = ControlledScheduledTaskNameIn<Register>;
+
 export type NextaskingControl = {
   readonly waitForIdle: (options?: { timeout?: Duration }) => Promise<void>;
-  readonly makeRunsDueNow: (options?: { task?: string }) => Promise<{ task: string; runId: RunId }[]>;
-  readonly fireSchedule: (taskName: string) => Promise<{ runId: RunId }>;
+  readonly makeRunsDueNow: <const Name extends string = ControlledTaskName>(options?: {
+    task?: CheckedTaskNameOf<Name, ControlledTaskName>;
+  }) => Promise<{ task: string; runId: RunId }[]>;
+  readonly fireSchedule: <const Name extends string>(
+    taskName: CheckedTaskNameOf<Name, ControlledScheduledTaskName>,
+  ) => Promise<{ runId: RunId }>;
   readonly reset: (options?: { timeout?: Duration }) => Promise<void>;
   readonly close: () => Promise<void>;
   readonly [Symbol.asyncDispose]: () => Promise<void>;

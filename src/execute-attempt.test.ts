@@ -475,6 +475,31 @@ describe("executeAttempt", () => {
     };
     expect(checkCalls).toBeTypeOf("function");
   });
+
+  test("takes scheduledAt for a scheduled task only", () => {
+    const nextasking = createSignUpNextasking(async () => undefined);
+    const typedOptions: ExecuteAttemptOptions = { attempt: 2 };
+    const checkCalls = () => {
+      void executeAttempt(nextasking, "purge-expired-sessions", undefined, { scheduledAt: new Date() });
+      void executeAttempt(nextasking, "sign-up-user", { email: "ada@example.com" }, typedOptions);
+      void executeAttempt(nextasking, "sign-up-user", { email: "ada@example.com" }, { attempt: 2 });
+      void executeAttempt(
+        nextasking,
+        "sign-up-user",
+        { email: "ada@example.com" },
+        // @ts-expect-error a task that isn't scheduled has no scheduledAt
+        { scheduledAt: new Date() },
+      );
+      void executeAttempt(
+        nextasking,
+        "create-default-workspace",
+        { userId: "user-1" },
+        // @ts-expect-error a listener has no scheduledAt
+        { attempt: 2, scheduledAt: new Date() },
+      );
+    };
+    expect(checkCalls).toBeTypeOf("function");
+  });
 });
 
 type SignUpNextasking = ReturnType<typeof createSignUpNextasking>;

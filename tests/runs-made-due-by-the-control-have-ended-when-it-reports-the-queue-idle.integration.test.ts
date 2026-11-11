@@ -160,7 +160,8 @@ integrationTest(
         },
         { timeout: 10_000 },
       );
-      const remindersMadeDue = await control.makeRunsDueNow({ task: "send-reminder" });
+      const sendReminderTaskName: string = sendReminder.name;
+      const remindersMadeDue = await control.makeRunsDueNow({ task: sendReminderTaskName });
       await control.waitForIdle({ timeout: "10s" });
       const finishedAfterTheReminder = [...finishedRuns];
       const runsMadeDue = await control.makeRunsDueNow();

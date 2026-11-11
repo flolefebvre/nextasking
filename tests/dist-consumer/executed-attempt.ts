@@ -24,6 +24,10 @@ export async function retryTheWelcomeEmail(logger: Logger): Promise<WelcomeEmail
   await executeAttempt(nextasking, "purge-expired-sessions", { olderThanDays: 30 });
   // @ts-expect-error the payload doesn't match the task's schema
   await executeAttempt(nextasking, "send-welcome-email", { email: 42 });
+  // @ts-expect-error a task that isn't scheduled has no scheduledAt
+  await executeAttempt(nextasking, "send-welcome-email", { email: "ada@example.com" }, { scheduledAt: new Date() });
+  const typedOptions: ExecuteAttemptOptions = { attempt: 2 };
+  await executeAttempt(nextasking, "send-welcome-email", { email: "ada@example.com" }, typedOptions);
   await executeAttempt(nextasking, "send-welcome-email", { email: "ada@example.com" }).catch((error: unknown) => {
     if (!(error instanceof NonRetriableError)) {
       throw error;

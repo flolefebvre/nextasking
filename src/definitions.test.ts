@@ -3,6 +3,7 @@ import { describe, expect, expectTypeOf, test } from "vitest";
 import { z } from "zod";
 
 import { concurrencyKeyOf, defineEvent, defineListener, defineScheduledTask, defineTask } from "./definitions.js";
+import type { EventDefinition } from "./definitions.js";
 import type { StepTools } from "./step-engine.js";
 
 describe("defineTask", () => {
@@ -298,12 +299,71 @@ describe("defineListener", () => {
     });
   });
 
+  test("throws on an undefined on, naming the listener and the import cycle", () => {
+    const eventImportedThroughACycle = undefined as unknown as typeof invoicePaid;
+
+    expect(() =>
+      defineListener("record-invoice-payment", { on: eventImportedThroughACycle, handler: async () => undefined }),
+    ).toThrow(
+      new Error(
+        'Listener "record-invoice-payment" has an undefined on: an import cycle is the usual cause, the file that defines its event imports the file that defines this listener',
+      ),
+    );
+  });
+
   test("rejects an on that isn't an event definition", () => {
     defineListener("record-invoice-payment", {
       // @ts-expect-error on takes the event definition, not its name
       on: "invoice.paid",
       handler: async () => undefined,
     });
+  });
+});
+
+describe("a definer called from a generic factory", () => {
+  test("takes the factory's name and keeps it literal in the definition", () => {
+    const schema = z.object({ invoiceId: z.string() });
+    const syncTaskOf = <const Name extends string>(name: Name) =>
+      defineTask(name, { schema, handler: async () => undefined });
+    const syncEventOf = <const Name extends string>(name: Name) => defineEvent(name, { schema });
+
+    const syncInvoices = syncTaskOf("sync-invoices");
+    const invoicesSynced = syncEventOf("invoices.synced");
+
+    expect(syncInvoices.name).toBe("sync-invoices");
+    expectTypeOf(syncInvoices.name).toEqualTypeOf<"sync-invoices">();
+    expectTypeOf(invoicesSynced.name).toEqualTypeOf<"invoices.synced">();
+  });
+});
+
+describe("an event's place", () => {
+  const sendReceipt = defineTask("send-receipt", {
+    schema: z.object({ invoiceId: z.string() }),
+    handler: async () => undefined,
+  });
+  const archiveInvoice = defineListener("archive-invoice", { on: invoicePaid, handler: async () => undefined });
+  const purgeExpiredSessions = defineScheduledTask("purge-expired-sessions", {
+    schedule: { cron: "0 3 * * *" },
+    handler: async () => undefined,
+  });
+
+  test("refuses a task, a listener or a scheduled task as a listener's on", () => {
+    // @ts-expect-error a task is not an event
+    defineListener("record-invoice-payment", { on: sendReceipt, handler: async () => undefined });
+    // @ts-expect-error a listener is not an event
+    defineListener("record-invoice-payment", { on: archiveInvoice, handler: async () => undefined });
+    // @ts-expect-error a scheduled task is not an event
+    defineListener("record-invoice-payment", { on: purgeExpiredSessions, handler: async () => undefined });
+  });
+
+  test("refuses a task or a listener as an EventDefinition", () => {
+    // @ts-expect-error a task is not an event
+    const taskAsEvent: EventDefinition = sendReceipt;
+    // @ts-expect-error a listener is not an event
+    const listenerAsEvent: EventDefinition = archiveInvoice;
+    const event: EventDefinition = invoicePaid;
+
+    expect([taskAsEvent, listenerAsEvent, event]).toHaveLength(3);
   });
 });
 

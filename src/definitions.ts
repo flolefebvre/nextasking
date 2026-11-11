@@ -54,6 +54,7 @@ export type EventOptions<Schema extends PayloadSchema> = {
 export type EventDefinition<Name extends string = string, Schema extends PayloadSchema = PayloadSchema> = {
   readonly name: Name;
   readonly schema: Schema;
+  readonly handler?: never;
 };
 
 export type ListenerOptions<Event extends EventDefinition> = { on: Event } & SharedTaskOptions<
@@ -178,5 +179,10 @@ export function defineListener<const Name extends string, Event extends EventDef
   name: Name,
   options: ListenerOptions<Event>,
 ): ListenerDefinition<Name, Event> {
+  if (options.on === undefined) {
+    throw new Error(
+      `Listener "${name}" has an undefined on: an import cycle is the usual cause, the file that defines its event imports the file that defines this listener`,
+    );
+  }
   return { ...options, schema: options.on.schema, name };
 }

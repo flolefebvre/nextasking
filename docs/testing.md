@@ -142,7 +142,7 @@ Pass them as the fourth argument; a scheduled task takes `undefined` as its payl
 | `attempt`     | `1`                      | The handler's `attempt`                                                                                                              |
 | `runId`       | a random id              | The handler's `runId`, which the idempotency keys and the send ids derive from                                                       |
 | `abortSignal` | a signal never aborted   | The handler's `abortSignal`: abort it to make the next step throw                                                                    |
-| `scheduledAt` | the time of the call     | A scheduled task's `scheduledAt`                                                                                                     |
+| `scheduledAt` | the time of the call     | A scheduled task's `scheduledAt`; another task doesn't compile with it                                                               |
 | `logger`      | a logger writing nothing | The handler's `logger`, with `task`, `runId` and `attempt` added to each line, as production                                         |
 
 ### Assert on a failure
@@ -227,6 +227,8 @@ test("a new user gets the tips email the day after signing up", async ({ page })
 | `fireSchedule(taskName)`    | Starts one run of a scheduled task now; resolves with `{ runId }`                                                |
 | `reset({ timeout? })`       | Waits until no attempt executes, removes every key under the prefix, and keeps the schedules                     |
 | `close()`                   | Closes the control's connection; `await using` calls it for you                                                  |
+
+- Task names are checked against the `Register` augmentation: a literal name the instance doesn't list, or for `fireSchedule` one that isn't a scheduled task, doesn't compile. A name typed `string` passes unchecked, and the control can't check it at runtime either: an unknown task makes nothing due and resolves `[]`, an unscheduled one throws `No schedule is stored`.
 
 ### When the queue is idle
 

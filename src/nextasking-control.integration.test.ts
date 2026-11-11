@@ -19,6 +19,8 @@ type ControlTestContext = EngineTestContext & { control: NextaskingControl };
 
 const ONE_HOUR_IN_MILLISECONDS = 3_600_000;
 
+const BUILD_REPORT_TASK_NAME: string = "build-report";
+
 const CONTROL_CALL_TIMEOUT: Duration = "1s";
 
 const DUE_RUN_COUNT_TIMEOUT_IN_MILLISECONDS = 1000;
@@ -113,7 +115,7 @@ controlTest(
     await engine.enqueue({ runs: delayedRunsOf("send-email", 150) });
     await engine.enqueue({ runs: delayedRunsOf("build-report", 150) });
 
-    const madeDueRuns = await control.makeRunsDueNow({ task: "build-report" });
+    const madeDueRuns = await control.makeRunsDueNow({ task: BUILD_REPORT_TASK_NAME });
 
     expect(madeDueRuns).toHaveLength(150);
     expect(madeDueRuns.every(({ task }) => task === "build-report")).toBe(true);
@@ -143,7 +145,7 @@ controlTest(
     const scheduleBefore = await redis.hGetAll(keys.schedule("build-report"));
     const instantBefore = await serverInstantInMillisecondsOf(redis);
 
-    const { runId } = await control.fireSchedule("build-report");
+    const { runId } = await control.fireSchedule(BUILD_REPORT_TASK_NAME);
 
     const [retries, scheduledAt] = await redis.hmGet(keys.runRecord("build-report", runId), ["retries", "scheduledAt"]);
     expect(retries).toBe("4");
@@ -157,7 +159,9 @@ controlTest(
 controlTest("fireSchedule of a task with no stored schedule throws and starts nothing", async (context) => {
   const { redis, keys, control } = context;
 
-  const fireSchedule = control.fireSchedule("send-digest");
+  const taskNameWithNoSchedule: string = "send-digest";
+
+  const fireSchedule = control.fireSchedule(taskNameWithNoSchedule);
 
   await expect(fireSchedule).rejects.toThrow(
     'No schedule is stored for task "send-digest": fire a scheduled task whose worker has started once',
@@ -170,7 +174,7 @@ controlTest("fireSchedule of a schedule record of a newer version throws naming 
   await storedBuildReportOf(context);
   await redis.hSet(keys.schedule("build-report"), "version", RECORD_VERSION + 1);
 
-  const fireSchedule = control.fireSchedule("build-report");
+  const fireSchedule = control.fireSchedule(BUILD_REPORT_TASK_NAME);
 
   await expect(fireSchedule).rejects.toThrow(
     `The firing of task "build-report" was refused: a newer release wrote a schedule record of version ${String(RECORD_VERSION + 1)} this release cannot read, so no run was started.`,

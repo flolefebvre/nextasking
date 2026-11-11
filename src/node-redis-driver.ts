@@ -6,6 +6,7 @@ import {
   createClient,
   DisconnectsClientError,
   ErrorReply,
+  RedisClient,
   SocketClosedUnexpectedlyError,
   TimeoutError,
 } from "@redis/client";
@@ -88,6 +89,15 @@ export function isUnblockedReply(error: unknown): boolean {
 
 export function unansweredWithinDeadlineError(): Error {
   return new TimeoutError();
+}
+
+export function isUrlTheDriverReads(url: string): boolean {
+  try {
+    RedisClient.parseURL(url);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function isNoScriptReply(error: unknown): boolean {

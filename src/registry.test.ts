@@ -238,6 +238,21 @@ describe("createNextasking", () => {
     expect(creating).toThrow(expect.objectContaining({ cause: expect.any(Error) }));
   });
 
+  test.each([
+    ["without a scheme", "localhost:6379", '"localhost:6379"'],
+    ["of another scheme, hiding its password", "http://user:s3cr3t@cache.internal", '"http://user:***@cache.internal"'],
+    ["that is not a URL", "not a url", '"not a url"'],
+  ])("rejects a connection.url %s, before opening any connection", async (_, url, shownUrl) => {
+    const networkResourcesBefore = networkResources();
+
+    expect(() => createNextasking({ connection: { url }, tasks: [sendWelcomeEmail] })).toThrow(
+      `Invalid connection.url: ${shownUrl} is not a valid redis:// or rediss:// URL, such as "redis://localhost:6379"`,
+    );
+    await setImmediate();
+
+    expect(networkResources()).toEqual(networkResourcesBefore);
+  });
+
   test("accepts a valid connection.giveUpAfter", () => {
     expect(() =>
       createNextasking({ connection: { url: UNREACHABLE_URL, giveUpAfter: "2s" }, tasks: [sendWelcomeEmail] }),

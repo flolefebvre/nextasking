@@ -10,6 +10,7 @@ import {
   isReadOnlyReply,
   isUnansweredCommandError,
   isUnblockedReply,
+  isUrlTheDriverReads,
   unansweredWithinDeadlineError,
 } from "./node-redis-driver.js";
 import type { CreateRedisDriver, RedisDriver } from "./node-redis-driver.js";
@@ -36,6 +37,41 @@ export function giveUpAfterInMillisecondsOf(connection: ConnectionConfig): Durat
     return parseDuration(connection.giveUpAfter ?? DEFAULT_GIVE_UP_AFTER);
   } catch (error) {
     throw new Error(`Invalid connection.giveUpAfter: ${(error as Error).message}`, { cause: error });
+  }
+}
+
+const URL_SCHEME_PATTERN = /^[a-z][a-z0-9+.-]*:\/\//i;
+
+function isUrlMissing(url: string | undefined): boolean {
+  return url === undefined || url === "";
+}
+
+function shownUrlOf(url: string): string {
+  const scheme = URL_SCHEME_PATTERN.exec(url)?.[0] ?? "";
+  const afterScheme = url.slice(scheme.length);
+  const userinfoEnd = afterScheme.lastIndexOf("@");
+  if (userinfoEnd === -1) {
+    return url;
+  }
+  const userinfo = afterScheme.slice(0, userinfoEnd);
+  const usernameEnd = userinfo.indexOf(":");
+  const shownUserinfo = usernameEnd === -1 ? "***" : `${userinfo.slice(0, usernameEnd)}:***`;
+  return `${scheme}${shownUserinfo}${afterScheme.slice(userinfoEnd)}`;
+}
+
+function rejectUrlTheDriverCannotRead(connection: ConnectionConfig): void {
+  if (!isUrlMissing(connection.url) && !isUrlTheDriverReads(connection.url)) {
+    throw new Error(
+      `Invalid connection.url: ${JSON.stringify(shownUrlOf(connection.url))} is not a valid redis:// or rediss:// URL, such as "redis://localhost:6379"`,
+    );
+  }
+}
+
+function rejectMissingUrl(connection: ConnectionConfig): void {
+  if (isUrlMissing(connection.url)) {
+    throw new Error(
+      "Missing connection.url: it is undefined or empty, set the variable your app reads it from, such as REDIS_URL",
+    );
   }
 }
 
@@ -265,6 +301,7 @@ export function createRedisConnections(
   createDriver: CreateRedisDriver = createNodeRedisDriver,
 ): RedisConnections {
   const giveUpAfterInMilliseconds = giveUpAfterInMillisecondsOf(connection);
+  rejectUrlTheDriverCannotRead(connection);
   const outageTracker = createConnectionOutageTracker(logger);
   const refusedWriteStretch = createRefusedWriteStretch({ outageTracker, giveUpAfterInMilliseconds });
   const stateByConnection = new WeakMap<RedisConnection, ConnectionState>();
@@ -516,6 +553,7 @@ export function createRedisConnections(
   });
 
   const openConnection = (longestBlockInMilliseconds: DurationInMilliseconds): RedisConnection => {
+    rejectMissingUrl(connection);
     const opened: { state?: ConnectionState } = {};
     const openState = () => (opened.state === undefined || isClosed(opened.state) ? undefined : opened.state);
     const driver = createDriver(connection.url, {

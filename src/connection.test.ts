@@ -19,6 +19,7 @@ import {
 } from "./connection.js";
 import type { RedisConnection, RedisConnections } from "./connection.js";
 import { createEngine } from "./engine/engine.js";
+import { RedisUnavailableError } from "./errors.js";
 import { createFakeRedisDrivers, fakeReplyCommandOf } from "../tests/fake-redis-drivers.js";
 import type { FakeRedisDriver } from "../tests/fake-redis-drivers.js";
 import { builtInCommandOf } from "./redis-client.js";
@@ -1117,6 +1118,99 @@ describe("a silence that ends after one connection gave up and before the other 
 
     expect(messagesBeforeTheClose).toEqual(["connection error"]);
     expect(messages()).toEqual(["connection error", "connection restored"]);
+  });
+});
+
+function errorThrownBy(call: () => unknown): Error {
+  try {
+    call();
+  } catch (error) {
+    return error as Error;
+  }
+  throw new Error("the call threw nothing");
+}
+
+function everyTextOfTheErrorChain(error: unknown): string {
+  const texts: string[] = [];
+  let link: unknown = error;
+  while (link !== undefined) {
+    texts.push(link instanceof Error ? `${link.message} ${JSON.stringify({ ...link })}` : String(link));
+    link = link instanceof Error ? link.cause : undefined;
+  }
+  return texts.join("\n");
+}
+
+describe("the connection.url", () => {
+  test.each([
+    ["without a scheme", "localhost:6379", '"localhost:6379"'],
+    ["of another scheme", "http://cache.internal:6379", '"http://cache.internal:6379"'],
+    ["that is not a URL", "not a url", '"not a url"'],
+    ["with a database that is not a number", "redis://localhost:6379/queues", '"redis://localhost:6379/queues"'],
+  ])("%s is refused at creation, naming the option", (_, url, shownUrl) => {
+    const creating = () => createRedisConnections({ url }, createRecordingLogger().logger);
+
+    expect(creating).toThrow(
+      `Invalid connection.url: ${shownUrl} is not a valid redis:// or rediss:// URL, such as "redis://localhost:6379"`,
+    );
+    expect(errorThrownBy(creating)).not.toBeInstanceOf(TypeError);
+  });
+
+  test.each([
+    ["a scheme-less URL", "user:s3cr3t@localhost:6379", '"user:***@localhost:6379"'],
+    ["a scheme-less URL with no username", ":s3cr3t@localhost:6379", '":***@localhost:6379"'],
+    ["a URL of another scheme", "http://user:s3cr3t@cache.internal", '"http://user:***@cache.internal"'],
+    ["a URL with a bare credential", "http://s3cr3t@cache.internal", '"http://***@cache.internal"'],
+    ["a database that is not a number", "redis://user:s3cr3t@localhost/queues", '"redis://user:***@localhost/queues"'],
+    ["a password holding a slash and an at sign", "user:s3/cr@3t@localhost:6379", '"user:***@localhost:6379"'],
+  ])("hides the password of %s, in the message and everywhere in the error", (_, url, shownUrl) => {
+    const error = errorThrownBy(() => createRedisConnections({ url }, createRecordingLogger().logger));
+
+    expect(error.message).toContain(`Invalid connection.url: ${shownUrl} is not a valid`);
+    expect(everyTextOfTheErrorChain(error)).not.toMatch(/s3\/?cr@?3t/);
+    expect(error.cause).toBeUndefined();
+  });
+
+  test.each([
+    "redis://localhost:6379",
+    "redis://127.0.0.1:1",
+    "redis://nextasking.invalid:6379",
+    "rediss://default:s3cr3t@cache.example.com:6380/2",
+    "redis://:s3cr3t@[::1]:6379/0",
+    "unix:///var/run/redis/redis.sock",
+  ])("%s is accepted at creation", (url) => {
+    expect(() => createRedisConnections({ url }, createRecordingLogger().logger)).not.toThrow();
+  });
+
+  test.each([
+    ["undefined", undefined],
+    ["empty", ""],
+  ])("%s is accepted at creation, and refused at once by each connection it would open, with no driver", (_, url) => {
+    const fakeRedisDrivers = createFakeRedisDrivers();
+    const connections = createRedisConnections(
+      { url: url as unknown as string },
+      createRecordingLogger().logger,
+      fakeRedisDrivers.createDriver,
+    );
+    const missingUrlMessage =
+      "Missing connection.url: it is undefined or empty, set the variable your app reads it from, such as REDIS_URL";
+
+    expect(() => connections.createCommandConnection()).toThrow(missingUrlMessage);
+    expect(() => connections.createBlockingConnection(1000)).toThrow(missingUrlMessage);
+    expect(() => connections.createCommandConnection()).toThrow(missingUrlMessage);
+    expect(fakeRedisDrivers.createdDrivers()).toEqual([]);
+  });
+
+  test("a missing one passes callOnRedis as it is, not as a RedisUnavailableError", async () => {
+    const connections = createRedisConnections(
+      { url: "" },
+      createRecordingLogger().logger,
+      createFakeRedisDrivers().createDriver,
+    );
+
+    const calling = connections.callOnRedis({}, async () => connections.createCommandConnection());
+
+    await expect(calling).rejects.toThrow("Missing connection.url");
+    await expect(calling).rejects.not.toBeInstanceOf(RedisUnavailableError);
   });
 });
 

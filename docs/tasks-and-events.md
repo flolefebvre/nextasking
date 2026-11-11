@@ -112,7 +112,7 @@ declare module "@flefebvre/nextasking" {
 ```
 
 - `events` is optional: an app with tasks alone leaves it out.
-- `createNextasking` opens no connection. Importing the instance is safe anywhere, `next build` included; the first `dispatch` or `emit` connects.
+- `createNextasking` opens no connection. Importing the instance needs no Redis, `next build` included; the first `dispatch` or `emit` connects. It does run the [startup checks](#startup-checks), wherever it is imported.
 - `connection.giveUpAfter` (default `"5s"`) bounds how long a call waits for Redis before it throws. See [When Redis is down](#when-redis-is-down).
 - `prefix` (default `"nextasking"`) puts every key of the instance under that prefix. Give two apps sharing one server different prefixes.
 - `logger` takes your app's logger; without it the library is silent. See [Logging](logging.md).
@@ -155,6 +155,7 @@ Invalid prefix: "" is empty: leave prefix out for the default "nextasking", or g
 Fix the definition or the option; don't catch the error.
 
 - Thrown from `register()`, it fails loudly but doesn't stop the process: `next start` keeps running and answers 500 to every request, and logs the error on boot and on each request as `Error: An error occurred while loading instrumentation hook:` followed by the message above.
+- Thrown where `next build` imports the instance, it fails the build. A build-time placeholder that isn't a URL, such as `REDIS_URL=localhost:6379`, is a malformed `connection.url`: leave the variable unset or empty for the build.
 - `createNextaskingControl` runs the same checks on its `connection` and `prefix`.
 
 A missing `connection.url`, `undefined` or `""`, is not a startup check: creating the instance and reading its definitions still work, so `next build` passes without the variable. Every call that needs Redis, `startWorker` included, throws at once, each time, and never waits `giveUpAfter`:
@@ -196,6 +197,7 @@ export async function signUp(formData: FormData) {
 - At runtime, `dispatch` validates the payload and stores the schema's output; the handler receives that output.
 - A listener is a task: `dispatch("record-invoice-payment", payload)` takes its event's payload and starts one run of that listener alone. That run's log lines have no `eventName` or `eventId`.
 - `dispatch(name, payload, { runId, delay })` takes your own run id (see [Run once per business fact](#run-once-per-business-fact)) and a delay.
+- An option `dispatch` doesn't take doesn't compile, written inline, held in a variable or spread in; the error names it: `"delayy" is not an option of this call`. The same holds in a handler.
 
 ### Start a run later
 
@@ -225,6 +227,7 @@ export async function POST(request: Request) {
 - The listeners are those of the release that emitted: their runs are stored by the `emit`, whatever release the workers run. See [Deploys](deploys.md#which-release-decides-what).
 - A listener's lines carry `eventName` and `eventId` on top of `task`, `runId` and `attempt`. See [Logging](logging.md).
 - `emit(name, payload, { eventId })` takes your own event id: see [Run once per business fact](#run-once-per-business-fact).
+- An option `emit` doesn't take doesn't compile, like `dispatch`'s: `"eventID" is not an option of this call`.
 
 ### An event with no listeners
 
@@ -329,9 +332,9 @@ import { RedisUnavailableError } from "@flefebvre/nextasking";
 import { nextasking } from "@/nextasking";
 
 export async function POST(request: Request) {
-  const { email } = (await request.json()) as { email: string };
+  const { userId, email } = (await request.json()) as { userId: string; email: string };
   try {
-    const { runId } = await nextasking.dispatch("send-welcome-email", { email });
+    const { runId } = await nextasking.dispatch("send-welcome-email", { userId, email });
     return Response.json({ runId }, { status: 202 });
   } catch (error) {
     if (error instanceof RedisUnavailableError) {
@@ -367,7 +370,7 @@ export async function register() {
 
 - `startWorker()` runs one worker in this process, executing the runs of every task the instance lists, listeners included.
 - A process that never calls `startWorker()` only dispatches and emits.
-- Calling `startWorker()` a second time in the same process throws.
+- Calling `startWorker()` again in the same process, once a call has started the worker, throws.
 - With Redis down, `startWorker()` resolves anyway and the worker starts once Redis is back, so pages keep rendering. See [Worker](worker.md#when-redis-is-down).
 - Set `NEXT_MANUAL_SIG_HANDLE=1` in the environment of `next start`, so a deploy lets running attempts finish instead of cutting them. See [Worker](worker.md) for this, `concurrency` and the other options.
 - Completed runs are kept 24 hours, and at most 1,000 per task: the oldest are removed first. Failed runs are kept longer; see [Retries and failures](retries-and-failures.md#what-a-failed-run-keeps).

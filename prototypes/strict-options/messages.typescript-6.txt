@@ -1,0 +1,154 @@
+prototypes/strict-options/strict-options.without-directives.ts(267,18): error TS2345: Argument of type '""' is not assignable to parameter of type 'never'.
+prototypes/strict-options/strict-options.without-directives.ts(268,18): error TS2345: Argument of type '"nextasking/sync"' is not assignable to parameter of type 'never'.
+prototypes/strict-options/strict-options.without-directives.ts(269,65): error TS2322: Type 'number' is not assignable to type '"\"retry\" is not an option of this call"'.
+prototypes/strict-options/strict-options.without-directives.ts(271,23): error TS2345: Argument of type '{ retry: number; timeOut: string; schema: z.ZodObject<{ userId: z.ZodString; }, z.core.$strip>; handler: () => Promise<undefined>; }' is not assignable to parameter of type 'OnlyKnown<{ retry: unknown; timeOut: unknown; schema: unknown; handler: unknown; }, TaskOptions<ZodObject<{ userId: ZodString; }, $strip>>>'.
+  Type '{ retry: number; timeOut: string; schema: z.ZodObject<{ userId: z.ZodString; }, z.core.$strip>; handler: () => Promise<undefined>; }' is not assignable to type '{ retry: "\"retry\" is not an option of this call"; timeOut: "\"timeOut\" is not an option of this call"; }'.
+    Types of property 'retry' are incompatible.
+      Type 'number' is not assignable to type '"\"retry\" is not an option of this call"'.
+prototypes/strict-options/strict-options.without-directives.ts(273,23): error TS2345: Argument of type '{ schema: z.ZodObject<{ userId: z.ZodString; }, z.core.$strip>; handler: () => Promise<undefined>; retry: number; }' is not assignable to parameter of type 'OnlyKnown<{ schema: unknown; handler: unknown; retry: unknown; }, TaskOptions<ZodObject<{ userId: ZodString; }, $strip>>>'.
+  Type '{ schema: z.ZodObject<{ userId: z.ZodString; }, z.core.$strip>; handler: () => Promise<undefined>; retry: number; }' is not assignable to type '{ retry: "\"retry\" is not an option of this call"; }'.
+    Types of property 'retry' are incompatible.
+      Type 'number' is not assignable to type '"\"retry\" is not an option of this call"'.
+prototypes/strict-options/strict-options.without-directives.ts(274,23): error TS2345: Argument of type '{ schema: z.ZodObject<{ userId: z.ZodString; }, z.core.$strip>; }' is not assignable to parameter of type 'OnlyKnown<{ schema: unknown; }, TaskOptions<ZodObject<{ userId: ZodString; }, $strip>>>'.
+  Property 'handler' is missing in type '{ schema: z.ZodObject<{ userId: z.ZodString; }, z.core.$strip>; }' but required in type 'SharedTaskOptions<{ userId: string; }>'.
+prototypes/strict-options/strict-options.without-directives.ts(275,23): error TS2345: Argument of type '{ handler: () => Promise<undefined>; }' is not assignable to parameter of type 'OnlyKnown<{ handler: unknown; }, TaskOptions<PayloadSchema>>'.
+  Property 'schema' is missing in type '{ handler: () => Promise<undefined>; }' but required in type '{ schema: PayloadSchema; }'.
+prototypes/strict-options/strict-options.without-directives.ts(276,62): error TS2339: Property 'missing' does not exist on type '{ userId: string; }'.
+prototypes/strict-options/strict-options.without-directives.ts(277,65): error TS2322: Type 'string' is not assignable to type 'number'.
+prototypes/strict-options/strict-options.without-directives.ts(278,32): error TS2345: Argument of type '{ retry: number; timeOut: string; schedule: { cron: string; }; handler: () => Promise<undefined>; }' is not assignable to parameter of type 'OnlyKnown<{ retry: unknown; timeOut: unknown; schedule: unknown; handler: unknown; }, ScheduledTaskOptions>'.
+  Type '{ retry: number; timeOut: string; schedule: { cron: string; }; handler: () => Promise<undefined>; }' is not assignable to type '{ retry: "\"retry\" is not an option of this call"; timeOut: "\"timeOut\" is not an option of this call"; }'.
+    Types of property 'retry' are incompatible.
+      Type 'number' is not assignable to type '"\"retry\" is not an option of this call"'.
+prototypes/strict-options/strict-options.without-directives.ts(283,24): error TS2345: Argument of type '{ retry: number; timeOut: string; schema: z.ZodObject<{ userId: z.ZodString; }, z.core.$strip>; }' is not assignable to parameter of type 'OnlyKnown<{ retry: unknown; timeOut: unknown; schema: unknown; }, EventOptions<ZodObject<{ userId: ZodString; }, $strip>>>'.
+  Type '{ retry: number; timeOut: string; schema: z.ZodObject<{ userId: z.ZodString; }, z.core.$strip>; }' is not assignable to type '{ retry: "\"retry\" is not an option of this call"; timeOut: "\"timeOut\" is not an option of this call"; }'.
+    Types of property 'retry' are incompatible.
+      Type 'number' is not assignable to type '"\"retry\" is not an option of this call"'.
+prototypes/strict-options/strict-options.without-directives.ts(284,29): error TS2322: Type 'Readonly<{ name: "send-email"; schema: ZodObject<{ userId: ZodString; }, $strip>; } & SharedTaskOptions<{ userId: string; }>>' is not assignable to type 'EventDefinition & { handler?: undefined; }'.
+  Type 'Readonly<{ name: "send-email"; schema: ZodObject<{ userId: ZodString; }, $strip>; } & SharedTaskOptions<{ userId: string; }>>' is not assignable to type '{ handler?: undefined; }'.
+    Types of property 'handler' are incompatible.
+      Type 'TaskHandler<{ userId: string; }>' is not assignable to type 'undefined'.
+prototypes/strict-options/strict-options.without-directives.ts(285,29): error TS2322: Type 'Readonly<{ name: "send-email"; schema: ZodObject<{ userId: ZodString; }, $strip>; } & SharedTaskOptions<{ userId: string; }>>' is not assignable to type 'EventDefinition & { handler?: undefined; }'.
+  Type 'Readonly<{ name: "send-email"; schema: ZodObject<{ userId: ZodString; }, $strip>; } & SharedTaskOptions<{ userId: string; }>>' is not assignable to type '{ handler?: undefined; }'.
+    Types of property 'handler' are incompatible.
+      Type 'TaskHandler<{ userId: string; }>' is not assignable to type 'undefined'.
+prototypes/strict-options/strict-options.without-directives.ts(286,27): error TS2345: Argument of type '{ retry: number; timeOut: string; on: EventDefinition<"user-signed-up", z.ZodObject<{ userId: z.ZodString; }, z.core.$strip>>; handler: () => Promise<undefined>; }' is not assignable to parameter of type 'OnlyKnown<{ retry: unknown; timeOut: unknown; on: unknown; handler: unknown; }, ListenerOptions<EventDefinition<"user-signed-up", ZodObject<{ userId: ZodString; }, $strip>>>>'.
+  Type '{ retry: number; timeOut: string; on: EventDefinition<"user-signed-up", z.ZodObject<{ userId: z.ZodString; }, z.core.$strip>>; handler: () => Promise<undefined>; }' is not assignable to type '{ retry: "\"retry\" is not an option of this call"; timeOut: "\"timeOut\" is not an option of this call"; }'.
+    Types of property 'retry' are incompatible.
+      Type 'number' is not assignable to type '"\"retry\" is not an option of this call"'.
+prototypes/strict-options/strict-options.without-directives.ts(287,29): error TS2322: Type 'string' is not assignable to type 'EventDefinition & { handler?: undefined; }'.
+  Type 'string' is not assignable to type 'EventDefinition'.
+prototypes/strict-options/strict-options.without-directives.ts(289,67): error TS2322: Type 'Readonly<{ name: "send-email"; schema: ZodObject<{ userId: ZodString; }, $strip>; } & SharedTaskOptions<{ userId: string; }>>' is not assignable to type 'StrictEvent'.
+  Type 'Readonly<{ name: "send-email"; schema: ZodObject<{ userId: ZodString; }, $strip>; } & SharedTaskOptions<{ userId: string; }>>' is not assignable to type '{ handler?: undefined; }'.
+    Types of property 'handler' are incompatible.
+      Type 'TaskHandler<{ userId: string; }>' is not assignable to type 'undefined'.
+prototypes/strict-options/strict-options.without-directives.ts(290,67): error TS2322: Type 'Readonly<{ name: "on-sign-up"; schema: ZodObject<{ userId: ZodString; }, $strip>; on: EventDefinition<"user-signed-up", ZodObject<{ userId: ZodString; }, $strip>>; } & SharedTaskOptions<...>>' is not assignable to type 'StrictEvent'.
+  Type 'Readonly<{ name: "on-sign-up"; schema: ZodObject<{ userId: ZodString; }, $strip>; on: EventDefinition<"user-signed-up", ZodObject<{ userId: ZodString; }, $strip>>; } & SharedTaskOptions<...>>' is not assignable to type '{ handler?: undefined; }'.
+    Types of property 'handler' are incompatible.
+      Type 'TaskHandler<{ userId: string; }>' is not assignable to type 'undefined'.
+prototypes/strict-options/strict-options.without-directives.ts(291,46): error TS2322: Type 'EventDefinition<"user-signed-up", ZodObject<{ userId: ZodString; }, $strip>>' is not assignable to type 'AnyTaskDefinition'.
+  Property 'handler' is missing in type 'EventDefinition<"user-signed-up", ZodObject<{ userId: ZodString; }, $strip>>' but required in type 'Readonly<{ name: string; schema: PayloadSchema; on?: EventDefinition<string, PayloadSchema> | undefined; schedule?: undefined; } & AnyTaskOptions>'.
+prototypes/strict-options/strict-options.without-directives.ts(292,58): error TS2322: Type 'Readonly<{ name: "send-email"; schema: ZodObject<{ userId: ZodString; }, $strip>; } & SharedTaskOptions<{ userId: string; }>>[]' is not assignable to type '"\"task\" is not an option of this call"'.
+prototypes/strict-options/strict-options.without-directives.ts(294,24): error TS2345: Argument of type '{ prefixx: string; connection: { url: string; }; tasks: [Readonly<{ name: "send-email"; schema: z.ZodObject<{ userId: z.ZodString; }, z.core.$strip>; } & SharedTaskOptions<{ userId: string; }>>]; }' is not assignable to parameter of type 'OnlyKnown<{ prefixx: unknown; connection: unknown; tasks: unknown; }, StrictConfig<readonly [Readonly<{ name: "send-email"; schema: ZodObject<{ userId: ZodString; }, $strip>; } & SharedTaskOptions<{ userId: string; }>>], readonly [], OnlyKnown<...>>>'.
+  Type '{ prefixx: string; connection: { url: string; }; tasks: [Readonly<{ name: "send-email"; schema: z.ZodObject<{ userId: z.ZodString; }, z.core.$strip>; } & SharedTaskOptions<{ userId: string; }>>]; }' is not assignable to type '{ prefixx: "\"prefixx\" is not an option of this call"; }'.
+    Types of property 'prefixx' are incompatible.
+      Type 'string' is not assignable to type '"\"prefixx\" is not an option of this call"'.
+prototypes/strict-options/strict-options.without-directives.ts(296,24): error TS2345: Argument of type '{ connection: { url: string; }; tasks: readonly [Readonly<{ name: "send-email"; schema: z.ZodObject<{ userId: z.ZodString; }, z.core.$strip>; } & SharedTaskOptions<{ userId: string; }>>]; prefixx: string; }' is not assignable to parameter of type 'OnlyKnown<{ connection: unknown; tasks: unknown; prefixx: unknown; }, StrictConfig<readonly [Readonly<{ name: "send-email"; schema: ZodObject<{ userId: ZodString; }, $strip>; } & SharedTaskOptions<{ userId: string; }>>], readonly [], OnlyKnown<...>>>'.
+  Type '{ connection: { url: string; }; tasks: readonly [Readonly<{ name: "send-email"; schema: z.ZodObject<{ userId: z.ZodString; }, z.core.$strip>; } & SharedTaskOptions<{ userId: string; }>>]; prefixx: string; }' is not assignable to type '{ prefixx: "\"prefixx\" is not an option of this call"; }'.
+    Types of property 'prefixx' are incompatible.
+      Type 'string' is not assignable to type '"\"prefixx\" is not an option of this call"'.
+prototypes/strict-options/strict-options.without-directives.ts(298,26): error TS2322: Type '{ url: string; giveUpAfterr: string; }' is not assignable to type 'ConnectionConfig & { giveUpAfterr: "\"giveUpAfterr\" is not an option of this call"; } & KeysRead<{ url: unknown; giveUpAfterr: unknown; }>'.
+  Type '{ url: string; giveUpAfterr: string; }' is not assignable to type '{ giveUpAfterr: "\"giveUpAfterr\" is not an option of this call"; }'.
+    Types of property 'giveUpAfterr' are incompatible.
+      Type 'string' is not assignable to type '"\"giveUpAfterr\" is not an option of this call"'.
+prototypes/strict-options/strict-options.without-directives.ts(299,26): error TS2322: Type '{ giveUpAfterr: "5s"; url: string; }' is not assignable to type 'ConnectionConfig & { giveUpAfterr: "\"giveUpAfterr\" is not an option of this call"; } & KeysRead<{ giveUpAfterr: unknown; url: unknown; }>'.
+  Type '{ giveUpAfterr: "5s"; url: string; }' is not assignable to type '{ giveUpAfterr: "\"giveUpAfterr\" is not an option of this call"; }'.
+    Types of property 'giveUpAfterr' are incompatible.
+      Type '"5s"' is not assignable to type '"\"giveUpAfterr\" is not an option of this call"'.
+prototypes/strict-options/strict-options.without-directives.ts(300,24): error TS2345: Argument of type '{ tasks: [Readonly<{ name: "send-email"; schema: z.ZodObject<{ userId: z.ZodString; }, z.core.$strip>; } & SharedTaskOptions<{ userId: string; }>>]; }' is not assignable to parameter of type 'OnlyKnown<{ tasks: unknown; }, StrictConfig<readonly [Readonly<{ name: "send-email"; schema: ZodObject<{ userId: ZodString; }, $strip>; } & SharedTaskOptions<{ userId: string; }>>], readonly [], OnlyKnown<...>>>'.
+  Property 'connection' is missing in type '{ tasks: [Readonly<{ name: "send-email"; schema: z.ZodObject<{ userId: z.ZodString; }, z.core.$strip>; } & SharedTaskOptions<{ userId: string; }>>]; }' but required in type 'StrictConfig<readonly [Readonly<{ name: "send-email"; schema: ZodObject<{ userId: ZodString; }, $strip>; } & SharedTaskOptions<{ userId: string; }>>], readonly [], OnlyKnown<...>>'.
+prototypes/strict-options/strict-options.without-directives.ts(301,58): error TS2322: Type 'number' is not assignable to type 'string'.
+prototypes/strict-options/strict-options.without-directives.ts(303,24): error TS2322: Type 'string[]' is not assignable to type '"\"states\" is not an option of this call"'.
+prototypes/strict-options/strict-options.without-directives.ts(305,22): error TS2345: Argument of type '{ states: string[]; search: string; limit: number; }' is not assignable to parameter of type 'ListRunsOptionsOf<"send-email" | "purge" | "on-sign-up", "failed" | "delayed" | "pending" | "waitingForConcurrencySlot" | "executing" | "suspended" | "backingOff" | "completed"> & { ...; } & KeysRead<...>'.
+  Type '{ states: string[]; search: string; limit: number; }' is not assignable to type '{ states: "\"states\" is not an option of this call"; search: "\"search\" is not an option of this call"; }'.
+    Types of property 'states' are incompatible.
+      Type 'string[]' is not assignable to type '"\"states\" is not an option of this call"'.
+prototypes/strict-options/strict-options.without-directives.ts(307,22): error TS2345: Argument of type '{ limit: number; states: string[]; }' is not assignable to parameter of type 'ListRunsOptionsOf<"send-email" | "purge" | "on-sign-up", "failed" | "delayed" | "pending" | "waitingForConcurrencySlot" | "executing" | "suspended" | "backingOff" | "completed"> & { ...; } & KeysRead<...>'.
+  Type '{ limit: number; states: string[]; }' is not assignable to type '{ states: "\"states\" is not an option of this call"; }'.
+    Types of property 'states' are incompatible.
+      Type 'string[]' is not assignable to type '"\"states\" is not an option of this call"'.
+prototypes/strict-options/strict-options.without-directives.ts(309,22): error TS2345: Argument of type '{ states: string[]; }' is not assignable to parameter of type 'ListRunsOptionsOf<"send-email" | "purge" | "on-sign-up", "failed" | "delayed" | "pending" | "waitingForConcurrencySlot" | "executing" | "suspended" | "backingOff" | "completed"> & { ...; } & KeysRead<...>'.
+  Type '{ states: string[]; }' is not assignable to type '{ states: "\"states\" is not an option of this call"; }'.
+    Types of property 'states' are incompatible.
+      Type 'string[]' is not assignable to type '"\"states\" is not an option of this call"'.
+prototypes/strict-options/strict-options.without-directives.ts(311,22): error TS2345: Argument of type 'ListRunsOptions & { states: string[]; }' is not assignable to parameter of type '(ListRunsOptionsOf<never, "failed" | "delayed" | "pending" | "waitingForConcurrencySlot" | "executing" | "suspended" | "backingOff" | "completed"> & { ...; } & KeysRead<...>) | undefined'.
+  Type 'ListRunsOptions & { states: string[]; }' is not assignable to type 'ListRunsOptionsOf<never, "failed" | "delayed" | "pending" | "waitingForConcurrencySlot" | "executing" | "suspended" | "backingOff" | "completed"> & { ...; } & KeysRead<...>'.
+    Type 'ListRunsOptions & { states: string[]; }' is not assignable to type '{ states: "\"states\" is not an option of this call"; }'.
+      Types of property 'states' are incompatible.
+        Type 'string[]' is not assignable to type '"\"states\" is not an option of this call"'.
+prototypes/strict-options/strict-options.without-directives.ts(312,22): error TS2345: Argument of type 'string' is not assignable to parameter of type 'ListRunsOptionsOf<"send-email" | "purge" | "on-sign-up", "failed" | "delayed" | "pending" | "waitingForConcurrencySlot" | "executing" | "suspended" | "backingOff" | "completed"> & { ...; } & KeysRead<...>'.
+  Type 'string' is not assignable to type '{ [iterator]: "not an option of this call"; length: "\"length\" is not an option of this call"; toString: "\"toString\" is not an option of this call"; concat: "\"concat\" is not an option of this call"; ... 45 more ...; replaceAll: "\"replaceAll\" is not an option of this call"; }'.
+prototypes/strict-options/strict-options.without-directives.ts(313,22): error TS2345: Argument of type 'null' is not assignable to parameter of type '(ListRunsOptionsOf<"send-email" | "purge" | "on-sign-up", "failed" | "delayed" | "pending" | "waitingForConcurrencySlot" | "executing" | "suspended" | "backingOff" | "completed"> & {} & KeysRead<...>) | undefined'.
+prototypes/strict-options/strict-options.without-directives.ts(314,23): error TS2322: Type '"failed"' is not assignable to type 'never'.
+prototypes/strict-options/strict-options.without-directives.ts(315,24): error TS2322: Type '"done"' is not assignable to type '"failed" | "delayed" | "pending" | "waitingForConcurrencySlot" | "executing" | "suspended" | "backingOff" | "completed" | readonly ("failed" | "delayed" | "pending" | "waitingForConcurrencySlot" | "executing" | "suspended" | "backingOff" | "completed")[] | undefined'.
+prototypes/strict-options/strict-options.without-directives.ts(316,24): error TS2322: Type '"unknown"' is not assignable to type '"send-email" | "purge" | "on-sign-up" | readonly ("send-email" | "purge" | "on-sign-up")[] | undefined'.
+prototypes/strict-options/strict-options.without-directives.ts(317,24): error TS2322: Type 'string' is not assignable to type 'number'.
+prototypes/strict-options/strict-options.without-directives.ts(318,34): error TS2322: Type '"completed"' is not assignable to type '"failed" | readonly "failed"[] | undefined'.
+prototypes/strict-options/strict-options.without-directives.ts(320,22): error TS2345: Argument of type '"unknown"' is not assignable to parameter of type '"send-email" | "purge" | "on-sign-up"'.
+prototypes/strict-options/strict-options.without-directives.ts(321,13): error TS2554: Expected 2-3 arguments, but got 1.
+prototypes/strict-options/strict-options.without-directives.ts(322,38): error TS2322: Type 'number' is not assignable to type 'string'.
+prototypes/strict-options/strict-options.without-directives.ts(323,31): error TS2345: Argument of type '{ userId: string; }' is not assignable to parameter of type 'undefined'.
+prototypes/strict-options/strict-options.without-directives.ts(324,45): error TS2345: Argument of type 'string' is not assignable to parameter of type 'OnlyKnown<{ toString: unknown; charAt: unknown; charCodeAt: unknown; concat: unknown; indexOf: unknown; lastIndexOf: unknown; localeCompare: unknown; match: unknown; replace: unknown; search: unknown; slice: unknown; split: unknown; substring: unknown; toLowerCase: unknown; toLocaleLowerCase: unknown; toUpperCase: u...'.
+  Type 'string' is not assignable to type '{ [iterator]: "not an option of this call"; length: "\"length\" is not an option of this call"; toString: "\"toString\" is not an option of this call"; concat: "\"concat\" is not an option of this call"; ... 45 more ...; replaceAll: "\"replaceAll\" is not an option of this call"; }'.
+prototypes/strict-options/strict-options.without-directives.ts(325,45): error TS2345: Argument of type 'null' is not assignable to parameter of type 'OnlyKnown<DispatchOptions, DispatchOptions> | undefined'.
+prototypes/strict-options/strict-options.without-directives.ts(326,47): error TS2322: Type 'number' is not assignable to type '`${bigint}s` | `${bigint}m` | `${bigint}h` | `${bigint}d` | undefined'.
+prototypes/strict-options/strict-options.without-directives.ts(327,47): error TS2322: Type '"5m"' is not assignable to type '"\"delayy\" is not an option of this call"'.
+prototypes/strict-options/strict-options.without-directives.ts(329,45): error TS2345: Argument of type '{ delayy: string; runId: string; }' is not assignable to parameter of type 'OnlyKnown<{ delayy: unknown; runId: unknown; }, DispatchOptions>'.
+  Type '{ delayy: string; runId: string; }' is not assignable to type '{ delayy: "\"delayy\" is not an option of this call"; }'.
+    Types of property 'delayy' are incompatible.
+      Type 'string' is not assignable to type '"\"delayy\" is not an option of this call"'.
+prototypes/strict-options/strict-options.without-directives.ts(331,45): error TS2345: Argument of type '{ runID: string; delay: "5m"; }' is not assignable to parameter of type 'OnlyKnown<{ runID: unknown; delay: unknown; }, DispatchOptions>'.
+  Type '{ runID: string; delay: "5m"; }' is not assignable to type '{ runID: "\"runID\" is not an option of this call"; }'.
+    Types of property 'runID' are incompatible.
+      Type 'string' is not assignable to type '"\"runID\" is not an option of this call"'.
+prototypes/strict-options/strict-options.without-directives.ts(332,45): error TS2345: Argument of type '{ delayy: string; }' is not assignable to parameter of type 'OnlyKnown<{ delayy: unknown; }, DispatchOptions>'.
+  Type '{ delayy: string; }' is not assignable to type '{ delayy: "\"delayy\" is not an option of this call"; }'.
+    Types of property 'delayy' are incompatible.
+      Type 'string' is not assignable to type '"\"delayy\" is not an option of this call"'.
+prototypes/strict-options/strict-options.without-directives.ts(333,42): error TS2345: Argument of type '{ delayy: string; delay: "1h"; }' is not assignable to parameter of type 'OnlyKnown<{ delayy: unknown; delay: unknown; }, DispatchOptions>'.
+  Type '{ delayy: string; delay: "1h"; }' is not assignable to type '{ delayy: "\"delayy\" is not an option of this call"; }'.
+    Types of property 'delayy' are incompatible.
+      Type 'string' is not assignable to type '"\"delayy\" is not an option of this call"'.
+prototypes/strict-options/strict-options.without-directives.ts(335,45): error TS2345: Argument of type 'string' is not assignable to parameter of type 'OnlyKnown<{ toString: unknown; charAt: unknown; charCodeAt: unknown; concat: unknown; indexOf: unknown; lastIndexOf: unknown; localeCompare: unknown; match: unknown; replace: unknown; search: unknown; slice: unknown; split: unknown; substring: unknown; toLowerCase: unknown; toLocaleLowerCase: unknown; toUpperCase: u...'.
+  Type 'string' is not assignable to type '{ [iterator]: "not an option of this call"; length: "\"length\" is not an option of this call"; toString: "\"toString\" is not an option of this call"; concat: "\"concat\" is not an option of this call"; ... 45 more ...; replaceAll: "\"replaceAll\" is not an option of this call"; }'.
+prototypes/strict-options/strict-options.without-directives.ts(336,47): error TS2322: Type '"x"' is not assignable to type '"\"eventID\" is not an option of this call"'.
+prototypes/strict-options/strict-options.without-directives.ts(338,45): error TS2345: Argument of type '{ eventID: string; eventId: string; }' is not assignable to parameter of type 'OnlyKnown<{ eventID: unknown; eventId: unknown; }, EmitOptions>'.
+  Type '{ eventID: string; eventId: string; }' is not assignable to type '{ eventID: "\"eventID\" is not an option of this call"; }'.
+    Types of property 'eventID' are incompatible.
+      Type 'string' is not assignable to type '"\"eventID\" is not an option of this call"'.
+prototypes/strict-options/strict-options.without-directives.ts(340,45): error TS2345: Argument of type '{ eventId: string; eventID: string; }' is not assignable to parameter of type 'OnlyKnown<{ eventId: unknown; eventID: unknown; }, EmitOptions>'.
+  Type '{ eventId: string; eventID: string; }' is not assignable to type '{ eventID: "\"eventID\" is not an option of this call"; }'.
+    Types of property 'eventID' are incompatible.
+      Type 'string' is not assignable to type '"\"eventID\" is not an option of this call"'.
+prototypes/strict-options/strict-options.without-directives.ts(341,18): error TS2345: Argument of type '"nextasking/run.failed"' is not assignable to parameter of type '"user-signed-up"'.
+prototypes/strict-options/strict-options.without-directives.ts(342,38): error TS2322: Type 'number' is not assignable to type 'string'.
+prototypes/strict-options/strict-options.without-directives.ts(344,25): error TS2345: Argument of type 'string' is not assignable to parameter of type 'OnlyKnown<{ toString: unknown; charAt: unknown; charCodeAt: unknown; concat: unknown; indexOf: unknown; lastIndexOf: unknown; localeCompare: unknown; match: unknown; replace: unknown; search: unknown; slice: unknown; split: unknown; substring: unknown; toLowerCase: unknown; toLocaleLowerCase: unknown; toUpperCase: u...'.
+  Type 'string' is not assignable to type '{ [iterator]: "not an option of this call"; length: "\"length\" is not an option of this call"; toString: "\"toString\" is not an option of this call"; concat: "\"concat\" is not an option of this call"; ... 45 more ...; replaceAll: "\"replaceAll\" is not an option of this call"; }'.
+prototypes/strict-options/strict-options.without-directives.ts(345,25): error TS2345: Argument of type 'null' is not assignable to parameter of type 'OnlyKnown<StartWorkerOptions, StartWorkerOptions> | undefined'.
+prototypes/strict-options/strict-options.without-directives.ts(346,27): error TS2322: Type 'number' is not assignable to type '"\"concurency\" is not an option of this call"'.
+prototypes/strict-options/strict-options.without-directives.ts(348,25): error TS2345: Argument of type '{ concurency: number; }' is not assignable to parameter of type 'OnlyKnown<{ concurency: unknown; }, StartWorkerOptions>'.
+  Type '{ concurency: number; }' is not assignable to type '{ concurency: "\"concurency\" is not an option of this call"; }'.
+    Types of property 'concurency' are incompatible.
+      Type 'number' is not assignable to type '"\"concurency\" is not an option of this call"'.
+prototypes/strict-options/strict-options.without-directives.ts(350,25): error TS2345: Argument of type '{ concurency: number; shutdownTimeout: "10s"; }' is not assignable to parameter of type 'OnlyKnown<{ concurency: unknown; shutdownTimeout: unknown; }, StartWorkerOptions>'.
+  Type '{ concurency: number; shutdownTimeout: "10s"; }' is not assignable to type '{ concurency: "\"concurency\" is not an option of this call"; }'.
+    Types of property 'concurency' are incompatible.
+      Type 'number' is not assignable to type '"\"concurency\" is not an option of this call"'.
+prototypes/strict-options/strict-options.without-directives.ts(351,25): error TS2345: Argument of type '{ concurency: number; shutdownTimeout: "10s"; }' is not assignable to parameter of type 'OnlyKnown<{ concurency: unknown; shutdownTimeout: unknown; }, StartWorkerOptions>'.
+  Type '{ concurency: number; shutdownTimeout: "10s"; }' is not assignable to type '{ concurency: "\"concurency\" is not an option of this call"; }'.
+    Types of property 'concurency' are incompatible.
+      Type 'number' is not assignable to type '"\"concurency\" is not an option of this call"'.
+prototypes/strict-options/strict-options.without-directives.ts(352,27): error TS2322: Type 'string' is not assignable to type 'number'.
+prototypes/strict-options/strict-options.without-directives.ts(360,45): error TS2345: Argument of type 'DispatchOptionsWithMore' is not assignable to parameter of type 'OnlyKnown<{ tenant: unknown; runId: unknown; delay: unknown; }, DispatchOptions>'.
+  Type 'DispatchOptionsWithMore' is not assignable to type '{ tenant: "\"tenant\" is not an option of this call"; }'.
+    Types of property 'tenant' are incompatible.
+      Type 'string' is not assignable to type '"\"tenant\" is not an option of this call"'.

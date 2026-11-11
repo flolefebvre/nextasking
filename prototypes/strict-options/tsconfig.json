@@ -1,0 +1,5 @@
+{
+  "extends": "../../tsconfig.json",
+  "include": ["strict-options.ts"],
+  "exclude": []
+}

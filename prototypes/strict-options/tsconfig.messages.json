@@ -1,0 +1,6 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": { "noErrorTruncation": false },
+  "include": ["strict-options.without-directives.ts"],
+  "exclude": []
+}

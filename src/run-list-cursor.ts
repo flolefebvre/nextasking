@@ -73,11 +73,12 @@ export function encodeRunListCursor({
   return cursorOfFields([CURSOR_FORMAT_VERSION, direction, placeFields, listedStates, listedTasks]);
 }
 
-function isSameList(left: readonly string[] | null, right: readonly string[] | null): boolean {
-  return (
-    left === right ||
-    (left !== null && right !== null && left.length === right.length && left.every((name, at) => name === right[at]))
-  );
+function isSameSetOfNames(left: readonly string[] | null, right: readonly string[] | null): boolean {
+  if (left === null || right === null) {
+    return left === right;
+  }
+  const [leftNames, rightNames] = [new Set(left), new Set(right)];
+  return leftNames.size === rightNames.size && [...leftNames].every((name) => rightNames.has(name));
 }
 
 export function decodeRunListCursor(cursor: unknown, listedIndexes: ListedIndexes): PageBoundary {
@@ -85,12 +86,12 @@ export function decodeRunListCursor(cursor: unknown, listedIndexes: ListedIndexe
   if (content === undefined) {
     throw new Error(INVALID_CURSOR_MESSAGE);
   }
-  if (!isSameList(content.listedStates, listedIndexes.listedStates)) {
+  if (!isSameSetOfNames(content.listedStates, listedIndexes.listedStates)) {
     throw new Error(
       `Invalid listRuns cursor: it pages through ${shownCursorStatesOf(content.listedStates)}, not ${shownCalledStatesOf(listedIndexes.listedStates)}`,
     );
   }
-  if (!isSameList(content.listedTasks, listedIndexes.listedTasks)) {
+  if (!isSameSetOfNames(content.listedTasks, listedIndexes.listedTasks)) {
     throw new Error(
       `Invalid listRuns cursor: it pages through ${shownTasksOf(content.listedTasks)}, not ${shownTasksOf(listedIndexes.listedTasks)}`,
     );

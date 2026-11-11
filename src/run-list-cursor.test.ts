@@ -33,6 +33,23 @@ describe("the listRuns cursor on the indexes", () => {
     expect(decodeRunListCursor(cursor, FAILED_OF_EVERY_TASK)).toEqual({ direction, place });
   });
 
+  test("decodes a cursor listing the same states and tasks in another order, as a release listing its tasks in another order hands", () => {
+    const cursor = cursorOfFields([
+      3,
+      "forward",
+      ["ended", 1_731_000_000_000, "send-email", "run-42"],
+      ["failed", "completed"],
+      ["send-email", "build-report"],
+    ]);
+
+    expect(
+      decodeRunListCursor(cursor, {
+        listedStates: ["completed", "failed"],
+        listedTasks: ["build-report", "send-email"],
+      }),
+    ).toEqual({ direction: "forward", place: FAILED_RUN_PLACE });
+  });
+
   test("decodes back the boundary of one task", () => {
     const cursor = encodeRunListCursor({ ...FORWARD_FROM_A_FAILED_RUN, listedTasks: ["send-email"] });
 

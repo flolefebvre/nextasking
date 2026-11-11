@@ -1,7 +1,7 @@
 import { createNextasking, defineScheduledTask } from "@flefebvre/nextasking";
 import type { DispatchedRun } from "@flefebvre/nextasking";
 
-const purgeExpiredSessions = defineScheduledTask("purge-expired-sessions", {
+const purgeExpiredSessionsTask = defineScheduledTask("purge-expired-sessions", {
   schedule: { cron: "0 3 * * *" },
   handler: async ({ scheduledAt, abortSignal }) => {
     await Promise.resolve(abortSignal.aborted ? undefined : scheduledAt);
@@ -10,7 +10,7 @@ const purgeExpiredSessions = defineScheduledTask("purge-expired-sessions", {
 
 export const nextasking = createNextasking({
   connection: { url: "redis://localhost:6379" },
-  tasks: [purgeExpiredSessions],
+  tasks: [purgeExpiredSessionsTask],
 });
 
 export async function purgeNow(): Promise<DispatchedRun> {

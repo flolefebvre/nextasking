@@ -3,7 +3,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { z } from "zod";
 import { writeRecord } from "@/nextasking/records";
 
-export const buildReport = defineTask("build-report", {
+export const buildReportTask = defineTask("build-report", {
   schema: z.object({ reportId: z.string() }),
   handler: async ({ payload, runId, step }) => {
     const rowCount = await step.run("query-rows", async () => {

@@ -19,6 +19,19 @@ const NODE_REDIS_RESTRICTION = {
     "Only the driver (src/node-redis-driver.ts) imports @redis/client: the rest of the library reaches Redis through it.",
 };
 
+const TASK_CONST_RESTRICTION = {
+  selector:
+    'VariableDeclaration[kind="const"] > VariableDeclarator[id.type="Identifier"][id.name!=/Task$/]:matches([init.callee.name=/^define(Task|Listener|ScheduledTask)$/], [init.expression.callee.name=/^define(Task|Listener|ScheduledTask)$/])',
+  message:
+    "End a const holding a task, a listener or a scheduled task with Task (sendWelcomeEmailTask): without it, the const reads as a function to call.",
+};
+
+const EVENT_CONST_RESTRICTION = {
+  selector:
+    'VariableDeclaration[kind="const"] > VariableDeclarator[id.type="Identifier"][id.name!=/Event$/]:matches([init.callee.name="defineEvent"], [init.expression.callee.name="defineEvent"])',
+  message: "End a const holding an event with Event (invoicePaidEvent): without it, the const reads as a boolean.",
+};
+
 export default defineConfig([
   includeIgnoreFile(gitignorePath, "Ignore what git ignores"),
   globalIgnores([".agents/skills/**"], "Ignore the agent skills"),
@@ -31,6 +44,14 @@ export default defineConfig([
         "error",
         { allow: ["eslint", "global", "@ts-", "prettier-ignore", "/ <reference "] },
       ],
+      "no-restricted-syntax": ["error", TASK_CONST_RESTRICTION, EVENT_CONST_RESTRICTION],
+    },
+  },
+  {
+    files: ["src/**", "tests/**"],
+    ignores: ["tests/e2e/fixture-app/**", "tests/dist-consumer/**"],
+    rules: {
+      "no-restricted-syntax": "off",
     },
   },
   {

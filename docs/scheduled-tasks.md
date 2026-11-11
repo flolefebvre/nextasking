@@ -8,7 +8,7 @@ A scheduled task is a task with a cron and no payload. Each firing of its schedu
 // src/nextasking/tasks/purge-expired-sessions.ts
 import { defineScheduledTask } from "@flefebvre/nextasking";
 
-export const purgeExpiredSessions = defineScheduledTask("purge-expired-sessions", {
+export const purgeExpiredSessionsTask = defineScheduledTask("purge-expired-sessions", {
   schedule: { cron: "0 3 * * *", timezone: "Europe/Paris" },
   retries: 2,
   timeout: "10m",
@@ -25,7 +25,7 @@ export const purgeExpiredSessions = defineScheduledTask("purge-expired-sessions"
 // src/nextasking/index.ts
 export const nextasking = createNextasking({
   connection: { url: process.env.REDIS_URL ?? "redis://localhost:6379" },
-  tasks: [sendWelcomeEmail, purgeExpiredSessions],
+  tasks: [sendWelcomeEmailTask, purgeExpiredSessionsTask],
 });
 ```
 

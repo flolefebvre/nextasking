@@ -82,7 +82,7 @@ type RegisteredTaskName = "send-welcome-email" | "create-default-workspace" | "p
 
 type UserSignedUpPayload = { userId: string };
 
-export const sendWelcomeEmail = defineTask("send-welcome-email", {
+export const sendWelcomeEmailTask = defineTask("send-welcome-email", {
   schema: welcomeEmailSchema,
   retries: 3,
   backoff: "10s",
@@ -99,10 +99,10 @@ export const sendWelcomeEmail = defineTask("send-welcome-email", {
   },
 });
 
-export const userSignedUp = defineEvent("user.signed-up", { schema: userSignedUpSchema });
+export const userSignedUpEvent = defineEvent("user.signed-up", { schema: userSignedUpSchema });
 
-export const createDefaultWorkspace = defineListener("create-default-workspace", {
-  on: userSignedUp,
+export const createDefaultWorkspaceTask = defineListener("create-default-workspace", {
+  on: userSignedUpEvent,
   handler: async ({ payload, dispatch, emit }) => {
     await dispatch("send-welcome-email", { email: `${payload.userId}@example.com` });
     await emit("user.signed-up", { userId: payload.userId }, { eventId: "signed-up-again" });
@@ -113,7 +113,7 @@ export const createDefaultWorkspace = defineListener("create-default-workspace",
   },
 });
 
-export const purgeExpiredSessions = defineScheduledTask("purge-expired-sessions", {
+export const purgeExpiredSessionsTask = defineScheduledTask("purge-expired-sessions", {
   schedule: { cron: "0 3 * * *", timezone: "Europe/Paris" },
   retries: 2,
   concurrency: { limit: 1 },
@@ -130,7 +130,7 @@ export type ScheduledTaskHandlerGetsScheduledAt = Expect<
 >;
 
 export type ScheduledTaskIsAScheduledTaskDefinition = Expect<
-  IsEqual<typeof purgeExpiredSessions, ScheduledTaskDefinition<"purge-expired-sessions">>
+  IsEqual<typeof purgeExpiredSessionsTask, ScheduledTaskDefinition<"purge-expired-sessions">>
 >;
 
 export const purgeExpiredSessionsOptions: ScheduledTaskOptions = {
@@ -138,9 +138,9 @@ export const purgeExpiredSessionsOptions: ScheduledTaskOptions = {
   handler: (async () => undefined) satisfies ScheduledTaskHandler,
 };
 
-type WelcomeEmailContext = Parameters<(typeof sendWelcomeEmail)["handler"]>[0];
+type WelcomeEmailContext = Parameters<(typeof sendWelcomeEmailTask)["handler"]>[0];
 
-type WorkspaceListenerContext = Parameters<(typeof createDefaultWorkspace)["handler"]>[0];
+type WorkspaceListenerContext = Parameters<(typeof createDefaultWorkspaceTask)["handler"]>[0];
 
 export type HandlerPayloadIsTheSchemaOutput = Expect<IsEqual<WelcomeEmailContext["payload"], WelcomeEmailPayload>>;
 
@@ -173,8 +173,8 @@ const connection: ConnectionConfig = { url: "redis://nextasking.invalid:6379", g
 export const nextasking = createNextasking({
   connection,
   prefix: "dist-consumer",
-  events: [userSignedUp],
-  tasks: [sendWelcomeEmail, createDefaultWorkspace, purgeExpiredSessions],
+  events: [userSignedUpEvent],
+  tasks: [sendWelcomeEmailTask, createDefaultWorkspaceTask, purgeExpiredSessionsTask],
 });
 
 declare module "@flefebvre/nextasking" {
@@ -234,22 +234,22 @@ export type InstanceIsANextasking = Expect<
   IsEqual<
     typeof nextasking,
     Nextasking<
-      typeof sendWelcomeEmail | typeof createDefaultWorkspace | typeof purgeExpiredSessions,
-      typeof userSignedUp | typeof runFailedEvent
+      typeof sendWelcomeEmailTask | typeof createDefaultWorkspaceTask | typeof purgeExpiredSessionsTask,
+      typeof userSignedUpEvent | typeof runFailedEvent
     >
   >
 >;
 
 export type TaskIsATaskDefinition = Expect<
-  IsEqual<typeof sendWelcomeEmail, TaskDefinition<"send-welcome-email", typeof welcomeEmailSchema>>
+  IsEqual<typeof sendWelcomeEmailTask, TaskDefinition<"send-welcome-email", typeof welcomeEmailSchema>>
 >;
 
 export type EventIsAnEventDefinition = Expect<
-  IsEqual<typeof userSignedUp, EventDefinition<"user.signed-up", typeof userSignedUpSchema>>
+  IsEqual<typeof userSignedUpEvent, EventDefinition<"user.signed-up", typeof userSignedUpSchema>>
 >;
 
 export type ListenerIsAListenerDefinition = Expect<
-  IsEqual<typeof createDefaultWorkspace, ListenerDefinition<"create-default-workspace", typeof userSignedUp>>
+  IsEqual<typeof createDefaultWorkspaceTask, ListenerDefinition<"create-default-workspace", typeof userSignedUpEvent>>
 >;
 
 export const welcomeEmailOptions: TaskOptions<typeof welcomeEmailSchema> = {
@@ -259,8 +259,8 @@ export const welcomeEmailOptions: TaskOptions<typeof welcomeEmailSchema> = {
 
 export const userSignedUpOptions: EventOptions<typeof userSignedUpSchema> = { schema: userSignedUpSchema };
 
-export const workspaceListenerOptions: ListenerOptions<typeof userSignedUp> = {
-  on: userSignedUp,
+export const workspaceListenerOptions: ListenerOptions<typeof userSignedUpEvent> = {
+  on: userSignedUpEvent,
   handler: async () => undefined,
 };
 
@@ -268,9 +268,9 @@ export const welcomeEmailHandler: TaskHandler<WelcomeEmailPayload> = async ({ pa
   await Promise.resolve(payload.locale);
 };
 
-export const consumerConfig: NextaskingConfig<readonly [typeof sendWelcomeEmail]> = {
+export const consumerConfig: NextaskingConfig<readonly [typeof sendWelcomeEmailTask]> = {
   connection,
-  tasks: [sendWelcomeEmail],
+  tasks: [sendWelcomeEmailTask],
 };
 
 export const anyStandardSchema: StandardSchemaV1 = welcomeEmailSchema;
@@ -347,14 +347,14 @@ export type IsEventNameNarrowsToTheEmittableEvents = Expect<
   IsEqual<NonNullable<ReturnType<typeof eventNameFor>>, "user.signed-up">
 >;
 
-export const alertOnRunFailed = defineListener("alert-on-run-failed", {
+export const alertOnRunFailedTask = defineListener("alert-on-run-failed", {
   on: runFailedEvent,
   handler: async ({ payload }) => {
     await Promise.resolve(`${payload.task} ${payload.runId} ${payload.reason} ${payload.error.message}`);
   },
 });
 
-type RunFailedListenerContext = Parameters<(typeof alertOnRunFailed)["handler"]>[0];
+type RunFailedListenerContext = Parameters<(typeof alertOnRunFailedTask)["handler"]>[0];
 
 export type RunFailedListenerGetsTheNotice = Expect<IsEqual<RunFailedListenerContext["payload"], RunFailedPayload>>;
 
@@ -508,30 +508,30 @@ export type RunFailedIsAnEventDefinition = Expect<
 >;
 
 // @ts-expect-error a task is not an event
-export const taskAsEvent: EventDefinition = sendWelcomeEmail;
+export const taskAsEvent: EventDefinition = sendWelcomeEmailTask;
 
 // @ts-expect-error a listener is not an event
-export const listenerAsEvent: EventDefinition = createDefaultWorkspace;
+export const listenerAsEvent: EventDefinition = createDefaultWorkspaceTask;
 
-export const eventAsEvent: EventDefinition = userSignedUp;
+export const eventAsEvent: EventDefinition = userSignedUpEvent;
 
 export const listenerOnATask = defineListener("send-welcome-sms", {
   // @ts-expect-error a task is not an event
-  on: sendWelcomeEmail,
+  on: sendWelcomeEmailTask,
   handler: async () => undefined,
 });
 
 export const instanceListingATaskAsAnEvent = createNextasking({
   connection,
   // @ts-expect-error a task is not an event
-  events: [userSignedUp, sendWelcomeEmail],
+  events: [userSignedUpEvent, sendWelcomeEmailTask],
   tasks: [],
 });
 
 export const instanceListingAListenerAsAnEvent = createNextasking({
   connection,
   // @ts-expect-error a listener is not an event
-  events: [createDefaultWorkspace],
+  events: [createDefaultWorkspaceTask],
   tasks: [],
 });
 

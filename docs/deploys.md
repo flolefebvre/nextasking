@@ -89,16 +89,16 @@ const unfinishedRunCount = Object.values(unfinishedCounts).reduce((total, count)
 
 ```ts
 // before
-export const recordInvoicePayment = defineListener("record-invoice-payment", {
-  on: invoicePaid,
+export const recordInvoicePaymentTask = defineListener("record-invoice-payment", {
+  on: invoicePaidEvent,
   handler: async ({ payload }) => {
     await ledger.record(payload);
   },
 });
 
 // deploy 1
-export const recordInvoicePayment = defineTask("record-invoice-payment", {
-  schema: invoicePaid.schema,
+export const recordInvoicePaymentTask = defineTask("record-invoice-payment", {
+  schema: invoicePaidEvent.schema,
   handler: async ({ payload }) => {
     await ledger.record(payload);
   },

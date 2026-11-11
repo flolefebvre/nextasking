@@ -14,7 +14,7 @@ import pino from "pino";
 export const nextasking = createNextasking({
   connection: { url: process.env.REDIS_URL ?? "redis://localhost:6379" },
   logger: pino({ name: "nextasking" }),
-  tasks: [sendWelcomeEmail],
+  tasks: [sendWelcomeEmailTask],
 });
 ```
 
@@ -123,7 +123,7 @@ Each message is fixed: filter and alert on it.
 Use the handler's `logger`, not your app logger: every line it writes carries `task`, `runId` and `attempt`, and in a listener `eventName` and `eventId` too.
 
 ```ts
-export const sendWelcomeEmail = defineTask("send-welcome-email", {
+export const sendWelcomeEmailTask = defineTask("send-welcome-email", {
   schema: z.object({ userId: z.string(), email: z.email() }),
   handler: async ({ payload, logger }) => {
     const { messageId } = await email.send({ to: payload.email, template: "welcome" });

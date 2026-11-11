@@ -6,7 +6,7 @@ nextasking closes every path to a duplicate side effect it can, and leaves six w
 
 ```ts
 // src/nextasking/tasks/send-receipt.ts
-export const sendReceipt = defineTask("send-receipt", {
+export const sendReceiptTask = defineTask("send-receipt", {
   schema: z.object({ invoiceId: z.string(), email: z.email() }),
   handler: async ({ payload, step }) => {
     await step.run("send-receipt-email", async ({ idempotencyKey }) => {

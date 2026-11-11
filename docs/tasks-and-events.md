@@ -11,7 +11,7 @@ Put each task in its own file under `src/nextasking/tasks/`. Name tasks in kebab
 import { defineTask } from "@flefebvre/nextasking";
 import { z } from "zod";
 
-export const sendWelcomeEmail = defineTask("send-welcome-email", {
+export const sendWelcomeEmailTask = defineTask("send-welcome-email", {
   schema: z.object({ userId: z.string(), email: z.email() }),
   handler: async ({ payload }) => {
     await email.send({ to: payload.email, template: "welcome" });
@@ -56,7 +56,7 @@ Put each event in its own file under `src/nextasking/events/`. Name events dotte
 import { defineEvent } from "@flefebvre/nextasking";
 import { z } from "zod";
 
-export const invoicePaid = defineEvent("invoice.paid", {
+export const invoicePaidEvent = defineEvent("invoice.paid", {
   schema: z.object({ invoiceId: z.string(), amountInCents: z.int().positive() }),
 });
 ```
@@ -71,10 +71,10 @@ A listener is a task subscribed to one event. Put it under `src/nextasking/tasks
 ```ts
 // src/nextasking/tasks/record-invoice-payment.ts
 import { defineListener } from "@flefebvre/nextasking";
-import { invoicePaid } from "@/nextasking/events/invoice-paid";
+import { invoicePaidEvent } from "@/nextasking/events/invoice-paid";
 
-export const recordInvoicePayment = defineListener("record-invoice-payment", {
-  on: invoicePaid,
+export const recordInvoicePaymentTask = defineListener("record-invoice-payment", {
+  on: invoicePaidEvent,
   retries: 3,
   handler: async ({ payload, runId }) => {
     await ledger.record({ invoiceId: payload.invoiceId, amountInCents: payload.amountInCents, runId });
@@ -94,14 +94,14 @@ Create the instance once, in `src/nextasking/index.ts`, and augment `Register` w
 ```ts
 // src/nextasking/index.ts
 import { createNextasking } from "@flefebvre/nextasking";
-import { invoicePaid } from "@/nextasking/events/invoice-paid";
-import { recordInvoicePayment } from "@/nextasking/tasks/record-invoice-payment";
-import { sendWelcomeEmail } from "@/nextasking/tasks/send-welcome-email";
+import { invoicePaidEvent } from "@/nextasking/events/invoice-paid";
+import { recordInvoicePaymentTask } from "@/nextasking/tasks/record-invoice-payment";
+import { sendWelcomeEmailTask } from "@/nextasking/tasks/send-welcome-email";
 
 export const nextasking = createNextasking({
   connection: { url: process.env.REDIS_URL ?? "redis://localhost:6379" },
-  events: [invoicePaid],
-  tasks: [sendWelcomeEmail, recordInvoicePayment],
+  events: [invoicePaidEvent],
+  tasks: [sendWelcomeEmailTask, recordInvoicePaymentTask],
 });
 
 declare module "@flefebvre/nextasking" {

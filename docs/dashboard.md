@@ -118,7 +118,8 @@ Invalid listRuns cursor: pass back a nextCursor or previousCursor that listRuns 
 - Order, by order group: executing, most recently started first; queued, most recently queued first; waiting for a time, latest due first; ended, most recently finished first. A run queues anew when it is dispatched, comes due after a delay, a sleep or a backoff, or is replayed; a handed-back, yielded or stalled run keeps its place.
 - A page read through `previousCursor` comes in the same order as any other page.
 - A cursor is a place in that order, not a page number and not a run that must still exist: `nextCursor` lists the runs after the page's last run, `previousCursor` the runs before its first. It stays valid after that run leaves the list, and reading it again returns the same runs, with a higher `firstRunPosition` when runs arrived before them.
-- A run that leaves the state between two pages is skipped, and one that leaves and comes back further along the order can be listed again.
+- A run that leaves the states listed between two pages is skipped, and one that leaves and comes back further along the list can be listed again.
+- A run that moves between two states listed stays in the list. Inside one order group the only moves are between `pending` and `waitingForConcurrencySlot`, and the run keeps its place in the queue, so a walk lists it once. Between two order groups it moves to the block of its new state, at its new place: a walk lists it twice when it was listed already and its new place is still ahead, and misses it when its new place is behind and its old one was not reached yet.
 - A page read through `previousCursor` that reaches the head of the list is the first page: when fewer than `limit` runs come before the place, it returns what a call without `cursor` returns, full, with no `previousCursor`. Runs that arrive at the head while a dashboard pages back never leave it a short first page.
 - A page past the end of the list, its runs all gone since the cursor was handed, holds no run and no `nextCursor`; its `previousCursor` returns the last page of the list.
 - A run written by a newer release is left out.
@@ -169,7 +170,7 @@ States of one group merge into one order: completed and failed runs interleave b
 const { runs } = await nextasking.listRuns({ state: ["completed", "failed"], limit: 20 });
 ```
 
-States of several groups come as blocks, one per group, always in the sequence executing, queued, waiting for a time, ended, whatever the order of the list. Each block keeps its group's order, and a page fills across a block boundary: it is short only at the end of the list.
+States of several groups come as blocks, one per group, always in the sequence executing, queued, waiting for a time, ended, whatever order the call lists the states in. Each block keeps its group's order, and a page fills across a block boundary: it is short only at the end of the list.
 
 ```ts
 const { runs } = await nextasking.listRuns({ state: ["failed", "pending", "executing"] });

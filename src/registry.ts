@@ -316,6 +316,8 @@ export function createNextasking<
 function rejectInvalidConfig(tasks: readonly AnyTaskDefinition[], events: readonly EventDefinition[]): void {
   rejectUndefinedEntries("tasks", "task", tasks);
   rejectUndefinedEntries("events", "event", events);
+  rejectEmptyNames("tasks", tasks);
+  rejectEmptyNames("events", events);
   rejectDuplicateNames([...tasks.map((task) => task.name), ...events.map((event) => event.name)]);
   for (const event of events) {
     if (isBuiltInEventName(event.name)) {
@@ -353,6 +355,16 @@ function rejectUndefinedEntries(
     throw new Error(
       `${listName}[${String(undefinedPosition)}] is undefined: an import cycle is the usual cause, the file that defines this ${definitionKind} imports the file that calls createNextasking`,
     );
+  }
+}
+
+function rejectEmptyNames(
+  listName: "tasks" | "events",
+  definitions: readonly (AnyTaskDefinition | EventDefinition)[],
+): void {
+  const emptyNamePosition = definitions.findIndex((definition) => definition.name === "");
+  if (emptyNamePosition !== -1) {
+    throw new Error(`${listName}[${String(emptyNamePosition)}] has an empty name: every task and event needs a name`);
   }
 }
 

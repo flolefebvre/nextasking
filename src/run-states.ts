@@ -26,3 +26,22 @@ export const RUN_STATES: readonly RunState[] = [
 export function isRunState(value: unknown): value is RunState {
   return RUN_STATES.some((state) => state === value);
 }
+
+export type OrderGroup = "executing" | "queued" | "waitingForATime" | "ended";
+
+export type OrderGroupStates = { name: OrderGroup; states: readonly RunState[] };
+
+export const ORDER_GROUPS: readonly OrderGroupStates[] = [
+  { name: "executing", states: ["executing"] },
+  { name: "queued", states: ["pending", "waitingForConcurrencySlot"] },
+  { name: "waitingForATime", states: ["delayed", "suspended", "backingOff"] },
+  { name: "ended", states: ["completed", "failed"] },
+];
+
+export function orderGroupOf(state: RunState): OrderGroup {
+  return ORDER_GROUPS.find(({ states }) => states.includes(state))!.name;
+}
+
+export function isOrderGroup(value: unknown): value is OrderGroup {
+  return ORDER_GROUPS.some(({ name }) => name === value);
+}

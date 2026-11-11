@@ -1528,6 +1528,42 @@ engineTest(
   },
 );
 
+engineTest(
+  "listRuns with its argument left out is listRuns({}): the same page, the same cursors, in two round trips",
+  async (context) => {
+    await endRunsOfEachTask(context, 15);
+    const reader = await readerOfRunsInFourOrderGroupsOverTwoTasks(context);
+
+    const pages = {
+      argumentLeftOut: await reader.listRuns(),
+      undefinedArgument: await reader.listRuns(undefined),
+      noOption: await reader.listRuns({}),
+    };
+    const nextPages = {
+      afterArgumentLeftOut: await reader.listRuns({ cursor: pages.argumentLeftOut.nextCursor! }),
+      afterNoOption: await reader.listRuns({ cursor: pages.noOption.nextCursor! }),
+    };
+    const traffic = await readTrafficOf(context.client, () => reader.listRuns());
+
+    expect(pages.noOption).toMatchObject({
+      totalRunCount: 45 + RUN_COUNT_IN_FOUR_ORDER_GROUPS,
+      firstRunPosition: 1,
+      nextCursor: expect.any(String),
+    });
+    expect(pages.noOption.runs).toHaveLength(50);
+    expect(new Set(pages.noOption.runs.map(({ state }) => state))).toEqual(
+      new Set(["executing", "pending", "suspended", "completed", "failed"]),
+    );
+    expect(pages.argumentLeftOut).toEqual(pages.noOption);
+    expect(pages.undefinedArgument).toEqual(pages.noOption);
+    expect(nextPages.afterArgumentLeftOut).toEqual(nextPages.afterNoOption);
+    expect(nextPages.afterArgumentLeftOut).toMatchObject({ firstRunPosition: 51, previousCursor: expect.any(String) });
+    expect(nextPages.afterArgumentLeftOut.runs).toHaveLength(6);
+    expect(traffic.roundTripCount).toBe(2);
+    expectOnlyBoundedReads(traffic);
+  },
+);
+
 integrationTest(
   "listRuns silently drops an index entry without its record, of a newer record version or of another state",
   async ({ redisUrl, keyPrefix, expectInvariantViolation }) => {

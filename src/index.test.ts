@@ -205,6 +205,15 @@ describe("the root export", () => {
     expectTypeOf<ListRunsOptions["state"]>().toEqualTypeOf<RunState | readonly RunState[] | undefined>();
   });
 
+  test("takes listRuns with its argument left out, typing its runs as every state of every task", () => {
+    const listEveryRun = async () => (await nextasking.listRuns()).runs;
+    const listEveryRunOfUndefined = async () => (await nextasking.listRuns(undefined)).runs;
+
+    expectTypeOf(listEveryRun).returns.resolves.items.toEqualTypeOf<ListedRun>();
+    expectTypeOf(listEveryRunOfUndefined).returns.resolves.items.toEqualTypeOf<ListedRun>();
+    expectTypeOf(nextasking.listRuns).returns.resolves.toEqualTypeOf<RunPage>();
+  });
+
   test("takes a time range of Dates and an order on listRuns", () => {
     expectTypeOf<ListRunsOptions["from"]>().toEqualTypeOf<Date | undefined>();
     expectTypeOf<ListRunsOptions["until"]>().toEqualTypeOf<Date | undefined>();

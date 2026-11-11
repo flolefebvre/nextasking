@@ -175,7 +175,7 @@ export type ReadApiConfig = {
 
 export type ReadApi = {
   getRun: (taskName: string, runId: RunId) => Promise<AnyRun | undefined>;
-  listRuns: (options: ListRunsOptionsOf<string>) => Promise<RunPageOf<AnyListedRun>>;
+  listRuns: (options?: ListRunsOptionsOf<string>) => Promise<RunPageOf<AnyListedRun>>;
   countRuns: () => Promise<RunCountsOf<string>>;
   getEvent: (eventName: string, eventId: EventId) => Promise<EventWithRunsOf<AnyTaskDefinition, EventDefinition>>;
   listSchedules: () => Promise<ListedScheduleOf<string>[]>;
@@ -659,7 +659,7 @@ export function createReadApi(config: ReadApiConfig): ReadApi {
       return run;
     },
 
-    listRuns: async (options) => {
+    listRuns: async (options = {}) => {
       const listedStates = listedStatesOf(options.state);
       const listedTasks = listedTasksOf(options.task, tasksByName);
       const limit = listLimitOf(options.limit);

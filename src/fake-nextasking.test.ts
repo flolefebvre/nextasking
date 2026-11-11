@@ -204,6 +204,20 @@ describe("fakeNextasking", () => {
     expect(nextasking.eventDefinitions.map((event) => event.name)).toContain("order.placed");
   });
 
+  test("rejects listRuns with its argument left out as it rejects listRuns({})", async () => {
+    const nextasking = createShopNextasking();
+    fakeNextasking(nextasking);
+
+    const listings = { argumentLeftOut: nextasking.listRuns(), noOption: nextasking.listRuns({}) };
+
+    await expect(listings.argumentLeftOut).rejects.toThrow(
+      "This nextasking instance is faked: listRuns needs Redis, which a faked instance never touches. Call restore() on the fake first",
+    );
+    await expect(listings.noOption).rejects.toThrow(
+      "This nextasking instance is faked: listRuns needs Redis, which a faked instance never touches. Call restore() on the fake first",
+    );
+  });
+
   test("throws when the instance is faked already, and fakes it again once restored", async () => {
     const nextasking = createShopNextasking();
     const firstFake = fakeNextasking(nextasking);

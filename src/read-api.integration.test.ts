@@ -792,6 +792,31 @@ engineTest(
   },
 );
 
+engineTest(
+  "a cursor of the format version 2, from a page opened before a deploy, still pages forward",
+  async (context) => {
+    const reader = await readerOfTenRunsSuspendedUntilTheSameInstantOverTwoTasks(context);
+    const firstPage = await reader.listRuns({ state: "suspended", limit: 3 });
+    const { task, runId } = firstPage.runs.at(-1)!;
+    const score = await context.redis.zScore(context.keys.runIndex(task, "suspended"), storedRunIdOf(task, runId));
+    const versionTwoCursor = cursorOfFields([2, "suspended", null, score, task, runId]);
+
+    const pageAfterTheVersionTwoCursor = await reader.listRuns({
+      state: "suspended",
+      limit: 3,
+      cursor: versionTwoCursor,
+    });
+    const pageAfterTheNextCursor = await reader.listRuns({
+      state: "suspended",
+      limit: 3,
+      cursor: firstPage.nextCursor!,
+    });
+
+    expect(pageAfterTheVersionTwoCursor).toEqual(pageAfterTheNextCursor);
+    expect(pageAfterTheVersionTwoCursor.firstRunPosition).toBe(4);
+  },
+);
+
 engineTest("listRuns refuses a cursor from another state or another task", async (context) => {
   await endRunsOfEachTask(context, 3);
   const reader = readerOf(context);
@@ -832,7 +857,7 @@ engineTest(
     };
 
     await expect(listings.oldCursor).rejects.toThrow(
-      "Invalid listRuns cursor: pass back a nextCursor that listRuns returned",
+      "Invalid listRuns cursor: pass back a nextCursor or previousCursor that listRuns returned",
     );
     await expect(listings.invalidState).rejects.toThrow('Invalid listRuns state: "sleeping" is not one of');
     await expect(listings.invalidLimit).rejects.toThrow("Invalid listRuns limit: 0 is not a positive integer");

@@ -348,9 +348,9 @@ function compareInIndexOrder(left: IndexEntry, right: IndexEntry): number {
   );
 }
 
-function indexPlaceAfter(cursor: unknown, listedIndexes: ListedIndexes): IndexPlace {
-  const { score, task, runId } = decodeRunListCursor(cursor, listedIndexes);
-  return { score, storedRunId: storedRunIdOf(task, runId) };
+function indexPlaceAfter(cursor: unknown, listedIndexes: ListedIndexes): IndexPlace | undefined {
+  const { place } = decodeRunListCursor(cursor, listedIndexes);
+  return place === undefined ? undefined : { score: place.score, storedRunId: storedRunIdOf(place.task, place.runId) };
 }
 
 function indexEntryOf(indexKey: string, indexPlace: IndexPlace): IndexEntry {
@@ -464,12 +464,12 @@ export function createReadApi(config: ReadApiConfig): ReadApi {
       if (!isAnyEntryAfterPage) {
         return { runs, totalRunCount, firstRunPosition };
       }
-      const lastListedRun = { score: lastTakenEntry.indexPlace.score, ...lastTakenEntry.runIdentity };
+      const place = { score: lastTakenEntry.indexPlace.score, ...lastTakenEntry.runIdentity };
       return {
         runs,
         totalRunCount,
         firstRunPosition,
-        nextCursor: encodeRunListCursor({ ...listedIndexes, lastListedRun }),
+        nextCursor: encodeRunListCursor({ ...listedIndexes, direction: "forward", place }),
       };
     },
 

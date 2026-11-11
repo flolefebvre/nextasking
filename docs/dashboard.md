@@ -104,7 +104,7 @@ Invalid listRuns cursor: it pages through state "completed", not "failed"
 Invalid listRuns cursor: it pages through task "send-welcome-email", not task "create-default-workspace"
 Invalid listRuns cursor: it pages through every task, not task "send-welcome-email"
 Invalid listRuns cursor: it pages through task "send-welcome-email", not every task
-Invalid listRuns cursor: pass back a nextCursor that listRuns returned
+Invalid listRuns cursor: pass back a nextCursor or previousCursor that listRuns returned
 ```
 
 - A page may come back shorter than `limit`, even empty; only a missing `nextCursor` ends the walk.

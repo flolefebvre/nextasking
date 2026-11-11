@@ -8,7 +8,16 @@ export type RunListCursor = string;
 
 export type ListedIndexes = { state: RunState; listedTask: string | null };
 
-const INVALID_CURSOR_MESSAGE = "Invalid listRuns cursor: pass back a nextCursor that listRuns returned";
+export type PagingDirection = "forward" | "backward";
+
+export type RunListPlace = RunIdentity & { score: IndexScore };
+
+export type PageBoundary = { direction: PagingDirection; place: RunListPlace | undefined };
+
+export type RunListCursorContent = ListedIndexes & PageBoundary;
+
+const INVALID_CURSOR_MESSAGE =
+  "Invalid listRuns cursor: pass back a nextCursor or previousCursor that listRuns returned";
 
 function otherStateCursorMessageOf(cursorState: RunState, calledState: RunState): string {
   return `Invalid listRuns cursor: it pages through state "${cursorState}", not "${calledState}"`;
@@ -18,7 +27,7 @@ export function cursorOfFields(fields: readonly unknown[]): RunListCursor {
   return Buffer.from(JSON.stringify(fields), "utf8").toString("base64url");
 }
 
-function cursorFieldsOf(cursor: unknown, formatVersion: number, fieldCount: number): unknown[] | undefined {
+function cursorFieldsOf(cursor: unknown): unknown[] | undefined {
   if (typeof cursor !== "string" || cursor === "") {
     return undefined;
   }
@@ -28,41 +37,36 @@ function cursorFieldsOf(cursor: unknown, formatVersion: number, fieldCount: numb
   } catch {
     return undefined;
   }
-  if (!Array.isArray(decoded) || decoded.length !== fieldCount || decoded[0] !== formatVersion) {
-    return undefined;
-  }
-  return decoded as unknown[];
+  return Array.isArray(decoded) ? decoded : undefined;
 }
 
-export type LastListedRun = RunIdentity & { score: IndexScore };
+const CURSOR_FORMAT_VERSION = 3;
 
-export type RunListPosition = ListedIndexes & { lastListedRun: LastListedRun };
+const FORWARD_ONLY_CURSOR_FORMAT_VERSION = 2;
 
-const CURSOR_FORMAT_VERSION = 2;
-
-export function encodeRunListCursor({ state, listedTask, lastListedRun }: RunListPosition): RunListCursor {
-  const { score, task, runId } = lastListedRun;
-  return cursorOfFields([CURSOR_FORMAT_VERSION, state, listedTask, score, task, runId]);
+export function encodeRunListCursor({ state, listedTask, direction, place }: RunListCursorContent): RunListCursor {
+  const placeFields = place === undefined ? null : [place.score, place.task, place.runId];
+  return cursorOfFields([CURSOR_FORMAT_VERSION, direction, placeFields, state, listedTask]);
 }
 
 function shownTaskOf(listedTask: string | null): string {
   return listedTask === null ? "every task" : `task ${JSON.stringify(listedTask)}`;
 }
 
-export function decodeRunListCursor(cursor: unknown, listedIndexes: ListedIndexes): LastListedRun {
-  const position = positionIn(cursor);
-  if (position === undefined) {
+export function decodeRunListCursor(cursor: unknown, listedIndexes: ListedIndexes): PageBoundary {
+  const content = contentIn(cursor);
+  if (content === undefined) {
     throw new Error(INVALID_CURSOR_MESSAGE);
   }
-  if (position.state !== listedIndexes.state) {
-    throw new Error(otherStateCursorMessageOf(position.state, listedIndexes.state));
+  if (content.state !== listedIndexes.state) {
+    throw new Error(otherStateCursorMessageOf(content.state, listedIndexes.state));
   }
-  if (position.listedTask !== listedIndexes.listedTask) {
+  if (content.listedTask !== listedIndexes.listedTask) {
     throw new Error(
-      `Invalid listRuns cursor: it pages through ${shownTaskOf(position.listedTask)}, not ${shownTaskOf(listedIndexes.listedTask)}`,
+      `Invalid listRuns cursor: it pages through ${shownTaskOf(content.listedTask)}, not ${shownTaskOf(listedIndexes.listedTask)}`,
     );
   }
-  return position.lastListedRun;
+  return { direction: content.direction, place: content.place };
 }
 
 function isScoreSentExactly(score: unknown): score is number {
@@ -82,15 +86,16 @@ function isStorableRun(task: string, runId: string): boolean {
   }
 }
 
-function positionIn(cursor: unknown): RunListPosition | undefined {
-  const fields = cursorFieldsOf(cursor, CURSOR_FORMAT_VERSION, 6);
-  if (fields === undefined) {
+function isPagingDirection(value: unknown): value is PagingDirection {
+  return value === "forward" || value === "backward";
+}
+
+function placeOf(placeFields: unknown, listedTask: string | null): RunListPlace | undefined {
+  if (!Array.isArray(placeFields) || placeFields.length !== 3) {
     return undefined;
   }
-  const [, state, listedTask, score, task, runId] = fields;
+  const [score, task, runId] = placeFields as unknown[];
   if (
-    !isRunState(state) ||
-    (listedTask !== null && typeof listedTask !== "string") ||
     !isScoreSentExactly(score) ||
     !isNonEmptyString(task) ||
     !isNonEmptyString(runId) ||
@@ -99,5 +104,34 @@ function positionIn(cursor: unknown): RunListPosition | undefined {
   ) {
     return undefined;
   }
-  return { state, listedTask, lastListedRun: { score, task, runId } };
+  return { score, task, runId };
+}
+
+function contentOf(
+  state: unknown,
+  listedTask: unknown,
+  direction: unknown,
+  placeFields: unknown,
+): RunListCursorContent | undefined {
+  if (!isRunState(state) || (listedTask !== null && typeof listedTask !== "string") || !isPagingDirection(direction)) {
+    return undefined;
+  }
+  if (placeFields === null) {
+    return direction === "backward" ? { state, listedTask, direction, place: undefined } : undefined;
+  }
+  const place = placeOf(placeFields, listedTask);
+  return place === undefined ? undefined : { state, listedTask, direction, place };
+}
+
+function contentIn(cursor: unknown): RunListCursorContent | undefined {
+  const fields = cursorFieldsOf(cursor);
+  if (fields?.[0] === CURSOR_FORMAT_VERSION && fields.length === 5) {
+    const [, direction, placeFields, state, listedTask] = fields;
+    return contentOf(state, listedTask, direction, placeFields);
+  }
+  if (fields?.[0] === FORWARD_ONLY_CURSOR_FORMAT_VERSION && fields.length === 6) {
+    const [, state, listedTask, score, task, runId] = fields;
+    return contentOf(state, listedTask, "forward", [score, task, runId]);
+  }
+  return undefined;
 }

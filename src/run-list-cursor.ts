@@ -1,14 +1,12 @@
 import { storedRunIdOf } from "./engine/engine-keys.js";
 import type { RunIdentity } from "./engine/engine-keys.js";
-import type { IndexScore } from "./engine/index-page-script.js";
+import type { IndexScore, PagingDirection } from "./engine/index-page-script.js";
 import { isRunState } from "./run-states.js";
 import type { RunState } from "./run-states.js";
 
 export type RunListCursor = string;
 
 export type ListedIndexes = { state: RunState; listedTask: string | null };
-
-export type PagingDirection = "forward" | "backward";
 
 export type RunListPlace = RunIdentity & { score: IndexScore };
 

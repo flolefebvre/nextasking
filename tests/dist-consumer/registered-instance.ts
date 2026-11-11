@@ -410,6 +410,8 @@ export type RunPageHasItsTotal = Expect<IsEqual<RunPage["totalRunCount"], number
 
 export type RunPageHasThePositionOfItsFirstRun = Expect<IsEqual<RunPage["firstRunPosition"], number | undefined>>;
 
+export type RunPageHasACursorToThePageBefore = Expect<IsEqual<RunPage["previousCursor"], string | undefined>>;
+
 export type ListedRunHasNoPayload = Expect<IsEqual<"payload" extends keyof ListedRun ? true : false, false>>;
 
 export const runCounts: Promise<RunCounts> = nextasking.countRuns();

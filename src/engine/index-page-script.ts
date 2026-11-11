@@ -5,7 +5,11 @@ export type IndexScore = number;
 
 export type IndexPlace = { score: IndexScore; storedRunId: string };
 
-export type IndexPagesRequest = { indexKeys: readonly string[]; limit: number; after: IndexPlace | undefined };
+export type PagingDirection = "forward" | "backward";
+
+export type IndexPageBoundary = { direction: PagingDirection; place: IndexPlace | undefined };
+
+export type IndexPagesRequest = { indexKeys: readonly string[]; limit: number; boundary: IndexPageBoundary };
 
 export type IndexPage = {
   entryCount: number;
@@ -15,18 +19,22 @@ export type IndexPage = {
 };
 
 export const INDEX_PAGE_SCRIPT = `
-if #ARGV ~= 1 and #ARGV ~= 3 then
-  error("invalid argument: an index page takes a limit, then optionally a score and a run id, got " .. tostring(#ARGV) .. " arguments")
+if #ARGV ~= 2 and #ARGV ~= 4 then
+  error("invalid argument: an index page takes a limit and a direction, then optionally a score and a run id, got " .. tostring(#ARGV) .. " arguments")
 end
 local limit = tonumber(ARGV[1])
 if not limit or limit < 1 or limit ~= math.floor(limit) then
   error("invalid argument: limit must be a positive integer, got " .. tostring(ARGV[1]))
 end
+local isForward = ARGV[2] == "forward"
+if not isForward and ARGV[2] ~= "backward" then
+  error("invalid argument: direction must be forward or backward, got " .. tostring(ARGV[2]))
+end
 
 local function isBytewiseBefore(left, right)
   local sharedLength = math.min(#left, #right)
-  for position = 1, sharedLength do
-    local leftByte, rightByte = string.byte(left, position), string.byte(right, position)
+  for byteNumber = 1, sharedLength do
+    local leftByte, rightByte = string.byte(left, byteNumber), string.byte(right, byteNumber)
     if leftByte ~= rightByte then
       return leftByte < rightByte
     end
@@ -34,21 +42,28 @@ local function isBytewiseBefore(left, right)
   return #left < #right
 end
 
-local function entryCountBeforeBoundaryOf(indexKey)
-  if #ARGV == 1 then
-    return 0
+local function isBeforeBoundary(entryRunId, placeRunId)
+  if isForward then
+    return not isBytewiseBefore(entryRunId, placeRunId)
   end
-  local score, runId = ARGV[2], ARGV[3]
+  return isBytewiseBefore(placeRunId, entryRunId)
+end
+
+local function entryCountBeforeBoundaryOf(indexKey, entryCount)
+  if #ARGV == 2 then
+    return isForward and 0 or entryCount
+  end
+  local score, runId = ARGV[3], ARGV[4]
   local higherScoredCount = redis.call("ZCOUNT", indexKey, "(" .. score, "+inf")
   local sameScoredCount = redis.call("ZCOUNT", indexKey, score, score)
   local lowRank, highRank = higherScoredCount, higherScoredCount + sameScoredCount
   while lowRank < highRank do
     local middleRank = math.floor((lowRank + highRank) / 2)
     local middleRunId = redis.call("ZRANGE", indexKey, middleRank, middleRank, "REV")[1]
-    if isBytewiseBefore(middleRunId, runId) then
-      highRank = middleRank
-    else
+    if isBeforeBoundary(middleRunId, runId) then
       lowRank = middleRank + 1
+    else
+      highRank = middleRank
     end
   end
   return lowRank
@@ -56,10 +71,14 @@ end
 
 local indexPages = {}
 for keyNumber, indexKey in ipairs(KEYS) do
-  local entryCountBeforeBoundary = entryCountBeforeBoundaryOf(indexKey)
-  local firstEntryRank = entryCountBeforeBoundary
-  local indexPage = { redis.call("ZCARD", indexKey), entryCountBeforeBoundary, firstEntryRank }
-  local entries = redis.call("ZRANGE", indexKey, firstEntryRank, firstEntryRank + limit - 1, "REV", "WITHSCORES")
+  local entryCount = redis.call("ZCARD", indexKey)
+  local entryCountBeforeBoundary = entryCountBeforeBoundaryOf(indexKey, entryCount)
+  local firstEntryRank, lastEntryRank = entryCountBeforeBoundary, entryCountBeforeBoundary + limit - 1
+  if not isForward then
+    firstEntryRank, lastEntryRank = math.max(0, entryCountBeforeBoundary - limit), math.max(entryCountBeforeBoundary, limit) - 1
+  end
+  local indexPage = { entryCount, entryCountBeforeBoundary, firstEntryRank }
+  local entries = redis.call("ZRANGE", indexKey, firstEntryRank, lastEntryRank, "REV", "WITHSCORES")
   for _, element in ipairs(entries) do
     indexPage[#indexPage + 1] = element
   end
@@ -74,11 +93,12 @@ const INDEX_PAGE_REDIS_SCRIPT: RedisScript = {
   keyCount: "one or more",
 };
 
-export function indexPagesCommandOf({ indexKeys, limit, after }: IndexPagesRequest): RedisCommand {
+export function indexPagesCommandOf({ indexKeys, limit, boundary }: IndexPagesRequest): RedisCommand {
+  const { direction, place } = boundary;
   return scriptCommandOf(
     INDEX_PAGE_REDIS_SCRIPT,
     indexKeys,
-    after === undefined ? [limit] : [limit, String(after.score), after.storedRunId],
+    place === undefined ? [limit, direction] : [limit, direction, String(place.score), place.storedRunId],
   );
 }
 

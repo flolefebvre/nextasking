@@ -146,7 +146,16 @@ benchmarkTest(
             completedListingWithoutASecondPageCount += 1;
           } else {
             const cursor = nextCursor;
-            await measureRead("listRuns completed, second page", () => reader.listRuns({ state: "completed", cursor }));
+            let previousCursor: string | undefined;
+            await measureRead("listRuns completed, second page", async () => {
+              ({ previousCursor } = await reader.listRuns({ state: "completed", cursor }));
+            });
+            if (previousCursor !== undefined) {
+              const cursorOfThePreviousPage = previousCursor;
+              await measureRead("listRuns completed, previous page", () =>
+                reader.listRuns({ state: "completed", cursor: cursorOfThePreviousPage }),
+              );
+            }
           }
           await measureRead("listRuns failed", () => reader.listRuns({ state: "failed" }));
           await measureRead("listRuns pending of one task", () => reader.listRuns({ state: "pending", task }));

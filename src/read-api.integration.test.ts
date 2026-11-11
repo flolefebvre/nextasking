@@ -515,6 +515,7 @@ async function walkedRunPagesOf(
   options: ListedIndexesOptions,
   limits: readonly number[],
   firstCursor?: string,
+  followedCursor: "nextCursor" | "previousCursor" = "nextCursor",
 ): Promise<RunPageOf<AnyListedRun>[]> {
   const pages: RunPageOf<AnyListedRun>[] = [];
   let cursor = firstCursor;
@@ -522,12 +523,16 @@ async function walkedRunPagesOf(
     const limit = limits[pageCount % limits.length]!;
     const page = await reader.listRuns({ ...options, limit, ...(cursor === undefined ? {} : { cursor }) });
     expect(page.runs.length).toBeLessThanOrEqual(limit);
-    pages.push(page);
-    if (page.nextCursor === undefined) {
+    if (followedCursor === "nextCursor") {
+      pages.push(page);
+    } else {
+      pages.unshift(page);
+    }
+    if (page[followedCursor] === undefined) {
       return pages;
     }
-    expect(page.nextCursor).not.toBe(cursor);
-    cursor = page.nextCursor;
+    expect(page[followedCursor]).not.toBe(cursor);
+    cursor = page[followedCursor];
   }
   throw new Error(`the walk did not end within ${String(MOST_PAGES_WALKED)} pages`);
 }
@@ -817,6 +822,140 @@ engineTest(
   },
 );
 
+function runIdsOfRunPages(pages: readonly RunPageOf<AnyListedRun>[]): RunId[] {
+  return runIdsOfPages(pages.map(({ runs }) => runs));
+}
+
+for (const [options, limit] of [
+  [{ state: "suspended" }, 3],
+  [{ state: "suspended" }, 4],
+  [{ state: "suspended", task: "send-email" }, 2],
+] as const) {
+  engineTest(
+    `a walk backward from the last page lists the runs of a walk forward in the same order, ${JSON.stringify(options)} in pages of ${String(limit)}`,
+    async (context) => {
+      const reader = await readerOfTenRunsSuspendedUntilTheSameInstantOverTwoTasks(context);
+      const forwardPages = await walkedRunPagesOf(reader, options, [limit]);
+      const lastPage = forwardPages.at(-1)!;
+
+      const backwardPages = await walkedRunPagesOf(
+        reader,
+        options,
+        [limit],
+        lastPage.previousCursor!,
+        "previousCursor",
+      );
+
+      expect(runIdsOfRunPages([...backwardPages, lastPage])).toEqual(runIdsOfRunPages(forwardPages));
+      expect([...backwardPages, lastPage].map(pageFiguresOf)).toEqual(forwardPages.map(pageFiguresOf));
+    },
+  );
+}
+
+engineTest(
+  "a first page hands no previous cursor, and a page read backward hands both when runs lie on both sides",
+  async (context) => {
+    const reader = await readerOfTenRunsSuspendedUntilTheSameInstantOverTwoTasks(context);
+    const [firstPage, , thirdPage] = await walkedRunPagesOf(reader, { state: "suspended" }, [3]);
+
+    const pageReadBackward = await reader.listRuns({
+      state: "suspended",
+      limit: 3,
+      cursor: thirdPage!.previousCursor!,
+    });
+
+    expect(firstPage!.previousCursor).toBeUndefined();
+    expect(pageReadBackward).toMatchObject({
+      totalRunCount: 10,
+      firstRunPosition: 4,
+      previousCursor: expect.any(String),
+      nextCursor: expect.any(String),
+    });
+    expect(pageReadBackward.runs).toHaveLength(3);
+  },
+);
+
+engineTest("a next page then its previous page are the page left, and back again", async (context) => {
+  const reader = await readerOfTenRunsSuspendedUntilTheSameInstantOverTwoTasks(context);
+  const [firstPage, secondPage, thirdPage] = await walkedRunPagesOf(reader, { state: "suspended" }, [3]);
+
+  const pageBeforeTheSecond = await reader.listRuns({
+    state: "suspended",
+    limit: 3,
+    cursor: secondPage!.previousCursor!,
+  });
+  const pageBeforeTheThird = await reader.listRuns({
+    state: "suspended",
+    limit: 3,
+    cursor: thirdPage!.previousCursor!,
+  });
+
+  expect(pageBeforeTheSecond).toEqual(firstPage);
+  expect(pageBeforeTheThird).toEqual(secondPage);
+});
+
+engineTest("a page read backward that reaches the head of the list is the first page, full", async (context) => {
+  const reader = await readerOfTenRunsSuspendedUntilTheSameInstantOverTwoTasks(context);
+  const pageOfTwo = await reader.listRuns({ state: "suspended", limit: 2 });
+  const pageAfterIt = await reader.listRuns({ state: "suspended", limit: 3, cursor: pageOfTwo.nextCursor! });
+
+  const pageReachingTheHead = await reader.listRuns({
+    state: "suspended",
+    limit: 3,
+    cursor: pageAfterIt.previousCursor!,
+  });
+
+  expect(pageAfterIt.firstRunPosition).toBe(3);
+  expect(pageReachingTheHead).toEqual(await reader.listRuns({ state: "suspended", limit: 3 }));
+  expect(pageReachingTheHead.runs).toHaveLength(3);
+  expect(pageReachingTheHead).not.toHaveProperty("previousCursor");
+});
+
+engineTest(
+  "after the runs a page's cursors name leave the list, the page before and the page after start at the right runs",
+  async (context) => {
+    for (const taskName of TASK_NAMES) {
+      await endRuns(context.engine, taskName, runIdsOf(`${taskName}-run`, 3), "fail");
+    }
+    const reader = readerOf(context);
+    const runIdsInOrder = await runIdsInPromisedOrderOf(context, TASK_NAMES, "failed");
+    const firstPage = await reader.listRuns({ state: "failed", limit: 2 });
+    const secondPage = await reader.listRuns({ state: "failed", limit: 2, cursor: firstPage.nextCursor! });
+    for (const { task, runId } of secondPage.runs) {
+      await context.engine.replay({ task, runId });
+    }
+
+    const pageBefore = await reader.listRuns({ state: "failed", limit: 2, cursor: secondPage.previousCursor! });
+    const pageAfter = await reader.listRuns({ state: "failed", limit: 2, cursor: secondPage.nextCursor! });
+
+    expect(secondPage.runs.map(({ runId }) => runId)).toEqual(runIdsInOrder.slice(2, 4));
+    expect(pageBefore.runs.map(({ runId }) => runId)).toEqual(runIdsInOrder.slice(0, 2));
+    expect(pageBefore).toMatchObject({ totalRunCount: 7, firstRunPosition: 1 });
+    expect(pageBefore).not.toHaveProperty("previousCursor");
+    expect(pageAfter.runs.map(({ runId }) => runId)).toEqual(runIdsInOrder.slice(4, 6));
+    expect(pageAfter).toMatchObject({ totalRunCount: 7, firstRunPosition: 3, previousCursor: expect.any(String) });
+  },
+);
+
+engineTest(
+  "a page past the end of the list hands the end of the list as its previous page, the run of its cursor included",
+  async (context) => {
+    await endRuns(context.engine, "send-email", runIdsOf("send-email-run", 5), "fail");
+    const reader = readerOf(context);
+    const runIdsInOrder = await runIdsInPromisedOrderOf(context, ["send-email"], "failed");
+    const firstPage = await reader.listRuns({ state: "failed", limit: 4 });
+    await context.engine.replay({ task: "send-email", runId: runIdsInOrder[4]! });
+
+    const pagePastTheEnd = await reader.listRuns({ state: "failed", limit: 4, cursor: firstPage.nextCursor! });
+    const lastPage = await reader.listRuns({ state: "failed", limit: 2, cursor: pagePastTheEnd.previousCursor! });
+
+    expect(pagePastTheEnd).toEqual({ runs: [], totalRunCount: 4, previousCursor: expect.any(String) });
+    expect(lastPage.runs.map(({ runId }) => runId)).toEqual(runIdsInOrder.slice(2, 4));
+    expect(lastPage).toMatchObject({ totalRunCount: 4, firstRunPosition: 3, previousCursor: expect.any(String) });
+    expect(lastPage).not.toHaveProperty("nextCursor");
+  },
+);
+
 engineTest("listRuns refuses a cursor from another state or another task", async (context) => {
   await endRunsOfEachTask(context, 3);
   const reader = readerOf(context);
@@ -845,20 +984,26 @@ engineTest("listRuns refuses a cursor from another state or another task", async
 });
 
 engineTest(
-  "listRuns refuses a 0.1.x cursor, an invalid state or limit, and a task it does not define",
+  "listRuns refuses a 0.1.x cursor, a forward cursor from no place, an invalid state or limit, and a task it does not define",
   async (context) => {
     const reader = readerOf(context);
 
     const listings = {
       oldCursor: reader.listRuns({ state: "failed", cursor: cursorOfFields([1, "failed", 0, 50]) }),
+      forwardFromNoPlace: reader.listRuns({
+        state: "failed",
+        cursor: cursorOfFields([3, "forward", null, "failed", null]),
+      }),
       invalidState: reader.listRuns({ state: "sleeping" as RunState }),
       invalidLimit: reader.listRuns({ state: "failed", limit: 0 }),
       unknownTask: reader.listRuns({ state: "failed", task: "removed-task" }),
     };
 
-    await expect(listings.oldCursor).rejects.toThrow(
-      "Invalid listRuns cursor: pass back a nextCursor or previousCursor that listRuns returned",
-    );
+    for (const refusedCursorListing of [listings.oldCursor, listings.forwardFromNoPlace]) {
+      await expect(refusedCursorListing).rejects.toThrow(
+        "Invalid listRuns cursor: pass back a nextCursor or previousCursor that listRuns returned",
+      );
+    }
     await expect(listings.invalidState).rejects.toThrow('Invalid listRuns state: "sleeping" is not one of');
     await expect(listings.invalidLimit).rejects.toThrow("Invalid listRuns limit: 0 is not a positive integer");
     await expect(listings.unknownTask).rejects.toThrow(UnknownTaskError);
@@ -873,11 +1018,19 @@ engineTest(
     await endRuns(context.engine, "removed-task", ["removed-task-run"], "complete");
     const reader = readerOf(context);
     const { nextCursor } = await reader.listRuns({ state: "completed", limit: 2 });
+    const secondPage = await reader.listRuns({ state: "completed", limit: 2, cursor: nextCursor! });
+    const thirdPage = await reader.listRuns({ state: "completed", limit: 2, cursor: secondPage.nextCursor! });
 
     const trafficByListing = {
       firstPage: await readTrafficOf(client, () => reader.listRuns({ state: "completed", limit: 2 })),
       nextPage: await readTrafficOf(client, () =>
         reader.listRuns({ state: "completed", limit: 2, cursor: nextCursor! }),
+      ),
+      previousPage: await readTrafficOf(client, () =>
+        reader.listRuns({ state: "completed", limit: 2, cursor: thirdPage.previousCursor! }),
+      ),
+      previousPageReachingTheHead: await readTrafficOf(client, () =>
+        reader.listRuns({ state: "completed", limit: 3, cursor: secondPage.previousCursor! }),
       ),
       oneTask: await readTrafficOf(client, () => reader.listRuns({ state: "completed", task: "send-email" })),
       emptyState: await readTrafficOf(client, () => reader.listRuns({ state: "failed" })),
@@ -885,11 +1038,17 @@ engineTest(
 
     expect(trafficByListing.firstPage.roundTripCount).toBe(2);
     expect(trafficByListing.nextPage.roundTripCount).toBe(2);
+    expect(trafficByListing.previousPage.roundTripCount).toBe(2);
+    expect(trafficByListing.previousPageReachingTheHead.roundTripCount).toBe(2);
     expect(trafficByListing.oneTask.roundTripCount).toBe(2);
     expect(trafficByListing.emptyState.roundTripCount).toBe(1);
     expect(trafficByListing.firstPage.sentCommands[0]).toEqual({
       name: "evalsha",
-      args: [...[...TASK_NAMES, ...LISTENER_NAMES].map((taskName) => keys.runIndex(taskName, "completed")), 2],
+      args: [
+        ...[...TASK_NAMES, ...LISTENER_NAMES].map((taskName) => keys.runIndex(taskName, "completed")),
+        2,
+        "forward",
+      ],
     });
     for (const traffic of Object.values(trafficByListing)) {
       expectOnlyBoundedReads(traffic);

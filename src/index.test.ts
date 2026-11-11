@@ -179,6 +179,7 @@ describe("the root export", () => {
     expectTypeOf<RunPage["runs"][number]>().toEqualTypeOf<ListedRun>();
     expectTypeOf<RunPage["totalRunCount"]>().toEqualTypeOf<number>();
     expectTypeOf<RunPage["firstRunPosition"]>().toEqualTypeOf<number | undefined>();
+    expectTypeOf<RunPage["previousCursor"]>().toEqualTypeOf<string | undefined>();
     expectTypeOf<RunCounts["purge-expired-sessions"]["waitingForConcurrencySlot"]>().toEqualTypeOf<number>();
     expectTypeOf(nextasking.countRuns).returns.resolves.toEqualTypeOf<RunCounts>();
     // @ts-expect-error a listed run carries no payload

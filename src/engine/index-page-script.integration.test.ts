@@ -57,6 +57,7 @@ async function twoGroupsOfExecutingRunsOf(context: EngineTestContext): Promise<T
     interval: 1,
   });
   const later = await runsStartedTogether(context, LATER_RUN_IDS_IN_INDEX_ORDER);
+  expect(later.startedAt).toBeGreaterThan(earlier.startedAt);
   return { earlier, later, indexKey: context.keys.runIndex("send-email", "executing") };
 }
 

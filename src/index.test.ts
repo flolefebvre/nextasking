@@ -186,6 +186,20 @@ describe("the root export", () => {
     expectTypeOf<ListedRun["payload"]>().toBeUnknown();
   });
 
+  test("types listRuns' runs by the states listed, one state keeping its own type, and every state when none is", () => {
+    const listFailedRuns = async () => (await nextasking.listRuns({ state: "failed" })).runs;
+    const listEndedRuns = async () => (await nextasking.listRuns({ state: ["completed", "failed"] })).runs;
+    const listEveryRun = async () => (await nextasking.listRuns({ limit: 10 })).runs;
+
+    expectTypeOf(listFailedRuns).returns.resolves.items.toEqualTypeOf<
+      Awaited<ReturnType<typeof nextasking.listRuns<"failed">>>["runs"][number]
+    >();
+    expectTypeOf(listFailedRuns).returns.resolves.items.toHaveProperty("state").toEqualTypeOf<"failed">();
+    expectTypeOf(listEndedRuns).returns.resolves.items.toHaveProperty("state").toEqualTypeOf<"completed" | "failed">();
+    expectTypeOf(listEveryRun).returns.resolves.items.toEqualTypeOf<ListedRun>();
+    expectTypeOf<ListRunsOptions["state"]>().toEqualTypeOf<RunState | readonly RunState[] | undefined>();
+  });
+
   test("describes the tasks and events, with no schema and no handler, for a run-now picker", () => {
     const runNow = async (taskName: (typeof nextasking.taskDefinitions)[number]["name"]) => {
       if (taskName === "purge-expired-sessions") {

@@ -114,7 +114,11 @@ _Avoid_: Stopping, winding down
 
 **Pending**:
 Said of a run that is due and waits for a worker to start or continue its next attempt.
-_Avoid_: Queued, waiting, ready
+_Avoid_: Waiting, ready; not queued, which names the order group of pending runs and runs waiting for a concurrency slot together, never the pending state alone (see **Order group**)
+
+**Order group**:
+The states whose runs a list can put in one order, because each orders its runs by the same measure: executing (when the run started), queued (pending and waiting for a concurrency slot, by its place in the queue), waiting for a time (delayed, suspended and backing off, by when it is due) and ended (completed and failed, by when it finished). Runs of two order groups never share an order, so a list of several comes as one block per group, in that sequence.
+_Avoid_: Score family, state group, stage, category
 
 **Idle**:
 Said of the queue when no run is pending, executing or waiting for a concurrency slot; runs that wait for a set time don't count.

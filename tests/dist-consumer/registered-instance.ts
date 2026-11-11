@@ -406,6 +406,28 @@ export const failedRunsPage: Promise<RunPage> = nextasking.listRuns({ state: "fa
 
 export const listRunsOptions: ListRunsOptions = { state: "pending", task: "send-welcome-email" };
 
+export const listRunsOptionsOfSeveralStates: ListRunsOptions = { state: ["pending", "executing"] };
+
+export const listRunsOptionsOfEveryState: ListRunsOptions = { limit: 20 };
+
+export const listFailedRuns = () => nextasking.listRuns({ state: "failed" });
+
+export const listEndedRuns = () => nextasking.listRuns({ state: ["completed", "failed"] });
+
+export const listEveryRun = () => nextasking.listRuns({});
+
+type ListedRunOf<List extends () => Promise<RunPage>> = Awaited<ReturnType<List>>["runs"][number];
+
+export type OneListedStateKeepsItsOwnType = Expect<
+  IsEqual<ListedRunOf<typeof listFailedRuns>, Extract<ListedRun, { state: "failed" }>>
+>;
+
+export type SeveralListedStatesGiveTheirUnion = Expect<
+  IsEqual<ListedRunOf<typeof listEndedRuns>["state"], "completed" | "failed">
+>;
+
+export type NoListedStateGivesEveryState = Expect<IsEqual<ListedRunOf<typeof listEveryRun>, ListedRun>>;
+
 export type RunPageHasItsTotal = Expect<IsEqual<RunPage["totalRunCount"], number>>;
 
 export type RunPageHasThePositionOfItsFirstRun = Expect<IsEqual<RunPage["firstRunPosition"], number | undefined>>;

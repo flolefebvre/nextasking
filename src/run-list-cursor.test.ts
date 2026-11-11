@@ -1,14 +1,20 @@
 import { describe, expect, test } from "vitest";
 
 import { decodeRunListCursor, encodeRunListCursor } from "./run-list-cursor.js";
-import type { RunListCursorContent } from "./run-list-cursor.js";
+import type { ListedIndexes, RunListCursorContent } from "./run-list-cursor.js";
 import { cursorOfFields } from "./run-list-cursor.js";
 
-const FAILED_RUN_PLACE = { score: 1_731_000_000_000, task: "send-email", runId: "run-42" };
+const FAILED_RUN_PLACE = {
+  orderGroup: "ended",
+  score: 1_731_000_000_000,
+  task: "send-email",
+  runId: "run-42",
+} as const;
+
+const FAILED_OF_EVERY_TASK: ListedIndexes = { listedStates: ["failed"], listedTasks: null };
 
 const FORWARD_FROM_A_FAILED_RUN: RunListCursorContent = {
-  state: "failed",
-  listedTask: null,
+  ...FAILED_OF_EVERY_TASK,
   direction: "forward",
   place: FAILED_RUN_PLACE,
 };
@@ -24,28 +30,40 @@ describe("the listRuns cursor on the indexes", () => {
   ] as const)("decodes back to the boundary it encodes, %s", (_description, direction, place) => {
     const cursor = encodeRunListCursor({ ...FORWARD_FROM_A_FAILED_RUN, direction, place });
 
-    expect(decodeRunListCursor(cursor, { state: "failed", listedTask: null })).toEqual({ direction, place });
+    expect(decodeRunListCursor(cursor, FAILED_OF_EVERY_TASK)).toEqual({ direction, place });
   });
 
   test("decodes back the boundary of one task", () => {
-    const cursor = encodeRunListCursor({ ...FORWARD_FROM_A_FAILED_RUN, listedTask: "send-email" });
+    const cursor = encodeRunListCursor({ ...FORWARD_FROM_A_FAILED_RUN, listedTasks: ["send-email"] });
 
-    expect(decodeRunListCursor(cursor, { state: "failed", listedTask: "send-email" })).toEqual({
+    expect(decodeRunListCursor(cursor, { listedStates: ["failed"], listedTasks: ["send-email"] })).toEqual({
       direction: "forward",
       place: FAILED_RUN_PLACE,
     });
   });
 
-  test("is the format version 3, its direction and place, then its state and listed task", () => {
-    const cursor = encodeRunListCursor({ ...FORWARD_FROM_A_FAILED_RUN, direction: "backward" });
+  test("decodes back the boundary of every state, from a place in any order group", () => {
+    const place = { orderGroup: "queued", score: 48_213, task: "send-email", runId: "run-42" } as const;
+    const cursor = encodeRunListCursor({ listedStates: null, listedTasks: null, direction: "backward", place });
 
-    expect(cursor).toBe(cursorOfFields([3, "backward", [1_731_000_000_000, "send-email", "run-42"], "failed", null]));
+    expect(decodeRunListCursor(cursor, { listedStates: null, listedTasks: null })).toEqual({
+      direction: "backward",
+      place,
+    });
   });
 
-  test("reads a cursor of the format version 2 as a forward cursor from its place", () => {
+  test("is the format version 3, its direction and place in its order group, then its listed states and tasks", () => {
+    const cursor = encodeRunListCursor({ ...FORWARD_FROM_A_FAILED_RUN, direction: "backward" });
+
+    expect(cursor).toBe(
+      cursorOfFields([3, "backward", ["ended", 1_731_000_000_000, "send-email", "run-42"], ["failed"], null]),
+    );
+  });
+
+  test("reads a cursor of the format version 2 as a forward cursor from its place, in the order group of its state", () => {
     const cursor = cursorOfFields([2, "failed", "send-email", 1_731_000_000_000, "send-email", "run-42"]);
 
-    expect(decodeRunListCursor(cursor, { state: "failed", listedTask: "send-email" })).toEqual({
+    expect(decodeRunListCursor(cursor, { listedStates: ["failed"], listedTasks: ["send-email"] })).toEqual({
       direction: "forward",
       place: FAILED_RUN_PLACE,
     });
@@ -62,19 +80,36 @@ describe("the listRuns cursor on the indexes", () => {
     ["of the format version 3", encodeRunListCursor({ ...FORWARD_FROM_A_FAILED_RUN, direction: "backward" })],
     ["of the format version 2", cursorOfFields([2, "failed", null, 1, "send-email", "run-42"])],
   ])("is refused for another state than the one it pages through, %s", (_description, cursor) => {
-    expect(() => decodeRunListCursor(cursor, { state: "completed", listedTask: null })).toThrow(
+    expect(() => decodeRunListCursor(cursor, { listedStates: ["completed"], listedTasks: null })).toThrow(
       'Invalid listRuns cursor: it pages through state "failed", not "completed"',
     );
   });
 
   test.each([
-    [null, "send-email", 'it pages through every task, not task "send-email"'],
-    ["send-email", null, 'it pages through task "send-email", not every task'],
-    ["send-email", "build-report", 'it pages through task "send-email", not task "build-report"'],
-  ])("is refused when it pages through %s and the call asks for %s", (cursorTask, calledTask, reason) => {
-    const cursor = encodeRunListCursor({ ...FORWARD_FROM_A_FAILED_RUN, listedTask: cursorTask });
+    [["completed", "failed"], ["failed"], 'states "completed" and "failed", not "failed"'],
+    [["failed"], ["completed", "failed"], 'state "failed", not "completed" and "failed"'],
+    [null, ["completed", "failed"], 'every state, not "completed" and "failed"'],
+    [["failed"], null, 'state "failed", not every state'],
+    [["pending", "suspended", "failed"], null, 'states "pending", "suspended" and "failed", not every state'],
+  ] as const)(
+    "is refused when it pages through the states %j and the call lists %j, naming both",
+    (cursorStates, calledStates, reason) => {
+      const cursor = encodeRunListCursor({ ...FORWARD_FROM_A_FAILED_RUN, listedStates: cursorStates });
 
-    expect(() => decodeRunListCursor(cursor, { state: "failed", listedTask: calledTask })).toThrow(
+      expect(() => decodeRunListCursor(cursor, { listedStates: calledStates, listedTasks: null })).toThrow(
+        `Invalid listRuns cursor: it pages through ${reason}`,
+      );
+    },
+  );
+
+  test.each([
+    [null, ["send-email"], 'it pages through every task, not task "send-email"'],
+    [["send-email"], null, 'it pages through task "send-email", not every task'],
+    [["send-email"], ["build-report"], 'it pages through task "send-email", not task "build-report"'],
+  ] as const)("is refused when it pages through %j and the call asks for %j", (cursorTasks, calledTasks, reason) => {
+    const cursor = encodeRunListCursor({ ...FORWARD_FROM_A_FAILED_RUN, listedTasks: cursorTasks });
+
+    expect(() => decodeRunListCursor(cursor, { listedStates: ["failed"], listedTasks: calledTasks })).toThrow(
       `Invalid listRuns cursor: ${reason}`,
     );
   });
@@ -85,7 +120,10 @@ describe("the listRuns cursor on the indexes", () => {
     ["an empty string", ""],
     ["a 0.1.x cursor", cursorOfFields([1, "failed", 0, 50])],
     ["of another format version", cursorOfFields([1, "failed", null, 1, "send-email", "run-42"])],
-    ["of a format version to come", cursorOfFields([4, "forward", [1, "send-email", "run-42"], "failed", null])],
+    [
+      "of a format version to come",
+      cursorOfFields([4, "forward", ["ended", 1, "send-email", "run-42"], ["failed"], null]),
+    ],
     ["missing the task of its last run", cursorOfFields([2, "failed", null, 1, "run-42"])],
     ["of an unknown state", cursorOfFields([2, "sleeping", null, 1, "send-email", "run-42"])],
     ["of a listed task that is not a string", cursorOfFields([2, "failed", 7, 1, "send-email", "run-42"])],
@@ -98,26 +136,44 @@ describe("the listRuns cursor on the indexes", () => {
     ["of a run id that is not a string", cursorOfFields([2, "failed", null, 1, "send-email", 42])],
     [
       "of version 3 with an unknown direction",
-      cursorOfFields([3, "sideways", [1, "send-email", "run-42"], "failed", null]),
+      cursorOfFields([3, "sideways", ["ended", 1, "send-email", "run-42"], ["failed"], null]),
     ],
-    ["of version 3 forward from no place", cursorOfFields([3, "forward", null, "failed", null])],
-    ["of version 3 with a place that is not a list", cursorOfFields([3, "backward", "run-42", "failed", null])],
-    ["of version 3 with a place missing its task", cursorOfFields([3, "backward", [1, "run-42"], "failed", null])],
+    ["of version 3 forward from no place", cursorOfFields([3, "forward", null, ["failed"], null])],
+    ["of version 3 with a place that is not a list", cursorOfFields([3, "backward", "run-42", ["failed"], null])],
+    [
+      "of version 3 with a place missing its order group",
+      cursorOfFields([3, "backward", [1, "send-email", "run-42"], ["failed"], null]),
+    ],
+    [
+      "of version 3 with a place in an unknown order group",
+      cursorOfFields([3, "backward", ["finished", 1, "send-email", "run-42"], ["failed"], null]),
+    ],
+    [
+      "of version 3 with a place in an order group none of its states is in",
+      cursorOfFields([3, "backward", ["queued", 1, "send-email", "run-42"], ["failed"], null]),
+    ],
     [
       "of version 3 with a score that is a string",
-      cursorOfFields([3, "backward", ["1", "send-email", "run-42"], "failed", null]),
+      cursorOfFields([3, "backward", ["ended", "1", "send-email", "run-42"], ["failed"], null]),
     ],
-    ["of version 3 with an unknown state", cursorOfFields([3, "backward", null, "sleeping", null])],
-    ["of version 3 missing its listed task", cursorOfFields([3, "backward", null, "failed"])],
+    ["of version 3 with an unknown state", cursorOfFields([3, "backward", null, ["sleeping"], null])],
+    ["of version 3 with a state that is not listed", cursorOfFields([3, "backward", null, "failed", null])],
+    ["of version 3 with an empty list of states", cursorOfFields([3, "backward", null, [], null])],
+    ["of version 3 with an empty list of tasks", cursorOfFields([3, "backward", null, ["failed"], []])],
+    ["of version 3 with a task that is not a string", cursorOfFields([3, "backward", null, ["failed"], [7]])],
+    ["of version 3 missing its listed tasks", cursorOfFields([3, "backward", null, ["failed"]])],
   ])("is refused when it is %s", (_description, cursor) => {
-    expect(() => decodeRunListCursor(cursor, { state: "failed", listedTask: null })).toThrow(INVALID_CURSOR_MESSAGE);
+    expect(() => decodeRunListCursor(cursor, FAILED_OF_EVERY_TASK)).toThrow(INVALID_CURSOR_MESSAGE);
   });
 
   test.each([
     ["of the format version 2", cursorOfFields([2, "failed", "send-email", 1, "build-report", "run-42"])],
-    ["of the format version 3", cursorOfFields([3, "forward", [1, "build-report", "run-42"], "failed", "send-email"])],
+    [
+      "of the format version 3",
+      cursorOfFields([3, "forward", ["ended", 1, "build-report", "run-42"], ["failed"], ["send-email"]]),
+    ],
   ])("is refused when it lists one task and its place is a run of another, %s", (_description, cursor) => {
-    expect(() => decodeRunListCursor(cursor, { state: "failed", listedTask: "send-email" })).toThrow(
+    expect(() => decodeRunListCursor(cursor, { listedStates: ["failed"], listedTasks: ["send-email"] })).toThrow(
       INVALID_CURSOR_MESSAGE,
     );
   });

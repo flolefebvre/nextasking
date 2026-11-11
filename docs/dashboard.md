@@ -1,6 +1,6 @@
 # Dashboard
 
-The instance reads its runs back, so you can build your own dashboard: one run with its state, payload, errors and saved steps; a page of runs in one state; the backlog per task; the run of each listener of one event; each schedule's firings; a "run now" picker. Every read works from any process with a connection, with or without a worker.
+The instance reads its runs back, so you can build your own dashboard: one run with its state, payload, errors and saved steps; a page of runs in one state, several, or all of them; the backlog per task; the run of each listener of one event; each schedule's firings; a "run now" picker. Every read works from any process with a connection, with or without a worker.
 
 ## Protect the dashboard
 
@@ -91,17 +91,20 @@ const { runs, totalRunCount, firstRunPosition, previousCursor, nextCursor } = aw
 });
 ```
 
-`listRuns({ state, task?, limit?, cursor? })` returns `{ runs, totalRunCount, firstRunPosition?, previousCursor?, nextCursor? }`:
+`listRuns({ state?, task?, limit?, cursor? })` returns `{ runs, totalRunCount, firstRunPosition?, previousCursor?, nextCursor? }`:
 
+- `state` takes one state or a list of states; left out, the list holds every state. See [List several states](#list-several-states).
 - `limit` defaults to 50; it must be a whole number, 1 or more.
-- `task` keeps the runs of one task; the runs come typed by that task and by the state.
-- `totalRunCount` is how many runs the list holds: the runs in `state`, of `task` or of every task the instance lists.
+- `task` keeps the runs of one task; the runs come typed by that task and by the states listed.
+- `totalRunCount` is how many runs the list holds: the runs in the states listed, of `task` or of every task the instance lists.
 - `firstRunPosition` is the position of the page's first run in the list, counted from 1. It is absent only when the list is empty or the page lies past its end.
 - `nextCursor` is present exactly when a run follows the page; `previousCursor` exactly when a run comes before it. Pass either back as `cursor`, with the same `state` and `task`, for the page after or the page before. The direction is inside the cursor: there is no other option to set.
 - A cursor is an opaque string; any other cursor throws:
 
 ```text
 Invalid listRuns cursor: it pages through state "completed", not "failed"
+Invalid listRuns cursor: it pages through states "completed" and "failed", not "failed"
+Invalid listRuns cursor: it pages through every state, not "completed" and "failed"
 Invalid listRuns cursor: it pages through task "send-welcome-email", not task "create-default-workspace"
 Invalid listRuns cursor: it pages through every task, not task "send-welcome-email"
 Invalid listRuns cursor: it pages through task "send-welcome-email", not every task
@@ -111,7 +114,7 @@ Invalid listRuns cursor: pass back a nextCursor or previousCursor that listRuns 
 - A page may come back shorter than `limit`, even empty; only a missing `nextCursor` ends the walk.
 - `totalRunCount` and `firstRunPosition` count the list at the instant its page is read. A run written by a newer release, or one that leaves the state between that instant and the read of its fields, is counted but not listed: a page can hold fewer runs than its position and the total suggest, down to none, with `runs` empty while `firstRunPosition` is present. Two pages read at different instants can disagree on the total.
 - Each listed run has the fields of a `Run` but `payload`, `errors` and `steps`, and adds `lastErrorMessage`, the message of its last error, when it has one. Call `getRun` for the rest.
-- Order: `completed` and `failed` most recently finished first; `executing` most recently started first; `delayed`, `suspended` and `backingOff` latest due first; `pending` and `waitingForConcurrencySlot` most recently queued first. A run queues anew when it is dispatched, comes due after a delay, a sleep or a backoff, or is replayed; a handed-back, yielded or stalled run keeps its place.
+- Order, by order group: executing, most recently started first; queued, most recently queued first; waiting for a time, latest due first; ended, most recently finished first. A run queues anew when it is dispatched, comes due after a delay, a sleep or a backoff, or is replayed; a handed-back, yielded or stalled run keeps its place.
 - A page read through `previousCursor` comes in the same order as any other page.
 - A cursor is a place in that order, not a page number and not a run that must still exist: `nextCursor` lists the runs after the page's last run, `previousCursor` the runs before its first. It stays valid after that run leaves the list, and reading it again returns the same runs, with a higher `firstRunPosition` when runs arrived before them.
 - A run that leaves the state between two pages is skipped, and one that leaves and comes back further along the order can be listed again.
@@ -147,6 +150,41 @@ export default async function FailedRunsPage({ searchParams }: { searchParams: P
 With 20 failed runs, the second page reads "Runs 6 to 10 of 20", with both links; the first page has no Previous link, the fourth no Next link. If four runs fail while the second page is open, reading it again shows the same five runs as "Runs 10 to 14 of 24", Previous then returns runs 5 to 9, and Previous again the first page, runs 1 to 5: only four runs come before run 5, so that page fills up from the head of the list and shows run 5 again.
 
 Give each row a replay button backed by a server action that calls `replay(run.task, run.runId)`. See [Retries and failures](retries-and-failures.md#replay-a-failed-run).
+
+## List several states
+
+The eight states fall into four order groups. The runs of one group share one order; the runs of two groups never do.
+
+| Order group        | States                                 | Ordered by                                |
+| ------------------ | -------------------------------------- | ----------------------------------------- |
+| executing          | `executing`                            | When it started, most recent first        |
+| queued             | `pending`, `waitingForConcurrencySlot` | Its place in the queue, most recent first |
+| waiting for a time | `delayed`, `suspended`, `backingOff`   | When it is due, latest first              |
+| ended              | `completed`, `failed`                  | When it finished, most recent first       |
+
+States of one group merge into one order: completed and failed runs interleave by finish time.
+
+```ts
+const { runs } = await nextasking.listRuns({ state: ["completed", "failed"], limit: 20 });
+```
+
+States of several groups come as blocks, one per group, always in the sequence executing, queued, waiting for a time, ended, whatever the order of the list. Each block keeps its group's order, and a page fills across a block boundary: it is short only at the end of the list.
+
+```ts
+const { runs } = await nextasking.listRuns({ state: ["failed", "pending", "executing"] });
+```
+
+Leave `state` out to list every run of the instance, in four blocks:
+
+```ts
+const { runs, totalRunCount, firstRunPosition, nextCursor } = await nextasking.listRuns({ limit: 50 });
+```
+
+- Each run carries its `state`: draw a heading where the order group of `state` changes.
+- `totalRunCount`, `firstRunPosition`, `previousCursor` and `nextCursor` run through the whole list, blocks included: the position of a page's first run counts the runs of the blocks before it.
+- The runs come typed by the states listed: one state gives that state's run, a list the union, no `state` every state.
+- An empty list throws: list at least one state, or leave `state` out.
+- The same states in another order are the same list, and accept each other's cursors. A list of all eight states is not the same list as `state` left out: their cursors refuse each other.
 
 ## Count the backlog
 
@@ -228,12 +266,12 @@ export async function runNow(taskName: TaskName) {
 - A worker visits one task per second, in turn, so a cap is reached again at each visit rather than held at every instant: between two visits a task sits over its cap by the runs it ended meanwhile, about a minute's worth with 50 tasks.
 - No read is a snapshot: runs keep moving while a read runs, so two reads, or two counts of one `countRuns`, can disagree by the runs that moved in between.
 - One run is read at one instant: the record, payload, errors and steps `getRun` returns are of the same moment, and so are each listed run's state and `lastErrorMessage`. A run replayed during the read is read whole, as it was before the `replay` or after it, never `failed` without the errors it failed with. Two runs of one `getEvent` or one `listRuns` page can still be of different instants.
-- One `listRuns` page is placed in its list at one instant: which runs fall on the page, `totalRunCount` and `firstRunPosition` are read together, across every task listed. Each run's fields are read afterwards, at an instant of its own.
+- One `listRuns` page is placed in its list at one instant: which runs fall on the page, `totalRunCount` and `firstRunPosition` are read together, across every state and task listed. Each run's fields are read afterwards, at an instant of its own.
 
-| Read            | Cost                                                                                                                                                                                                                                               |
-| --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `getRun`        | One round trip: record, payload, errors and steps together                                                                                                                                                                                         |
-| `listRuns`      | Two round trips: one script reading a page and the counts of each task the instance lists (one task with `task`), all at one instant, then the page's runs with their last error, each at its own instant; one when no task has a run left to list |
-| `countRuns`     | One round trip: one count per task and state, whatever the queue holds                                                                                                                                                                             |
-| `getEvent`      | One round trip: every listener's run together                                                                                                                                                                                                      |
-| `listSchedules` | One round trip: one read per scheduled task the instance lists                                                                                                                                                                                     |
+| Read            | Cost                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `getRun`        | One round trip: record, payload, errors and steps together                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `listRuns`      | Two round trips, whatever the number of states: one script reading the counts of one index per state and task listed (the tasks the instance lists, or `task`), and at most `limit` entries from each index of an order group the page reaches, none from the others, all at one instant; then the page's runs with their last error, each at its own instant. One round trip when no task has a run left to list. Every state of 50 tasks is 400 indexes in that one script |
+| `countRuns`     | One round trip: one count per task and state, whatever the queue holds                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `getEvent`      | One round trip: every listener's run together                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| `listSchedules` | One round trip: one read per scheduled task the instance lists                                                                                                                                                                                                                                                                                                                                                                                                               |

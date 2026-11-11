@@ -13,6 +13,7 @@ import type { DispatchedRun, DispatchOptions, EmitOptions, EmittedEvent, Replaye
 import type { RedisCallIds } from "./errors.js";
 import type { EventId, RunId } from "./ids.js";
 import { createInstanceLifecycle } from "./instance-lifecycle.js";
+import type { OnlyKnownOptions } from "./known-options.js";
 import type { InstanceCalls } from "./instance-lifecycle.js";
 import { silentLogger } from "./logger.js";
 import type { Logger } from "./logger.js";
@@ -112,7 +113,9 @@ export type Nextasking<Task extends AnyTaskDefinition, Event extends EventDefini
   readonly replay: <Name extends Task["name"]>(name: Name, runId: RunId) => Promise<ReplayedRun>;
   readonly isTaskName: (name: string) => name is Task["name"];
   readonly isEventName: (name: string) => name is EmittableEventNameOf<Event>;
-  readonly startWorker: (options?: StartWorkerOptions) => Promise<void>;
+  readonly startWorker: <Given = StartWorkerOptions>(
+    options?: OnlyKnownOptions<Given, StartWorkerOptions>,
+  ) => Promise<void>;
   readonly getRun: <Name extends Task["name"]>(
     name: Name,
     runId: RunId,

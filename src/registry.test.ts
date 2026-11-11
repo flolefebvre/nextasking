@@ -10,8 +10,13 @@ import { InvalidPayloadError, UnknownEventError, UnknownTaskError } from "./erro
 import type { Duration } from "./durations.js";
 import type { Logger } from "./logger.js";
 import { createNextasking } from "./registry.js";
+import type { StartWorkerOptions } from "./worker-options.js";
 
 const UNREACHABLE_URL = "redis://nextasking.invalid:6379";
+
+interface StartWorkerOptionsWithATenant extends StartWorkerOptions {
+  tenant: string;
+}
 
 const sendWelcomeEmail = defineTask("send-welcome-email", {
   schema: z.object({ email: z.email(), address: z.object({ zipCode: z.string().length(5) }) }),
@@ -666,6 +671,66 @@ describe("startWorker", () => {
     expectTypeOf(nextasking.startWorker).toBeCallableWith({ onWorkerNotStarted: "exit" });
     // @ts-expect-error a shutdownTimeout is a Duration
     expectTypeOf(nextasking.startWorker).toBeCallableWith({ shutdownTimeout: 25_000 });
+  });
+
+  test("refuses an option it doesn't know at compile time, in a literal, through a variable and through a spread", () => {
+    const nextasking = createTestNextasking();
+    const unknownOptions = { concurency: 1 };
+    const optionsWithOneKnown = { concurency: 1, shutdownTimeout: "10s" as const };
+    const optionsWiderThanItsType: StartWorkerOptionsWithATenant = { concurrency: 1, tenant: "acme" };
+    const startWithUnknownOptions = async () => {
+      // @ts-expect-error concurency is not an option of startWorker
+      await nextasking.startWorker({ concurency: 1 });
+      // @ts-expect-error concurency is not an option of startWorker
+      await nextasking.startWorker(unknownOptions);
+      // @ts-expect-error concurency is not an option of startWorker
+      await nextasking.startWorker(optionsWithOneKnown);
+      // @ts-expect-error concurency is not an option of startWorker
+      await nextasking.startWorker({ shutdownTimeout: "10s", ...unknownOptions });
+      // @ts-expect-error tenant is not an option of startWorker
+      await nextasking.startWorker(optionsWiderThanItsType);
+      // @ts-expect-error a string is not the options
+      await nextasking.startWorker("10s");
+      // @ts-expect-error a list is not the options
+      await nextasking.startWorker(["10s"]);
+      // @ts-expect-error null is not the options
+      await nextasking.startWorker(null);
+      // @ts-expect-error concurrency is a number
+      await nextasking.startWorker({ concurrency: "5" });
+    };
+
+    expectTypeOf(startWithUnknownOptions).toBeFunction();
+  });
+
+  test("takes its options from a typed variable, a spread, a conditional or an option set to undefined, typed as today", () => {
+    const nextasking = createTestNextasking();
+    const typedOptions: StartWorkerOptions = { concurrency: 5 };
+    const knownOptions = { shutdownTimeout: "10s" } as const;
+    const isDraining = Math.random() < 0.5;
+    const partialOptions: Partial<StartWorkerOptions> = {};
+    const readonlyOptions: Readonly<StartWorkerOptions> = {};
+    const startWithKnownOptions = async () => {
+      await nextasking.startWorker(typedOptions);
+      await nextasking.startWorker({ concurrency: 1, ...knownOptions });
+      await nextasking.startWorker({ ...typedOptions, concurrency: 2 });
+      await nextasking.startWorker(isDraining ? { shutdownTimeout: "1m" } : {});
+      await nextasking.startWorker(partialOptions);
+      await nextasking.startWorker(readonlyOptions);
+      await nextasking.startWorker({ concurrency: undefined, onWorkerNotStarted: (error) => console.error(error) });
+      await nextasking.startWorker(undefined);
+    };
+    const start: (options?: StartWorkerOptions) => Promise<void> = nextasking.startWorker;
+
+    expectTypeOf(startWithKnownOptions).toBeFunction();
+    expectTypeOf(start).toBeFunction();
+    expectTypeOf<Parameters<typeof nextasking.startWorker>>().toEqualTypeOf<[options?: StartWorkerOptions]>();
+    expectTypeOf(nextasking.startWorker<StartWorkerOptions>).parameters.toEqualTypeOf<[options?: StartWorkerOptions]>();
+    expectTypeOf(nextasking.startWorker<{ [Member in keyof string]: unknown }>)
+      .parameter(0)
+      .toEqualTypeOf<StartWorkerOptions | undefined>();
+    expectTypeOf(nextasking.startWorker<string[]>)
+      .parameter(0)
+      .toEqualTypeOf<StartWorkerOptions | undefined>();
   });
 });
 

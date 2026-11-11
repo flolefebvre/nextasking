@@ -13,6 +13,7 @@ import type { DispatchedRun, DispatchOptions, EmitOptions, EmittedEvent, Replaye
 import type { RedisCallIds } from "./errors.js";
 import type { EventId, RunId } from "./ids.js";
 import { createInstanceLifecycle } from "./instance-lifecycle.js";
+import type { OnlyKnownOptions } from "./known-options.js";
 import type { InstanceCalls } from "./instance-lifecycle.js";
 import { silentLogger } from "./logger.js";
 import type { Logger } from "./logger.js";
@@ -78,47 +79,55 @@ export type ListedSchedule = ListedScheduleOf<ScheduledTaskNameOf<RegisteredTask
 type ScheduledTaskNameOf<Task> =
   Extract<Task, { schedule: object }> extends { name: infer Name extends string } ? Name : never;
 
-export type DispatchArguments<Task> = Task extends { schema: infer Schema extends PayloadSchema }
-  ? [payload: PayloadInput<Schema>, options?: DispatchOptions]
-  : [payload?: undefined, options?: DispatchOptions];
+export type DispatchArguments<Task, Given = DispatchOptions> = Task extends {
+  schema: infer Schema extends PayloadSchema;
+}
+  ? [payload: PayloadInput<Schema>, options?: OnlyKnownOptions<Given, DispatchOptions>]
+  : [payload?: undefined, options?: OnlyKnownOptions<Given, DispatchOptions>];
 
 export interface RegisteredDispatch {
-  <Name extends TaskName>(
+  <Name extends TaskName, Given = DispatchOptions>(
     name: Name,
-    ...dispatchArguments: DispatchArguments<Extract<RegisteredTask, { name: Name }>>
+    ...dispatchArguments: DispatchArguments<Extract<RegisteredTask, { name: Name }>, Given>
   ): Promise<DispatchedRun>;
 }
 
 export type EmittableEventNameOf<Event extends EventDefinition> = Exclude<Event["name"], BuiltInEventName>;
 
 export interface RegisteredEmit {
-  <Name extends Exclude<EventName, BuiltInEventName>>(
+  <Name extends Exclude<EventName, BuiltInEventName>, Given = EmitOptions>(
     name: Name,
     payload: PayloadInput<Extract<RegisteredEvent, { name: Name }>["schema"]>,
-    options?: EmitOptions,
+    options?: OnlyKnownOptions<Given, EmitOptions>,
   ): Promise<EmittedEvent>;
 }
 
 export type Nextasking<Task extends AnyTaskDefinition, Event extends EventDefinition = never> = {
-  readonly dispatch: <Name extends Task["name"]>(
+  readonly dispatch: <Name extends Task["name"], Given = DispatchOptions>(
     name: Name,
-    ...dispatchArguments: DispatchArguments<Extract<Task, { name: Name }>>
+    ...dispatchArguments: DispatchArguments<Extract<Task, { name: Name }>, Given>
   ) => Promise<DispatchedRun>;
-  readonly emit: <Name extends EmittableEventNameOf<Event>>(
+  readonly emit: <Name extends EmittableEventNameOf<Event>, Given = EmitOptions>(
     name: Name,
     payload: PayloadInput<Extract<Event, { name: Name }>["schema"]>,
-    options?: EmitOptions,
+    options?: OnlyKnownOptions<Given, EmitOptions>,
   ) => Promise<EmittedEvent>;
   readonly replay: <Name extends Task["name"]>(name: Name, runId: RunId) => Promise<ReplayedRun>;
   readonly isTaskName: (name: string) => name is Task["name"];
   readonly isEventName: (name: string) => name is EmittableEventNameOf<Event>;
-  readonly startWorker: (options?: StartWorkerOptions) => Promise<void>;
+  readonly startWorker: <Given = StartWorkerOptions>(
+    options?: OnlyKnownOptions<Given, StartWorkerOptions>,
+  ) => Promise<void>;
   readonly getRun: <Name extends Task["name"]>(
     name: Name,
     runId: RunId,
   ) => Promise<RunOfTask<Extract<Task, { name: Name }>> | undefined>;
-  readonly listRuns: <State extends RunState = RunState, Name extends Task["name"] = Task["name"]>(
-    options: ListRunsOptionsOf<Name, State>,
+  readonly listRuns: <
+    State extends RunState = RunState,
+    Name extends Task["name"] = Task["name"],
+    Given = ListRunsOptionsOf<Name, State>,
+  >(
+    options?: OnlyKnownOptions<Given, ListRunsOptionsOf<Name, State>>,
   ) => Promise<RunPageOf<Extract<ListedRunOfTask<Extract<Task, { name: Name }>>, { state: State }>>>;
   readonly countRuns: () => Promise<RunCountsOf<Task["name"]>>;
   readonly getEvent: <Name extends Event["name"]>(

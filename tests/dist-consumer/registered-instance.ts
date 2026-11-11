@@ -431,7 +431,19 @@ export const listEndedRuns = () => nextasking.listRuns({ state: ["completed", "f
 
 export const listEveryRun = () => nextasking.listRuns({});
 
+export const listEveryRunWithNoArgument = () => nextasking.listRuns();
+
+export const listEveryRunOfUndefined = () => nextasking.listRuns(undefined);
+
 type ListedRunOf<List extends () => Promise<RunPage>> = Awaited<ReturnType<List>>["runs"][number];
+
+export type NoArgumentGivesEveryStateOfEveryTask = Expect<
+  IsEqual<ListedRunOf<typeof listEveryRunWithNoArgument>, ListedRun>
+>;
+
+export type UndefinedGivesEveryStateOfEveryTask = Expect<
+  IsEqual<ListedRunOf<typeof listEveryRunOfUndefined>, ListedRun>
+>;
 
 export type OneListedStateKeepsItsOwnType = Expect<
   IsEqual<ListedRunOf<typeof listFailedRuns>, Extract<ListedRun, { state: "failed" }>>

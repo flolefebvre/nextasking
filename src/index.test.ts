@@ -4,6 +4,10 @@ import { z } from "zod";
 import * as root from "./index.js";
 import { createNextasking, defineEvent, defineListener, defineScheduledTask, defineTask } from "./index.js";
 import type {
+  DispatchedRun,
+  DispatchOptions,
+  EmitOptions,
+  EmittedEvent,
   EventName,
   EventWithRuns,
   FailureReason,
@@ -19,7 +23,12 @@ import type {
   TaskContext,
   TaskName,
 } from "./index.js";
+import type { ListRunsOptionsOf } from "./read-api.js";
 import type { EventNameIn, TaskNameIn } from "./registry.js";
+
+interface ListRunsOptionsWithASearch extends ListRunsOptions {
+  search: string;
+}
 
 const sendWelcomeEmail = defineTask("send-welcome-email", {
   schema: z.object({ email: z.email() }),
@@ -97,6 +106,48 @@ describe("the root export", () => {
     expectTypeOf(sendFromAHandler).returns.resolves.toBeVoid();
     expectTypeOf<TaskContext<unknown>["dispatch"]>().parameter(0).toEqualTypeOf<RegisteredTaskName>();
     expectTypeOf<TaskContext<unknown>["emit"]>().parameter(0).toEqualTypeOf<"user.signed-up">();
+  });
+
+  test("refuses an option a handler's dispatch or emit doesn't know, in a literal, through a variable and through a spread", () => {
+    const unknownDispatchOptions = { delayy: "5m" };
+    const unknownEmitOptions = { eventID: "signed-up-1" };
+    const typedDispatchOptions: DispatchOptions = { delay: "5m" };
+    const typedEmitOptions: EmitOptions = { eventId: "signed-up-1" };
+    const sendFromAHandler = async ({ dispatch, emit }: TaskContext<unknown>) => {
+      const dispatchAScheduledTask: (
+        name: "purge-expired-sessions",
+        payload?: undefined,
+        options?: DispatchOptions,
+      ) => Promise<DispatchedRun> = dispatch;
+      const emitASignUp: (
+        name: "user.signed-up",
+        payload: { userId: string },
+        options?: EmitOptions,
+      ) => Promise<EmittedEvent> = emit;
+      await dispatchAScheduledTask("purge-expired-sessions");
+      await emitASignUp("user.signed-up", { userId: "user-1" });
+      await dispatch("send-welcome-email", { email: "ada@example.com" }, typedDispatchOptions);
+      await dispatch("purge-expired-sessions", undefined, { ...typedDispatchOptions, runId: "purge-now" });
+      await emit("user.signed-up", { userId: "user-1" }, typedEmitOptions);
+      // @ts-expect-error delayy is not an option of dispatch
+      await dispatch("send-welcome-email", { email: "ada@example.com" }, { delayy: "5m" });
+      // @ts-expect-error delayy is not an option of dispatch
+      await dispatch("send-welcome-email", { email: "ada@example.com" }, unknownDispatchOptions);
+      // @ts-expect-error delayy is not an option of dispatch
+      await dispatch("purge-expired-sessions", undefined, { runId: "purge-now", ...unknownDispatchOptions });
+      // @ts-expect-error a string is not the options
+      await dispatch("purge-expired-sessions", undefined, "5m");
+      // @ts-expect-error eventID is not an option of emit
+      await emit("user.signed-up", { userId: "user-1" }, unknownEmitOptions);
+      // @ts-expect-error eventID is not an option of emit
+      await emit("user.signed-up", { userId: "user-1" }, { eventId: "signed-up-1", ...unknownEmitOptions });
+      // @ts-expect-error null is not the options
+      await emit("user.signed-up", { userId: "user-1" }, null);
+    };
+
+    expectTypeOf(sendFromAHandler).returns.resolves.toBeVoid();
+    expectTypeOf<Parameters<TaskContext<unknown>["emit"]>[2]>().toEqualTypeOf<EmitOptions | undefined>();
+    expectTypeOf<Parameters<TaskContext<unknown>["dispatch"]>[0]>().toEqualTypeOf<RegisteredTaskName>();
   });
 
   test("types a handler's dispatch of a scheduled task with no payload", () => {
@@ -203,6 +254,82 @@ describe("the root export", () => {
     expectTypeOf(listEndedRuns).returns.resolves.items.toHaveProperty("state").toEqualTypeOf<"completed" | "failed">();
     expectTypeOf(listEveryRun).returns.resolves.items.toEqualTypeOf<ListedRun>();
     expectTypeOf<ListRunsOptions["state"]>().toEqualTypeOf<RunState | readonly RunState[] | undefined>();
+  });
+
+  test("takes listRuns with its argument left out, typing its runs as every state of every task", () => {
+    const listEveryRun = async () => (await nextasking.listRuns()).runs;
+    const listEveryRunOfUndefined = async () => (await nextasking.listRuns(undefined)).runs;
+
+    expectTypeOf(listEveryRun).returns.resolves.items.toEqualTypeOf<ListedRun>();
+    expectTypeOf(listEveryRunOfUndefined).returns.resolves.items.toEqualTypeOf<ListedRun>();
+    expectTypeOf(nextasking.listRuns).returns.resolves.toEqualTypeOf<RunPage>();
+  });
+
+  test("refuses an option listRuns doesn't know at compile time, in a literal, through a variable and through a spread", () => {
+    const unknownOptions = { states: ["failed"], search: "abc" };
+    const optionsWithOneKnown = { limit: 20, states: ["failed"] };
+    const optionsWiderThanTheirType: ListRunsOptionsWithASearch = { state: "failed", search: "abc" };
+    const listWithUnknownOptions = async () => {
+      // @ts-expect-error a string is not the options
+      await nextasking.listRuns("pending");
+      // @ts-expect-error a list is not the options
+      await nextasking.listRuns(["pending"]);
+      // @ts-expect-error null is not the options
+      await nextasking.listRuns(null);
+      // @ts-expect-error states is not an option of listRuns
+      await nextasking.listRuns({ states: ["failed"] });
+      // @ts-expect-error states is not an option of listRuns
+      await nextasking.listRuns(unknownOptions);
+      // @ts-expect-error states is not an option of listRuns
+      await nextasking.listRuns(optionsWithOneKnown);
+      // @ts-expect-error states is not an option of listRuns
+      await nextasking.listRuns({ limit: 20, ...unknownOptions });
+      // @ts-expect-error search is not an option of listRuns
+      await nextasking.listRuns(optionsWiderThanTheirType);
+      // @ts-expect-error the state named by the type argument is not the state listed
+      await nextasking.listRuns<"pending">({ state: "executing" });
+      // @ts-expect-error a limit is a number
+      await nextasking.listRuns({ limit: "10" });
+    };
+
+    expectTypeOf(listWithUnknownOptions).toBeFunction();
+  });
+
+  test("takes listRuns' options from a typed variable, a spread, a conditional or a variable value, typing its runs as today", () => {
+    const typedOptions: ListRunsOptions = { limit: 5 };
+    const pickedOptions: Pick<ListRunsOptions, "limit" | "cursor"> = {};
+    const readonlyOptions: Readonly<ListRunsOptions> = {};
+    const states: RunState[] = ["failed"];
+    const isEnded = Math.random() < 0.5;
+    const cursor: string | undefined = undefined;
+    const listWithKnownOptions = async () => {
+      await nextasking.listRuns(typedOptions);
+      await nextasking.listRuns(pickedOptions);
+      await nextasking.listRuns(readonlyOptions);
+      await nextasking.listRuns({ state: states, limit: 10 });
+      await nextasking.listRuns({ state: "failed", cursor });
+      await nextasking.listRuns({ ...pickedOptions, state: isEnded ? ["completed", "failed"] : "pending" });
+      await nextasking.listRuns(isEnded ? { state: "failed" } : {});
+      await nextasking.listRuns({ state: "failed", limit: undefined });
+      await nextasking.listRuns<"failed", "send-welcome-email">({ state: "failed", task: "send-welcome-email" });
+    };
+    const listFailedRuns = async () => (await nextasking.listRuns({ ...typedOptions, state: "failed" })).runs;
+    const listOneTaskOfAVariable = async () => (await nextasking.listRuns({ task: "send-welcome-email", cursor })).runs;
+    const list: (options?: ListRunsOptions) => Promise<RunPage> = nextasking.listRuns;
+
+    expectTypeOf(listWithKnownOptions).toBeFunction();
+    expectTypeOf(list).toBeFunction();
+    expectTypeOf(listFailedRuns).returns.resolves.items.toEqualTypeOf<Extract<ListedRun, { state: "failed" }>>();
+    expectTypeOf(listOneTaskOfAVariable).returns.resolves.items.toEqualTypeOf<
+      Extract<ListedRun, { task: "send-welcome-email" }>
+    >();
+    expectTypeOf<Parameters<typeof nextasking.listRuns>>().toEqualTypeOf<[options?: ListRunsOptions]>();
+    expectTypeOf(nextasking.listRuns<"failed", "send-welcome-email">)
+      .parameter(0)
+      .toEqualTypeOf<ListRunsOptionsOf<"send-welcome-email", "failed"> | undefined>();
+    expectTypeOf(nextasking.listRuns<RunState, RegisteredTaskName, { [Member in keyof string]: unknown }>)
+      .parameter(0)
+      .toEqualTypeOf<ListRunsOptions | undefined>();
   });
 
   test("takes a time range of Dates and an order on listRuns", () => {

@@ -94,8 +94,9 @@ const { runs, totalRunCount, firstRunPosition, previousCursor, nextCursor } = aw
 });
 ```
 
-`listRuns({ state?, task?, from?, until?, order?, limit?, cursor? })` returns `{ runs, totalRunCount, firstRunPosition?, previousCursor?, nextCursor? }`:
+`listRuns({ state?, task?, from?, until?, order?, limit?, cursor? }?)` returns `{ runs, totalRunCount, firstRunPosition?, previousCursor?, nextCursor? }`:
 
+- The argument can be left out: `listRuns()` is `listRuns({})`, the first 50 runs of every state of every task.
 - `state` takes one state or a list of states; left out, the list holds every state. See [List several states](#list-several-states).
 - `from` and `until` keep the runs of a time range, by the time their state is ordered by. See [List the runs of a time range](#list-the-runs-of-a-time-range).
 - `order` is `"descending"`, the default, or `"ascending"`. See [Order](#order).
@@ -183,10 +184,10 @@ States of several groups come as blocks, one per group, always in the sequence e
 const { runs } = await nextasking.listRuns({ state: ["failed", "pending", "executing"] });
 ```
 
-Leave `state` out to list every run of the instance, in four blocks:
+Leave `state` out, or the whole argument, to list every run of the instance, in four blocks:
 
 ```ts
-const { runs, totalRunCount, firstRunPosition, nextCursor } = await nextasking.listRuns({ limit: 50 });
+const { runs, totalRunCount, firstRunPosition, nextCursor } = await nextasking.listRuns();
 ```
 
 - Each run carries its `state`: draw a heading where the order group of `state` changes.

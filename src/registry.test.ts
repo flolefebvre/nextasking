@@ -10,8 +10,18 @@ import { InvalidPayloadError, UnknownEventError, UnknownTaskError } from "./erro
 import type { Duration } from "./durations.js";
 import type { Logger } from "./logger.js";
 import { createNextasking } from "./registry.js";
+import type { DispatchedRun, DispatchOptions, EmitOptions, EmittedEvent } from "./enqueue-requests.js";
+import type { StartWorkerOptions } from "./worker-options.js";
 
 const UNREACHABLE_URL = "redis://nextasking.invalid:6379";
+
+interface DispatchOptionsWithATenant extends DispatchOptions {
+  tenant: string;
+}
+
+interface StartWorkerOptionsWithATenant extends StartWorkerOptions {
+  tenant: string;
+}
 
 const sendWelcomeEmail = defineTask("send-welcome-email", {
   schema: z.object({ email: z.email(), address: z.object({ zipCode: z.string().length(5) }) }),
@@ -484,6 +494,107 @@ describe("emit", () => {
   });
 });
 
+describe("the options of dispatch and emit", () => {
+  test("refuse an option they don't know at compile time, in a literal, through a variable and through a spread", () => {
+    const nextasking = createTestNextasking();
+    const unknownDispatchOptions = { delayy: "5m" };
+    const dispatchOptionsWithOneKnown = { runID: "welcome-ada", delay: "5m" as const };
+    const dispatchOptionsWiderThanTheirType: DispatchOptionsWithATenant = { delay: "5m", tenant: "acme" };
+    const unknownEmitOptions = { eventID: "paid-1" };
+    const emitOptionsWithOneKnown = { eventId: "paid-1", eventID: "paid-1" };
+    const invoice = { invoiceId: "inv-1", amountInCents: 100 };
+    const sendWithUnknownOptions = async () => {
+      // @ts-expect-error delayy is not an option of dispatch
+      await nextasking.dispatch("send-welcome-email", VALID_WELCOME_PAYLOAD, { delayy: "5m" });
+      // @ts-expect-error delayy is not an option of dispatch
+      await nextasking.dispatch("send-welcome-email", VALID_WELCOME_PAYLOAD, unknownDispatchOptions);
+      // @ts-expect-error runID is not an option of dispatch
+      await nextasking.dispatch("send-welcome-email", VALID_WELCOME_PAYLOAD, dispatchOptionsWithOneKnown);
+      // @ts-expect-error delayy is not an option of dispatch
+      await nextasking.dispatch("send-welcome-email", VALID_WELCOME_PAYLOAD, { runId: "r", ...unknownDispatchOptions });
+      // @ts-expect-error tenant is not an option of dispatch
+      await nextasking.dispatch("send-welcome-email", VALID_WELCOME_PAYLOAD, dispatchOptionsWiderThanTheirType);
+      // @ts-expect-error a string is not the options
+      await nextasking.dispatch("send-welcome-email", VALID_WELCOME_PAYLOAD, "5m");
+      // @ts-expect-error a list is not the options
+      await nextasking.dispatch("send-welcome-email", VALID_WELCOME_PAYLOAD, ["5m"]);
+      // @ts-expect-error null is not the options
+      await nextasking.dispatch("send-welcome-email", VALID_WELCOME_PAYLOAD, null);
+      // @ts-expect-error a delay is a Duration
+      await nextasking.dispatch("send-welcome-email", VALID_WELCOME_PAYLOAD, { delay: 300 });
+      // @ts-expect-error eventID is not an option of emit
+      await nextasking.emit("invoice.paid", invoice, { eventID: "paid-1" });
+      // @ts-expect-error eventID is not an option of emit
+      await nextasking.emit("invoice.paid", invoice, unknownEmitOptions);
+      // @ts-expect-error eventID is not an option of emit
+      await nextasking.emit("invoice.paid", invoice, emitOptionsWithOneKnown);
+      // @ts-expect-error eventID is not an option of emit
+      await nextasking.emit("invoice.paid", invoice, { eventId: "paid-1", ...unknownEmitOptions });
+      // @ts-expect-error a string is not the options
+      await nextasking.emit("invoice.paid", invoice, "paid-1");
+      // @ts-expect-error a list is not the options
+      await nextasking.emit("invoice.paid", invoice, ["paid-1"]);
+      // @ts-expect-error null is not the options
+      await nextasking.emit("invoice.paid", invoice, null);
+    };
+
+    expectTypeOf(sendWithUnknownOptions).toBeFunction();
+  });
+
+  test("take their options from a typed variable, a spread, a conditional or an option set to undefined, typed as today", () => {
+    const nextasking = createTestNextasking();
+    const typedDispatchOptions: DispatchOptions = { delay: "5m" };
+    const knownDispatchOptions = { delay: "5m" } as const;
+    const isDelayed = Math.random() < 0.5;
+    const partialDispatchOptions: Partial<DispatchOptions> = {};
+    const readonlyDispatchOptions: Readonly<DispatchOptions> = {};
+    const typedEmitOptions: EmitOptions = { eventId: "paid-1" };
+    const invoice = { invoiceId: "inv-1", amountInCents: 100 };
+    const sendWithKnownOptions = async () => {
+      await nextasking.dispatch("send-welcome-email", VALID_WELCOME_PAYLOAD, typedDispatchOptions);
+      await nextasking.dispatch("send-welcome-email", VALID_WELCOME_PAYLOAD, { runId: "r", ...knownDispatchOptions });
+      await nextasking.dispatch("send-welcome-email", VALID_WELCOME_PAYLOAD, { ...typedDispatchOptions, runId: "r" });
+      await nextasking.dispatch("send-welcome-email", VALID_WELCOME_PAYLOAD, isDelayed ? { delay: "5m" } : {});
+      await nextasking.dispatch("send-welcome-email", VALID_WELCOME_PAYLOAD, isDelayed ? { delay: "5m" } : undefined);
+      await nextasking.dispatch("send-welcome-email", VALID_WELCOME_PAYLOAD, partialDispatchOptions);
+      await nextasking.dispatch("send-welcome-email", VALID_WELCOME_PAYLOAD, readonlyDispatchOptions);
+      await nextasking.dispatch("send-welcome-email", VALID_WELCOME_PAYLOAD, { delay: undefined, runId: undefined });
+      await nextasking.dispatch("record-invoice-payment", invoice, { runId: "r" });
+      await nextasking.emit("invoice.paid", invoice, typedEmitOptions);
+      await nextasking.emit("invoice.paid", invoice, { ...typedEmitOptions });
+      await nextasking.emit("invoice.paid", invoice, isDelayed ? { eventId: "paid-1" } : {});
+      await nextasking.emit("invoice.paid", invoice, { eventId: undefined });
+    };
+    const dispatchWelcomeEmail: (
+      name: "send-welcome-email",
+      payload: typeof VALID_WELCOME_PAYLOAD,
+      options?: DispatchOptions,
+    ) => Promise<DispatchedRun> = nextasking.dispatch;
+    const emitInvoicePaid: (
+      name: "invoice.paid",
+      payload: typeof invoice,
+      options?: EmitOptions,
+    ) => Promise<EmittedEvent> = nextasking.emit;
+
+    expectTypeOf(sendWithKnownOptions).toBeFunction();
+    expectTypeOf(dispatchWelcomeEmail).toBeFunction();
+    expectTypeOf(emitInvoicePaid).toBeFunction();
+    expectTypeOf<Parameters<typeof nextasking.dispatch<"count-page-views">>>().toEqualTypeOf<
+      [name: "count-page-views", payload: { views: string }, options?: DispatchOptions]
+    >();
+    expectTypeOf<Parameters<typeof nextasking.emit<"invoice.paid">>>().toEqualTypeOf<
+      [name: "invoice.paid", payload: { invoiceId: string; amountInCents: number }, options?: EmitOptions]
+    >();
+    expectTypeOf<Parameters<typeof nextasking.emit>[2]>().toEqualTypeOf<EmitOptions | undefined>();
+    expectTypeOf(nextasking.dispatch<"count-page-views", { [Member in keyof string]: unknown }>)
+      .parameter(2)
+      .toEqualTypeOf<DispatchOptions | undefined>();
+    expectTypeOf(nextasking.emit<"invoice.paid", string[]>)
+      .parameter(2)
+      .toEqualTypeOf<EmitOptions | undefined>();
+  });
+});
+
 function createScheduledTaskNextasking(schedule: { cron: string; timezone?: string }) {
   const purgeExpiredSessions = defineScheduledTask("purge-expired-sessions", {
     schedule,
@@ -666,6 +777,66 @@ describe("startWorker", () => {
     expectTypeOf(nextasking.startWorker).toBeCallableWith({ onWorkerNotStarted: "exit" });
     // @ts-expect-error a shutdownTimeout is a Duration
     expectTypeOf(nextasking.startWorker).toBeCallableWith({ shutdownTimeout: 25_000 });
+  });
+
+  test("refuses an option it doesn't know at compile time, in a literal, through a variable and through a spread", () => {
+    const nextasking = createTestNextasking();
+    const unknownOptions = { concurency: 1 };
+    const optionsWithOneKnown = { concurency: 1, shutdownTimeout: "10s" as const };
+    const optionsWiderThanItsType: StartWorkerOptionsWithATenant = { concurrency: 1, tenant: "acme" };
+    const startWithUnknownOptions = async () => {
+      // @ts-expect-error concurency is not an option of startWorker
+      await nextasking.startWorker({ concurency: 1 });
+      // @ts-expect-error concurency is not an option of startWorker
+      await nextasking.startWorker(unknownOptions);
+      // @ts-expect-error concurency is not an option of startWorker
+      await nextasking.startWorker(optionsWithOneKnown);
+      // @ts-expect-error concurency is not an option of startWorker
+      await nextasking.startWorker({ shutdownTimeout: "10s", ...unknownOptions });
+      // @ts-expect-error tenant is not an option of startWorker
+      await nextasking.startWorker(optionsWiderThanItsType);
+      // @ts-expect-error a string is not the options
+      await nextasking.startWorker("10s");
+      // @ts-expect-error a list is not the options
+      await nextasking.startWorker(["10s"]);
+      // @ts-expect-error null is not the options
+      await nextasking.startWorker(null);
+      // @ts-expect-error concurrency is a number
+      await nextasking.startWorker({ concurrency: "5" });
+    };
+
+    expectTypeOf(startWithUnknownOptions).toBeFunction();
+  });
+
+  test("takes its options from a typed variable, a spread, a conditional or an option set to undefined, typed as today", () => {
+    const nextasking = createTestNextasking();
+    const typedOptions: StartWorkerOptions = { concurrency: 5 };
+    const knownOptions = { shutdownTimeout: "10s" } as const;
+    const isDraining = Math.random() < 0.5;
+    const partialOptions: Partial<StartWorkerOptions> = {};
+    const readonlyOptions: Readonly<StartWorkerOptions> = {};
+    const startWithKnownOptions = async () => {
+      await nextasking.startWorker(typedOptions);
+      await nextasking.startWorker({ concurrency: 1, ...knownOptions });
+      await nextasking.startWorker({ ...typedOptions, concurrency: 2 });
+      await nextasking.startWorker(isDraining ? { shutdownTimeout: "1m" } : {});
+      await nextasking.startWorker(partialOptions);
+      await nextasking.startWorker(readonlyOptions);
+      await nextasking.startWorker({ concurrency: undefined, onWorkerNotStarted: (error) => console.error(error) });
+      await nextasking.startWorker(undefined);
+    };
+    const start: (options?: StartWorkerOptions) => Promise<void> = nextasking.startWorker;
+
+    expectTypeOf(startWithKnownOptions).toBeFunction();
+    expectTypeOf(start).toBeFunction();
+    expectTypeOf<Parameters<typeof nextasking.startWorker>>().toEqualTypeOf<[options?: StartWorkerOptions]>();
+    expectTypeOf(nextasking.startWorker<StartWorkerOptions>).parameters.toEqualTypeOf<[options?: StartWorkerOptions]>();
+    expectTypeOf(nextasking.startWorker<{ [Member in keyof string]: unknown }>)
+      .parameter(0)
+      .toEqualTypeOf<StartWorkerOptions | undefined>();
+    expectTypeOf(nextasking.startWorker<string[]>)
+      .parameter(0)
+      .toEqualTypeOf<StartWorkerOptions | undefined>();
   });
 });
 

@@ -167,6 +167,7 @@ const RUN_RECORD_FIELDS = [
   "attempt",
   "dispatchedAt",
   "finishedAt",
+  "startedAt",
   "startsAt",
   "resumesAt",
   "nextAttemptAt",
@@ -237,6 +238,10 @@ function runStateFieldsOf(state: RunState, storedRecord: StoredRunRecord): RunSt
       return dueStateFieldsOf(state, storedRecord);
     case "failed":
       return isFailureReason(storedRecord.reason) ? { state, reason: storedRecord.reason } : undefined;
+    case "executing": {
+      const startedAt = storedDateOf(storedRecord.startedAt);
+      return startedAt === undefined ? undefined : { state, startedAt };
+    }
     default:
       return { state };
   }

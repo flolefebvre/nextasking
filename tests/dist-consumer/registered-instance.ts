@@ -398,6 +398,12 @@ export type RunStateIsTheEightStates = Expect<
   >
 >;
 
+export type AnExecutingRunShowsWhenItStarted = Expect<IsEqual<Extract<Run, { state: "executing" }>["startedAt"], Date>>;
+
+export type AnExecutingListedRunShowsWhenItStarted = Expect<
+  IsEqual<Extract<ListedRun, { state: "executing" }>["startedAt"], Date>
+>;
+
 export type RunErrorsAreRunErrors = Expect<IsEqual<Run["errors"], RunError[]>>;
 
 export type RunStepsAreSavedStepResults = Expect<IsEqual<Run["steps"], SavedStepResult[]>>;

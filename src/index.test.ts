@@ -130,6 +130,9 @@ describe("the root export", () => {
           return run.resumesAt;
         case "backingOff":
           return run.nextAttemptAt;
+        case "executing":
+          expectTypeOf(run.startedAt).toEqualTypeOf<Date>();
+          return run.startedAt;
         case "failed":
           expectTypeOf(run.reason).toEqualTypeOf<FailureReason>();
           return run.finishedAt;

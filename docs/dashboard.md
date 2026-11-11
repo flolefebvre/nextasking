@@ -59,6 +59,8 @@ switch (run.state) {
     return `asleep until ${run.resumesAt.toISOString()}`;
   case "backingOff":
     return `attempt ${run.attempt} at ${run.nextAttemptAt.toISOString()}`;
+  case "executing":
+    return `executing since ${run.startedAt.toISOString()}`;
   case "failed":
     return `failed: ${run.reason}`;
   default:
@@ -71,7 +73,7 @@ switch (run.state) {
 | `delayed`                   | Was dispatched with `delay` and waits for it to pass                                         | `startsAt`      |
 | `pending`                   | Is due and waits for a worker                                                                | none            |
 | `waitingForConcurrencySlot` | Waits for a slot of its `concurrency` limit; see [Concurrency](concurrency.md)               | none            |
-| `executing`                 | Has an attempt executing                                                                     | none            |
+| `executing`                 | Has an attempt executing; `startedAt` is when a worker last took it                          | `startedAt`     |
 | `suspended`                 | Sleeps in `step.sleep` or `step.sleepUntil`; see [Steps](steps.md)                           | `resumesAt`     |
 | `backingOff`                | Failed an attempt and waits out its backoff; `attempt` is the attempt `nextAttemptAt` starts | `nextAttemptAt` |
 | `completed`                 | Completed                                                                                    | none            |
@@ -79,6 +81,7 @@ switch (run.state) {
 
 - A run fetched by a worker that doesn't define its task, during a deploy overlap, shows `executing` for the 10 seconds that worker holds it, then `pending` again, with `attempt` unchanged. Until a worker that defines the task takes it, a dashboard can show it flip between the two. See [Worker](worker.md#overlapping-releases).
 - A run yielded at shutdown or come back from a stall shows `pending` too.
+- `startedAt` is when a worker last took the run, not when its first attempt started: a run that resumed from a sleep, retried, or was handed back, yielded or stalled and then taken again, shows the later time.
 - `RunState` is the type of `state`; `FailureReason` the type of `reason`.
 
 ## Page through failed runs

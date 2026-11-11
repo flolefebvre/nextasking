@@ -1,4 +1,4 @@
-import { expect } from "vitest";
+import { expect, vi } from "vitest";
 
 import { DAY_IN_MILLISECONDS, endRuns, runIdsOf, SEND_EMAIL_PRUNE_REQUEST } from "../tests/ended-runs.js";
 import { backdateEndedRun, engineTest, engineTestContextOf, fetchedLockedRunsOf } from "../tests/engine-test.js";
@@ -83,6 +83,16 @@ async function settleEach(
   }
 }
 
+async function waitForServerInstantAfter(
+  { redis }: EngineTestContext,
+  instantInMilliseconds: EpochMilliseconds,
+): Promise<void> {
+  await vi.waitUntil(async () => (await serverInstantInMillisecondsOf(redis)) > instantInMilliseconds, {
+    timeout: 1000,
+    interval: 1,
+  });
+}
+
 async function recordFieldOf(context: EngineTestContext, task: string, runId: RunId, field: string): Promise<Date> {
   return new Date(Number(await context.redis.hGet(context.keys.runRecord(task, runId), field)));
 }
@@ -108,6 +118,7 @@ engineTest(
       task: "send-email",
       runId: "run-1",
       state: "executing",
+      startedAt: new Date(secondAttempt!.startedAt),
       attempt: 2,
       dispatchedAt: new Date(secondAttempt!.dispatchedAt),
       payload: { runId: "run-1" },
@@ -220,6 +231,56 @@ engineTest("getRun reads each state with its own field and attempt", async (cont
     startsAt: await recordFieldOf(context, "send-email", "delayed-run", "startsAt"),
   });
   expect(runsByRunId["pending-run"]).not.toHaveProperty("finishedAt");
+});
+
+engineTest(
+  "an executing run shows when a worker last took it, from getRun and listRuns, the time its index orders it by",
+  async (context) => {
+    await enqueueRuns(context, [runOf("taken-again-run", "send-email")]);
+    const [firstLock] = await fetchedLockedRunsOf(context, 1);
+    await context.engine.settle({
+      ...firstLock!,
+      outcome: { kind: "handBack", error: ATTEMPT_ERROR, failureNotice: undefined },
+    });
+    await waitForServerInstantAfter(context, firstLock!.startedAt);
+    const [secondLock] = await fetchedLockedRunsOf(context, 1);
+    const reader = readerOf(context);
+
+    const run = await reader.getRun("send-email", "taken-again-run");
+    const { runs } = await reader.listRuns({ state: "executing" });
+
+    expect(secondLock!.startedAt).toBeGreaterThan(firstLock!.startedAt);
+    expect(run).toMatchObject({ state: "executing", startedAt: new Date(secondLock!.startedAt) });
+    expect(runs).toEqual([
+      expect.objectContaining({ runId: "taken-again-run", startedAt: new Date(secondLock!.startedAt) }),
+    ]);
+    expect(
+      await context.redis.zScore(
+        context.keys.runIndex("send-email", "executing"),
+        storedRunIdOf("send-email", "taken-again-run"),
+      ),
+    ).toBe(secondLock!.startedAt);
+  },
+);
+
+engineTest("an executing run whose record holds no readable startedAt is read as no run", async (context) => {
+  await enqueueRuns(context, [runOf("broken-run", "send-email")]);
+  await fetchedLockedRunsOf(context, 1);
+  const executingIndexKey = context.keys.runIndex("send-email", "executing");
+  const storedRunId = storedRunIdOf("send-email", "broken-run");
+  const score = await context.redis.zScore(executingIndexKey, storedRunId);
+  await context.redis.hDel(context.keys.runRecord("send-email", "broken-run"), "startedAt");
+  context.expectInvariantViolation(
+    "stored keys",
+    `run "${storedRunId}" has score ${String(score)} in ${executingIndexKey} but undefined in its record`,
+  );
+  const reader = readerOf(context);
+
+  const run = await reader.getRun("send-email", "broken-run");
+  const page = await reader.listRuns({ state: "executing" });
+
+  expect(run).toBeUndefined();
+  expect(page).toEqual({ runs: [], totalRunCount: 1, firstRunPosition: 1 });
 });
 
 engineTest("getRun reads a run stored without a payload with an undefined payload", async (context) => {

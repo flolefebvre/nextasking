@@ -130,6 +130,9 @@ describe("the root export", () => {
           return run.resumesAt;
         case "backingOff":
           return run.nextAttemptAt;
+        case "executing":
+          expectTypeOf(run.startedAt).toEqualTypeOf<Date>();
+          return run.startedAt;
         case "failed":
           expectTypeOf(run.reason).toEqualTypeOf<FailureReason>();
           return run.finishedAt;
@@ -200,6 +203,15 @@ describe("the root export", () => {
     expectTypeOf(listEndedRuns).returns.resolves.items.toHaveProperty("state").toEqualTypeOf<"completed" | "failed">();
     expectTypeOf(listEveryRun).returns.resolves.items.toEqualTypeOf<ListedRun>();
     expectTypeOf<ListRunsOptions["state"]>().toEqualTypeOf<RunState | readonly RunState[] | undefined>();
+  });
+
+  test("takes a time range of Dates and an order on listRuns", () => {
+    expectTypeOf<ListRunsOptions["from"]>().toEqualTypeOf<Date | undefined>();
+    expectTypeOf<ListRunsOptions["until"]>().toEqualTypeOf<Date | undefined>();
+    expectTypeOf<ListRunsOptions["order"]>().toEqualTypeOf<"descending" | "ascending" | undefined>();
+    const listRecentFailures = () => nextasking.listRuns({ state: "failed", from: new Date(0), until: new Date() });
+
+    expectTypeOf(listRecentFailures).returns.resolves.toHaveProperty("totalRunCount").toEqualTypeOf<number>();
   });
 
   test("types listRuns' runs by the tasks listed, one task keeping its own type", () => {

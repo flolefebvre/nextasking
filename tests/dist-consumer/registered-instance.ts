@@ -398,6 +398,12 @@ export type RunStateIsTheEightStates = Expect<
   >
 >;
 
+export type AnExecutingRunShowsWhenItStarted = Expect<IsEqual<Extract<Run, { state: "executing" }>["startedAt"], Date>>;
+
+export type AnExecutingListedRunShowsWhenItStarted = Expect<
+  IsEqual<Extract<ListedRun, { state: "executing" }>["startedAt"], Date>
+>;
+
 export type RunErrorsAreRunErrors = Expect<IsEqual<Run["errors"], RunError[]>>;
 
 export type RunStepsAreSavedStepResults = Expect<IsEqual<Run["steps"], SavedStepResult[]>>;
@@ -409,6 +415,15 @@ export const listRunsOptions: ListRunsOptions = { state: "pending", task: "send-
 export const listRunsOptionsOfSeveralStates: ListRunsOptions = { state: ["pending", "executing"] };
 
 export const listRunsOptionsOfEveryState: ListRunsOptions = { limit: 20 };
+
+export const listRunsOptionsOfATimeRange: ListRunsOptions = {
+  state: "failed",
+  from: new Date("2026-11-11T08:00:00.000Z"),
+  until: new Date("2026-11-11T10:00:00.000Z"),
+  order: "ascending",
+};
+
+export type ListRunsTakesTwoOrders = Expect<IsEqual<ListRunsOptions["order"], "descending" | "ascending" | undefined>>;
 
 export const listFailedRuns = () => nextasking.listRuns({ state: "failed" });
 

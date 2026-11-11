@@ -11,14 +11,21 @@ import type {
   IndexPageBoundary,
   IndexPlace,
   OrderGroupNumber,
+  ListOrder,
   PagingDirection,
 } from "./engine/index-page-script.js";
 import { listedRunReadCommandOf, readPartsOf, runReadCommandOf } from "./engine/run-read-scripts.js";
 import { UnknownEventError, UnknownTaskError } from "./errors.js";
 import { deriveFiringRunId, deriveListenerRunId } from "./ids.js";
 import type { EventId, RunId } from "./ids.js";
-import { decodeRunListCursor, encodeRunListCursor } from "./run-list-cursor.js";
-import type { ListedIndexes, RunListCursor } from "./run-list-cursor.js";
+import {
+  EVERY_TIME,
+  decodeRunListCursor,
+  encodeRunListCursor,
+  quotedListOf,
+  sentenceListOf,
+} from "./run-list-cursor.js";
+import type { RunListCursor, RunListRequest, TimeRange } from "./run-list-cursor.js";
 import { ORDER_GROUPS, RUN_STATES, isRunState, orderGroupOf } from "./run-states.js";
 import type { OrderGroup, RunState, RunStateFields } from "./run-states.js";
 import type { CronExpression, IanaTimeZone } from "./schedules.js";
@@ -60,6 +67,9 @@ export type ListedRunOfTask<Task extends AnyTaskDefinition> = Task extends AnyTa
 export type ListRunsOptionsOf<TaskName extends string, State extends RunState = RunState> = {
   state?: State | readonly State[];
   task?: TaskName | readonly TaskName[];
+  from?: Date;
+  until?: Date;
+  order?: ListOrder;
   limit?: number;
   cursor?: RunListCursor;
 };
@@ -128,6 +138,17 @@ export function listLimitOf(limit: unknown): number {
   return limit;
 }
 
+function listOrderOf(order: unknown): ListOrder {
+  if (order === undefined) {
+    return "descending";
+  }
+  if (order !== "descending" && order !== "ascending") {
+    const shownOrder = typeof order === "string" ? JSON.stringify(order) : String(order);
+    throw new Error(`Invalid listRuns order: ${shownOrder} is not "descending" or "ascending"`);
+  }
+  return order;
+}
+
 export function rejectUnknownTask(tasksByName: ReadonlyMap<string, AnyTaskDefinition>, taskName: string): void {
   if (!tasksByName.has(taskName)) {
     throw new UnknownTaskError(taskName, [...tasksByName.keys()]);
@@ -167,6 +188,7 @@ const RUN_RECORD_FIELDS = [
   "attempt",
   "dispatchedAt",
   "finishedAt",
+  "startedAt",
   "startsAt",
   "resumesAt",
   "nextAttemptAt",
@@ -237,6 +259,10 @@ function runStateFieldsOf(state: RunState, storedRecord: StoredRunRecord): RunSt
       return dueStateFieldsOf(state, storedRecord);
     case "failed":
       return isFailureReason(storedRecord.reason) ? { state, reason: storedRecord.reason } : undefined;
+    case "executing": {
+      const startedAt = storedDateOf(storedRecord.startedAt);
+      return startedAt === undefined ? undefined : { state, startedAt };
+    }
     default:
       return { state };
   }
@@ -355,23 +381,28 @@ function listedRunOf(
   return lastError === undefined ? undefined : ({ ...runSummary, lastErrorMessage: lastError.message } as AnyListedRun);
 }
 
-function compareInListOrder(left: IndexEntry, right: IndexEntry): number {
+function compareInGroupOrder(left: IndexEntry, right: IndexEntry): number {
   return (
-    left.orderGroupNumber - right.orderGroupNumber ||
-    right.indexPlace.score - left.indexPlace.score ||
-    compareInSortedSetMemberOrder(right.indexPlace.storedRunId, left.indexPlace.storedRunId)
+    left.indexPlace.score - right.indexPlace.score ||
+    compareInSortedSetMemberOrder(left.indexPlace.storedRunId, right.indexPlace.storedRunId)
   );
+}
+
+function compareInListOrderOf(order: ListOrder): (left: IndexEntry, right: IndexEntry) => number {
+  const orderSign = order === "ascending" ? 1 : -1;
+  return (left, right) =>
+    left.orderGroupNumber - right.orderGroupNumber || orderSign * compareInGroupOrder(left, right);
 }
 
 function orderGroupNumberOf(orderGroup: OrderGroup): OrderGroupNumber {
   return ORDER_GROUPS.findIndex(({ name }) => name === orderGroup) + 1;
 }
 
-function pageBoundaryOf(cursor: unknown, listedIndexes: ListedIndexes): IndexPageBoundary {
+function pageBoundaryOf(cursor: unknown, runListRequest: RunListRequest): IndexPageBoundary {
   if (cursor === undefined) {
     return { direction: "forward", place: undefined };
   }
-  const { direction, place } = decodeRunListCursor(cursor, listedIndexes);
+  const { direction, place } = decodeRunListCursor(cursor, runListRequest);
   return {
     direction,
     place:
@@ -415,19 +446,95 @@ function listedTasksOf(task: unknown, tasksByName: ReadonlyMap<string, AnyTaskDe
   return [...tasksByName.keys()].filter((taskName) => task.includes(taskName));
 }
 
+const TIME_FIELD_BY_TIMED_STATE: Readonly<Partial<Record<RunState, string>>> = {
+  executing: "startedAt",
+  delayed: "startsAt",
+  suspended: "resumesAt",
+  backingOff: "nextAttemptAt",
+  completed: "finishedAt",
+  failed: "finishedAt",
+};
+
+const RANGED_ORDER_GROUPS_SENTENCE =
+  "A range takes the states of one order group ordered by a time: executing, waiting for a time, or ended";
+
+function orderingOf(orderGroup: OrderGroup, states: readonly RunState[]): string {
+  const timeFields = [...new Set(states.flatMap((state) => TIME_FIELD_BY_TIMED_STATE[state] ?? []))];
+  switch (orderGroup) {
+    case "queued":
+      return "by their place in the queue, not by a time";
+    case "waitingForATime":
+      return `by when they are due, ${sentenceListOf(timeFields)}`;
+    default:
+      return `by ${sentenceListOf(timeFields)}`;
+  }
+}
+
+function timeBoundOf(bound: unknown, boundName: "from" | "until"): EpochMilliseconds | undefined {
+  if (bound === undefined) {
+    return undefined;
+  }
+  if (!(bound instanceof Date)) {
+    const shownBound = typeof bound === "string" ? JSON.stringify(bound) : String(bound);
+    throw new Error(`Invalid listRuns ${boundName}: pass a Date, got ${shownBound}`);
+  }
+  if (Number.isNaN(bound.getTime())) {
+    throw new Error(`Invalid listRuns ${boundName}: pass a valid Date, got an Invalid Date`);
+  }
+  return bound.getTime();
+}
+
+function rejectRangeOverStatesWithoutOneTime(listedStates: readonly RunState[] | null): void {
+  const listedOrderGroups = ORDER_GROUPS.flatMap(({ name, states }) => {
+    const listedStatesOfGroup = states.filter((state) => listedStates === null || listedStates.includes(state));
+    return listedStatesOfGroup.length === 0 ? [] : [{ name, states: listedStatesOfGroup }];
+  });
+  if (listedOrderGroups.length > 1) {
+    const listedSubject =
+      listedStates === null
+        ? "state left out lists every state, and its order groups are"
+        : "the states listed are of several order groups,";
+    const shownOrderings = listedOrderGroups.map(
+      ({ name, states }) => `${quotedListOf(states)} ${orderingOf(name, states)}`,
+    );
+    throw new Error(
+      `Invalid listRuns range: ${listedSubject} each ordered its own way: ${shownOrderings.join("; ")}. ${RANGED_ORDER_GROUPS_SENTENCE}`,
+    );
+  }
+  const { name, states } = listedOrderGroups[0]!;
+  if (name === "queued") {
+    throw new Error(
+      `Invalid listRuns range: ${quotedListOf(states)} runs are ordered ${orderingOf(name, states)}. ${RANGED_ORDER_GROUPS_SENTENCE}`,
+    );
+  }
+}
+
+function listedTimeRangeOf(from: unknown, until: unknown, listedStates: readonly RunState[] | null): TimeRange {
+  const timeRange = { from: timeBoundOf(from, "from"), until: timeBoundOf(until, "until") };
+  if (timeRange.from === undefined && timeRange.until === undefined) {
+    return EVERY_TIME;
+  }
+  if (timeRange.from !== undefined && timeRange.until !== undefined && timeRange.from > timeRange.until) {
+    throw new Error(
+      `Invalid listRuns range: from ${new Date(timeRange.from).toISOString()} is after until ${new Date(timeRange.until).toISOString()}; pass a from at or before until`,
+    );
+  }
+  rejectRangeOverStatesWithoutOneTime(listedStates);
+  return timeRange;
+}
+
 type IndexPageOfEntries = Omit<IndexPage, "places"> & { indexEntries: IndexEntry[] };
 
 type TakenEntries = { takenEntries: IndexEntry[]; entryCountBeforePage: number };
-
-function mergedInListOrder(indexEntries: readonly IndexEntry[]): IndexEntry[] {
-  return [...indexEntries].sort(compareInListOrder);
-}
 
 function takenEntriesOf(
   indexPages: readonly IndexPageOfEntries[],
   direction: PagingDirection,
   limit: number,
+  order: ListOrder,
 ): TakenEntries {
+  const mergedInListOrder = (indexEntries: readonly IndexEntry[]) =>
+    [...indexEntries].sort(compareInListOrderOf(order));
   const entryCountBeforeBoundary = sumOf(indexPages.map((indexPage) => indexPage.entryCountBeforeBoundary));
   const everyIndexEntry = indexPages.flatMap(({ indexEntries }) => indexEntries);
   if (direction === "forward") {
@@ -506,12 +613,21 @@ export function createReadApi(config: ReadApiConfig): ReadApi {
     listedRunIndexes: readonly ListedRunIndex[],
     limit: number,
     boundary: IndexPageBoundary,
+    { timeRange, order }: RunListRequest,
   ): Promise<IndexPageOfEntries[]> => {
     if (listedRunIndexes.length === 0) {
       return [];
     }
     const indexPages = indexPagesOf(
-      await client.send(indexPagesCommandOf({ indexesInList: listedRunIndexes, limit, boundary })),
+      await client.send(
+        indexPagesCommandOf({
+          indexesInList: listedRunIndexes,
+          limit,
+          boundary,
+          order,
+          scoreRange: { lowestScore: timeRange.from, highestScore: timeRange.until },
+        }),
+      ),
       listedRunIndexes.length,
     );
     return indexPages.map(({ places, ...entryCounts }, indexNumber) => ({
@@ -547,16 +663,23 @@ export function createReadApi(config: ReadApiConfig): ReadApi {
       const listedStates = listedStatesOf(options.state);
       const listedTasks = listedTasksOf(options.task, tasksByName);
       const limit = listLimitOf(options.limit);
-      const listedIndexes = { listedStates, listedTasks };
-      const boundary = pageBoundaryOf(options.cursor, listedIndexes);
+      const timeRange = listedTimeRangeOf(options.from, options.until, listedStates);
+      const order = listOrderOf(options.order);
+      const runListRequest = { listedStates, listedTasks, timeRange, order };
+      const boundary = pageBoundaryOf(options.cursor, runListRequest);
       const taskNames = listedTasks ?? [...tasksByName.keys()];
-      const indexPages = await readIndexPages(listedRunIndexesOf(listedStates, taskNames), limit, boundary);
+      const indexPages = await readIndexPages(
+        listedRunIndexesOf(listedStates, taskNames),
+        limit,
+        boundary,
+        runListRequest,
+      );
       const totalRunCount = sumOf(indexPages.map(({ entryCount }) => entryCount));
-      const { takenEntries, entryCountBeforePage } = takenEntriesOf(indexPages, boundary.direction, limit);
+      const { takenEntries, entryCountBeforePage } = takenEntriesOf(indexPages, boundary.direction, limit, order);
       const runs = await readListedRuns(takenEntries);
       const cursorOf = (direction: PagingDirection, entry: IndexEntry | undefined) =>
         encodeRunListCursor({
-          ...listedIndexes,
+          ...runListRequest,
           direction,
           place:
             entry === undefined

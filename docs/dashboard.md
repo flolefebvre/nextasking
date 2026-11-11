@@ -59,6 +59,8 @@ switch (run.state) {
     return `asleep until ${run.resumesAt.toISOString()}`;
   case "backingOff":
     return `attempt ${run.attempt} at ${run.nextAttemptAt.toISOString()}`;
+  case "executing":
+    return `executing since ${run.startedAt.toISOString()}`;
   case "failed":
     return `failed: ${run.reason}`;
   default:
@@ -71,7 +73,7 @@ switch (run.state) {
 | `delayed`                   | Was dispatched with `delay` and waits for it to pass                                         | `startsAt`      |
 | `pending`                   | Is due and waits for a worker                                                                | none            |
 | `waitingForConcurrencySlot` | Waits for a slot of its `concurrency` limit; see [Concurrency](concurrency.md)               | none            |
-| `executing`                 | Has an attempt executing                                                                     | none            |
+| `executing`                 | Has an attempt executing; `startedAt` is when a worker last took it                          | `startedAt`     |
 | `suspended`                 | Sleeps in `step.sleep` or `step.sleepUntil`; see [Steps](steps.md)                           | `resumesAt`     |
 | `backingOff`                | Failed an attempt and waits out its backoff; `attempt` is the attempt `nextAttemptAt` starts | `nextAttemptAt` |
 | `completed`                 | Completed                                                                                    | none            |
@@ -79,6 +81,7 @@ switch (run.state) {
 
 - A run fetched by a worker that doesn't define its task, during a deploy overlap, shows `executing` for the 10 seconds that worker holds it, then `pending` again, with `attempt` unchanged. Until a worker that defines the task takes it, a dashboard can show it flip between the two. See [Worker](worker.md#overlapping-releases).
 - A run yielded at shutdown or come back from a stall shows `pending` too.
+- `startedAt` is when a worker last took the run, not when its first attempt started: a run that resumed from a sleep, retried, or was handed back, yielded or stalled and then taken again, shows the later time.
 - `RunState` is the type of `state`; `FailureReason` the type of `reason`.
 
 ## Page through failed runs
@@ -91,14 +94,16 @@ const { runs, totalRunCount, firstRunPosition, previousCursor, nextCursor } = aw
 });
 ```
 
-`listRuns({ state?, task?, limit?, cursor? })` returns `{ runs, totalRunCount, firstRunPosition?, previousCursor?, nextCursor? }`:
+`listRuns({ state?, task?, from?, until?, order?, limit?, cursor? })` returns `{ runs, totalRunCount, firstRunPosition?, previousCursor?, nextCursor? }`:
 
 - `state` takes one state or a list of states; left out, the list holds every state. See [List several states](#list-several-states).
+- `from` and `until` keep the runs of a time range, by the time their state is ordered by. See [List the runs of a time range](#list-the-runs-of-a-time-range).
+- `order` is `"descending"`, the default, or `"ascending"`. See [Order](#order).
 - `limit` defaults to 50; it must be a whole number, 1 or more.
 - `task` takes one task name or a list of names, and keeps their runs; left out, the list holds every task the instance lists. The runs come typed by the tasks and the states listed. See [List several tasks](#list-several-tasks).
 - `totalRunCount` is how many runs the list holds: the runs in the states listed, of the tasks listed.
 - `firstRunPosition` is the position of the page's first run in the list, counted from 1. It is absent only when the list is empty or the page lies past its end.
-- `nextCursor` is present exactly when a run follows the page; `previousCursor` exactly when a run comes before it. Pass either back as `cursor`, with the same `state` and `task`, for the page after or the page before. The direction is inside the cursor: there is no other option to set.
+- `nextCursor` is present exactly when a run follows the page; `previousCursor` exactly when a run comes before it. Pass either back as `cursor`, with the same `state`, `task`, `from`, `until` and `order`, for the page after or the page before. The direction is inside the cursor: there is no other option to set.
 - A cursor is an opaque string; any other cursor throws:
 
 ```text
@@ -109,13 +114,15 @@ Invalid listRuns cursor: it pages through task "send-welcome-email", not task "c
 Invalid listRuns cursor: it pages through every task, not task "send-welcome-email"
 Invalid listRuns cursor: it pages through task "send-welcome-email", not every task
 Invalid listRuns cursor: it pages through tasks "send-welcome-email" and "create-default-workspace", not task "send-welcome-email"
+Invalid listRuns cursor: it pages through runs from 2026-11-11T08:00:00.000Z until 2026-11-11T10:00:00.000Z, not runs from 2026-11-11T08:05:00.000Z until 2026-11-11T10:05:00.000Z
+Invalid listRuns cursor: it pages through runs in ascending order, not in descending order
 Invalid listRuns cursor: pass back a nextCursor or previousCursor that listRuns returned
 ```
 
 - A page may come back shorter than `limit`, even empty; only a missing `nextCursor` ends the walk.
 - `totalRunCount` and `firstRunPosition` count the list at the instant its page is read. A run written by a newer release, or one that leaves the state between that instant and the read of its fields, is counted but not listed: a page can hold fewer runs than its position and the total suggest, down to none, with `runs` empty while `firstRunPosition` is present. Two pages read at different instants can disagree on the total.
 - Each listed run has the fields of a `Run` but `payload`, `errors` and `steps`, and adds `lastErrorMessage`, the message of its last error, when it has one. Call `getRun` for the rest.
-- Order, by order group: executing, most recently started first; queued, most recently queued first; waiting for a time, latest due first; ended, most recently finished first. A run queues anew when it is dispatched, comes due after a delay, a sleep or a backoff, or is replayed; a handed-back, yielded or stalled run keeps its place.
+- The order is told by order group, in [Order](#order).
 - A page read through `previousCursor` comes in the same order as any other page.
 - A cursor is a place in that order, not a page number and not a run that must still exist: `nextCursor` lists the runs after the page's last run, `previousCursor` the runs before its first. It stays valid after that run leaves the list, and reading it again returns the same runs, with a higher `firstRunPosition` when runs arrived before them.
 - A run that leaves the states listed between two pages is skipped, and one that leaves and comes back further along the list can be listed again.
@@ -157,12 +164,12 @@ Give each row a replay button backed by a server action that calls `replay(run.t
 
 The eight states fall into four order groups. The runs of one group share one order; the runs of two groups never do.
 
-| Order group        | States                                 | Ordered by                                |
-| ------------------ | -------------------------------------- | ----------------------------------------- |
-| executing          | `executing`                            | When it started, most recent first        |
-| queued             | `pending`, `waitingForConcurrencySlot` | Its place in the queue, most recent first |
-| waiting for a time | `delayed`, `suspended`, `backingOff`   | When it is due, latest first              |
-| ended              | `completed`, `failed`                  | When it finished, most recent first       |
+| Order group        | States                                 | Ordered by             |
+| ------------------ | -------------------------------------- | ---------------------- |
+| executing          | `executing`                            | When it started        |
+| queued             | `pending`, `waitingForConcurrencySlot` | Its place in the queue |
+| waiting for a time | `delayed`, `suspended`, `backingOff`   | When it is due         |
+| ended              | `completed`, `failed`                  | When it finished       |
 
 States of one group merge into one order: completed and failed runs interleave by finish time.
 
@@ -170,7 +177,7 @@ States of one group merge into one order: completed and failed runs interleave b
 const { runs } = await nextasking.listRuns({ state: ["completed", "failed"], limit: 20 });
 ```
 
-States of several groups come as blocks, one per group, always in the sequence executing, queued, waiting for a time, ended, whatever order the call lists the states in. Each block keeps its group's order, and a page fills across a block boundary: it is short only at the end of the list.
+States of several groups come as blocks, one per group, always in the sequence executing, queued, waiting for a time, ended, whatever order the call lists the states in and in both [orders](#order). Each block keeps its group's order, and a page fills across a block boundary: it is short only at the end of the list.
 
 ```ts
 const { runs } = await nextasking.listRuns({ state: ["failed", "pending", "executing"] });
@@ -187,6 +194,29 @@ const { runs, totalRunCount, firstRunPosition, nextCursor } = await nextasking.l
 - The runs come typed by the states listed: one state gives that state's run, a list the union, no `state` every state.
 - An empty list throws: list at least one state, or leave `state` out.
 - The same states in another order are the same list, and accept each other's cursors. A list of all eight states is not the same list as `state` left out: their cursors refuse each other.
+
+## Order
+
+`order` reverses each order group; it never reorders the blocks.
+
+| Order group        | `"descending"`, the default  | `"ascending"`         |
+| ------------------ | ---------------------------- | --------------------- |
+| executing          | Most recently started first  | Longest running first |
+| queued             | Most recently queued first   | Next to run first     |
+| waiting for a time | Latest due first             | Soonest due first     |
+| ended              | Most recently finished first | Oldest first          |
+
+```ts
+const { runs } = await nextasking.listRuns({ state: "pending", order: "ascending", limit: 20 });
+```
+
+- An ascending list is exactly the descending list read from its end, runs of equal time included.
+- With several order groups listed, the blocks keep the sequence executing, queued, waiting for a time, ended, in both orders; each block is reversed inside.
+- `totalRunCount`, `firstRunPosition` and both cursors work the same in both orders. A cursor carries its order, and is refused with the other one.
+- To reach the oldest runs, list in ascending order: its first page is the end of the descending list. No option opens a last page.
+- The oldest ended runs are the ones retention removes next: a run on the first ascending page of `completed` or `failed` can be gone by the time `getRun` reads it.
+- A run queues anew when it is dispatched, comes due after a delay, a sleep or a backoff, or is replayed; a handed-back, yielded or stalled run keeps its place in the queue.
+- `order` takes a time range too: `{ state: "failed", from, until, order: "ascending" }` lists the oldest failures of the range first.
 
 ## List several tasks
 
@@ -207,6 +237,94 @@ const { runs, nextCursor } = await nextasking.listRuns({
 Invalid listRuns cursor: it pages through tasks "send-welcome-email" and "create-default-workspace", not every task
 Invalid listRuns cursor: it pages through every task, not tasks "send-welcome-email" and "create-default-workspace"
 ```
+
+## List the runs of a time range
+
+`from` and `until` keep the runs whose time falls between them, both included. Each takes a `Date` and works alone. The time is the one the order group of the listed states is ordered by:
+
+| Order group        | States                               | `from` and `until` apply to                              |
+| ------------------ | ------------------------------------ | -------------------------------------------------------- |
+| executing          | `executing`                          | `startedAt`                                              |
+| waiting for a time | `delayed`, `suspended`, `backingOff` | When it is due: `startsAt`, `resumesAt`, `nextAttemptAt` |
+| ended              | `completed`, `failed`                | `finishedAt`                                             |
+
+Runs that failed in the last two hours:
+
+```ts
+const now = Date.now();
+const { runs, totalRunCount } = await nextasking.listRuns({
+  state: "failed",
+  from: new Date(now - 2 * 60 * 60 * 1000),
+  until: new Date(now),
+});
+```
+
+Runs executing for more than ten minutes, their attempt taken ten minutes ago or earlier:
+
+```ts
+const { runs } = await nextasking.listRuns({
+  state: "executing",
+  until: new Date(Date.now() - 10 * 60 * 1000),
+});
+```
+
+Runs due in the next thirty minutes:
+
+```ts
+const now = Date.now();
+const { runs } = await nextasking.listRuns({
+  state: ["delayed", "suspended", "backingOff"],
+  from: new Date(now),
+  until: new Date(now + 30 * 60 * 1000),
+});
+```
+
+- `totalRunCount`, `firstRunPosition` and both cursors count the runs inside the time range only, and paging in either direction stays inside it.
+- A cursor carries its `from` and `until`, and is refused with any other bounds. Compute the bounds once, on the first page, and pass the same bounds with every cursor: keep them beside the cursor, in the URL for instance. A page that computes `from` again from the current time is refused.
+
+```ts
+// src/app/admin/recent-failures/page.tsx
+export default async function RecentFailuresPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ from?: string; until?: string; cursor?: string }>;
+}) {
+  await requireAdmin();
+  const params = await searchParams;
+  const until = params.until ? new Date(Number(params.until)) : new Date();
+  const from = params.from ? new Date(Number(params.from)) : new Date(until.getTime() - 2 * 60 * 60 * 1000);
+  const { runs, previousCursor, nextCursor } = await nextasking.listRuns({
+    state: "failed",
+    from,
+    until,
+    limit: 20,
+    ...(params.cursor ? { cursor: params.cursor } : {}),
+  });
+  const pageLinkOf = (cursor: string) => `?from=${from.getTime()}&until=${until.getTime()}&cursor=${cursor}`;
+  return (
+    <>
+      <FailedRunsTable runs={runs} />
+      {previousCursor && <Link href={pageLinkOf(previousCursor)}>Previous</Link>}
+      {nextCursor && <Link href={pageLinkOf(nextCursor)}>Next</Link>}
+    </>
+  );
+}
+```
+
+- The bounds are compared with times the server wrote from its own clock: the app's clock and the server's can differ by their skew.
+- A run that yielded, retried, resumed, or was handed back and taken again has the `startedAt` of its latest take, and is filtered on it.
+- The call costs the same two round trips as without a time range.
+- A time range is refused, before any round trip, with a message that says why:
+
+```text
+Invalid listRuns range: the states listed are of several order groups, each ordered its own way: "executing" by startedAt; "failed" by finishedAt. A range takes the states of one order group ordered by a time: executing, waiting for a time, or ended
+Invalid listRuns range: "pending" runs are ordered by their place in the queue, not by a time. A range takes the states of one order group ordered by a time: executing, waiting for a time, or ended
+Invalid listRuns range: from 2026-11-11T10:00:00.000Z is after until 2026-11-11T08:00:00.000Z; pass a from at or before until
+Invalid listRuns from: pass a Date, got "2026-11-11T08:00:00.000Z"
+Invalid listRuns until: pass a valid Date, got an Invalid Date
+```
+
+- A time range takes the states of one order group ordered by a time: neither `state` left out, nor `pending` or `waitingForConcurrencySlot`, takes one. Queued runs are ordered by their place in the queue, and a run holds no time at which it became pending.
 
 ## Count the backlog
 

@@ -4,7 +4,7 @@ export type RunStateFields =
   | { state: "delayed"; startsAt: Date }
   | { state: "pending" }
   | { state: "waitingForConcurrencySlot" }
-  | { state: "executing" }
+  | { state: "executing"; startedAt: Date }
   | { state: "suspended"; resumesAt: Date }
   | { state: "backingOff"; nextAttemptAt: Date }
   | { state: "completed" }

@@ -1,8 +1,10 @@
 import { describe, expect, test } from "vitest";
 
-import { decodeRunListCursor, encodeRunListCursor } from "./run-list-cursor.js";
-import type { ListedIndexes, RunListCursorContent } from "./run-list-cursor.js";
+import { EVERY_TIME, decodeRunListCursor, encodeRunListCursor } from "./run-list-cursor.js";
+import type { RunListCursorContent, RunListRequest, TimeRange } from "./run-list-cursor.js";
 import { cursorOfFields } from "./run-list-cursor.js";
+import type { ListOrder } from "./engine/index-page-script.js";
+import type { RunState } from "./run-states.js";
 
 const FAILED_RUN_PLACE = {
   orderGroup: "ended",
@@ -11,13 +13,24 @@ const FAILED_RUN_PLACE = {
   runId: "run-42",
 } as const;
 
-const FAILED_OF_EVERY_TASK: ListedIndexes = { listedStates: ["failed"], listedTasks: null };
+function requestOf(
+  listedStates: readonly RunState[] | null,
+  listedTasks: readonly string[] | null,
+  timeRange: TimeRange = EVERY_TIME,
+  order: ListOrder = "descending",
+): RunListRequest {
+  return { listedStates, listedTasks, timeRange, order };
+}
+
+const FAILED_OF_EVERY_TASK = requestOf(["failed"], null);
 
 const FORWARD_FROM_A_FAILED_RUN: RunListCursorContent = {
   ...FAILED_OF_EVERY_TASK,
   direction: "forward",
   place: FAILED_RUN_PLACE,
 };
+
+const TWO_HOURS_TO_THE_FAILED_RUN: TimeRange = { from: 1_730_992_800_000, until: 1_731_000_000_000 };
 
 const INVALID_CURSOR_MESSAGE =
   "Invalid listRuns cursor: pass back a nextCursor or previousCursor that listRuns returned";
@@ -40,20 +53,21 @@ describe("the listRuns cursor on the indexes", () => {
       ["ended", 1_731_000_000_000, "send-email", "run-42"],
       ["failed", "completed"],
       ["send-email", "build-report"],
+      null,
+      null,
+      "descending",
     ]);
 
-    expect(
-      decodeRunListCursor(cursor, {
-        listedStates: ["completed", "failed"],
-        listedTasks: ["build-report", "send-email"],
-      }),
-    ).toEqual({ direction: "forward", place: FAILED_RUN_PLACE });
+    expect(decodeRunListCursor(cursor, requestOf(["completed", "failed"], ["build-report", "send-email"]))).toEqual({
+      direction: "forward",
+      place: FAILED_RUN_PLACE,
+    });
   });
 
   test("decodes back the boundary of one task", () => {
     const cursor = encodeRunListCursor({ ...FORWARD_FROM_A_FAILED_RUN, listedTasks: ["send-email"] });
 
-    expect(decodeRunListCursor(cursor, { listedStates: ["failed"], listedTasks: ["send-email"] })).toEqual({
+    expect(decodeRunListCursor(cursor, requestOf(["failed"], ["send-email"]))).toEqual({
       direction: "forward",
       place: FAILED_RUN_PLACE,
     });
@@ -61,29 +75,92 @@ describe("the listRuns cursor on the indexes", () => {
 
   test("decodes back the boundary of every state, from a place in any order group", () => {
     const place = { orderGroup: "queued", score: 48_213, task: "send-email", runId: "run-42" } as const;
-    const cursor = encodeRunListCursor({ listedStates: null, listedTasks: null, direction: "backward", place });
+    const cursor = encodeRunListCursor({ ...requestOf(null, null), direction: "backward", place });
 
-    expect(decodeRunListCursor(cursor, { listedStates: null, listedTasks: null })).toEqual({
-      direction: "backward",
-      place,
-    });
+    expect(decodeRunListCursor(cursor, requestOf(null, null))).toEqual({ direction: "backward", place });
   });
 
-  test("is the format version 3, its direction and place in its order group, then its listed states and tasks", () => {
-    const cursor = encodeRunListCursor({ ...FORWARD_FROM_A_FAILED_RUN, direction: "backward" });
+  test.each([
+    ["both bounds", TWO_HOURS_TO_THE_FAILED_RUN],
+    ["a start alone", { from: 1_731_000_000_000, until: undefined }],
+    ["an end alone", { from: undefined, until: 1_731_000_000_000 }],
+  ])("decodes back the boundary of a time range with %s, its place on a bound", (_description, timeRange) => {
+    const cursor = encodeRunListCursor({ ...FORWARD_FROM_A_FAILED_RUN, timeRange });
 
-    expect(cursor).toBe(
-      cursorOfFields([3, "backward", ["ended", 1_731_000_000_000, "send-email", "run-42"], ["failed"], null]),
-    );
-  });
-
-  test("reads a cursor of the format version 2 as a forward cursor from its place, in the order group of its state", () => {
-    const cursor = cursorOfFields([2, "failed", "send-email", 1_731_000_000_000, "send-email", "run-42"]);
-
-    expect(decodeRunListCursor(cursor, { listedStates: ["failed"], listedTasks: ["send-email"] })).toEqual({
+    expect(decodeRunListCursor(cursor, requestOf(["failed"], null, timeRange))).toEqual({
       direction: "forward",
       place: FAILED_RUN_PLACE,
     });
+  });
+
+  test("decodes back the boundary of an ascending list", () => {
+    const cursor = encodeRunListCursor({ ...FORWARD_FROM_A_FAILED_RUN, order: "ascending" });
+
+    expect(decodeRunListCursor(cursor, requestOf(["failed"], null, EVERY_TIME, "ascending"))).toEqual({
+      direction: "forward",
+      place: FAILED_RUN_PLACE,
+    });
+  });
+
+  test.each([
+    ["descending", "ascending"],
+    ["ascending", "descending"],
+  ] as const)(
+    "is refused when it pages in %s order and the call asks for %s, naming both",
+    (cursorOrder, calledOrder) => {
+      const cursor = encodeRunListCursor({ ...FORWARD_FROM_A_FAILED_RUN, order: cursorOrder });
+
+      expect(() => decodeRunListCursor(cursor, requestOf(["failed"], null, EVERY_TIME, calledOrder))).toThrow(
+        `Invalid listRuns cursor: it pages through runs in ${cursorOrder} order, not in ${calledOrder} order`,
+      );
+    },
+  );
+
+  test("is the format version 3, its direction and place in its order group, its listed states and tasks, its time range, then its order", () => {
+    const backwardCursor = encodeRunListCursor({ ...FORWARD_FROM_A_FAILED_RUN, direction: "backward" });
+    const rangedCursor = encodeRunListCursor({ ...FORWARD_FROM_A_FAILED_RUN, timeRange: TWO_HOURS_TO_THE_FAILED_RUN });
+
+    expect(backwardCursor).toBe(
+      cursorOfFields([
+        3,
+        "backward",
+        ["ended", 1_731_000_000_000, "send-email", "run-42"],
+        ["failed"],
+        null,
+        null,
+        null,
+        "descending",
+      ]),
+    );
+    expect(rangedCursor).toBe(
+      cursorOfFields([
+        3,
+        "forward",
+        ["ended", 1_731_000_000_000, "send-email", "run-42"],
+        ["failed"],
+        null,
+        1_730_992_800_000,
+        1_731_000_000_000,
+        "descending",
+      ]),
+    );
+  });
+
+  test("reads a cursor of the format version 2 as a forward cursor from its place, in the order group of its state, at any time, in descending order", () => {
+    const cursor = cursorOfFields([2, "failed", "send-email", 1_731_000_000_000, "send-email", "run-42"]);
+
+    expect(decodeRunListCursor(cursor, requestOf(["failed"], ["send-email"]))).toEqual({
+      direction: "forward",
+      place: FAILED_RUN_PLACE,
+    });
+    expect(() => decodeRunListCursor(cursor, requestOf(["failed"], ["send-email"], EVERY_TIME, "ascending"))).toThrow(
+      "Invalid listRuns cursor: it pages through runs in descending order, not in ascending order",
+    );
+    expect(() =>
+      decodeRunListCursor(cursor, requestOf(["failed"], ["send-email"], TWO_HOURS_TO_THE_FAILED_RUN)),
+    ).toThrow(
+      "Invalid listRuns cursor: it pages through runs at any time, not runs from 2024-11-07T15:20:00.000Z until 2024-11-07T17:20:00.000Z",
+    );
   });
 
   test("is an opaque base64url string", () => {
@@ -97,7 +174,7 @@ describe("the listRuns cursor on the indexes", () => {
     ["of the format version 3", encodeRunListCursor({ ...FORWARD_FROM_A_FAILED_RUN, direction: "backward" })],
     ["of the format version 2", cursorOfFields([2, "failed", null, 1, "send-email", "run-42"])],
   ])("is refused for another state than the one it pages through, %s", (_description, cursor) => {
-    expect(() => decodeRunListCursor(cursor, { listedStates: ["completed"], listedTasks: null })).toThrow(
+    expect(() => decodeRunListCursor(cursor, requestOf(["completed"], null))).toThrow(
       'Invalid listRuns cursor: it pages through state "failed", not "completed"',
     );
   });
@@ -113,7 +190,7 @@ describe("the listRuns cursor on the indexes", () => {
     (cursorStates, calledStates, reason) => {
       const cursor = encodeRunListCursor({ ...FORWARD_FROM_A_FAILED_RUN, listedStates: cursorStates });
 
-      expect(() => decodeRunListCursor(cursor, { listedStates: calledStates, listedTasks: null })).toThrow(
+      expect(() => decodeRunListCursor(cursor, requestOf(calledStates, null))).toThrow(
         `Invalid listRuns cursor: it pages through ${reason}`,
       );
     },
@@ -137,10 +214,37 @@ describe("the listRuns cursor on the indexes", () => {
   ] as const)("is refused when it pages through %j and the call asks for %j", (cursorTasks, calledTasks, reason) => {
     const cursor = encodeRunListCursor({ ...FORWARD_FROM_A_FAILED_RUN, listedTasks: cursorTasks });
 
-    expect(() => decodeRunListCursor(cursor, { listedStates: ["failed"], listedTasks: calledTasks })).toThrow(
+    expect(() => decodeRunListCursor(cursor, requestOf(["failed"], calledTasks))).toThrow(
       `Invalid listRuns cursor: ${reason}`,
     );
   });
+
+  test.each([
+    [
+      TWO_HOURS_TO_THE_FAILED_RUN,
+      { from: 1_730_996_400_000, until: 1_731_000_000_000 },
+      "runs from 2024-11-07T15:20:00.000Z until 2024-11-07T17:20:00.000Z, not runs from 2024-11-07T16:20:00.000Z until 2024-11-07T17:20:00.000Z",
+    ],
+    [
+      TWO_HOURS_TO_THE_FAILED_RUN,
+      EVERY_TIME,
+      "runs from 2024-11-07T15:20:00.000Z until 2024-11-07T17:20:00.000Z, not runs at any time",
+    ],
+    [
+      { from: undefined, until: 1_731_000_000_000 },
+      { from: 1_731_000_000_000, until: undefined },
+      "runs until 2024-11-07T17:20:00.000Z, not runs from 2024-11-07T17:20:00.000Z",
+    ],
+  ] as const)(
+    "is refused when it pages through another time range than the call's, naming both: %j against %j",
+    (cursorRange, calledRange, reason) => {
+      const cursor = encodeRunListCursor({ ...FORWARD_FROM_A_FAILED_RUN, timeRange: cursorRange });
+
+      expect(() => decodeRunListCursor(cursor, requestOf(["failed"], null, calledRange))).toThrow(
+        `Invalid listRuns cursor: it pages through ${reason}`,
+      );
+    },
+  );
 
   test.each([
     ["a string that is not a cursor", "not-a-cursor"],
@@ -150,7 +254,7 @@ describe("the listRuns cursor on the indexes", () => {
     ["of another format version", cursorOfFields([1, "failed", null, 1, "send-email", "run-42"])],
     [
       "of a format version to come",
-      cursorOfFields([4, "forward", ["ended", 1, "send-email", "run-42"], ["failed"], null]),
+      cursorOfFields([4, "forward", ["ended", 1, "send-email", "run-42"], ["failed"], null, null, null, "descending"]),
     ],
     ["missing the task of its last run", cursorOfFields([2, "failed", null, 1, "run-42"])],
     ["of an unknown state", cursorOfFields([2, "sleeping", null, 1, "send-email", "run-42"])],
@@ -164,32 +268,128 @@ describe("the listRuns cursor on the indexes", () => {
     ["of a run id that is not a string", cursorOfFields([2, "failed", null, 1, "send-email", 42])],
     [
       "of version 3 with an unknown direction",
-      cursorOfFields([3, "sideways", ["ended", 1, "send-email", "run-42"], ["failed"], null]),
+      cursorOfFields([3, "sideways", ["ended", 1, "send-email", "run-42"], ["failed"], null, null, null, "descending"]),
     ],
-    ["of version 3 forward from no place", cursorOfFields([3, "forward", null, ["failed"], null])],
-    ["of version 3 with a place that is not a list", cursorOfFields([3, "backward", "run-42", ["failed"], null])],
+    [
+      "of version 3 forward from no place",
+      cursorOfFields([3, "forward", null, ["failed"], null, null, null, "descending"]),
+    ],
+    [
+      "of version 3 with a place that is not a list",
+      cursorOfFields([3, "backward", "run-42", ["failed"], null, null, null, "descending"]),
+    ],
     [
       "of version 3 with a place missing its order group",
-      cursorOfFields([3, "backward", [1, "send-email", "run-42"], ["failed"], null]),
+      cursorOfFields([3, "backward", [1, "send-email", "run-42"], ["failed"], null, null, null, "descending"]),
     ],
     [
       "of version 3 with a place in an unknown order group",
-      cursorOfFields([3, "backward", ["finished", 1, "send-email", "run-42"], ["failed"], null]),
+      cursorOfFields([
+        3,
+        "backward",
+        ["finished", 1, "send-email", "run-42"],
+        ["failed"],
+        null,
+        null,
+        null,
+        "descending",
+      ]),
     ],
     [
       "of version 3 with a place in an order group none of its states is in",
-      cursorOfFields([3, "backward", ["queued", 1, "send-email", "run-42"], ["failed"], null]),
+      cursorOfFields([
+        3,
+        "backward",
+        ["queued", 1, "send-email", "run-42"],
+        ["failed"],
+        null,
+        null,
+        null,
+        "descending",
+      ]),
     ],
     [
       "of version 3 with a score that is a string",
-      cursorOfFields([3, "backward", ["ended", "1", "send-email", "run-42"], ["failed"], null]),
+      cursorOfFields([
+        3,
+        "backward",
+        ["ended", "1", "send-email", "run-42"],
+        ["failed"],
+        null,
+        null,
+        null,
+        "descending",
+      ]),
     ],
-    ["of version 3 with an unknown state", cursorOfFields([3, "backward", null, ["sleeping"], null])],
-    ["of version 3 with a state that is not listed", cursorOfFields([3, "backward", null, "failed", null])],
-    ["of version 3 with an empty list of states", cursorOfFields([3, "backward", null, [], null])],
-    ["of version 3 with an empty list of tasks", cursorOfFields([3, "backward", null, ["failed"], []])],
-    ["of version 3 with a task that is not a string", cursorOfFields([3, "backward", null, ["failed"], [7]])],
-    ["of version 3 missing its listed tasks", cursorOfFields([3, "backward", null, ["failed"]])],
+    [
+      "of version 3 with an unknown state",
+      cursorOfFields([3, "backward", null, ["sleeping"], null, null, null, "descending"]),
+    ],
+    [
+      "of version 3 with a state that is not listed",
+      cursorOfFields([3, "backward", null, "failed", null, null, null, "descending"]),
+    ],
+    [
+      "of version 3 with an empty list of states",
+      cursorOfFields([3, "backward", null, [], null, null, null, "descending"]),
+    ],
+    [
+      "of version 3 with an empty list of tasks",
+      cursorOfFields([3, "backward", null, ["failed"], [], null, null, "descending"]),
+    ],
+    [
+      "of version 3 with a task that is not a string",
+      cursorOfFields([3, "backward", null, ["failed"], [7], null, null, "descending"]),
+    ],
+    ["of version 3 missing its time range", cursorOfFields([3, "backward", null, ["failed"], null])],
+    [
+      "of version 3 missing its order, as before the order",
+      cursorOfFields([3, "backward", null, ["failed"], null, null, null]),
+    ],
+    [
+      "of version 3 with an unknown order",
+      cursorOfFields([3, "backward", null, ["failed"], null, null, null, "sideways"]),
+    ],
+    [
+      "of version 3 with a start that is a string",
+      cursorOfFields([3, "backward", null, ["failed"], null, "1", null, "descending"]),
+    ],
+    [
+      "of version 3 with an end that is not whole milliseconds",
+      cursorOfFields([3, "backward", null, ["failed"], null, null, 1.5, "descending"]),
+    ],
+    [
+      "of version 3 with a start past the safe integers",
+      cursorOfFields([3, "backward", null, ["failed"], null, 2 ** 60, null, "descending"]),
+    ],
+    [
+      "of version 3 with a start past the latest time a Date holds",
+      cursorOfFields([3, "backward", null, ["failed"], null, 8_640_000_000_000_001, null, "descending"]),
+    ],
+    [
+      "of version 3 with an end past the latest time a Date holds",
+      cursorOfFields([3, "backward", null, ["failed"], null, null, 8.9e15, "descending"]),
+    ],
+    [
+      "of version 3 with a start before the earliest time a Date holds",
+      cursorOfFields([3, "backward", null, ["failed"], null, -8.9e15, null, "descending"]),
+    ],
+    [
+      "of version 3 with an end before the earliest time a Date holds",
+      cursorOfFields([3, "backward", null, ["failed"], null, null, -8_640_000_000_000_001, "descending"]),
+    ],
+    [
+      "of version 3 with a start after its end",
+      cursorOfFields([3, "backward", null, ["failed"], null, 2, 1, "descending"]),
+    ],
+    [
+      "of version 3 with a place before its start",
+      cursorOfFields([3, "backward", ["ended", 1, "send-email", "run-42"], ["failed"], null, 2, 3, "descending"]),
+    ],
+    [
+      "of version 3 with a place after its end",
+      cursorOfFields([3, "forward", ["ended", 4, "send-email", "run-42"], ["failed"], null, 2, 3, "descending"]),
+    ],
   ])("is refused when it is %s", (_description, cursor) => {
     expect(() => decodeRunListCursor(cursor, FAILED_OF_EVERY_TASK)).toThrow(INVALID_CURSOR_MESSAGE);
   });
@@ -198,11 +398,18 @@ describe("the listRuns cursor on the indexes", () => {
     ["of the format version 2", cursorOfFields([2, "failed", "send-email", 1, "build-report", "run-42"])],
     [
       "of the format version 3",
-      cursorOfFields([3, "forward", ["ended", 1, "build-report", "run-42"], ["failed"], ["send-email"]]),
+      cursorOfFields([
+        3,
+        "forward",
+        ["ended", 1, "build-report", "run-42"],
+        ["failed"],
+        ["send-email"],
+        null,
+        null,
+        "descending",
+      ]),
     ],
   ])("is refused when it lists one task and its place is a run of another, %s", (_description, cursor) => {
-    expect(() => decodeRunListCursor(cursor, { listedStates: ["failed"], listedTasks: ["send-email"] })).toThrow(
-      INVALID_CURSOR_MESSAGE,
-    );
+    expect(() => decodeRunListCursor(cursor, requestOf(["failed"], ["send-email"]))).toThrow(INVALID_CURSOR_MESSAGE);
   });
 });

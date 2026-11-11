@@ -106,6 +106,51 @@ describe("listRuns refuses, before any round trip", () => {
     ],
     ["a task that is null", { task: null }, 'Unknown task "null"'],
     ["a task that is a number", { task: 7 }, 'Unknown task "7"'],
+    [
+      "an order that is not one",
+      { state: "failed", order: "newest" },
+      'Invalid listRuns order: "newest" is not "descending" or "ascending"',
+    ],
+    [
+      "a start that is not a Date",
+      { state: "failed", from: "2026-11-11T08:00:00.000Z" },
+      'Invalid listRuns from: pass a Date, got "2026-11-11T08:00:00.000Z"',
+    ],
+    [
+      "an end that is an invalid Date",
+      { state: "failed", until: new Date("not a date") },
+      "Invalid listRuns until: pass a valid Date, got an Invalid Date",
+    ],
+    [
+      "a start after the end",
+      { state: "failed", from: new Date("2026-11-11T10:00:00.000Z"), until: new Date("2026-11-11T08:00:00.000Z") },
+      "Invalid listRuns range: from 2026-11-11T10:00:00.000Z is after until 2026-11-11T08:00:00.000Z; pass a from at or before until",
+    ],
+    [
+      "a range over states of several order groups, each ordered by a time",
+      { state: ["failed", "executing", "suspended", "delayed"], until: new Date("2026-11-11T08:00:00.000Z") },
+      'Invalid listRuns range: the states listed are of several order groups, each ordered its own way: "executing" by startedAt; "delayed" and "suspended" by when they are due, startsAt and resumesAt; "failed" by finishedAt. A range takes the states of one order group ordered by a time: executing, waiting for a time, or ended',
+    ],
+    [
+      "a range over states of several order groups, one of them queued",
+      { state: ["pending", "executing"], from: new Date("2026-11-11T08:00:00.000Z") },
+      'Invalid listRuns range: the states listed are of several order groups, each ordered its own way: "executing" by startedAt; "pending" by their place in the queue, not by a time. A range takes the states of one order group ordered by a time: executing, waiting for a time, or ended',
+    ],
+    [
+      "a range with state left out",
+      { from: new Date("2026-11-11T08:00:00.000Z") },
+      'Invalid listRuns range: state left out lists every state, and its order groups are each ordered its own way: "executing" by startedAt; "pending" and "waitingForConcurrencySlot" by their place in the queue, not by a time; "delayed", "suspended" and "backingOff" by when they are due, startsAt, resumesAt and nextAttemptAt; "completed" and "failed" by finishedAt. A range takes the states of one order group ordered by a time: executing, waiting for a time, or ended',
+    ],
+    [
+      "a range over pending runs",
+      { state: "pending", until: new Date("2026-11-11T08:00:00.000Z") },
+      'Invalid listRuns range: "pending" runs are ordered by their place in the queue, not by a time. A range takes the states of one order group ordered by a time: executing, waiting for a time, or ended',
+    ],
+    [
+      "a range over runs waiting for a concurrency slot",
+      { state: "waitingForConcurrencySlot", from: new Date("2026-11-11T08:00:00.000Z") },
+      'Invalid listRuns range: "waitingForConcurrencySlot" runs are ordered by their place in the queue, not by a time. A range takes the states of one order group ordered by a time: executing, waiting for a time, or ended',
+    ],
   ])("%s", async (_description, options, message) => {
     const client = clientRefusingEveryCommand();
 

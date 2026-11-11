@@ -179,7 +179,12 @@ type StoredValue = string | null;
 
 type AnyRunSummary = Omit<AnyListedRun, "lastErrorMessage">;
 
-type IndexEntry = { indexPlace: IndexPlace; runIdentity: RunIdentity; indexState: RunState };
+type IndexEntry = {
+  indexPlace: IndexPlace;
+  runIdentity: RunIdentity;
+  indexState: RunState;
+  orderGroupNumber: OrderGroupNumber;
+};
 
 type ListedRunIndex = IndexInList & { indexState: RunState };
 
@@ -352,7 +357,7 @@ function listedRunOf(
 
 function compareInListOrder(left: IndexEntry, right: IndexEntry): number {
   return (
-    orderGroupNumberOf(orderGroupOf(left.indexState)) - orderGroupNumberOf(orderGroupOf(right.indexState)) ||
+    left.orderGroupNumber - right.orderGroupNumber ||
     right.indexPlace.score - left.indexPlace.score ||
     compareInSortedSetMemberOrder(right.indexPlace.storedRunId, left.indexPlace.storedRunId)
   );
@@ -443,14 +448,14 @@ function takenEntriesOf(
   };
 }
 
-function indexEntryOf({ indexKey, indexState }: ListedRunIndex, indexPlace: IndexPlace): IndexEntry {
+function indexEntryOf({ indexKey, indexState, orderGroupNumber }: ListedRunIndex, indexPlace: IndexPlace): IndexEntry {
   const runIdentity = runIdentityOf(indexPlace.storedRunId);
   if (runIdentity === undefined) {
     throw new Error(
       `The run index ${indexKey} holds a member that is not a stored run id: ${JSON.stringify(indexPlace.storedRunId)}`,
     );
   }
-  return { indexPlace, runIdentity, indexState };
+  return { indexPlace, runIdentity, indexState, orderGroupNumber };
 }
 
 function sumOf(counts: readonly number[]): number {

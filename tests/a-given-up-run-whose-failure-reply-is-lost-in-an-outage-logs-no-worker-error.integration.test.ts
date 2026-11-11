@@ -2,7 +2,7 @@ import { expect, vi } from "vitest";
 import { z } from "zod";
 
 import { engineKeysOf } from "../src/engine/engine-keys.js";
-import { createNextasking, defineListener, defineTask, runFailed } from "../src/index.js";
+import { createNextasking, defineListener, defineTask, runFailedEvent } from "../src/index.js";
 import { closeWhenTestFinishes } from "./close-when-test-finishes.js";
 import { isSettleRequestOf } from "./engine-requests.js";
 import { integrationTest } from "./integration-test.js";
@@ -37,7 +37,7 @@ integrationTest(
       logger,
       tasks: [
         defineListener("alert-on-run-failed", {
-          on: runFailed,
+          on: runFailedEvent,
           handler: async ({ payload }) => {
             runFailedListenerTaskNames.push(payload.task);
           },

@@ -83,7 +83,7 @@ describe("the root export", () => {
       "defineListener",
       "defineScheduledTask",
       "defineTask",
-      "runFailed",
+      "runFailedEvent",
     ]);
   });
 

@@ -1,7 +1,7 @@
 import * as v from "valibot";
 import { expect, test } from "vitest";
 
-import { runFailed } from "./built-in-events.js";
+import { runFailedEvent } from "./built-in-events.js";
 import { defineListener, defineScheduledTask, defineTask } from "./definitions.js";
 import type { AnyTaskDefinition } from "./definitions.js";
 import type { LockedRun, RunToCreate } from "./engine/engine.js";
@@ -23,7 +23,7 @@ const NO_SENDER: HandlerSender = {
   emit: () => Promise.reject(new Error("this attempt sends nothing")),
 };
 
-const alertOnCall = defineListener("alert-on-call", { on: runFailed, handler: async () => undefined });
+const alertOnCall = defineListener("alert-on-call", { on: runFailedEvent, handler: async () => undefined });
 
 async function lockedRunOf(engine: InMemoryEngine, run: Partial<RunToCreate> & { task: string }): Promise<LockedRun> {
   await engine.enqueue({ runs: [{ runId: "run-1", payload: '{"to":"ada@example.com"}', retries: 2, ...run }] });
@@ -162,10 +162,10 @@ test("a non-retriable error fails the run on its first attempt", async () => {
   expect(attemptOutcome).toMatchObject({ kind: "fail", reason: "non-retriable" });
 });
 
-test("a failing listener of runFailed fails with an empty notice", async () => {
+test("a failing listener of runFailedEvent fails with an empty notice", async () => {
   const engine = createInMemoryEngine();
   const failingListener = defineListener("failing-listener", {
-    on: runFailed,
+    on: runFailedEvent,
     retries: 0,
     handler: async () => {
       throw new Error("pager down");
@@ -174,7 +174,7 @@ test("a failing listener of runFailed fails with an empty notice", async () => {
   const lockedRun = await lockedRunOf(engine, {
     task: "failing-listener",
     retries: 0,
-    sourceEvent: { eventName: runFailed.name, eventId: "notice-1" },
+    sourceEvent: { eventName: runFailedEvent.name, eventId: "notice-1" },
   });
 
   const { attemptOutcome } = await attemptResultOf(failingListener as AnyTaskDefinition, { engine, lockedRun });

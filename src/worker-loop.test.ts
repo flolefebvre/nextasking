@@ -1,7 +1,7 @@
 import * as v from "valibot";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
-import { runFailed } from "./built-in-events.js";
+import { runFailedEvent } from "./built-in-events.js";
 import { defineEvent, defineListener, defineScheduledTask, defineTask } from "./definitions.js";
 import type { AnyTaskDefinition, TaskHandler } from "./definitions.js";
 import { MOST_RUNS_PRUNED_PER_PRUNE } from "./engine/engine.js";
@@ -189,7 +189,7 @@ test("a run enqueued while the loop waits is fetched on the wake-up, before the 
 });
 
 test("a completed, retried, failed and suspended attempt each settle with their kind, the failing one with its notice", async () => {
-  const alertOnCall = defineListener("alert-on-call", { on: runFailed, handler: async () => undefined });
+  const alertOnCall = defineListener("alert-on-call", { on: runFailedEvent, handler: async () => undefined });
   const tasks = [
     defineTask("completes", { schema: v.object({}), handler: async () => undefined }),
     defineTask("retries", {
@@ -292,7 +292,7 @@ test("two runs sharing a run id on two tasks each hand their handler, their line
       },
     }),
     defineListener("alert-on-call", {
-      on: runFailed,
+      on: runFailedEvent,
       handler: async ({ payload }) => {
         noticedRuns.push({ task: payload.task, runId: payload.runId });
       },
@@ -327,9 +327,9 @@ test("two runs sharing a run id on two tasks each hand their handler, their line
   ]);
 });
 
-test("a run of a listener of runFailed that fails carries an empty notice", async () => {
+test("a run of a listener of runFailedEvent that fails carries an empty notice", async () => {
   const failingListener = defineListener("failing-listener", {
-    on: runFailed,
+    on: runFailedEvent,
     retries: 0,
     handler: async () => {
       throw new Error("pager down");
@@ -339,7 +339,7 @@ test("a run of a listener of runFailed that fails carries an empty notice", asyn
   await engine.enqueue({
     runs: runsOf("failing-listener", 1, {
       retries: 0,
-      sourceEvent: { eventName: runFailed.name, eventId: "notice-1" },
+      sourceEvent: { eventName: runFailedEvent.name, eventId: "notice-1" },
     }),
   });
 
@@ -351,7 +351,7 @@ test("a run of a listener of runFailed that fails carries an empty notice", asyn
 });
 
 test("a listener whose key throws costs its own notice run and writes one worker error, and the run still fails", async () => {
-  const alertOnCall = defineListener("alert-on-call", { on: runFailed, handler: async () => undefined });
+  const alertOnCall = defineListener("alert-on-call", { on: runFailedEvent, handler: async () => undefined });
   const fails = defineTask("fails", {
     schema: v.object({}),
     retries: 0,
@@ -858,7 +858,7 @@ for (const {
 }
 
 test("two loops ticking on the same reported third stall end with one failed run, one notice and one run failed line", async () => {
-  const alertOnCall = defineListener("alert-on-call", { on: runFailed, handler: async () => undefined });
+  const alertOnCall = defineListener("alert-on-call", { on: runFailedEvent, handler: async () => undefined });
   const sendEmail = defineTask("send-email", { schema: v.object({}), handler: async () => undefined });
   const tasks = [sendEmail, alertOnCall, brokenKeyRunFailedListener] as AnyTaskDefinition[];
   const engine = createInMemoryEngine();
@@ -940,7 +940,7 @@ test("a run of an unknown task is held 10 seconds against the concurrency, then 
 });
 
 test("a run of an unknown task first found 30 minutes ago fails unknown task with its notice", async () => {
-  const alertOnCall = defineListener("alert-on-call", { on: runFailed, handler: async () => undefined });
+  const alertOnCall = defineListener("alert-on-call", { on: runFailedEvent, handler: async () => undefined });
   const engine = createInMemoryEngine();
   await engine.enqueue({ runs: runsOf("resize-image", 1) });
   const { lines } = startedLoopOf([alertOnCall] as AnyTaskDefinition[], { engine });

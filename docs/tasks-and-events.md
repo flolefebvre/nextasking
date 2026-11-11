@@ -125,7 +125,7 @@ declare module "@flefebvre/nextasking" {
 - a task or event whose name is `""`, named by its position: it is usually one built at runtime, such as `process.env.QUEUE_NAME ?? ""`
 - two definitions with the same name: tasks and events share one namespace
 - a listener whose `on` event isn't listed in `events` and isn't a built-in event
-- a task or event name starting with `nextasking/`, which is reserved for the library and its built-in event, `runFailed` (`nextasking/run.failed`); see [Retries and failures](retries-and-failures.md#react-to-a-failure)
+- a task or event name starting with `nextasking/`, which is reserved for the library and its built-in event, `runFailedEvent` (`nextasking/run.failed`); see [Retries and failures](retries-and-failures.md#react-to-a-failure)
 - a built-in event listed in `events`: it is added automatically
 - a `concurrency.limit` that isn't a positive integer
 - `retries` that isn't a whole number, 0 or more

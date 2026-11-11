@@ -7,7 +7,7 @@ import {
   defineEvent,
   defineListener,
   defineTask,
-  runFailed,
+  runFailedEvent,
 } from "../src/index.js";
 import type { Logger, RunFailedPayload } from "../src/index.js";
 import { deriveFailureNoticeEventId } from "../src/ids.js";
@@ -53,7 +53,7 @@ function createAlertingNextasking(redisUrl: string, keyPrefix: string, logger: L
       ? []
       : [
           defineListener("alert-on-run-failed", {
-            on: runFailed,
+            on: runFailedEvent,
             retries: 0,
             handler: async ({ payload }) => {
               alerting.runFailedNotices.push(payload);

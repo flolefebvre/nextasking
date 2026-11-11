@@ -39,7 +39,7 @@ export const syncAccount = defineTask("sync-account", {
 - A key is scoped to its task: two tasks returning the same key don't share a limit.
 - The key is computed once, when the run is stored: at `dispatch`, or at `emit` for each listener. It is never computed again.
 - A run stored before its task had a `key` has none: it shares the limit with the other runs stored without one, not with the runs of a key. During the deploy that adds a `key`, a run stored before it and a run of the same key stored after can execute together.
-- A `key` that throws, or returns something other than a non-empty string, makes `dispatch` throw an `Error` naming the task, and `emit` an `Error` naming the listener: `Task "<listener>" has an invalid concurrency.key: it threw "<message>"`. Nothing is stored, for any listener of the event. For a `runFailed` listener, see [Retries and failures](retries-and-failures.md#react-to-a-failure).
+- A `key` that throws, or returns something other than a non-empty string, makes `dispatch` throw an `Error` naming the task, and `emit` an `Error` naming the listener: `Task "<listener>" has an invalid concurrency.key: it threw "<message>"`. Nothing is stored, for any listener of the event. For a `runFailedEvent` listener, see [Retries and failures](retries-and-failures.md#react-to-a-failure).
 - A listener takes `concurrency` too, with the event's payload.
 
 ## Keep a scheduled task's firings from overlapping

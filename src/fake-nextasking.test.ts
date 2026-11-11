@@ -10,7 +10,7 @@ import {
   defineTask,
   InvalidPayloadError,
   RedisUnavailableError,
-  runFailed,
+  runFailedEvent,
   UnknownEventError,
   UnknownTaskError,
 } from "./index.js";
@@ -39,7 +39,7 @@ const reserveStock = defineListener("reserve-stock", {
 });
 
 const alertOnRunFailed = defineListener("alert-on-run-failed", {
-  on: runFailed,
+  on: runFailedEvent,
   handler: async () => undefined,
 });
 
@@ -311,4 +311,4 @@ type ShopEventName = "order.placed" | "order.cancelled";
 
 type ShopTask = typeof sendInvoice | typeof reserveStock | typeof alertOnRunFailed | typeof closeBooks;
 
-type ShopEvent = typeof orderPlaced | typeof orderCancelled | typeof runFailed;
+type ShopEvent = typeof orderPlaced | typeof orderCancelled | typeof runFailedEvent;

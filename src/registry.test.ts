@@ -173,6 +173,36 @@ describe("createNextasking", () => {
     );
   });
 
+  test.each([
+    { kind: "task", unnamed: defineTask("", { schema: z.object({}), handler: async () => undefined }) },
+    { kind: "listener", unnamed: defineListener("", { on: invoicePaid, handler: async () => undefined }) },
+  ])("rejects a $kind with an empty name, naming its position in tasks", ({ unnamed }) => {
+    expect(() =>
+      createNextasking({
+        connection: { url: UNREACHABLE_URL },
+        events: [invoicePaid],
+        tasks: [sendWelcomeEmail, unnamed],
+      }),
+    ).toThrow(new Error("tasks[1] has an empty name: every task and event needs a name"));
+  });
+
+  test("rejects an event with an empty name, naming its position in events", () => {
+    const unnamedEvent = defineEvent("", { schema: z.object({}) });
+
+    expect(() =>
+      createNextasking({ connection: { url: UNREACHABLE_URL }, events: [unnamedEvent, invoicePaid], tasks: [] }),
+    ).toThrow(new Error("events[0] has an empty name: every task and event needs a name"));
+  });
+
+  test("reports two empty names as an empty name, not as a duplicate", () => {
+    const unnamedTask = defineTask("", { schema: z.object({}), handler: async () => undefined });
+    const unnamedEvent = defineEvent("", { schema: z.object({}) });
+
+    expect(() =>
+      createNextasking({ connection: { url: UNREACHABLE_URL }, events: [unnamedEvent], tasks: [unnamedTask] }),
+    ).toThrow(new Error("tasks[0] has an empty name: every task and event needs a name"));
+  });
+
   test("refuses a task, a listener or a scheduled task listed in events", () => {
     const purgeExpiredSessions = defineScheduledTask("purge-expired-sessions", {
       schedule: { cron: "0 3 * * *" },

@@ -122,6 +122,7 @@ declare module "@flefebvre/nextasking" {
 
 `createNextasking` checks the definitions and the options before anything else, with no connection, and throws an `Error` whose one-line message names the definition or the option and what is wrong:
 
+- a task or event whose name is `""`, named by its position: it is usually one built at runtime, such as `process.env.QUEUE_NAME ?? ""`
 - two definitions with the same name: tasks and events share one namespace
 - a listener whose `on` event isn't listed in `events` and isn't a built-in event
 - a task or event name starting with `nextasking/`, which is reserved for the library and its built-in event, `runFailed` (`nextasking/run.failed`); see [Retries and failures](retries-and-failures.md#react-to-a-failure)
@@ -137,6 +138,8 @@ declare module "@flefebvre/nextasking" {
 ```text
 tasks[1] is undefined: an import cycle is the usual cause, the file that defines this task imports the file that calls createNextasking
 events[0] is undefined: an import cycle is the usual cause, the file that defines this event imports the file that calls createNextasking
+tasks[1] has an empty name: every task and event needs a name
+events[0] has an empty name: every task and event needs a name
 Duplicate name "invoice.paid": every task and event needs its own name
 Listener "record-invoice-payment" listens to event "invoice.paid", which is not listed in events
 Event "nextasking/user.deleted" has a reserved name: names starting with "nextasking/" belong to the built-in events

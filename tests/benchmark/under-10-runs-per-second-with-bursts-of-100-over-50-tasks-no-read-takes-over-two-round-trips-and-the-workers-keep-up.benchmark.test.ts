@@ -159,6 +159,20 @@ benchmarkTest(
           }
           await measureRead("listRuns failed", () => reader.listRuns({ state: "failed" }));
           await measureRead("listRuns completed and failed", () => reader.listRuns({ state: ["completed", "failed"] }));
+          const lastMinute = { from: new Date(Date.now() - 60_000), until: new Date() };
+          let cursorAfterTheFirstPageOfTheLastMinute: string | undefined;
+          await measureRead("listRuns completed in the last minute", async () => {
+            ({ nextCursor: cursorAfterTheFirstPageOfTheLastMinute } = await reader.listRuns({
+              state: "completed",
+              ...lastMinute,
+            }));
+          });
+          if (cursorAfterTheFirstPageOfTheLastMinute !== undefined) {
+            const cursor = cursorAfterTheFirstPageOfTheLastMinute;
+            await measureRead("listRuns completed in the last minute, second page", () =>
+              reader.listRuns({ state: "completed", ...lastMinute, cursor }),
+            );
+          }
           let cursorAfterTheFirstPageOfEveryState: string | undefined;
           await measureRead("listRuns every state", async () => {
             ({ nextCursor: cursorAfterTheFirstPageOfEveryState } = await reader.listRuns({}));

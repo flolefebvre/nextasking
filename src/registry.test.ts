@@ -3,7 +3,7 @@ import * as v from "valibot";
 import { describe, expect, expectTypeOf, test, vi } from "vitest";
 import { z } from "zod";
 
-import { runFailed } from "./built-in-events.js";
+import { runFailedEvent } from "./built-in-events.js";
 import type { RunFailedPayload } from "./built-in-events.js";
 import { defineEvent, defineListener, defineScheduledTask, defineTask } from "./definitions.js";
 import type { EventDefinition } from "./definitions.js";
@@ -128,7 +128,7 @@ describe("createNextasking", () => {
     );
   });
 
-  test.each([runFailed])("rejects the built-in event $name listed in events", (builtInEvent) => {
+  test.each([runFailedEvent])("rejects the built-in event $name listed in events", (builtInEvent) => {
     expect(() => createNextasking({ connection: { url: UNREACHABLE_URL }, events: [builtInEvent], tasks: [] })).toThrow(
       `Event "${builtInEvent.name}" is built in and added automatically: remove it from events, and listen to it as it is`,
     );
@@ -1064,7 +1064,7 @@ describe("replay", () => {
 
 describe("built-in events", () => {
   const alertOnRunFailed = defineListener("alert-on-run-failed", {
-    on: runFailed,
+    on: runFailedEvent,
     handler: async ({ payload }) => {
       expectTypeOf(payload).toEqualTypeOf<RunFailedPayload>();
     },
@@ -1078,9 +1078,9 @@ describe("built-in events", () => {
     });
   }
 
-  test("type runFailed as an event definition named nextasking/run.failed, whose schema gives the notice", () => {
-    expect(Object.keys(runFailed).sort()).toEqual(["name", "schema"]);
-    expectTypeOf(runFailed).toEqualTypeOf<
+  test("type runFailedEvent as an event definition named nextasking/run.failed, whose schema gives the notice", () => {
+    expect(Object.keys(runFailedEvent).sort()).toEqual(["name", "schema"]);
+    expectTypeOf(runFailedEvent).toEqualTypeOf<
       EventDefinition<"nextasking/run.failed", StandardSchemaV1<RunFailedPayload, RunFailedPayload>>
     >();
   });

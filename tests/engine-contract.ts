@@ -1,6 +1,6 @@
 import { expect } from "vitest";
 
-import { runFailed } from "../src/built-in-events.js";
+import { runFailedEvent } from "../src/built-in-events.js";
 import type { DurationInMilliseconds, EpochMilliseconds } from "../src/durations.js";
 import type { RunIdentity } from "../src/engine/engine-keys.js";
 import { MOST_RUNS_PRUNED_PER_PRUNE } from "../src/engine/engine.js";
@@ -180,9 +180,9 @@ function failureNoticeOf(runId: RunId, listenerRunIds: readonly RunId[]): Failur
       runId: listenerRunId,
       task: "alert-on-call",
       retries: 1,
-      sourceEvent: { eventName: runFailed.name, eventId: `notice-of-${runId}` },
+      sourceEvent: { eventName: runFailedEvent.name, eventId: `notice-of-${runId}` },
     })),
-    eventDedup: { eventName: runFailed.name, eventId: `notice-of-${runId}` },
+    eventDedup: { eventName: runFailedEvent.name, eventId: `notice-of-${runId}` },
   };
 }
 
@@ -440,7 +440,7 @@ export function defineEngineContractTests(contractTest: EngineContractTest): voi
         runId: "listener-run-1",
         task: "alert-on-call",
         retries: 1,
-        sourceEvent: { eventName: runFailed.name, eventId: "notice-of-run-1" },
+        sourceEvent: { eventName: runFailedEvent.name, eventId: "notice-of-run-1" },
       });
       expect(JSON.parse(noticeRun!.payload)).toEqual({
         ...failureNoticeOf("run-1", []).payload,

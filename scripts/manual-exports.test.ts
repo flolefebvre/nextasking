@@ -50,7 +50,7 @@ test("an entry's exports are named with their kind, through re-exports, a class 
     ].join("\n"),
     "/package/dist/errors.d.ts": "export declare class InternalError extends Error {}",
     "/package/dist/steps.d.ts":
-      "export declare const runFailed: { name: string };\nexport declare namespace StepTools { type Id = string }",
+      "export declare const runFailedEvent: { name: string };\nexport declare namespace StepTools { type Id = string }",
   });
 
   const publicExports = publicExportsOf([{ entry: ".", declarationPath: "/package/dist/index.d.ts" }], readDeclaration);
@@ -60,7 +60,7 @@ test("an entry's exports are named with their kind, through re-exports, a class 
     { entry: ".", name: "InternalError", kind: "type" },
     { entry: ".", name: "Nextasking", kind: "type" },
     { entry: ".", name: "NonRetriableError", kind: "value" },
-    { entry: ".", name: "runFailed", kind: "value" },
+    { entry: ".", name: "runFailedEvent", kind: "value" },
     { entry: ".", name: "RunId", kind: "type" },
     { entry: ".", name: "StepTools", kind: "type" },
   ]);
@@ -109,26 +109,26 @@ test("a row of a ./testing export starts with From `./testing`, and a row of a r
 test("an import map missing an export, importing a name no entry exports, or importing a value as a type names each with what to do", () => {
   const publicExports: PublicExport[] = [
     ...ROOT_EXPORTS,
-    { entry: ".", name: "runFailed", kind: "value" },
+    { entry: ".", name: "runFailedEvent", kind: "value" },
     { entry: "./testing", name: "RecordedSleep", kind: "type" },
   ];
   const indexPage = indexPageOf(
     [
       'import { createNextasking, replayEvent } from "@flefebvre/nextasking";',
-      'import type { RunId, runFailed } from "@flefebvre/nextasking";',
+      'import type { RunId, runFailedEvent } from "@flefebvre/nextasking";',
       'import type { RecordedSleep, RunId } from "@flefebvre/nextasking/testing";',
     ].join("\n"),
     [
       "| `createNextasking` | Builds the instance |",
       "| `RunId` | The type of a run id |",
-      "| `runFailed` | The built-in event |",
+      "| `runFailedEvent` | The built-in event |",
       "| `RecordedSleep` | From `./testing`: a sleep |",
     ],
   );
 
   expect(manualExportProblemsOf(publicExports, indexPage)).toEqual([
     "`replayEvent`, imported as a value from the root entry in the import map of docs/index.md, is no export of it: remove it from the import map.",
-    "`runFailed` is a value export of the root entry, imported as a type in the import map of docs/index.md: move it to the value import.",
+    "`runFailedEvent` is a value export of the root entry, imported as a type in the import map of docs/index.md: move it to the value import.",
     "`RunId`, imported as a type from `./testing` in the import map of docs/index.md, is no export of it: remove it from the import map.",
   ]);
 });

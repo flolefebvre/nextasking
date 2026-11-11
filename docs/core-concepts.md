@@ -24,7 +24,7 @@ export const purgeSessions = defineScheduledTask("purge-sessions", {
 - **Event**: a named fact with a payload schema, which tasks can subscribe to. See [Tasks and events](tasks-and-events.md#define-an-event).
 - **Listener**: a task subscribed to exactly one event, whose payload is that event's payload. See [Tasks and events](tasks-and-events.md#define-a-listener).
 - **Scheduled task**: a task with a cron and a time zone, and no payload. See [Scheduled tasks](scheduled-tasks.md).
-- **Built-in event**: `runFailed`, an event the library defines and emits itself when a run fails. Listen to it, never emit it. See [Retries and failures](retries-and-failures.md#react-to-a-failure).
+- **Built-in event**: `runFailedEvent`, an event the library defines and emits itself when a run fails. Listen to it, never emit it. See [Retries and failures](retries-and-failures.md#react-to-a-failure).
 - **Failure notice**: one emission of a built-in event for one final failure of a run, stored together with that failure. See [Retries and failures](retries-and-failures.md#react-to-a-failure).
 - **Instance**: what `createNextasking` returns, listing every task and event. Server code calls it; `Register` types its names. See [Tasks and events](tasks-and-events.md#register-the-tasks-and-events).
 

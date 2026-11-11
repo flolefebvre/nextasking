@@ -141,4 +141,4 @@ export const sendWelcomeEmail = defineTask("send-welcome-email", {
 The `logger` is the one output: there is no hook and no built-in sink.
 
 - Ship the lines through your app's logger, such as a pino transport to Better Stack, Datadog or Axiom.
-- React to a failed run with a listener on the `runFailed` built-in event, which runs with retries, not from a log line. See [Retries and failures](retries-and-failures.md#react-to-a-failure).
+- React to a failed run with a listener on the built-in event `runFailedEvent`, which runs with retries, not from a log line. See [Retries and failures](retries-and-failures.md#react-to-a-failure).

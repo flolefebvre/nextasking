@@ -8,7 +8,7 @@ import {
   InvalidPayloadError,
   NonRetriableError,
   RedisUnavailableError,
-  runFailed,
+  runFailedEvent,
   RunNotReplayableError,
   StepMisuseError,
   UnknownEventError,
@@ -235,7 +235,7 @@ export type InstanceIsANextasking = Expect<
     typeof nextasking,
     Nextasking<
       typeof sendWelcomeEmail | typeof createDefaultWorkspace | typeof purgeExpiredSessions,
-      typeof userSignedUp | typeof runFailed
+      typeof userSignedUp | typeof runFailedEvent
     >
   >
 >;
@@ -348,7 +348,7 @@ export type IsEventNameNarrowsToTheEmittableEvents = Expect<
 >;
 
 export const alertOnRunFailed = defineListener("alert-on-run-failed", {
-  on: runFailed,
+  on: runFailedEvent,
   handler: async ({ payload }) => {
     await Promise.resolve(`${payload.task} ${payload.runId} ${payload.reason} ${payload.error.message}`);
   },
@@ -502,7 +502,7 @@ export const eventDefinitions: readonly EventDefinitionSummary<EventName, TaskNa
 
 export type RunFailedIsAnEventDefinition = Expect<
   IsEqual<
-    typeof runFailed,
+    typeof runFailedEvent,
     EventDefinition<"nextasking/run.failed", StandardSchemaV1<RunFailedPayload, RunFailedPayload>>
   >
 >;

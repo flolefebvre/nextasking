@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 
-import { createNextasking, defineListener, runFailed } from "../src/index.js";
+import { createNextasking, defineListener, runFailedEvent } from "../src/index.js";
 import { envelopeDefinitionsOf } from "./benchmark/envelope-definitions.js";
 import type { Logger } from "../src/index.js";
 import { overrideWorkerTiming } from "../src/worker-timing.js";
@@ -58,7 +58,7 @@ const failureNoticeRecordingListeners =
   config.isFailureNoticeRecorded === true
     ? [
         defineListener(FAILURE_NOTICE_RECORDING_LISTENER_NAME, {
-          on: runFailed,
+          on: runFailedEvent,
           handler: async ({ payload: { task, runId, reason } }) => {
             await writeRecord(FAILURE_NOTICE_RECORDING_LISTENER_NAME, { task, runId, reason });
           },

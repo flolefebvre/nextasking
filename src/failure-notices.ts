@@ -1,5 +1,5 @@
 import { errorFromThrownValue } from "./attempt-errors.js";
-import { isBuiltInEventName, runFailed } from "./built-in-events.js";
+import { isBuiltInEventName, runFailedEvent } from "./built-in-events.js";
 import type { RunFailedPayload } from "./built-in-events.js";
 import { concurrencyKeyOf, retriesOf } from "./definitions.js";
 import type { WorkerDefinitions } from "./definitions.js";
@@ -34,7 +34,7 @@ export function builtFailureNoticeOf(
   const isListenerOfABuiltInEvent = sourceEvent !== undefined && isBuiltInEventName(sourceEvent.eventName);
   const listeners = isListenerOfABuiltInEvent
     ? []
-    : (listenerNamesByEventName.get(runFailed.name) ?? []).flatMap((listenerName) => {
+    : (listenerNamesByEventName.get(runFailedEvent.name) ?? []).flatMap((listenerName) => {
         const listener = tasksByName.get(listenerName);
         return listener === undefined ? [] : [listener];
       });
@@ -53,12 +53,12 @@ export function builtFailureNoticeOf(
       runId: deriveListenerRunId(eventId, listener.name),
       task: listener.name,
       retries: retriesOf(listener),
-      sourceEvent: { eventName: runFailed.name, eventId },
+      sourceEvent: { eventName: runFailedEvent.name, eventId },
       ...(concurrencyKey === undefined ? {} : { concurrencyKey }),
     });
   }
   return {
-    failureNotice: { payload, runs: noticeRuns, eventDedup: { eventName: runFailed.name, eventId } },
+    failureNotice: { payload, runs: noticeRuns, eventDedup: { eventName: runFailedEvent.name, eventId } },
     listenersLeftOut,
   };
 }

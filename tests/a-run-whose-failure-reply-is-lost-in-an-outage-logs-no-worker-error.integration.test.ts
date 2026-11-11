@@ -1,7 +1,7 @@
 import { expect, vi } from "vitest";
 import { z } from "zod";
 
-import { createNextasking, defineListener, defineTask, runFailed } from "../src/index.js";
+import { createNextasking, defineListener, defineTask, runFailedEvent } from "../src/index.js";
 import type { RunFailedPayload } from "../src/index.js";
 import { closeWhenTestFinishes } from "./close-when-test-finishes.js";
 import { integrationTest } from "./integration-test.js";
@@ -49,7 +49,7 @@ async function withFailureReplyCut(
       },
     }),
     defineListener("alert-on-run-failed", {
-      on: runFailed,
+      on: runFailedEvent,
       handler: async ({ payload }) => {
         runFailedNotices.push(payload);
       },

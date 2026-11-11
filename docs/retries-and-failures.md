@@ -23,7 +23,7 @@ export const syncAccount = defineTask("sync-account", {
 - `backoff` (default `"30s"`) is the wait before the first retry. Each later wait doubles.
 - Each wait is jittered to between 80% and 100% of its value, so runs that failed together don't retry together.
 - The default schedule waits up to 30 s, 1 min, 2 min, 4 min, then 8 min: about 12 to 16 minutes in all, enough to outlast a dependency's deploy.
-- The retry count is fixed when the run is stored: by the release that dispatched; for a listener run, by the release that emitted; for a firing's run, by the worker that processed the firing; for the run of a `runFailed` listener, by the worker that failed the run. Each wait uses the `backoff` of the worker that ran the failed attempt. See [Deploys](deploys.md#which-release-decides-what).
+- The retry count is fixed when the run is stored: by the release that dispatched; for a listener run, by the release that emitted; for a firing's run, by the worker that processed the firing; for the run of a `runFailedEvent` listener, by the worker that failed the run. Each wait uses the `backoff` of the worker that ran the failed attempt. See [Deploys](deploys.md#which-release-decides-what).
 - A listener takes the same options, for its own runs.
 - Make the handler safe to run again: a retry starts it from the top. Wrap each side effect in `step.run` so a retry reuses its result instead of repeating it; see [Steps](steps.md).
 
@@ -119,10 +119,10 @@ The library emits a built-in event on each final failure. Listen to it with an o
 
 ```ts
 // src/nextasking/tasks/alert-on-run-failed.ts
-import { defineListener, runFailed } from "@flefebvre/nextasking";
+import { defineListener, runFailedEvent } from "@flefebvre/nextasking";
 
 export const alertOnRunFailed = defineListener("alert-on-run-failed", {
-  on: runFailed,
+  on: runFailedEvent,
   handler: async ({ payload, step }) => {
     await step.run("page-on-call", () =>
       pager.trigger(`${payload.task} failed (${payload.reason}): ${payload.error.message}`, { runId: payload.runId }),
@@ -140,8 +140,8 @@ export const nextasking = createNextasking({
 });
 ```
 
-- List the listener in `tasks`. Don't list `runFailed` in `events`: it is added automatically, and `createNextasking` throws if you list it.
-- `runFailed` (`nextasking/run.failed`) carries `{ task, runId, reason, error: { name, message, stack }, attempt, failedAt }`, plus `eventName` and `eventId` when the failed run is a listener's. `failedAt` is an ISO string, equal to the failed run's `finishedAt`. `error.message` and `error.stack` are cut at 4,000 characters, as in the error record.
+- List the listener in `tasks`. Don't list `runFailedEvent` in `events`: it is added automatically, and `createNextasking` throws if you list it.
+- `runFailedEvent` (`nextasking/run.failed`) carries `{ task, runId, reason, error: { name, message, stack }, attempt, failedAt }`, plus `eventName` and `eventId` when the failed run is a listener's. `failedAt` is an ISO string, equal to the failed run's `finishedAt`. `error.message` and `error.stack` are cut at 4,000 characters, as in the error record.
 - It doesn't carry the failed run's payload. Read it with `getRun(task, runId)` if the alert needs it.
 - One notice per final failure: a run that is replayed and fails again sends a second one. The notice is stored with the failure, in the same write: once the run is failed, each listener has its run, and nothing is ever re-sent. Each notice has its own event id, derived from the failure.
 - A listener whose `concurrency.key` throws, or returns something other than a non-empty string, on the notice is left out of that notice: the run still fails, the other listeners still get their run, and the worker writes `worker error` with the error naming the listener. The `failedAt` that key function receives is read from the worker's clock; the handler's payload carries the server's instant.

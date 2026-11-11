@@ -1,7 +1,7 @@
 import * as v from "valibot";
 import { expect, test } from "vitest";
 
-import { runFailed } from "./built-in-events.js";
+import { runFailedEvent } from "./built-in-events.js";
 import { defineListener, defineTask } from "./definitions.js";
 import type { AnyTaskDefinition } from "./definitions.js";
 import { builtFailureNoticeOf } from "./failure-notices.js";
@@ -11,19 +11,19 @@ import { brokenKeyRunFailedListener, workerDefinitionsOf } from "../tests/worker
 const sendEmail = defineTask("send-email", { schema: v.object({}), handler: async () => undefined });
 
 const alertOnCall = defineListener("alert-on-call", {
-  on: runFailed,
+  on: runFailedEvent,
   retries: 2,
   concurrency: { key: (payload) => payload.task, limit: 1 },
   handler: async () => undefined,
 });
 
-const archiveFailure = defineListener("archive-failure", { on: runFailed, handler: async () => undefined });
+const archiveFailure = defineListener("archive-failure", { on: runFailedEvent, handler: async () => undefined });
 
 const FAILING_RUN = { runId: "run-1", task: "send-email", attempt: 3, replays: 1 };
 
 const ERROR = Object.assign(new Error("provider down"), { stack: "Error: provider down\n    at send" });
 
-test("a failure notice holds one run of each runFailed listener of the release, under ids derived from the run's life", () => {
+test("a failure notice holds one run of each runFailedEvent listener of the release, under ids derived from the run's life", () => {
   const { failureNotice: notice, listenersLeftOut } = builtFailureNoticeOf(
     { ...FAILING_RUN, sourceEvent: { eventName: "user.signed-up", eventId: "event-1" } },
     { error: ERROR, reason: "retries exhausted" },
@@ -47,16 +47,16 @@ test("a failure notice holds one run of each runFailed listener of the release, 
         task: "alert-on-call",
         retries: 2,
         concurrencyKey: "send-email",
-        sourceEvent: { eventName: runFailed.name, eventId },
+        sourceEvent: { eventName: runFailedEvent.name, eventId },
       },
       {
         runId: deriveListenerRunId(eventId, "archive-failure"),
         task: "archive-failure",
         retries: 5,
-        sourceEvent: { eventName: runFailed.name, eventId },
+        sourceEvent: { eventName: runFailedEvent.name, eventId },
       },
     ],
-    eventDedup: { eventName: runFailed.name, eventId },
+    eventDedup: { eventName: runFailedEvent.name, eventId },
   });
   expect(listenersLeftOut).toEqual([]);
 });
@@ -87,7 +87,7 @@ test("a replayed run that fails again gets a notice of its own event id", () => 
 
 test("a failing listener of a built-in event gets an empty notice", () => {
   const { failureNotice: notice } = builtFailureNoticeOf(
-    { ...FAILING_RUN, task: "alert-on-call", sourceEvent: { eventName: runFailed.name, eventId: "notice-1" } },
+    { ...FAILING_RUN, task: "alert-on-call", sourceEvent: { eventName: runFailedEvent.name, eventId: "notice-1" } },
     { error: ERROR, reason: "non-retriable" },
     workerDefinitionsOf([sendEmail, alertOnCall] as AnyTaskDefinition[]),
   );
@@ -95,7 +95,7 @@ test("a failing listener of a built-in event gets an empty notice", () => {
   expect(notice.runs).toEqual([]);
 });
 
-test("a release with no runFailed listener gets an empty notice", () => {
+test("a release with no runFailedEvent listener gets an empty notice", () => {
   const { failureNotice: notice } = builtFailureNoticeOf(
     FAILING_RUN,
     { error: ERROR, reason: "non-retriable" },

@@ -31,9 +31,11 @@ function payloadSchemaBuiltInto<BuiltInPayload>(): StandardSchemaV1<BuiltInPaylo
   };
 }
 
-export const runFailed = defineEvent("nextasking/run.failed", { schema: payloadSchemaBuiltInto<RunFailedPayload>() });
+export const runFailedEvent = defineEvent("nextasking/run.failed", {
+  schema: payloadSchemaBuiltInto<RunFailedPayload>(),
+});
 
-export const BUILT_IN_EVENTS = [runFailed] as const;
+export const BUILT_IN_EVENTS = [runFailedEvent] as const;
 
 export type BuiltInEvent = (typeof BUILT_IN_EVENTS)[number];
 

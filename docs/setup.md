@@ -123,6 +123,9 @@ export async function register() {
 | `NEXT_MANUAL_SIG_HANDLE` | Next.js  | `next start` when it runs the worker | A deploy's SIGTERM lets running attempts finish; see [Worker](worker.md#let-a-deploy-finish-the-running-attempts) |
 
 - Without `NEXT_MANUAL_SIG_HANDLE`, a `next start` running the worker warns at startup that a deploy cuts the attempts in flight.
+- An unset or empty `REDIS_URL` is a missing `connection.url`. Creating the instance still works, so `next build` passes without it; every `dispatch`, `emit`, read and `startWorker` throws at once `Missing connection.url: …`. See [Startup checks](tasks-and-events.md#startup-checks).
+  - `url: process.env.REDIS_URL!`: unset or empty, it is missing.
+  - `url: process.env.REDIS_URL ?? "redis://localhost:6379"`: unset, it connects to the local server; empty, it is missing.
 
 ## Webpack only: serverExternalPackages
 

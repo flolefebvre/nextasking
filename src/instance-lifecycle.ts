@@ -184,10 +184,10 @@ export function createInstanceLifecycle(config: InstanceLifecycleConfig): Instan
     if (isWorkerStartedInThisProcess) {
       throw new Error("The nextasking worker is already started in this process");
     }
+    const opened = openCommandConnection();
     isWorkerStartedInThisProcess = true;
     isThisInstanceTheProcessWorker = true;
     const timing = config.timing ?? workerTiming();
-    const opened = openCommandConnection();
     const redisOutage = connections.workerRedisOutageOf(opened.commandConnection, timing.tickIntervalInMilliseconds);
     const serverInfoReading = answeredUnlessClosed(redisOutage, () =>
       readServerInfo(opened.commandConnection.workerCalls),

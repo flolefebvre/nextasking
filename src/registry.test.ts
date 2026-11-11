@@ -8,10 +8,11 @@ import type { RunFailedPayload } from "./built-in-events.js";
 import { defineEvent, defineListener, defineScheduledTask, defineTask } from "./definitions.js";
 import type { EventDefinition } from "./definitions.js";
 import type { StandardSchemaV1 } from "./standard-schema.js";
-import { InvalidPayloadError, UnknownEventError, UnknownTaskError } from "./errors.js";
+import { InvalidPayloadError, RedisUnavailableError, UnknownEventError, UnknownTaskError } from "./errors.js";
 import type { Duration } from "./durations.js";
 import type { Logger } from "./logger.js";
 import { createNextasking } from "./registry.js";
+import { fakeNextasking } from "./testing.js";
 import type { DispatchedRun, DispatchOptions, EmitOptions, EmittedEvent } from "./enqueue-requests.js";
 import type { StartWorkerOptions } from "./worker-options.js";
 
@@ -236,6 +237,38 @@ describe("createNextasking", () => {
       'Invalid connection.giveUpAfter: "half a second" is not a duration: a whole number followed by s, m, h or d, such as "30s"',
     );
     expect(creating).toThrow(expect.objectContaining({ cause: expect.any(Error) }));
+  });
+
+  test.each([
+    ["without a scheme", "localhost:6379", '"localhost:6379"'],
+    ["of another scheme, hiding its password", "http://user:s3cr3t@cache.internal", '"http://user:***@cache.internal"'],
+    ["that is not a URL", "not a url", '"not a url"'],
+  ])("rejects a connection.url %s, before opening any connection", async (_, url, shownUrl) => {
+    const networkResourcesBefore = networkResources();
+
+    expect(() => createNextasking({ connection: { url }, tasks: [sendWelcomeEmail] })).toThrow(
+      `Invalid connection.url: ${shownUrl} is not a valid redis:// or rediss:// URL, such as "redis://localhost:6379"`,
+    );
+    await setImmediate();
+
+    expect(networkResources()).toEqual(networkResourcesBefore);
+  });
+
+  test("rejects an empty prefix, before opening any connection", async () => {
+    const networkResourcesBefore = networkResources();
+
+    expect(() =>
+      createNextasking({ connection: { url: UNREACHABLE_URL }, prefix: "", tasks: [sendWelcomeEmail] }),
+    ).toThrow('Invalid prefix: "" is empty: leave prefix out for the default "nextasking", or give a non-empty one');
+    await setImmediate();
+
+    expect(networkResources()).toEqual(networkResourcesBefore);
+  });
+
+  test("accepts a prefix of one character", () => {
+    expect(() =>
+      createNextasking({ connection: { url: UNREACHABLE_URL }, prefix: "q", tasks: [sendWelcomeEmail] }),
+    ).not.toThrow();
   });
 
   test("accepts a valid connection.giveUpAfter", () => {
@@ -733,6 +766,87 @@ describe("dispatch of a scheduled task", () => {
 
     expect(nextasking.isTaskName("purge-expired-sessions")).toBe(true);
     expectTypeOf(nextasking.dispatch).parameter(0).toEqualTypeOf<"send-welcome-email" | "purge-expired-sessions">();
+  });
+});
+
+const MISSING_URL_MESSAGE =
+  "Missing connection.url: it is undefined or empty, set the variable your app reads it from, such as REDIS_URL";
+
+function createNextaskingWithUrl(url: string | undefined) {
+  return createNextasking({
+    connection: { url: url as string },
+    events: [invoicePaid],
+    tasks: [sendWelcomeEmail, recordInvoicePayment],
+  });
+}
+
+async function expectRejectedAtOnceWithTheMissingUrl(call: () => Promise<unknown>): Promise<void> {
+  vi.useFakeTimers();
+  try {
+    const calling = call();
+    await expect(calling).rejects.toThrow(MISSING_URL_MESSAGE);
+    await expect(calling).rejects.not.toBeInstanceOf(RedisUnavailableError);
+    expect(vi.getTimerCount()).toBe(0);
+  } finally {
+    vi.useRealTimers();
+  }
+}
+
+describe.each([
+  ["undefined", undefined],
+  ["empty", ""],
+])("a connection.url that is %s", (_, url) => {
+  test("is accepted at creation, opening no connection, and the definitions are read", async () => {
+    const networkResourcesBefore = networkResources();
+
+    const nextasking = createNextaskingWithUrl(url);
+    await setImmediate();
+
+    expect(nextasking.taskDefinitions.map(({ name }) => name)).toEqual([
+      "send-welcome-email",
+      "record-invoice-payment",
+    ]);
+    expect(nextasking.eventDefinitions.map(({ name }) => name)).toContain("invoice.paid");
+    expect(networkResources()).toEqual(networkResourcesBefore);
+  });
+
+  test("makes dispatch, emit, each read and startWorker throw at once that it is missing, every time", async () => {
+    const nextasking = createNextaskingWithUrl(url);
+    const calls = [
+      () => nextasking.dispatch("send-welcome-email", VALID_WELCOME_PAYLOAD),
+      () => nextasking.emit("invoice.paid", { invoiceId: "inv-1", amountInCents: 1200 }),
+      () => nextasking.getRun("send-welcome-email", "run-1"),
+      () => nextasking.listRuns(),
+      () => nextasking.countRuns(),
+      () => nextasking.listSchedules(),
+      () => nextasking.startWorker(),
+    ];
+
+    for (const call of [...calls, ...calls]) {
+      await expectRejectedAtOnceWithTheMissingUrl(call);
+    }
+  });
+
+  test("leaves no worker started after startWorker threw: a second one throws the same, and the instance can be faked", async () => {
+    const nextasking = createNextaskingWithUrl(url);
+
+    await expectRejectedAtOnceWithTheMissingUrl(() => nextasking.startWorker());
+    await expectRejectedAtOnceWithTheMissingUrl(() => createNextaskingWithUrl(url).startWorker());
+    using fake = fakeNextasking(nextasking);
+    await nextasking.dispatch("send-welcome-email", VALID_WELCOME_PAYLOAD);
+
+    expect(fake.dispatches.map(({ task }) => task)).toEqual(["send-welcome-email"]);
+  });
+
+  test("throws nothing on a faked instance, which never touches Redis", async () => {
+    const nextasking = createNextaskingWithUrl(url);
+    using fake = fakeNextasking(nextasking);
+
+    await nextasking.dispatch("send-welcome-email", VALID_WELCOME_PAYLOAD);
+    await nextasking.emit("invoice.paid", { invoiceId: "inv-1", amountInCents: 1200 });
+
+    expect(fake.dispatches.map(({ task }) => task)).toEqual(["send-welcome-email"]);
+    expect(fake.emits.map(({ event }) => event)).toEqual(["invoice.paid"]);
   });
 });
 

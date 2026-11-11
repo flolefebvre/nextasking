@@ -120,7 +120,7 @@ declare module "@flefebvre/nextasking" {
 
 ### Startup checks
 
-`createNextasking` checks the definitions before anything else, with no connection, and throws an `Error` whose one-line message names the definition and what is wrong:
+`createNextasking` checks the definitions and the options before anything else, with no connection, and throws an `Error` whose one-line message names the definition or the option and what is wrong:
 
 - two definitions with the same name: tasks and events share one namespace
 - a listener whose `on` event isn't listed in `events` and isn't a built-in event
@@ -131,6 +131,8 @@ declare module "@flefebvre/nextasking" {
 - a duration option that isn't a valid duration, such as `"-5s"` or `"0.5h"` passed through a cast or plain JavaScript, `connection.giveUpAfter` included
 - a scheduled task's cron or time zone that isn't valid; see [Scheduled tasks](scheduled-tasks.md#startup-checks)
 - an entry of `tasks` or `events` that is `undefined`, named by its position: its import ran in a cycle, so its type says defined while its value isn't yet
+- a `connection.url` that isn't a valid `redis://` or `rediss://` URL, such as `"localhost:6379"` with no scheme; the message hides its password
+- an empty `prefix`
 
 ```text
 tasks[1] is undefined: an import cycle is the usual cause, the file that defines this task imports the file that calls createNextasking
@@ -143,11 +145,25 @@ Task "nextasking/sync" has a reserved name: names starting with "nextasking/" ar
 Task "rebuild-index" has an invalid timeout: "0.5h" is not a duration: a whole number followed by s, m, h or d, such as "30s"
 Task "sync-account" has an invalid retries: -1 is not a non-negative integer
 Invalid connection.giveUpAfter: "0.5h" is not a duration: a whole number followed by s, m, h or d, such as "30s"
+Invalid connection.url: "user:***@localhost:6379" is not a valid redis:// or rediss:// URL, such as "redis://localhost:6379"
+Invalid prefix: "" is empty: leave prefix out for the default "nextasking", or give a non-empty one
 ```
 
-Fix the definition; don't catch the error.
+Fix the definition or the option; don't catch the error.
 
 - Thrown from `register()`, it fails loudly but doesn't stop the process: `next start` keeps running and answers 500 to every request, and logs the error on boot and on each request as `Error: An error occurred while loading instrumentation hook:` followed by the message above.
+- `createNextaskingControl` runs the same checks on its `connection` and `prefix`.
+
+A missing `connection.url`, `undefined` or `""`, is not a startup check: creating the instance and reading its definitions still work, so `next build` passes without the variable. Every call that needs Redis, `startWorker` included, throws at once, each time, and never waits `giveUpAfter`:
+
+```text
+Missing connection.url: it is undefined or empty, set the variable your app reads it from, such as REDIS_URL
+```
+
+- It is an `Error`, not a `RedisUnavailableError`: nothing is down, the variable is unset. Set it; see [Setup](setup.md#set-the-environment).
+- Thrown by `startWorker` in `register()`, it fails as a startup check does.
+- A faked instance never touches Redis, so it never throws it. See [Testing](testing.md).
+- The calls of `createNextaskingControl` throw it the same way.
 
 `defineListener` runs the same check on its `on`, as the listener's file loads:
 

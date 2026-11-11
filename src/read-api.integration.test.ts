@@ -682,6 +682,19 @@ async function runsFinishedSecondsApart(
   return backdatedFinishedAts;
 }
 
+async function runsFinishedInTheirOrderAfterTheLatest(
+  context: EngineTestContext,
+  runs: readonly RunIdentity[],
+): Promise<void> {
+  const finishedAts = await Promise.all(
+    runs.map(async ({ task, runId }) => (await recordFieldOf(context, task, runId, "finishedAt")).getTime()),
+  );
+  const latestFinishedAt = Math.max(...finishedAts);
+  for (const [runNumber, { task, runId }] of runs.entries()) {
+    await backdateEndedRun(context, task, runId, finishedAts[runNumber]! - (latestFinishedAt + runNumber + 1));
+  }
+}
+
 async function runsFinishedAtOneInstant(context: EngineTestContext, runs: readonly RunIdentity[]): Promise<void> {
   await runsFinishedSecondsApart(
     context,
@@ -722,6 +735,12 @@ async function readerOfRunsInFourOrderGroupsOverTwoTasks(context: EngineTestCont
   await endRuns(context.engine, "send-email", ["ended-1", "ended-2"], "complete");
   await endRuns(context.engine, "build-report", ["ended-3"], "fail");
   await endRuns(context.engine, "build-report", ["ended-4"], "complete");
+  await runsFinishedInTheirOrderAfterTheLatest(context, [
+    { task: "send-email", runId: "ended-1" },
+    { task: "send-email", runId: "ended-2" },
+    { task: "build-report", runId: "ended-3" },
+    { task: "build-report", runId: "ended-4" },
+  ]);
   await runsSuspendedUntilTheSameInstant(context, [runOf("asleep-1", "send-email"), runOf("asleep-2", "build-report")]);
   await enqueueRuns(context, [runOf("started-1", "send-email"), runOf("started-2", "build-report")]);
   await fetchedLockedRunsOf(context, 2);

@@ -1106,6 +1106,29 @@ engineTest(
   },
 );
 
+engineTest("listRuns takes a state or a task listed twice as listed once, reading its index once", async (context) => {
+  const { client, keys } = context;
+  await endRunsOfEachTask(context, 2);
+  const reader = readerOf(context);
+  const cursorOfOneValue = (await reader.listRuns({ state: "completed", task: "send-email", limit: 1 })).nextCursor!;
+
+  const pageOfTheDuplicatedValues = await reader.listRuns({
+    state: ["completed", "completed"],
+    task: ["send-email", "send-email"],
+    limit: 1,
+    cursor: cursorOfOneValue,
+  });
+  const traffic = await readTrafficOf(client, () =>
+    reader.listRuns({ state: ["completed", "completed"], task: ["send-email", "send-email"], limit: 1 }),
+  );
+
+  expect(pageOfTheDuplicatedValues).toMatchObject({ totalRunCount: 2, firstRunPosition: 2 });
+  expect(traffic.sentCommands[0]).toEqual({
+    name: "evalsha",
+    args: [keys.runIndex("send-email", "completed"), 1, "forward", ENDED_ORDER_GROUP_NUMBER],
+  });
+});
+
 engineTest(
   "listRuns takes the same tasks listed in another order as the same list, and refuses a cursor from another set of tasks",
   async (context) => {

@@ -22,6 +22,8 @@ export const NEXT_TELEMETRY_ENV = { NEXT_TELEMETRY_DISABLED: "1" };
 
 const STANDALONE_BUILD_ENV = { NEXTASKING_E2E_STANDALONE: "1" };
 
+const MISSING_REDIS_URL_BUILD_ENV = { REDIS_URL: "" };
+
 export type PreparedFixtureApp = { fixtureAppDir: string; standaloneAppDir: string; remove: () => Promise<void> };
 
 export function fixtureNextVersion(env: NodeJS.ProcessEnv = process.env): string | undefined {
@@ -98,7 +100,13 @@ export async function prepareFixtureApp(): Promise<PreparedFixtureApp> {
     }
     await runInDir(fixtureAppDir, "pnpm", ["install"], "the fixture app failed to install");
     await cp(fixtureAppDir, standaloneBuildDir, { recursive: true, verbatimSymlinks: true });
-    await runInDir(fixtureAppDir, nextBinOf(fixtureAppDir), ["build"], "the fixture app failed to build");
+    await runInDir(
+      fixtureAppDir,
+      nextBinOf(fixtureAppDir),
+      ["build"],
+      "the fixture app failed to build with REDIS_URL empty",
+      MISSING_REDIS_URL_BUILD_ENV,
+    );
     await runInDir(
       standaloneBuildDir,
       nextBinOf(standaloneBuildDir),

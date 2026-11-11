@@ -84,7 +84,7 @@ export const recordInvoicePayment = defineListener("record-invoice-payment", {
 
 - The payload is the event's schema output: a listener has no `schema` of its own.
 - It takes every task option (`retries`, `backoff`, `timeout`, `concurrency`) and the same handler context. See [Retries and failures](retries-and-failures.md) for the first three and [Concurrency](concurrency.md) for `concurrency`.
-- `on` takes the event definition, not its name.
+- `on` takes the event definition, not its name. A task or a listener passed as `on` doesn't compile, nor does one listed in `events`.
 - Give each reaction its own listener: one event can have any number of them, and each gets its own run.
 
 ## Register the tasks and events
@@ -130,8 +130,11 @@ declare module "@flefebvre/nextasking" {
 - `retries` that isn't a whole number, 0 or more
 - a duration option that isn't a valid duration, such as `"-5s"` or `"0.5h"` passed through a cast or plain JavaScript, `connection.giveUpAfter` included
 - a scheduled task's cron or time zone that isn't valid; see [Scheduled tasks](scheduled-tasks.md#startup-checks)
+- an entry of `tasks` or `events` that is `undefined`, named by its position: its import ran in a cycle, so its type says defined while its value isn't yet
 
 ```text
+tasks[1] is undefined: an import cycle is the usual cause, the file that defines this task imports the file that calls createNextasking
+events[0] is undefined: an import cycle is the usual cause, the file that defines this event imports the file that calls createNextasking
 Duplicate name "invoice.paid": every task and event needs its own name
 Listener "record-invoice-payment" listens to event "invoice.paid", which is not listed in events
 Event "nextasking/user.deleted" has a reserved name: names starting with "nextasking/" belong to the built-in events
@@ -145,6 +148,15 @@ Invalid connection.giveUpAfter: "0.5h" is not a duration: a whole number followe
 Fix the definition; don't catch the error.
 
 - Thrown from `register()`, it fails loudly but doesn't stop the process: `next start` keeps running and answers 500 to every request, and logs the error on boot and on each request as `Error: An error occurred while loading instrumentation hook:` followed by the message above.
+
+`defineListener` runs the same check on its `on`, as the listener's file loads:
+
+```text
+Listener "record-invoice-payment" has an undefined on: an import cycle is the usual cause, the file that defines its event imports the file that defines this listener
+```
+
+- Break the cycle by importing nothing back: a definition's file imports its schema, its event and its libraries, never `@/nextasking` nor a file that does.
+- A handler that imports the instance to call `nextasking.dispatch` or `nextasking.emit` is the usual cycle: use the handler's own `dispatch` and `emit` instead. See [Steps](steps.md#emit-and-dispatch-from-a-handler).
 
 ## Dispatch a task
 

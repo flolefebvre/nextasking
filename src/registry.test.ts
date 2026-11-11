@@ -6,6 +6,8 @@ import { z } from "zod";
 import { runFailed } from "./built-in-events.js";
 import type { RunFailedPayload } from "./built-in-events.js";
 import { defineEvent, defineListener, defineScheduledTask, defineTask } from "./definitions.js";
+import type { EventDefinition } from "./definitions.js";
+import type { StandardSchemaV1 } from "./standard-schema.js";
 import { InvalidPayloadError, UnknownEventError, UnknownTaskError } from "./errors.js";
 import type { Duration } from "./durations.js";
 import type { Logger } from "./logger.js";
@@ -50,6 +52,8 @@ const recordInvoicePayment = defineListener("record-invoice-payment", {
   on: invoicePaid,
   handler: async () => undefined,
 });
+
+const importedThroughACycle = undefined as unknown as typeof sendWelcomeEmail;
 
 function createTestNextasking(logger?: Logger) {
   return createNextasking({
@@ -135,6 +139,54 @@ describe("createNextasking", () => {
     expect(() => createNextasking({ connection: { url: UNREACHABLE_URL }, tasks: [reservedTask] })).toThrow(
       'Task "nextasking/firing" has a reserved name: names starting with "nextasking/" are reserved for the library',
     );
+  });
+
+  test.each([
+    { position: "first", tasks: [importedThroughACycle, sendWelcomeEmail], message: "tasks[0]" },
+    { position: "last", tasks: [sendWelcomeEmail, generateInvoicePdf, importedThroughACycle], message: "tasks[2]" },
+    { position: "alone", tasks: [importedThroughACycle], message: "tasks[0]" },
+  ])(
+    "rejects an undefined entry of tasks, $position, naming its position and the import cycle",
+    ({ tasks, message }) => {
+      expect(() => createNextasking({ connection: { url: UNREACHABLE_URL }, tasks })).toThrow(
+        new Error(
+          `${message} is undefined: an import cycle is the usual cause, the file that defines this task imports the file that calls createNextasking`,
+        ),
+      );
+    },
+  );
+
+  test("rejects an undefined entry of events, naming its position and the import cycle", () => {
+    const eventImportedThroughACycle = undefined as unknown as typeof userSignedUp;
+
+    expect(() =>
+      createNextasking({
+        connection: { url: UNREACHABLE_URL },
+        events: [invoicePaid, eventImportedThroughACycle],
+        tasks: [sendWelcomeEmail],
+      }),
+    ).toThrow(
+      new Error(
+        "events[1] is undefined: an import cycle is the usual cause, the file that defines this event imports the file that calls createNextasking",
+      ),
+    );
+  });
+
+  test("refuses a task, a listener or a scheduled task listed in events", () => {
+    const purgeExpiredSessions = defineScheduledTask("purge-expired-sessions", {
+      schedule: { cron: "0 3 * * *" },
+      handler: async () => undefined,
+    });
+    const createWithEvents = () => {
+      // @ts-expect-error a task is not an event
+      createNextasking({ connection: { url: UNREACHABLE_URL }, events: [invoicePaid, sendWelcomeEmail], tasks: [] });
+      // @ts-expect-error a listener is not an event
+      createNextasking({ connection: { url: UNREACHABLE_URL }, events: [recordInvoicePayment], tasks: [] });
+      // @ts-expect-error a scheduled task is not an event
+      createNextasking({ connection: { url: UNREACHABLE_URL }, events: [purgeExpiredSessions], tasks: [] });
+    };
+
+    expect(createWithEvents).toBeTypeOf("function");
   });
 
   test("accepts events and their listeners, and no events at all", () => {
@@ -881,6 +933,13 @@ describe("built-in events", () => {
       tasks: [recordInvoicePayment, alertOnRunFailed],
     });
   }
+
+  test("type runFailed as an event definition named nextasking/run.failed, whose schema gives the notice", () => {
+    expect(Object.keys(runFailed).sort()).toEqual(["name", "schema"]);
+    expectTypeOf(runFailed).toEqualTypeOf<
+      EventDefinition<"nextasking/run.failed", StandardSchemaV1<RunFailedPayload, RunFailedPayload>>
+    >();
+  });
 
   test("are added to the registry automatically, with their listeners, and left out of isEventName", () => {
     const nextasking = createAlertingNextasking();

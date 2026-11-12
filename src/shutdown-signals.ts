@@ -9,7 +9,7 @@ const SHUTDOWN_SIGNALS = ["SIGTERM", "SIGINT"] as const;
 export const MISSING_MANUAL_SIGNAL_HANDLING_WARNING =
   "NEXT_MANUAL_SIG_HANDLE is not set: on SIGTERM Next exits at once and cuts the attempts running in this worker";
 
-export type ShutdownExit = {
+type ShutdownExit = {
   shutDown: () => Promise<void>;
   onWorkerStopped: StartWorkerOptions["onWorkerStopped"];
   onWorkerStoppedBoundInMilliseconds: DurationInMilliseconds;

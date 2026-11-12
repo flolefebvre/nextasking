@@ -67,7 +67,7 @@ On the first SIGTERM or SIGINT (a repeat is ignored):
 2. A running attempt that reaches a step boundary (any `step.run`, `step.sleep`, `step.sleepUntil`, `emit` or `dispatch`) lets its steps in flight finish and save, then goes back to pending at once. Another instance resumes it from its saved steps. This uses no retry and counts no stall.
 3. An attempt that ends before reaching a boundary completes or fails as usual.
 4. At `shutdownTimeout`, the attempts still running get their `abortSignal` aborted. One that stops on the abort goes back to pending like a step boundary; one that returns keeps its completion. The worker waits up to one second more for them.
-5. The worker closes its connections, waiting up to one second for a clean close, and writes `worker stopped`.
+5. The worker closes its connections, waiting up to one second for a clean close, and writes `worker stopped`. When the boot was still waiting for Redis, no worker was running: the connections close and no line is written. See [When Redis is down](#when-redis-is-down).
 6. The library awaits `onWorkerStopped`, up to 2 seconds, then the process exits with code 0.
 
 - The whole shutdown takes at most `shutdownTimeout` plus about 4 seconds, whatever the state of the connection: up to 1 second for the aborted attempts, 1 for the connections, 2 for `onWorkerStopped`. Keep that under your platform's grace period before SIGKILL (30 seconds on Kubernetes and most hosts). The default `"25s"` fits 30 seconds with one second to spare; when you raise `shutdownTimeout` or your grace period is shorter, subtract 4 seconds, not 2, from the grace period to get the most `shutdownTimeout` can be.
@@ -91,7 +91,7 @@ export async function register() {
 }
 ```
 
-- It is called once, with no argument, after `worker stopped`, or after `worker shutdown failed` when stopping failed, on every exit the library makes. That includes a signal that arrives once `startWorker()` has resolved while the boot still waits for Redis.
+- It is called once, with no argument, on every exit the library makes: after `worker stopped`, or after `worker shutdown failed` when stopping failed. A signal that arrives once `startWorker()` has resolved while the boot still waits for Redis calls it too, but no worker was running then, so no line comes before it: there is no `worker stopped` to wait for.
 - It is never called without `NEXT_MANUAL_SIG_HANDLE`, since the library then never exits the process, nor when `startWorker()` rejects, nor on a signal that arrives before `startWorker()` has resolved: nothing listens to the signal then.
 - The process exits once its promise settles, or after 2 seconds if it hasn't. A repeated signal meanwhile is ignored.
 - A callback that throws or rejects writes `onWorkerStopped failed` at error with `err`; the exit code stays 0, or 1 when stopping failed.
@@ -200,7 +200,7 @@ A server `timeout` closes a client it hasn't heard from for that many seconds (3
 - When Redis doesn't answer its first command within `connection.giveUpAfter` (default `"5s"`), `startWorker()` resolves anyway and writes `connection error`. Pages keep rendering; route handlers calling the instance get `RedisUnavailableError`, see [Tasks and events](tasks-and-events.md#when-redis-is-down).
 - The boot waits for Redis in the background: once it answers, the worker checks the policy and the version, reconciles the schedules, then writes `worker started` and takes attempts. No attempt starts before.
 - An evicting policy or a server below the floor found in the background writes `worker not started` at error, `err` saying why, and the worker stays off until the process restarts.
-- A SIGTERM while the boot waits for Redis stops it at once: nothing to drain.
+- A SIGTERM while the boot waits for Redis stops it at once: nothing to drain, and no `worker stopped` is written. With `NEXT_MANUAL_SIG_HANDLE` set, `onWorkerStopped` is still awaited before the process exits with code 0.
 
 Once started, the worker waits out an outage instead of failing attempts:
 

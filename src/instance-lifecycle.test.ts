@@ -15,6 +15,7 @@ import type { InstanceLifecycle } from "./instance-lifecycle.js";
 import { MISSING_MANUAL_SIGNAL_HANDLING_WARNING } from "./shutdown-signals.js";
 import type { HandlerSender } from "./step-engine.js";
 import { DEFAULT_WORKER_TIMING } from "./worker-timing.js";
+import type { WorkerTiming } from "./worker-timing.js";
 import { createFakeRedisDrivers, engineOnFakeDriver, wakeUpWaitOnFakeDriver } from "../tests/fake-redis-drivers.js";
 import type { FakeRedisDriver, FakeRedisDrivers } from "../tests/fake-redis-drivers.js";
 import { createHandlerGate, gatedBetweenTwoSteps, gatedWithNoStep } from "../tests/handler-gate.js";
@@ -61,6 +62,7 @@ type LifecycleScenarioOptions = {
   engineOn?: (engine: InMemoryEngine, client: RedisClient, commandDriver: () => FakeRedisDriver) => Engine;
   senderOn?: (engine: Engine) => HandlerSender;
   env?: NodeJS.ProcessEnv;
+  timing?: WorkerTiming;
 };
 
 function connectionResetError(): Error {
@@ -86,6 +88,7 @@ function lifecycleScenarioOf({
   engineOn = (inMemoryEngine, client) => engineOnFakeDriver(inMemoryEngine, client),
   senderOn = () => NO_SENDER,
   env = { NODE_ENV: "development" },
+  timing = DEFAULT_WORKER_TIMING,
 }: LifecycleScenarioOptions = {}): LifecycleScenario {
   const { logger, lines } = createRecordingLogger();
   const fakeRedisDrivers = createFakeRedisDrivers();
@@ -109,7 +112,7 @@ function lifecycleScenarioOf({
     senderOn,
     definitions: workerDefinitionsOf(tasks),
     logger,
-    timing: DEFAULT_WORKER_TIMING,
+    timing,
     env,
   });
   startedLifecycles.push(lifecycle);
@@ -480,6 +483,29 @@ describe("the exit on a shutdown signal", () => {
     await vi.advanceTimersByTimeAsync(CLOSE_BOUND_IN_MILLISECONDS);
 
     expect(messagesWhenCalled).toEqual([["worker started", "worker stopped"]]);
+    expect(processSignals.exitCodes()).toEqual([0]);
+  });
+
+  test("an onWorkerStopped that never settles holds the exit for the timing's bound past its call, then the process exits with code 0", async () => {
+    const timing: WorkerTiming = { ...DEFAULT_WORKER_TIMING, onWorkerStoppedBoundInMilliseconds: 3000 };
+    const { lifecycle } = lifecycleScenarioOf({ env: MANUAL_SIGNAL_HANDLING, timing });
+    let calledAt: number | undefined;
+    await lifecycle.startWorker({
+      onWorkerStopped: () => {
+        calledAt = Date.now();
+        return new Promise<void>(() => undefined);
+      },
+    });
+
+    processSignals.sendSignal("SIGTERM");
+    await vi.advanceTimersByTimeAsync(0);
+    const calledAtTheClose = calledAt;
+    await vi.advanceTimersByTimeAsync(timing.onWorkerStoppedBoundInMilliseconds - 1);
+    const exitCodesBeforeTheBound = processSignals.exitCodes();
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(calledAtTheClose).toBeDefined();
+    expect(exitCodesBeforeTheBound).toEqual([]);
     expect(processSignals.exitCodes()).toEqual([0]);
   });
 

@@ -14,7 +14,7 @@ export type WorkerOptions = {
   shutdownTimeoutInMilliseconds: DurationInMilliseconds;
 };
 
-export type AppCallbackName = "onWorkerNotStarted" | "onWorkerStopped";
+type AppCallbackName = "onWorkerNotStarted" | "onWorkerStopped";
 
 const UNLIMITED_CONCURRENCY = Number.MAX_SAFE_INTEGER;
 

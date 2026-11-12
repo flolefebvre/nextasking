@@ -1,108 +1,192 @@
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import type { MockInstance } from "vitest";
 
-import type { Logger } from "./logger.js";
+import type { DurationInMilliseconds } from "./durations.js";
 import { exitOnShutdownSignals } from "./shutdown-signals.js";
 import { createRecordingLogger } from "../tests/recording-logger.js";
+import type { RecordedLogLine } from "../tests/recording-logger.js";
+import { spyOnProcessSignals } from "../tests/process-signal-spies.js";
+import type { ProcessSignalSpies } from "../tests/process-signal-spies.js";
 
-type ProcessListenerCall = [event: string | symbol, listener: (...listenerArguments: unknown[]) => void];
+const ON_WORKER_STOPPED_BOUND_IN_MILLISECONDS: DurationInMilliseconds = 2000;
 
-type WatchedShutdownSignals = {
-  listenerCallsOfOn: ProcessListenerCall[];
-  onShutdownSignal: () => void;
+type HeldPromise = { promise: Promise<void>; settle: () => void; fail: (error: Error) => void };
+
+function heldPromise(): HeldPromise {
+  let settle: () => void = () => undefined;
+  let fail: (error: Error) => void = () => undefined;
+  const promise = new Promise<void>((resolve, reject) => {
+    settle = resolve;
+    fail = reject;
+  });
+  return { promise, settle, fail };
+}
+
+type ShutdownScenario = {
+  lines: RecordedLogLine[];
   stopExitingOnShutdownSignals: () => void;
 };
 
-function listenerCallsDuring(method: "on" | "off", call: () => void): ProcessListenerCall[] {
-  const listenerSpy = vi.spyOn(process, method).mockImplementation(() => process);
-  try {
-    call();
-    return listenerSpy.mock.calls.map(([event, listener]) => [event, listener]);
-  } finally {
-    listenerSpy.mockRestore();
-  }
-}
+let processSignals: ProcessSignalSpies;
 
-function shutdownSignalsWatchedBy(shutDown: () => Promise<void>, logger: Logger): WatchedShutdownSignals {
-  let stopExitingOnShutdownSignals: () => void = () => undefined;
-  const listenerCallsOfOn = listenerCallsDuring("on", () => {
-    stopExitingOnShutdownSignals = exitOnShutdownSignals(shutDown, logger);
+function shutdownScenarioOf(
+  shutDown: () => Promise<void>,
+  onWorkerStopped?: () => void | Promise<void>,
+): ShutdownScenario {
+  const { logger, lines } = createRecordingLogger();
+  const stopExitingOnShutdownSignals = exitOnShutdownSignals({
+    shutDown,
+    onWorkerStopped,
+    onWorkerStoppedBoundInMilliseconds: ON_WORKER_STOPPED_BOUND_IN_MILLISECONDS,
+    logger,
   });
-  const [firstCall] = listenerCallsOfOn;
-  if (firstCall === undefined) {
-    throw new Error("exitOnShutdownSignals installed no listener");
-  }
-  const [, onShutdownSignal] = firstCall;
-  return { listenerCallsOfOn, onShutdownSignal, stopExitingOnShutdownSignals };
+  return { lines, stopExitingOnShutdownSignals };
 }
 
-let exitSpy: MockInstance<typeof process.exit>;
+const SHUTDOWN_FAILURE = new Error("the command connection did not close");
+
+const SHUTDOWN_OUTCOMES = [
+  { outcome: "resolves", shutDown: () => Promise.resolve(), exitCode: 0, shutdownLines: [] },
+  {
+    outcome: "rejects",
+    shutDown: () => Promise.reject(SHUTDOWN_FAILURE),
+    exitCode: 1,
+    shutdownLines: [{ level: "error", message: "worker shutdown failed", fields: { err: SHUTDOWN_FAILURE } }],
+  },
+];
 
 beforeEach(() => {
-  exitSpy = vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
+  vi.useFakeTimers();
+  processSignals = spyOnProcessSignals();
 });
 
 afterEach(() => {
-  exitSpy.mockRestore();
+  processSignals.restore();
+  vi.useRealTimers();
 });
 
 test("listens to SIGTERM and SIGINT with one listener, and the function it returns removes that listener from both", () => {
-  const { logger } = createRecordingLogger();
+  const { stopExitingOnShutdownSignals } = shutdownScenarioOf(() => Promise.resolve());
+  const [onShutdownSignal] = processSignals.attachedListenersOf("SIGTERM");
 
-  const { listenerCallsOfOn, onShutdownSignal, stopExitingOnShutdownSignals } = shutdownSignalsWatchedBy(
-    () => Promise.resolve(),
-    logger,
-  );
-  const listenerCallsOfOff = listenerCallsDuring("off", stopExitingOnShutdownSignals);
+  stopExitingOnShutdownSignals();
 
-  expect(listenerCallsOfOn).toEqual([
-    ["SIGTERM", onShutdownSignal],
-    ["SIGINT", onShutdownSignal],
-  ]);
-  expect(listenerCallsOfOff).toEqual([
-    ["SIGTERM", onShutdownSignal],
-    ["SIGINT", onShutdownSignal],
+  expect(processSignals.listenerCalls()).toEqual([
+    ["on", "SIGTERM", onShutdownSignal],
+    ["on", "SIGINT", onShutdownSignal],
+    ["off", "SIGTERM", onShutdownSignal],
+    ["off", "SIGINT", onShutdownSignal],
   ]);
 });
 
-test("a shutdown that rejects writes worker shutdown failed with the rejection as err, and exits with code 1", async () => {
-  const { logger, lines } = createRecordingLogger();
-  const shutdownFailure = new Error("the command connection did not close");
-  const { onShutdownSignal } = shutdownSignalsWatchedBy(() => Promise.reject(shutdownFailure), logger);
+test.each(SHUTDOWN_OUTCOMES)(
+  "a shutdown that $outcome writes its lines, then calls onWorkerStopped once, and exits with code $exitCode only once its promise settled",
+  async ({ shutDown, exitCode, shutdownLines }) => {
+    const flush = heldPromise();
+    const linesWhenCalled: RecordedLogLine[][] = [];
+    const { lines } = shutdownScenarioOf(shutDown, () => {
+      linesWhenCalled.push([...lines]);
+      return flush.promise;
+    });
 
-  onShutdownSignal();
-  await vi.waitFor(() => expect(exitSpy).toHaveBeenCalled(), { timeout: 1_000 });
+    processSignals.sendSignal("SIGTERM");
+    await vi.advanceTimersByTimeAsync(ON_WORKER_STOPPED_BOUND_IN_MILLISECONDS - 1);
+    const exitCodesWhileFlushing = processSignals.exitCodes();
+    flush.settle();
+    await vi.advanceTimersByTimeAsync(0);
 
-  expect(lines).toEqual([{ level: "error", message: "worker shutdown failed", fields: { err: shutdownFailure } }]);
-  expect(lines[0]?.fields["err"]).toBe(shutdownFailure);
-  expect(exitSpy.mock.calls).toEqual([[1]]);
-});
+    expect(linesWhenCalled).toEqual([shutdownLines]);
+    expect(exitCodesWhileFlushing).toEqual([]);
+    expect(processSignals.exitCodes()).toEqual([exitCode]);
+    expect(lines).toEqual(shutdownLines);
+  },
+);
 
-test("a shutdown that resolves writes nothing and exits with code 0", async () => {
-  const { logger, lines } = createRecordingLogger();
-  const { onShutdownSignal } = shutdownSignalsWatchedBy(() => Promise.resolve(), logger);
+test.each(SHUTDOWN_OUTCOMES)(
+  "after a shutdown that $outcome, an onWorkerStopped still pending at 2 s holds the exit no longer: the process exits with code $exitCode",
+  async ({ shutDown, exitCode }) => {
+    shutdownScenarioOf(shutDown, () => heldPromise().promise);
 
-  onShutdownSignal();
-  await vi.waitFor(() => expect(exitSpy).toHaveBeenCalled(), { timeout: 1_000 });
+    processSignals.sendSignal("SIGTERM");
+    await vi.advanceTimersByTimeAsync(ON_WORKER_STOPPED_BOUND_IN_MILLISECONDS - 1);
+    const exitCodesBeforeTheBound = processSignals.exitCodes();
+    await vi.advanceTimersByTimeAsync(1);
 
-  expect(lines).toEqual([]);
-  expect(exitSpy.mock.calls).toEqual([[0]]);
-});
+    expect(exitCodesBeforeTheBound).toEqual([]);
+    expect(processSignals.exitCodes()).toEqual([exitCode]);
+  },
+);
 
-test("a second signal during the shutdown starts no second shutdown", async () => {
-  const { logger } = createRecordingLogger();
-  let endShutdown: () => void = () => undefined;
-  const shutdownDone = new Promise<void>((resolve) => {
-    endShutdown = resolve;
-  });
-  const shutDown = vi.fn(() => shutdownDone);
-  const { onShutdownSignal } = shutdownSignalsWatchedBy(shutDown, logger);
+test.each(
+  SHUTDOWN_OUTCOMES.flatMap((shutdownOutcome) => [
+    {
+      ...shutdownOutcome,
+      failure: "throws",
+      onWorkerStoppedFailingWith: (callbackError: Error) => () => {
+        throw callbackError;
+      },
+    },
+    {
+      ...shutdownOutcome,
+      failure: "rejects",
+      onWorkerStoppedFailingWith: (callbackError: Error) => () => Promise.reject(callbackError),
+    },
+  ]),
+)(
+  "after a shutdown that $outcome, an onWorkerStopped that $failure writes onWorkerStopped failed with what it threw after the shutdown's lines, and the process exits with code $exitCode",
+  async ({ shutDown, exitCode, shutdownLines, onWorkerStoppedFailingWith }) => {
+    const callbackError = new Error("the app's logger could not flush");
+    const { lines } = shutdownScenarioOf(shutDown, onWorkerStoppedFailingWith(callbackError));
 
-  onShutdownSignal();
-  onShutdownSignal();
-  endShutdown();
-  await vi.waitFor(() => expect(exitSpy).toHaveBeenCalled(), { timeout: 1_000 });
+    processSignals.sendSignal("SIGTERM");
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(lines).toEqual([
+      ...shutdownLines,
+      { level: "error", message: "onWorkerStopped failed", fields: { err: callbackError } },
+    ]);
+    expect(lines.at(-1)?.fields["err"]).toBe(callbackError);
+    expect(processSignals.exitCodes()).toEqual([exitCode]);
+  },
+);
+
+test.each(SHUTDOWN_OUTCOMES)(
+  "a shutdown that $outcome with no onWorkerStopped exits with code $exitCode at once",
+  async ({ shutDown, exitCode, shutdownLines }) => {
+    const { lines } = shutdownScenarioOf(shutDown);
+
+    processSignals.sendSignal("SIGTERM");
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(lines).toEqual(shutdownLines);
+    expect(processSignals.exitCodes()).toEqual([exitCode]);
+  },
+);
+
+test("a second signal during the shutdown or the wait for onWorkerStopped starts nothing again, and the listener stays on both signals until the exit", async () => {
+  const shutdown = heldPromise();
+  const flush = heldPromise();
+  const shutDown = vi.fn(() => shutdown.promise);
+  const onWorkerStopped = vi.fn(() => flush.promise);
+  const { stopExitingOnShutdownSignals } = shutdownScenarioOf(shutDown, onWorkerStopped);
+  const [onShutdownSignal] = processSignals.attachedListenersOf("SIGTERM");
+
+  processSignals.sendSignal("SIGTERM");
+  processSignals.sendSignal("SIGINT");
+  shutdown.settle();
+  await vi.advanceTimersByTimeAsync(0);
+  stopExitingOnShutdownSignals();
+  processSignals.sendSignal("SIGTERM");
+  const listenersDuringTheWait = [
+    processSignals.attachedListenersOf("SIGTERM"),
+    processSignals.attachedListenersOf("SIGINT"),
+  ];
+  flush.settle();
+  await vi.advanceTimersByTimeAsync(0);
 
   expect(shutDown).toHaveBeenCalledTimes(1);
-  expect(exitSpy.mock.calls).toEqual([[0]]);
+  expect(onWorkerStopped).toHaveBeenCalledTimes(1);
+  expect(listenersDuringTheWait).toEqual([[onShutdownSignal], [onShutdownSignal]]);
+  expect(processSignals.attachedListenersOf("SIGTERM")).toEqual([]);
+  expect(processSignals.attachedListenersOf("SIGINT")).toEqual([]);
+  expect(processSignals.exitCodes()).toEqual([0]);
 });

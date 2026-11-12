@@ -21,7 +21,7 @@ import {
 import type { HandlerSender } from "./step-engine.js";
 import { startWorkerLoop, wakeUpBlockInMillisecondsOf } from "./worker-loop.js";
 import type { WaitForWakeUp, WorkerLoop } from "./worker-loop.js";
-import { callOnWorkerNotStarted, workerOptionsFrom } from "./worker-options.js";
+import { callAppCallback, workerOptionsFrom } from "./worker-options.js";
 import type { StartWorkerOptions, WorkerOptions } from "./worker-options.js";
 import { workerTiming } from "./worker-timing.js";
 import type { WorkerTiming } from "./worker-timing.js";
@@ -174,7 +174,7 @@ export function createInstanceLifecycle(config: InstanceLifecycleConfig): Instan
       }
       releaseTheProcessWorker();
       logger.error({ err: error }, "worker not started");
-      await callOnWorkerNotStarted(onWorkerNotStarted, error, logger);
+      await callAppCallback("onWorkerNotStarted", () => onWorkerNotStarted?.(error), logger);
     }
   };
 
@@ -210,7 +210,12 @@ export function createInstanceLifecycle(config: InstanceLifecycleConfig): Instan
       void finishBootInBackground(boot, options.onWorkerNotStarted);
     }
     if (isSignalHandlingLeftToTheApp(env)) {
-      stopExitingOnShutdownSignals = exitOnShutdownSignals(close, logger);
+      stopExitingOnShutdownSignals = exitOnShutdownSignals({
+        shutDown: close,
+        onWorkerStopped: options.onWorkerStopped,
+        onWorkerStoppedBoundInMilliseconds: timing.onWorkerStoppedBoundInMilliseconds,
+        logger,
+      });
     } else if (!isDevelopment(env)) {
       logger.warn({}, MISSING_MANUAL_SIGNAL_HANDLING_WARNING);
     }

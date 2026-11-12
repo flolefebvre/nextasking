@@ -23,6 +23,8 @@ import { createInMemoryEngine } from "../tests/in-memory-engine.js";
 import type { InMemoryEngine } from "../tests/in-memory-engine.js";
 import { CONFIG_DISABLED, infoReplyWith } from "../tests/info-replies.js";
 import type { InfoReplyFields } from "../tests/info-replies.js";
+import { spyOnProcessSignals } from "../tests/process-signal-spies.js";
+import type { ProcessSignalSpies } from "../tests/process-signal-spies.js";
 import { createRecordingLogger } from "../tests/recording-logger.js";
 import type { RecordedLogLine } from "../tests/recording-logger.js";
 import { unhandledRejectionsDuring } from "../tests/unhandled-rejections.js";
@@ -445,6 +447,97 @@ describe("the boot", () => {
     expect(await startOutcome).toBeInstanceOf(InstanceClosedError);
     expect(messagesOf(lines)).toEqual([]);
     expect(vi.getTimerCount()).toBe(0);
+  });
+});
+
+describe("the exit on a shutdown signal", () => {
+  const MANUAL_SIGNAL_HANDLING: NodeJS.ProcessEnv = { NODE_ENV: "production", NEXT_MANUAL_SIG_HANDLE: "1" };
+
+  let processSignals: ProcessSignalSpies;
+
+  beforeEach(() => {
+    processSignals = spyOnProcessSignals();
+  });
+
+  afterEach(() => {
+    processSignals.restore();
+  });
+
+  function onWorkerStoppedRecordingLinesOf(lines: readonly RecordedLogLine[]) {
+    const messagesWhenCalled: string[][] = [];
+    const onWorkerStopped = () => {
+      messagesWhenCalled.push(messagesOf(lines));
+    };
+    return { onWorkerStopped, messagesWhenCalled };
+  }
+
+  test("calls onWorkerStopped once, after worker stopped, then exits with code 0", async () => {
+    const { lifecycle, lines } = lifecycleScenarioOf({ env: MANUAL_SIGNAL_HANDLING });
+    const { onWorkerStopped, messagesWhenCalled } = onWorkerStoppedRecordingLinesOf(lines);
+    await lifecycle.startWorker({ onWorkerStopped });
+
+    processSignals.sendSignal("SIGTERM");
+    await vi.advanceTimersByTimeAsync(CLOSE_BOUND_IN_MILLISECONDS);
+
+    expect(messagesWhenCalled).toEqual([["worker started", "worker stopped"]]);
+    expect(processSignals.exitCodes()).toEqual([0]);
+  });
+
+  test("calls onWorkerStopped on a signal that arrives while the boot waits for Redis, then exits with code 0", async () => {
+    const { lifecycle, lines } = lifecycleScenarioOf({
+      env: MANUAL_SIGNAL_HANDLING,
+      prepareDriver: (fakeRedisDriver) => {
+        fakeRedisDriver.infoReply = async () => infoReplyWith(VALKEY_AT_THE_FLOOR);
+      },
+    });
+    const { onWorkerStopped, messagesWhenCalled } = onWorkerStoppedRecordingLinesOf(lines);
+    await Promise.all([
+      lifecycle.startWorker({ onWorkerStopped }),
+      vi.advanceTimersByTimeAsync(GIVE_UP_AFTER_IN_MILLISECONDS),
+    ]);
+
+    processSignals.sendSignal("SIGTERM");
+    await vi.advanceTimersByTimeAsync(CLOSE_BOUND_IN_MILLISECONDS);
+
+    expect(messagesWhenCalled).toEqual([[]]);
+    expect(processSignals.exitCodes()).toEqual([0]);
+  });
+
+  test.each([
+    { case: "without NEXT_MANUAL_SIG_HANDLE", env: { NODE_ENV: "production" }, prepareDriver: readyAtTheFloor },
+    {
+      case: "when startWorker rejects",
+      env: MANUAL_SIGNAL_HANDLING,
+      prepareDriver: (fakeRedisDriver: FakeRedisDriver) => {
+        readyAtTheFloor(fakeRedisDriver);
+        fakeRedisDriver.infoReply = async () => infoReplyWith({ redisVersion: "7.2.4", maxmemoryPolicy: "noeviction" });
+      },
+    },
+  ])("listens to no signal $case, so onWorkerStopped is never called", async ({ env, prepareDriver }) => {
+    const { lifecycle } = lifecycleScenarioOf({ env, prepareDriver });
+    const onWorkerStopped = vi.fn();
+
+    await lifecycle.startWorker({ onWorkerStopped }).catch(() => undefined);
+    await lifecycle.close();
+
+    expect(processSignals.listenerCalls()).toEqual([]);
+    expect(onWorkerStopped).not.toHaveBeenCalled();
+    expect(processSignals.exitCodes()).toEqual([]);
+  });
+
+  test("a close the app makes removes the listeners, calls no onWorkerStopped and exits nothing", async () => {
+    const { lifecycle } = lifecycleScenarioOf({ env: MANUAL_SIGNAL_HANDLING });
+    const onWorkerStopped = vi.fn();
+    await lifecycle.startWorker({ onWorkerStopped });
+
+    const closing = lifecycle.close();
+    await vi.advanceTimersByTimeAsync(CLOSE_BOUND_IN_MILLISECONDS);
+    await closing;
+
+    expect(processSignals.attachedListenersOf("SIGTERM")).toEqual([]);
+    expect(processSignals.attachedListenersOf("SIGINT")).toEqual([]);
+    expect(onWorkerStopped).not.toHaveBeenCalled();
+    expect(processSignals.exitCodes()).toEqual([]);
   });
 });
 

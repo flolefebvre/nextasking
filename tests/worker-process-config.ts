@@ -9,6 +9,7 @@ export type WorkerProcessConfig = {
   startWorkerOptions?: StartWorkerOptions;
   isFailureNoticeRecorded?: boolean;
   definitions?: WorkerProcessDefinitions;
+  onWorkerStoppedDelayInMilliseconds?: number;
 };
 
 export type WorkerProcessDefinitions = "fixture tasks" | "envelope load";
@@ -30,3 +31,7 @@ export const LINE_COUNT_WRITTEN_AFTER_EXIT = 1000;
 export const DELAY_OF_THE_LINES_WRITTEN_AFTER_EXIT_IN_MILLISECONDS = 200;
 
 export const CLOSE_WHILE_BOOTING_URL_VARIABLE = "NEXTASKING_CLOSE_WHILE_BOOTING_URL";
+
+export const ON_WORKER_STOPPED_CALLED = "onWorkerStopped called";
+
+export const ON_WORKER_STOPPED_SETTLED = "onWorkerStopped settled";

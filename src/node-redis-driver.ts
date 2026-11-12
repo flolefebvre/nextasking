@@ -122,6 +122,7 @@ export const createNodeRedisDriver: CreateRedisDriver = (url, { onConnect, onRea
       url,
       RESP: 2,
       maintNotifications: "disabled",
+      pingInterval: Number(process.env.PROTOTYPE_DRIVER_PING_MS) || undefined,
       commandOptions: { timeout: undefined },
     });
     const isCurrent = () => createdClient === client;

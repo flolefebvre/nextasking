@@ -623,6 +623,20 @@ export function createRedisConnections(
     outageTracker.trackClient(subject, () => answeredCheckOf(state));
     openConnectionCount += 1;
     driver.connect();
+    const prototypeIdleCheckInMilliseconds = Number(process.env.PROTOTYPE_IDLE_CHECK_MS) || undefined;
+    if (prototypeIdleCheckInMilliseconds !== undefined) {
+      const prototypeIdleCheckTimer = unrefTimer(
+        setInterval(() => {
+          if (isClosed(state)) {
+            clearInterval(prototypeIdleCheckTimer);
+            return;
+          }
+          if (state.driver.isReady && state.callsInFlight.length === 0) {
+            answeredCheckOf(state).catch(() => undefined);
+          }
+        }, prototypeIdleCheckInMilliseconds),
+      );
+    }
     return redisConnection;
   };
 

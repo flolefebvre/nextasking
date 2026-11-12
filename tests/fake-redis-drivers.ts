@@ -35,6 +35,7 @@ export class FakeRedisDriver implements RedisDriver {
   destroyCount = 0;
   closeReply: FakeCloseReply = "answered";
   isAnswering = true;
+  pingReply: () => Promise<unknown> = () => Promise.resolve("PONG");
   infoReply: () => Promise<string> = () => Promise.reject(new Error("this fake driver has no INFO reply"));
   configReply: () => Promise<unknown> = () => Promise.reject(new Error("this fake driver has no CONFIG reply"));
   scriptReply: (scriptName: string) => Promise<unknown> = (scriptName) =>
@@ -185,7 +186,7 @@ export class FakeRedisDriver implements RedisDriver {
     }
     const sentCommand = [command.name, ...command.commandArguments].join(" ");
     const replyByCommandName: Record<string, () => Promise<unknown>> = {
-      PING: () => Promise.resolve("PONG"),
+      PING: this.pingReply,
       INFO: this.infoReply,
       CONFIG: this.configReply,
     };

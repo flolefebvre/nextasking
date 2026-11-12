@@ -30,6 +30,8 @@ const DEFAULT_GIVE_UP_AFTER: Duration = "5s";
 
 const ANSWER_CHECK_COMMAND = builtInCommandOf("PING");
 
+const QUIET_CONNECTION_CHECK_INTERVAL_IN_MILLISECONDS: DurationInMilliseconds = 10_000;
+
 export const READ_ONLY_RECONNECT_PAUSE_IN_MILLISECONDS: DurationInMilliseconds = 250;
 
 export function giveUpAfterInMillisecondsOf(connection: ConnectionConfig): DurationInMilliseconds {
@@ -213,6 +215,7 @@ type ConnectionState = {
   handshakeTimer: NodeJS.Timeout | undefined;
   readonly callsInFlight: { sentAt: EpochMilliseconds }[];
   watchdogTimer: NodeJS.Timeout | undefined;
+  quietCheckTimer: NodeJS.Timeout | undefined;
 };
 
 type Send<Reply> = (abortSignal?: AbortSignal) => Promise<Reply>;
@@ -387,6 +390,7 @@ export function createRedisConnections(
   const answeredWithinTheAnswerBound = <Reply>(state: ConnectionState, send: () => Promise<Reply>): Promise<Reply> => {
     const callInFlight = { sentAt: Date.now() };
     state.callsInFlight.push(callInFlight);
+    stopTheQuietCheck(state);
     if (state.watchdogTimer === undefined) {
       watchTheCallsInFlight(state);
     }
@@ -395,8 +399,27 @@ export function createRedisConnections(
       if (state.callsInFlight.length === 0) {
         clearTimeout(state.watchdogTimer);
         state.watchdogTimer = undefined;
+        checkOnceQuiet(state);
       }
     });
+  };
+
+  const stopTheQuietCheck = (state: ConnectionState) => {
+    clearTimeout(state.quietCheckTimer);
+    state.quietCheckTimer = undefined;
+  };
+
+  const checkOnceQuiet = (state: ConnectionState) => {
+    stopTheQuietCheck(state);
+    if (isClosed(state) || !state.driver.isReady || state.callsInFlight.length > 0) {
+      return;
+    }
+    state.quietCheckTimer = unrefTimer(
+      setTimeout(() => {
+        state.quietCheckTimer = undefined;
+        answeredCheckOf(state).catch(() => undefined);
+      }, QUIET_CONNECTION_CHECK_INTERVAL_IN_MILLISECONDS),
+    );
   };
 
   const answeredCheckOf = (state: ConnectionState): Promise<void> => {
@@ -587,6 +610,7 @@ export function createRedisConnections(
         state.readyWait?.markReady();
         state.readyWait = undefined;
         watchTheCallsInFlight(state);
+        checkOnceQuiet(state);
         outageTracker.reportClientReady(state.subject);
       },
       onError: (error) => {
@@ -595,6 +619,7 @@ export function createRedisConnections(
           return;
         }
         clearTimeout(state.handshakeTimer);
+        stopTheQuietCheck(state);
         state.errorWhileDown = error;
         outageTracker.reportClientError(state.subject, error);
       },
@@ -613,6 +638,7 @@ export function createRedisConnections(
       handshakeTimer: undefined,
       callsInFlight: [],
       watchdogTimer: undefined,
+      quietCheckTimer: undefined,
     };
     const redisConnection: RedisConnection = {
       instanceCalls: instanceCallsOf(state),
@@ -644,6 +670,7 @@ export function createRedisConnections(
       state.closedController.abort(new ConnectionClosedError());
       clearTimeout(state.handshakeTimer);
       clearTimeout(state.watchdogTimer);
+      stopTheQuietCheck(state);
       state.readyWait?.markClosed();
       state.readyWait = undefined;
       outageTracker.forgetClient(state.subject);

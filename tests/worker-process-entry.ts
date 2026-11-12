@@ -15,6 +15,8 @@ import {
   LINE_COUNT_WRITTEN_AFTER_EXIT,
   LINE_COUNT_WRITTEN_BEFORE_EXIT,
   LINE_WRITTEN_AROUND_EXIT,
+  ON_WORKER_STOPPED_CALLED,
+  ON_WORKER_STOPPED_SETTLED,
   WORKER_PROCESS_CONFIG_VARIABLE,
   WORKER_PROCESS_READY,
 } from "./worker-process-config.js";
@@ -105,5 +107,18 @@ process.on(EXIT_WITH_LINES_STILL_COMING_SIGNAL, () => {
   });
 });
 
-await nextasking.startWorker(config.startWorkerOptions);
+const onWorkerStoppedDelayInMilliseconds = config.onWorkerStoppedDelayInMilliseconds;
+
+const onWorkerStoppedOption =
+  onWorkerStoppedDelayInMilliseconds === undefined
+    ? {}
+    : {
+        onWorkerStopped: async () => {
+          ndjsonLogger.info({}, ON_WORKER_STOPPED_CALLED);
+          await new Promise((resolve) => setTimeout(resolve, onWorkerStoppedDelayInMilliseconds));
+          ndjsonLogger.info({}, ON_WORKER_STOPPED_SETTLED);
+        },
+      };
+
+await nextasking.startWorker({ ...config.startWorkerOptions, ...onWorkerStoppedOption });
 process.send?.(WORKER_PROCESS_READY);

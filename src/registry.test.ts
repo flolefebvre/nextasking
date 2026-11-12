@@ -963,21 +963,26 @@ describe("startWorker", () => {
     );
   });
 
-  test.each([
-    ["a string", "exit", '"exit"'],
-    ["null", null, "null"],
-  ])("rejects an onWorkerNotStarted that is %s, before opening any connection", async (_, value, shownValue) => {
-    const nextasking = createTestNextasking();
-    const networkResourcesBefore = networkResources();
+  test.each(
+    ["onWorkerNotStarted", "onWorkerStopped"].flatMap((callbackName) => [
+      { callbackName, valueKind: "a string", value: "exit", shownValue: '"exit"' },
+      { callbackName, valueKind: "null", value: null, shownValue: "null" },
+    ]),
+  )(
+    "rejects an $callbackName that is $valueKind, before opening any connection",
+    async ({ callbackName, value, shownValue }) => {
+      const nextasking = createTestNextasking();
+      const networkResourcesBefore = networkResources();
 
-    await expect(nextasking.startWorker({ onWorkerNotStarted: value as unknown as () => void })).rejects.toThrow(
-      `Invalid startWorker onWorkerNotStarted: ${shownValue} is not a function`,
-    );
-    await setImmediate();
-    expect(networkResources()).toEqual(networkResourcesBefore);
-  });
+      await expect(nextasking.startWorker({ [callbackName]: value } as StartWorkerOptions)).rejects.toThrow(
+        `Invalid startWorker ${callbackName}: ${shownValue} is not a function`,
+      );
+      await setImmediate();
+      expect(networkResources()).toEqual(networkResourcesBefore);
+    },
+  );
 
-  test("takes concurrency, a shutdownTimeout duration and an onWorkerNotStarted callback, and rejects other options at compile time", () => {
+  test("takes concurrency, a shutdownTimeout duration, an onWorkerNotStarted and an onWorkerStopped callback, and rejects other options at compile time", () => {
     const nextasking = createTestNextasking();
 
     expectTypeOf(nextasking.startWorker).toBeCallableWith();
@@ -986,8 +991,14 @@ describe("startWorker", () => {
       onWorkerNotStarted: (error: unknown) => console.error(error),
     });
     expectTypeOf(nextasking.startWorker).toBeCallableWith({ onWorkerNotStarted: async () => undefined });
+    expectTypeOf(nextasking.startWorker).toBeCallableWith({ onWorkerStopped: () => undefined });
+    expectTypeOf(nextasking.startWorker).toBeCallableWith({ onWorkerStopped: async () => undefined });
     // @ts-expect-error onWorkerNotStarted is a function
     expectTypeOf(nextasking.startWorker).toBeCallableWith({ onWorkerNotStarted: "exit" });
+    // @ts-expect-error onWorkerStopped is a function
+    expectTypeOf(nextasking.startWorker).toBeCallableWith({ onWorkerStopped: "exit" });
+    // @ts-expect-error onWorkerStopped takes no argument
+    expectTypeOf(nextasking.startWorker).toBeCallableWith({ onWorkerStopped: (reason: string) => void reason });
     // @ts-expect-error a shutdownTimeout is a Duration
     expectTypeOf(nextasking.startWorker).toBeCallableWith({ shutdownTimeout: 25_000 });
   });
@@ -1036,6 +1047,7 @@ describe("startWorker", () => {
       await nextasking.startWorker(partialOptions);
       await nextasking.startWorker(readonlyOptions);
       await nextasking.startWorker({ concurrency: undefined, onWorkerNotStarted: (error) => console.error(error) });
+      await nextasking.startWorker({ onWorkerStopped: undefined });
       await nextasking.startWorker(undefined);
     };
     const start: (options?: StartWorkerOptions) => Promise<void> = nextasking.startWorker;

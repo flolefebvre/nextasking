@@ -181,6 +181,10 @@ export async function startWorkerWithUnknownOptions(): Promise<void> {
   await nextasking.startWorker(null);
   // @ts-expect-error concurrency is a number
   await nextasking.startWorker({ concurrency: "5" });
+  // @ts-expect-error onWorkerStopped takes no argument
+  await nextasking.startWorker({ onWorkerStopped: (reason: string) => void reason });
+  // @ts-expect-error onWorkerStoppd is not an option of startWorker
+  await nextasking.startWorker({ onWorkerStoppd: async () => undefined });
 }
 
 declare const typedWorkerOptions: StartWorkerOptions;
@@ -199,6 +203,7 @@ export async function startWorkerWithKnownOptions(): Promise<void> {
   await nextasking.startWorker(partialWorkerOptions);
   await nextasking.startWorker(readonlyWorkerOptions);
   await nextasking.startWorker({ concurrency: undefined, onWorkerNotStarted: (error) => void error });
+  await nextasking.startWorker({ onWorkerStopped: async () => undefined });
   await nextasking.startWorker(undefined);
 }
 

@@ -41,7 +41,7 @@ await nextasking.dispatch("send-receipt", { invoiceId, email }, { runId: `send-r
 
 ## A crash between a side effect and its save
 
-A step's result is saved after `fn` returns. If the process crashes or is killed after the side effect but before the save, the next attempt runs `fn` again. A step still running at `shutdownTimeout` is in this window too: its `abortSignal` aborts, and a step that throws on the abort, or is still running when the process exits about a second later, saves nothing. See [Worker](worker.md#let-a-deploy-finish-the-running-attempts).
+A step's result is saved after `fn` returns. If the process crashes or is killed after the side effect but before the save, the next attempt runs `fn` again. A step still running at `shutdownTimeout` is in this window too: its `abortSignal` aborts, and from then on the step saves nothing, whether it throws on the abort, returns afterwards, or is still running when the process exits. See [Worker](worker.md#let-a-deploy-finish-the-running-attempts).
 
 ```ts
 await step.run("charge-invoice", async ({ idempotencyKey }) => {

@@ -83,7 +83,7 @@ export async function register() {
 - **Retries and steps**: retries with backoff, durable steps whose results a retry reuses, and sleeps that free the worker. See [Retries and failures](docs/retries-and-failures.md) and [Steps](docs/steps.md).
 - **Scheduled tasks**: cron schedules in a time zone, reconciled across deploys. See [Scheduled tasks](docs/scheduled-tasks.md).
 - **Concurrency**: a cap per task across every instance, or per account or any other key. See [Concurrency](docs/concurrency.md).
-- **The worker**: embedded in `next start`, with graceful shutdown on deploys. See [Worker](docs/worker.md) and [Deploys](docs/deploys.md).
+- **The worker**: embedded in `next start`, with graceful shutdown on deploys and a callback to flush your logs before it exits the process. See [Worker](docs/worker.md) and [Deploys](docs/deploys.md).
 - **A read API for dashboards**: runs, events and schedules, read from the instance. See [Dashboard](docs/dashboard.md).
 - **Testing**: a fake for the code that dispatches and emits, and an in-process attempt for the handlers, from `@flefebvre/nextasking/testing`. See [Testing](docs/testing.md).
 

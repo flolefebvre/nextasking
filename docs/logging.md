@@ -59,6 +59,7 @@ Each message is fixed: filter and alert on it.
 | `error` | `connection error`                                                                                              | `err`                                                                                                                                          |
 | `error` | `worker not started`                                                                                            | `err`                                                                                                                                          |
 | `error` | `onWorkerNotStarted failed`                                                                                     | `err`                                                                                                                                          |
+| `error` | `onWorkerStopped failed`                                                                                        | `err`                                                                                                                                          |
 | `error` | `worker error`                                                                                                  | `err`                                                                                                                                          |
 
 ### Fields every line of a run carries
@@ -103,7 +104,7 @@ Each message is fixed: filter and alert on it.
 - `worker started` is written once `startWorker()` has checked the server, reconciled the schedules and started taking attempts. With Redis down at boot, that happens once Redis is back, after `startWorker()` has resolved. The `NEXT_MANUAL_SIG_HANDLE` warning, when it applies, comes right after it, or before it when the boot waits for Redis.
 - `maxmemory-policy unreadable` is written at boot when neither `INFO` nor `CONFIG GET maxmemory-policy` yields the policy: `err` is an `AggregateError` holding both failures, and the worker starts. `server version unreadable` is written when `INFO` yields no version, with `err`, and the worker starts. See [Worker](worker.md#give-queues-their-own-valkey-or-redis).
 - `worker not started` is written only when the boot ran in the background because Redis was down, and failed, such as on an evicting `maxmemory-policy` or a server below the floor; `err` says why. `onWorkerNotStarted` is called right after it, and `onWorkerNotStarted failed` is written when that callback throws or rejects, `err` being what it threw. See [Worker](worker.md#exit-when-the-worker-cant-start).
-- `run yielded at shutdown` is written for each attempt that went back to pending at shutdown; `attempts aborted at shutdown deadline` once, when `shutdownTimeout` aborted at least one attempt. `worker stopped` is written once the worker has stopped and both its connections are closed. `worker shutdown failed` is written when stopping failed, before the process exits with code 1. See [Worker](worker.md#let-a-deploy-finish-the-running-attempts).
+- `run yielded at shutdown` is written for each attempt that went back to pending at shutdown; `attempts aborted at shutdown deadline` once, when `shutdownTimeout` aborted at least one attempt. `worker stopped` is written once the worker has stopped and both its connections are closed. `worker shutdown failed` is written when stopping failed, before the process exits with code 1. `onWorkerStopped` is awaited after either line, before the process exits, or with no line before it when the signal came while the boot still waited for Redis, since no worker was running; and `onWorkerStopped failed` is written when that callback throws or rejects, `err` being what it threw. See [Worker](worker.md#flush-before-the-process-exits).
 
 ### Connection and errors
 
@@ -139,7 +140,21 @@ export const sendWelcomeEmailTask = defineTask("send-welcome-email", {
 
 ## Ship the lines
 
-The `logger` is the one output: there is no hook and no built-in sink.
+The `logger` is the one output: there is no other log output and no built-in sink.
 
 - Ship the lines through your app's logger, such as a pino transport to Better Stack, Datadog or Axiom.
+- A sink that sends asynchronously, such as an exporter batching its lines once a second, must be flushed in `onWorkerStopped`: with `NEXT_MANUAL_SIG_HANDLE` set, the library exits the process itself on SIGTERM, right after `worker stopped` and the last `run completed`, `run failed` and `attempt failed` lines. See [Worker](worker.md#flush-before-the-process-exits).
+
+  ```ts
+  // src/instrumentation.ts
+  export async function register() {
+    if (process.env.NEXT_RUNTIME !== "nodejs" || process.env.NEXTASKING_WORKER !== "on") return;
+    const { nextasking } = await import("@/nextasking");
+    const { flushLogs } = await import("@/logger");
+    await nextasking.startWorker({ onWorkerStopped: flushLogs });
+  }
+  ```
+
+  `flushLogs` is your sink's own flush, returning a promise that settles once the lines are sent: an exporter's `flush()`, or pino's `logger.flush(callback)` wrapped in a promise. The process exits after 2 seconds whether it settled or not.
+
 - React to a failed run with a listener on the built-in event `runFailedEvent`, which runs with retries, not from a log line. See [Retries and failures](retries-and-failures.md#react-to-a-failure).

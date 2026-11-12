@@ -126,7 +126,11 @@ _Avoid_: Period, window, interval; not dedup window, which is how long a repeate
 
 **Idle**:
 Said of the queue when no run is pending, executing or waiting for a concurrency slot; runs that wait for a set time don't count.
-_Avoid_: Settled, empty; not drained, which describes a worker shutting down (see **Drain**)
+_Avoid_: Settled, empty; not drained, which describes a worker shutting down (see **Drain**); not quiet, which describes a connection (see **Quiet**)
+
+**Quiet**:
+Said of a connection to Valkey or Redis that is ready, with no call in flight and none for the last 10 seconds; the library then checks that the server still answers it.
+_Avoid_: Idle, which describes the queue (see **Idle**); inactive, silent
 
 **Idempotency key**:
 A value that stays the same for one step of one run, handed to that step so an external service can recognise a repeat.

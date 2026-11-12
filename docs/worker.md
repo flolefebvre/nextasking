@@ -29,6 +29,7 @@ export async function register() {
 
 - With Redis down, `startWorker()` resolves anyway and the boot finishes in the background. See [When Redis is down](#when-redis-is-down).
 - An instance with a worker holds two connections: one for commands, shared by your calls and the worker's, and the one the worker waits on. An instance with no worker holds one, opened by its first call.
+- A `next start` process holds up to three instances: Next evaluates the module that calls `createNextasking` once for `instrumentation.ts`, once for route handlers and once for server actions. With the worker, that is up to four connections: the worker's two, plus one each for route handlers and server actions once each has made a call.
 - One worker per process: calling `startWorker()` again in the same process throws `The nextasking worker is already started in this process`. A call that rejected started no worker, so `startWorker()` can be called again.
 - Type the options with `StartWorkerOptions`.
 - An option `startWorker` doesn't take doesn't compile, written inline, held in a variable or spread in; the error names it: `"concurency" is not an option of this call`.
@@ -169,6 +170,8 @@ maxmemory-policy is "allkeys-lru": the Valkey or Redis holding the queues must u
 Redis 7.2.4 is below the floor: Valkey 8 or Redis 7.4
 ```
 
+A server `timeout` closes a client it hasn't heard from for that many seconds (300 on some managed services). Each connection the library holds sends `PING` once it has been quiet for 10 seconds, ready with no command sent, so a `timeout` doesn't close it unless it is set under about 10 seconds. Under that, each close writes a `connection error` and a `connection restored`.
+
 ## When Redis is down
 
 `startWorker()` never blocks `next start` on Redis:
@@ -186,7 +189,7 @@ Once started, the worker waits out an outage instead of failing attempts:
 - A server that stops answering without closing the connections counts as down once a call has waited `connection.giveUpAfter`: the worker reconnects both connections, the one it waits on included, even while every slot runs a handler.
 - A server answering the worker's writes with `READONLY`, as a replica or a demoted primary does, is waited out the same way: the worker sends the writes again, attempts wait, no retry is spent. A failover that closes the connection the worker waits on writes nothing: the worker reconnects.
 - A server out of memory (`maxmemory` reached under `noeviction`) refuses writes: the worker waits and sends the refused write again about once a second. Your calls to `dispatch` and `emit` throw `RedisUnavailableError` meanwhile.
-- An outage writes one `connection error` and one `connection restored` per process. See [Logging](logging.md#lifecycle-lines) for when each is written.
+- An outage writes one `connection error` and one `connection restored` per instance, not per process: the logs of a `next start` process with the worker show up to three pairs for one outage, one for each of its instances that holds a connection. See [Logging](logging.md#lifecycle-lines) for when each is written.
 
 ### Exit when the worker can't start
 

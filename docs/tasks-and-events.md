@@ -353,7 +353,7 @@ export async function POST(request: Request) {
 - A server out of memory (`maxmemory` reached under `noeviction`) refuses writes: a call it refuses throws `RedisUnavailableError` at once, with the message `Redis refused the command: it is out of memory` and the server's reply as `error.cause`. Retry it with the id on the error, as above.
 - Validation errors come first: an unknown name or an invalid payload throws its own error, Redis down or not.
 - In a handler, `emit` and `dispatch` never throw `RedisUnavailableError`: like every command of the worker, they wait for Redis to come back, and the attempt goes on without spending a retry.
-- An outage writes one `connection error` line, then one `connection restored` line, per process. See [Logging](logging.md).
+- An outage writes one `connection error` line, then one `connection restored` line, per instance: a `next start` process holds up to three instances, so up to three pairs. See [Logging](logging.md).
 
 ## Start the worker
 

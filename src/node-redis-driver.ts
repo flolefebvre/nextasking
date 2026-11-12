@@ -52,6 +52,8 @@ const UNANSWERED_ERROR_CLASSES = [
   ClientClosedError,
 ];
 
+const TCP_KEEPALIVE_INITIAL_DELAY_IN_MILLISECONDS = 30_000;
+
 const NO_SCRIPT_REPLY_PREFIX = "NOSCRIPT";
 
 const READ_ONLY_REPLY_PREFIX = "READONLY";
@@ -122,6 +124,7 @@ export const createNodeRedisDriver: CreateRedisDriver = (url, { onConnect, onRea
       url,
       RESP: 2,
       maintNotifications: "disabled",
+      socket: { keepAlive: true, keepAliveInitialDelay: TCP_KEEPALIVE_INITIAL_DELAY_IN_MILLISECONDS },
       commandOptions: { timeout: undefined },
     });
     const isCurrent = () => createdClient === client;

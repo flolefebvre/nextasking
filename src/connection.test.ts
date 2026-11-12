@@ -25,6 +25,7 @@ import type { FakeRedisDriver } from "../tests/fake-redis-drivers.js";
 import { builtInCommandOf } from "./redis-client.js";
 import { createRecordingLogger } from "../tests/recording-logger.js";
 import type { RecordedLogLine } from "../tests/recording-logger.js";
+import { unhandledRejectionsDuring } from "../tests/unhandled-rejections.js";
 
 const GIVE_UP_AFTER_IN_MILLISECONDS = 1000;
 
@@ -147,15 +148,17 @@ describe("the instance calls", () => {
   });
 
   test("a burst of calls held before the first ready are each written once at the ready, and answered", async () => {
-    const { connection, driver } = connectionScenarioOf();
+    const { connections, connection, driver } = connectionScenarioOf();
     const replies = Array.from({ length: BURST_CALLER_COUNT }, (_, position) =>
       connection.instanceCalls.send(answered(position)),
     );
 
     await vi.advanceTimersByTimeAsync(GIVE_UP_AFTER_IN_MILLISECONDS - 1);
     driver.becomeReady();
+    const answeredReplies = await Promise.all(replies);
+    await connections.closeConnection(connection);
 
-    expect(await Promise.all(replies)).toEqual(Array.from({ length: BURST_CALLER_COUNT }, (_, position) => position));
+    expect(answeredReplies).toEqual(Array.from({ length: BURST_CALLER_COUNT }, (_, position) => position));
     expect(driver.sentCommands).toHaveLength(BURST_CALLER_COUNT);
     expect(vi.getTimerCount()).toBe(0);
   });
@@ -340,11 +343,13 @@ describe("a connection that stops answering without closing", () => {
     await connection.instanceCalls.send(answered("first"));
     await vi.advanceTimersByTimeAsync(10 * GIVE_UP_AFTER_IN_MILLISECONDS);
     const reply = await connection.instanceCalls.send(answered("next"));
+    const timerCountOnceAnswered = vi.getTimerCount();
+    await vi.advanceTimersByTimeAsync(2 * GIVE_UP_AFTER_IN_MILLISECONDS);
 
     expect(reply).toBe("next");
+    expect(timerCountOnceAnswered).toBe(1);
     expect(driver.forceReconnectCount).toBe(0);
     expect(lines).toEqual([]);
-    expect(vi.getTimerCount()).toBe(0);
   });
 
   test("none of its timers keeps the process alive, and none is left once the connection is closed", async () => {
@@ -368,6 +373,192 @@ describe("a connection that stops answering without closing", () => {
     expect(timers.map((timer) => timer.hasRef())).toEqual(timers.map(() => false));
     expect(vi.getTimerCount()).toBe(0);
   });
+});
+
+describe("a quiet connection", () => {
+  const QUIET_CHECK_INTERVAL_IN_MILLISECONDS = 10_000;
+
+  const BUSY_REPLY_MESSAGE = "BUSY Redis is busy running a script. You can only call SCRIPT KILL or SHUTDOWN NOSCRIPT.";
+
+  function readyConnectionScenarioOf(prepareDriver: (driver: FakeRedisDriver) => void = () => undefined) {
+    const scenario = connectionScenarioOf(prepareDriver);
+    scenario.driver.becomeReady();
+    return scenario;
+  }
+
+  async function sentCommandsAroundTheInterval(driver: FakeRedisDriver): Promise<[before: string[], at: string[]]> {
+    await vi.advanceTimersByTimeAsync(QUIET_CHECK_INTERVAL_IN_MILLISECONDS - 1);
+    const sentCommandsBefore = [...driver.sentCommands];
+    await vi.advanceTimersByTimeAsync(1);
+    return [sentCommandsBefore, [...driver.sentCommands]];
+  }
+
+  test("is sent a PING once it has had no call for 10 s since its ready, then again 10 s after each answer, logging nothing", async () => {
+    const { driver, lines } = readyConnectionScenarioOf();
+
+    const sentCommandsAroundTheFirstCheck = await sentCommandsAroundTheInterval(driver);
+    const sentCommandsAroundTheSecondCheck = await sentCommandsAroundTheInterval(driver);
+
+    expect(sentCommandsAroundTheFirstCheck).toEqual([[], ["PING"]]);
+    expect(sentCommandsAroundTheSecondCheck).toEqual([["PING"], ["PING", "PING"]]);
+    expect(driver.forceReconnectCount).toBe(0);
+    expect(lines).toEqual([]);
+  });
+
+  test("is checked 10 s after its last call settled, not 10 s after its ready", async () => {
+    const { connection, driver } = readyConnectionScenarioOf();
+    await vi.advanceTimersByTimeAsync(QUIET_CHECK_INTERVAL_IN_MILLISECONDS / 2);
+
+    await connection.instanceCalls.send(answered("OK"));
+    const sentCommandsAroundTheCheck = await sentCommandsAroundTheInterval(driver);
+
+    expect(sentCommandsAroundTheCheck).toEqual([["GET"], ["GET", "PING"]]);
+  });
+
+  test("is sent no check while a call is in flight for longer than 10 s, as a blocking wait is, and is checked 10 s after it settles", async () => {
+    const { logger } = createRecordingLogger();
+    const fakeRedisDrivers = createFakeRedisDrivers();
+    fakeRedisDrivers.onCreate((fakeRedisDriver) => {
+      fakeRedisDriver.becomeReady();
+    });
+    const connections = createRedisConnections(
+      { url: "redis://127.0.0.1:1", giveUpAfter: "1s" },
+      logger,
+      fakeRedisDrivers.createDriver,
+    );
+    const connection = connections.createBlockingConnection(6 * QUIET_CHECK_INTERVAL_IN_MILLISECONDS);
+    const [driver] = fakeRedisDrivers.createdDrivers();
+    if (driver === undefined) {
+      throw new Error("no driver was created");
+    }
+
+    const blockingWait = connection.workerCalls.send(
+      fakeReplyCommandOf(
+        "BZPOPMIN",
+        () =>
+          new Promise((resolve) => {
+            setTimeout(resolve, 3 * QUIET_CHECK_INTERVAL_IN_MILLISECONDS, null);
+          }),
+      ),
+    );
+    await vi.advanceTimersByTimeAsync(3 * QUIET_CHECK_INTERVAL_IN_MILLISECONDS);
+    await blockingWait;
+    const sentCommandsAroundTheCheck = await sentCommandsAroundTheInterval(driver);
+
+    expect(sentCommandsAroundTheCheck).toEqual([["BZPOPMIN"], ["BZPOPMIN", "PING"]]);
+  });
+
+  test("is sent no check while it is not ready, and is checked 10 s after it is ready again", async () => {
+    const { driver } = readyConnectionScenarioOf();
+    await vi.advanceTimersByTimeAsync(QUIET_CHECK_INTERVAL_IN_MILLISECONDS / 2);
+
+    driver.startReconnecting();
+    await vi.advanceTimersByTimeAsync(3 * QUIET_CHECK_INTERVAL_IN_MILLISECONDS);
+    const sentCommandsWhileNotReady = [...driver.sentCommands];
+    driver.becomeReady();
+    const sentCommandsAroundTheCheck = await sentCommandsAroundTheInterval(driver);
+
+    expect(sentCommandsWhileNotReady).toEqual([]);
+    expect(sentCommandsAroundTheCheck).toEqual([[], ["PING"]]);
+  });
+
+  test("is sent no check after a connection error until it is ready again", async () => {
+    const { driver } = readyConnectionScenarioOf();
+    await vi.advanceTimersByTimeAsync(QUIET_CHECK_INTERVAL_IN_MILLISECONDS / 2);
+
+    driver.loseConnection(networkError("ECONNRESET"));
+    await vi.advanceTimersByTimeAsync(3 * QUIET_CHECK_INTERVAL_IN_MILLISECONDS);
+    const timerCountWhileDown = vi.getTimerCount();
+    driver.becomeReady();
+    const sentCommandsAroundTheCheck = await sentCommandsAroundTheInterval(driver);
+
+    expect(timerCountWhileDown).toBe(0);
+    expect(sentCommandsAroundTheCheck).toEqual([[], ["PING"]]);
+  });
+
+  test("whose check goes unanswered is reconnected by force at 10 s plus giveUpAfter with one connection error, restored at its ready, and checked again 10 s after that ready", async () => {
+    const { driver, lines } = readyConnectionScenarioOf();
+    driver.isAnswering = false;
+    let forceReconnectCounts: [before: number | undefined, at: number | undefined] = [undefined, undefined];
+    let sentCommandsAroundTheNextCheck: [before: string[], at: string[]] = [[], []];
+    let messagesBeforeTheReady: string[] = [];
+
+    const unhandledRejections = await unhandledRejectionsDuring(async () => {
+      await vi.advanceTimersByTimeAsync(QUIET_CHECK_INTERVAL_IN_MILLISECONDS);
+      forceReconnectCounts = await forceReconnectCountsAround(driver, GIVE_UP_AFTER_IN_MILLISECONDS);
+      await vi.advanceTimersByTimeAsync(3 * QUIET_CHECK_INTERVAL_IN_MILLISECONDS);
+      messagesBeforeTheReady = lines.map(({ message }) => message);
+      driver.isAnswering = true;
+      driver.becomeReady();
+      sentCommandsAroundTheNextCheck = await sentCommandsAroundTheInterval(driver);
+    });
+
+    expect(forceReconnectCounts).toEqual([0, 1]);
+    expect(messagesBeforeTheReady).toEqual(["connection error"]);
+    expect(lines).toEqual(onePairNaming(expect.any(TimeoutError) as Error));
+    expect(sentCommandsAroundTheNextCheck).toEqual([["PING"], ["PING", "PING"]]);
+    expect(driver.forceReconnectCount).toBe(1);
+    expect(unhandledRejections).toEqual([]);
+  });
+
+  test("whose check is answered with an error reply counts it as an answer: no line, no reconnect, and the next check 10 s later", async () => {
+    const { driver, lines } = readyConnectionScenarioOf();
+    driver.pingReply = () => Promise.reject(new ErrorReply(BUSY_REPLY_MESSAGE));
+
+    const unhandledRejections = await unhandledRejectionsDuring(async () => {
+      await vi.advanceTimersByTimeAsync(2 * QUIET_CHECK_INTERVAL_IN_MILLISECONDS);
+    });
+
+    expect(driver.sentCommands).toEqual(["PING", "PING"]);
+    expect(driver.forceReconnectCount).toBe(0);
+    expect(lines).toEqual([]);
+    expect(unhandledRejections).toEqual([]);
+  });
+
+  test("is sent no check once closed, and no timer of its checks keeps the process alive", async () => {
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const { connections, connection, driver } = readyConnectionScenarioOf();
+    await vi.advanceTimersByTimeAsync(QUIET_CHECK_INTERVAL_IN_MILLISECONDS);
+    const timers = setTimeoutSpy.mock.results.map(({ value }) => value as NodeJS.Timeout);
+
+    await connections.closeConnection(connection);
+    await vi.advanceTimersByTimeAsync(3 * QUIET_CHECK_INTERVAL_IN_MILLISECONDS);
+
+    expect(driver.sentCommands).toEqual(["PING"]);
+    expect(timers.length).toBeGreaterThanOrEqual(2);
+    expect(timers.map((timer) => timer.hasRef())).toEqual(timers.map(() => false));
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  test.each([
+    { closeBound: "a close bound", closeBoundInMilliseconds: 1000, expectedCloseInMilliseconds: 1000 },
+    { closeBound: "no close bound", closeBoundInMilliseconds: undefined, expectedCloseInMilliseconds: 0 },
+  ] as const)(
+    "with a check in flight closes with $closeBound as it would without one, rejecting nothing unhandled",
+    async ({ closeBoundInMilliseconds, expectedCloseInMilliseconds }) => {
+      const { connections, connection, driver, lines } = readyConnectionScenarioOf((fakeRedisDriver) => {
+        fakeRedisDriver.closeReply = "never answered";
+      });
+      driver.isAnswering = false;
+      await vi.advanceTimersByTimeAsync(QUIET_CHECK_INTERVAL_IN_MILLISECONDS);
+      const sentCommandsBeforeTheClose = [...driver.sentCommands];
+      let closed: { outcome: unknown; afterMilliseconds: number } | undefined;
+
+      const unhandledRejections = await unhandledRejectionsDuring(async () => {
+        const closing = settledAtOf(connections.closeConnection(connection, closeBoundInMilliseconds), Date.now());
+        await vi.advanceTimersByTimeAsync(expectedCloseInMilliseconds);
+        closed = await closing;
+        await vi.advanceTimersByTimeAsync(3 * QUIET_CHECK_INTERVAL_IN_MILLISECONDS);
+      });
+
+      expect(sentCommandsBeforeTheClose).toEqual(["PING"]);
+      expect(closed).toEqual({ outcome: undefined, afterMilliseconds: expectedCloseInMilliseconds });
+      expect(driver.sentCommands).toEqual(["PING"]);
+      expect(lines).toEqual([]);
+      expect(unhandledRejections).toEqual([]);
+      expect(vi.getTimerCount()).toBe(0);
+    },
+  );
 });
 
 describe("a write answered READONLY, as during a failover", () => {
@@ -1098,16 +1289,18 @@ describe("a silence that ends after one connection gave up and before the other 
 
     await vi.advanceTimersByTimeAsync(GIVE_UP_AFTER_IN_MILLISECONDS);
     blockingDriver.becomeReady();
+    const blockingSentCommandsOnceReady = [...blockingDriver.sentCommands];
     const messagesOnceTheBlockingConnectionIsReady = messages();
     commandDriver.becomeReady();
     await vi.advanceTimersByTimeAsync(10 * GIVE_UP_AFTER_IN_MILLISECONDS);
 
     expect(commandDriver.forceReconnectCount).toBe(1);
-    expect(blockingDriver.sentCommands).toEqual([]);
+    expect(blockingSentCommandsOnceReady).toEqual([]);
+    expect(blockingDriver.sentCommands).toEqual(["PING"]);
     expect(blockingDriver.forceReconnectCount).toBe(0);
     expect(messagesOnceTheBlockingConnectionIsReady).toEqual(["connection error"]);
     expect(messages()).toEqual(["connection error", "connection restored"]);
-    expect(vi.getTimerCount()).toBe(0);
+    expect(vi.getTimerCount()).toBe(2);
   });
 
   test("closing the blocking connection still checked, once the command connection is back, writes connection restored", async () => {
@@ -1446,6 +1639,7 @@ describe("a write answered out of memory", () => {
     await connections.closeConnection(connection);
     const nextConnection = connections.createCommandConnection();
     await nextConnection.workerCalls.send(write).catch(() => undefined);
+    await connections.closeConnection(nextConnection);
 
     await expectMessagesOnceEveryTimerHasRun(lines, ["connection error", "connection error"]);
   });

@@ -16,6 +16,10 @@ export function redisClientModuleRecordingClients(importedModule: unknown): Redi
   return { ...actualModule, createClient };
 }
 
+export function socketOptionsOfClientsFor(url: string): unknown[] {
+  return clientRecords.filter((clientRecord) => clientRecord.url === url).map(({ client }) => client.options?.socket);
+}
+
 export function listenerCountsByEventOfClientsFor(url: string): Record<string, number>[] {
   return clientRecords
     .filter((clientRecord) => clientRecord.url === url)

@@ -13,11 +13,12 @@ export async function register() {
 }
 ```
 
-| Option               | Default   | What it does                                                                                                                              |
-| -------------------- | --------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| `concurrency`        | unlimited | The most attempts this process runs at once, a whole number 1 or more                                                                     |
-| `shutdownTimeout`    | `"25s"`   | How long a shutdown waits for running attempts before it aborts them                                                                      |
-| `onWorkerNotStarted` | none      | Called with the error when the boot that waited for Redis fails. See [Exit when the worker can't start](#exit-when-the-worker-cant-start) |
+| Option               | Default   | What it does                                                                                                                                               |
+| -------------------- | --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `concurrency`        | unlimited | The most attempts this process runs at once, a whole number 1 or more                                                                                      |
+| `shutdownTimeout`    | `"25s"`   | How long a shutdown waits for running attempts before it aborts them                                                                                       |
+| `onWorkerNotStarted` | none      | Called with the error when the boot that waited for Redis fails. See [Exit when the worker can't start](#exit-when-the-worker-cant-start)                  |
+| `onWorkerStopped`    | none      | Awaited, up to 2 seconds, before the library exits the process on SIGTERM or SIGINT. See [Flush before the process exits](#flush-before-the-process-exits) |
 
 `startWorker()` boots in this order, and resolves once the last step is done:
 
@@ -66,14 +67,34 @@ On the first SIGTERM or SIGINT (a repeat is ignored):
 2. A running attempt that reaches a step boundary (any `step.run`, `step.sleep`, `step.sleepUntil`, `emit` or `dispatch`) lets its steps in flight finish and save, then goes back to pending at once. Another instance resumes it from its saved steps. This uses no retry and counts no stall.
 3. An attempt that ends before reaching a boundary completes or fails as usual.
 4. At `shutdownTimeout`, the attempts still running get their `abortSignal` aborted. One that stops on the abort goes back to pending like a step boundary; one that returns keeps its completion. The worker waits up to one second more for them.
-5. The worker closes its connections, waiting up to one second for a clean close, writes `worker stopped`, and the process exits with code 0.
+5. The worker closes its connections, waiting up to one second for a clean close, and writes `worker stopped`.
+6. The library awaits `onWorkerStopped`, up to 2 seconds, then the process exits with code 0.
 
-- The whole shutdown takes at most `shutdownTimeout` plus about 2 seconds, whatever the state of the connection. Keep that under your platform's grace period before SIGKILL (30 seconds on Kubernetes and most hosts).
+- The whole shutdown takes at most `shutdownTimeout` plus about 4 seconds, whatever the state of the connection: up to 1 second for the aborted attempts, 1 for the connections, 2 for `onWorkerStopped`. Keep that under your platform's grace period before SIGKILL (30 seconds on Kubernetes and most hosts). The default `"25s"` fits 30 seconds with one second to spare; when you raise `shutdownTimeout` or your grace period is shorter, subtract 4 seconds, not 2, from the grace period to get the most `shutdownTimeout` can be.
 - An attempt still running when the process exits is cut. Its run comes back as a stall. See [Stalls](#stalls).
 - During an outage the yields can't reach Redis: the attempts cut that way come back as stalls once their locks expire.
 - From the start of the shutdown, a call on the instance throws `InstanceClosedError`; so does a call still waiting for Redis when the connection closes.
 - Without `NEXT_MANUAL_SIG_HANDLE`, Next exits on SIGTERM at once and cuts every running attempt. The worker then warns at startup with `NEXT_MANUAL_SIG_HANDLE is not set: on SIGTERM Next exits at once and cuts the attempts running in this worker`, except under `NODE_ENV=development`. See [Dev](dev.md#what-ctrl-c-does-to-the-attempt-in-flight).
-- With `NEXT_MANUAL_SIG_HANDLE` set, Next leaves both signals to your code: the worker exits the process once it has stopped, with code 1 if stopping itself failed.
+- With `NEXT_MANUAL_SIG_HANDLE` set, Next leaves both signals to your code: the worker exits the process once it has stopped and `onWorkerStopped` has settled, with code 1 if stopping itself failed.
+
+### Flush before the process exits
+
+The library calls `process.exit` itself, so a logger that sends its lines asynchronously, such as a batching exporter, loses the last ones: `worker stopped`, and the `run completed` or `attempt failed` of the attempts that drained. Pass `onWorkerStopped` to flush it:
+
+```ts
+// src/instrumentation.ts
+export async function register() {
+  if (process.env.NEXT_RUNTIME !== "nodejs" || process.env.NEXTASKING_WORKER !== "on") return;
+  const { nextasking } = await import("@/nextasking");
+  const { flushLogs } = await import("@/logger");
+  await nextasking.startWorker({ onWorkerStopped: flushLogs });
+}
+```
+
+- It is called once, with no argument, after `worker stopped`, or after `worker shutdown failed` when stopping failed, on every exit the library makes. That includes a signal that arrives once `startWorker()` has resolved while the boot still waits for Redis.
+- It is never called without `NEXT_MANUAL_SIG_HANDLE`, since the library then never exits the process, nor when `startWorker()` rejects, nor on a signal that arrives before `startWorker()` has resolved: nothing listens to the signal then.
+- The process exits once its promise settles, or after 2 seconds if it hasn't. A repeated signal meanwhile is ignored.
+- A callback that throws or rejects writes `onWorkerStopped failed` at error with `err`; the exit code stays 0, or 1 when stopping failed.
 
 ## Choose which processes run a worker
 
@@ -193,21 +214,21 @@ Once started, the worker waits out an outage instead of failing attempts:
 
 ### Exit when the worker can't start
 
-`startWorker()` fails in one of two ways: it rejects when it finds the problem at once, or, when the boot waited for Redis, it has already resolved and calls `onWorkerNotStarted` instead. Handle both with the same function, flush your logs, then exit so your platform restarts the process:
+`startWorker()` fails in one of two ways: it rejects when it finds the problem at once, or, when the boot waited for Redis, it has already resolved and calls `onWorkerNotStarted` instead. Handle both with the same function, flush your logs, then exit so your platform restarts the process. Flush through the same function at shutdown with `onWorkerStopped`, see [Flush before the process exits](#flush-before-the-process-exits):
 
 ```ts
 // src/instrumentation.ts
 export async function register() {
   if (process.env.NEXT_RUNTIME !== "nodejs" || process.env.NEXTASKING_WORKER !== "on") return;
   const { nextasking } = await import("@/nextasking");
+  const { appLogger, flushLogs } = await import("@/logger");
   const exitOnWorkerNotStarted = async (error: unknown) => {
-    const { appLogger, flushLogs } = await import("@/logger");
     appLogger.error({ err: error }, "exiting: the nextasking worker did not start");
     await flushLogs();
     process.exit(1);
   };
   try {
-    await nextasking.startWorker({ onWorkerNotStarted: exitOnWorkerNotStarted });
+    await nextasking.startWorker({ onWorkerNotStarted: exitOnWorkerNotStarted, onWorkerStopped: flushLogs });
   } catch (error) {
     await exitOnWorkerNotStarted(error);
   }
@@ -251,6 +272,7 @@ export default nextConfig;
 | `error` | `worker shutdown failed`                 | `err`                                 |
 | `error` | `worker not started`                     | `err`                                 |
 | `error` | `onWorkerNotStarted failed`              | `err`                                 |
+| `error` | `onWorkerStopped failed`                 | `err`                                 |
 | `error` | `worker error`                           | `err`                                 |
 
 See [Logging](logging.md#lifecycle-lines) for what each line means and for the other lines.
